@@ -1,0 +1,145 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/projanvil/langchain-golang/core/messages"
+
+	"github.com/projanvil/woca/internal/memory"
+	"github.com/projanvil/woca/internal/settings"
+)
+
+// fakeEngine is a minimal memory.Engine for agent-side tests (shared by later tasks).
+type fakeEngine struct {
+	mu         sync.Mutex
+	recalls    []string
+	topKs      []int
+	remembered []string
+	events     []string
+	hits       []memory.Hit
+	err        bool // Recall returns an error when set
+}
+
+func (f *fakeEngine) Recall(ctx context.Context, query, workspace string, topK int) ([]memory.Hit, error) {
+	f.mu.Lock()
+	f.recalls = append(f.recalls, workspace+"|"+query)
+	f.topKs = append(f.topKs, topK)
+	f.mu.Unlock()
+	if f.err {
+		return nil, errors.New("boom")
+	}
+	return f.hits, nil
+}
+func (f *fakeEngine) SearchCode(ctx context.Context, q, ws string, k int) ([]memory.Hit, error) {
+	return nil, nil
+}
+func (f *fakeEngine) Remember(ctx context.Context, ws, content string, tags []string, src string) (string, error) {
+	f.mu.Lock()
+	f.remembered = append(f.remembered, content)
+	f.mu.Unlock()
+	return "id-1", nil
+}
+func (f *fakeEngine) RecordEvent(ctx context.Context, ws, agentName, action, observation, outcome string) error {
+	f.mu.Lock()
+	f.events = append(f.events, agentName+"/"+action+"/"+outcome)
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeEngine) List(ctx context.Context, ws, layer string, limit, offset int) ([]memory.Hit, error) {
+	return nil, nil
+}
+func (f *fakeEngine) Forget(ctx context.Context, id string) error { return nil }
+func (f *fakeEngine) Stats(ctx context.Context, ws string) (*memory.Stats, error) {
+	return &memory.Stats{Total: 0, Layers: map[string]int{}}, nil
+}
+func (f *fakeEngine) IndexCode(ctx context.Context, root, ws string, force bool) (string, error) {
+	return "", nil
+}
+func (f *fakeEngine) Consolidate(ctx context.Context, ws string) (string, error) { return "", nil }
+func (f *fakeEngine) Description() string                                        { return "fake" }
+func (f *fakeEngine) Close() error                                               { return nil }
+
+func TestPrefetchUsesEngineRecall(t *testing.T) {
+	f := &fakeEngine{hits: []memory.Hit{{
+		ID: "h1", Layer: "L2_semantic", Type: "fact",
+		Summary: "auth uses JWT", Content: "auth uses JWT with 24h expiry",
+		Score: 0.83, UpdatedAt: 1,
+	}}}
+	a := &Agent{memEngine: f, workdir: "/ws"}
+	a.SetMemoryWorkspace("/ws/custom")
+	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("how does auth work?")})
+	var got []messages.Message
+	for i := 0; i < 50 && got == nil; i++ {
+		got = a.takeMemoryAttachments()
+		if got == nil {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("attachments = %d, want 1", len(got))
+	}
+	body := got[0].Content
+	if !strings.Contains(body, "<relevant-memory>") || !strings.Contains(body, "[L2_semantic|fact|0.83]") {
+		t.Fatalf("attachment format: %q", body)
+	}
+	if !strings.Contains(body, "auth uses JWT") {
+		t.Fatalf("attachment content: %q", body)
+	}
+	if len(f.recalls) != 1 || f.recalls[0] != "/ws/custom|how does auth work?" {
+		t.Fatalf("recalls = %v", f.recalls)
+	}
+	if more := a.takeMemoryAttachments(); len(more) != 0 {
+		t.Fatalf("dedup failed: %v", more)
+	}
+}
+
+func TestPrefetchEngineTopKFromSettings(t *testing.T) {
+	f := &fakeEngine{}
+	a := &Agent{
+		memEngine: f,
+		workdir:   "/ws",
+		loadSettings: func() settings.Settings {
+			s := settings.Default()
+			s.LadyMTopK = 12
+			return s
+		},
+	}
+	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("q")})
+	deadline := time.Now().Add(2 * time.Second)
+	for len(f.topKs) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(f.topKs) != 1 || f.topKs[0] != 12 {
+		t.Fatalf("topKs = %v", f.topKs)
+	}
+}
+
+func TestMemoryWorkspaceDefaultsToWorkdir(t *testing.T) {
+	a := &Agent{workdir: "/ws/default"}
+	if ws := a.memoryWorkspace(); ws != "/ws/default" {
+		t.Fatalf("workspace = %q", ws)
+	}
+	a.SetMemoryWorkspace("/ws/override")
+	if ws := a.memoryWorkspace(); ws != "/ws/override" {
+		t.Fatalf("workspace = %q", ws)
+	}
+	a.SetMemoryWorkspace("") // empty ignored
+	if ws := a.memoryWorkspace(); ws != "/ws/override" {
+		t.Fatalf("empty set should be ignored, got %q", ws)
+	}
+}
+
+func TestEngineRecallErrorSkipsSilently(t *testing.T) {
+	f := &fakeEngine{err: true}
+	a := &Agent{memEngine: f, workdir: "/ws"}
+	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("q")})
+	time.Sleep(150 * time.Millisecond)
+	if got := a.takeMemoryAttachments(); len(got) != 0 {
+		t.Fatalf("error path should produce no attachments: %v", got)
+	}
+}

@@ -24,10 +24,12 @@ import (
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/hooks"
+	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/model"
 	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/permissions"
 	"github.com/projanvil/woca/internal/prompt"
+	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/skills"
 	"github.com/projanvil/woca/internal/store"
 	"github.com/projanvil/woca/internal/tools"
@@ -165,6 +167,14 @@ type Config struct {
 	// prefetched at turn start and attached after tool rounds (Claude Code's
 	// memory attachments).
 	Memory *store.Store
+	// MemoryEngine is the factual-memory engine (ladyM). When set, the
+	// per-turn prefetch runs semantic Recall instead of the KV keyword
+	// match. Nil disables the subsystem.
+	MemoryEngine memory.Engine
+	// LoadSettings re-reads persisted settings per run (nil-safe to omit in
+	// tests); the memory paths read ladym-topk / ladym-autoretain /
+	// ladym-system2 live.
+	LoadSettings func() settings.Settings
 	// MaxTurns caps the model rounds within one turn (Claude Code's SDK
 	// maxTurns); 0 is unlimited. Reaching the cap ends the turn with a
 	// <max-turns-reached> marker.
@@ -246,6 +256,14 @@ type Agent struct {
 	usage usageTracker
 	// memPrefetch holds the turn's relevant-memory prefetch.
 	memPrefetch memoryPrefetch
+	// memEngine is the factual-memory engine (nil = disabled); swapped
+	// whole-pointer on settings rebuild (SetMemoryEngine).
+	memEngine memory.Engine
+	// memWorkspace is the current run's memory workspace (defaults to
+	// workdir); set per run by the harnesses alongside SetObsRun.
+	memWorkspace string
+	// loadSettings re-reads settings for per-run knobs (nil = defaults).
+	loadSettings func() settings.Settings
 	// transcriptMu guards lastTranscript: the most recent model-round input
 	// state, used by Task fork=true to copy the live conversation.
 	transcriptMu   sync.Mutex
@@ -322,6 +340,8 @@ func New(cfg Config) (*Agent, error) {
 		memory:         cfg.Memory,
 		maxTurns:       cfg.MaxTurns,
 		obs:            cfg.Obs,
+		memEngine:      cfg.MemoryEngine,
+		loadSettings:   cfg.LoadSettings,
 	}
 	if cfg.ToolResultBudgetChars == 0 {
 		a.toolBudget = DefaultToolResultBudgetChars
@@ -430,6 +450,45 @@ func (a *Agent) SetObsRun(workspace, session, run string) {
 		name = filepath.Base(name)
 	}
 	a.obs.SetContext(workspace, name, session, run)
+}
+
+// SetMemoryWorkspace scopes subsequent memory-engine calls to one workspace.
+// Harnesses call it at run start (web startRun; the TUI defaults to workdir).
+func (a *Agent) SetMemoryWorkspace(ws string) {
+	if ws == "" {
+		return
+	}
+	a.mu.Lock()
+	a.memWorkspace = ws
+	a.mu.Unlock()
+}
+
+func (a *Agent) memoryWorkspace() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.memWorkspace != "" {
+		return a.memWorkspace
+	}
+	return a.workdir
+}
+
+// MemoryWorkspace returns the current memory workspace (exported for the
+// console and web wiring).
+func (a *Agent) MemoryWorkspace() string { return a.memoryWorkspace() }
+
+// MemoryEngine returns the current memory engine (nil = disabled).
+func (a *Agent) MemoryEngine() memory.Engine {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.memEngine
+}
+
+// SetMemoryEngine swaps the memory engine whole-pointer (settings rebuild).
+// In-flight calls keep the old engine; the caller delays Close.
+func (a *Agent) SetMemoryEngine(m memory.Engine) {
+	a.mu.Lock()
+	a.memEngine = m
+	a.mu.Unlock()
 }
 
 // SystemPrompt returns the agent's system prompt.

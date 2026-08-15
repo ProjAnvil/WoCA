@@ -3,11 +3,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
+	"github.com/projanvil/woca/internal/memory"
+	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/store"
 )
 
@@ -25,18 +28,44 @@ const maxMemoryAttachments = 5
 
 // memoryPrefetch is the turn-scoped prefetch state.
 type memoryPrefetch struct {
-	mu       sync.Mutex
-	entries  []store.Entry
-	injected map[string]bool // keys already attached (per agent lifetime)
+	mu         sync.Mutex
+	entries    []store.Entry
+	engineHits []memory.Hit
+	injected   map[string]bool // keys already attached (per agent lifetime)
 }
 
 // injectedMemoryLimit bounds the injected-key set.
 const injectedMemoryLimit = 256
 
-// beginMemoryPrefetch asynchronously searches the memoryStore for entries
-// whose value mentions any salient keyword of the last user message. The
-// result is consumed non-blockingly after tool rounds.
+// beginMemoryPrefetch asynchronously searches long-term memory for entries
+// relevant to the last user message. With a memory engine wired it runs
+// semantic Recall workspace-scoped (natural-language query, settings topK);
+// otherwise it falls back to the KV keyword match. The result is consumed
+// non-blockingly after tool rounds.
 func (a *Agent) beginMemoryPrefetch(ctx context.Context, msgs []messages.Message) {
+	if eng := a.MemoryEngine(); eng != nil {
+		query := lastHumanQuery(msgs)
+		if query == "" {
+			return
+		}
+		topK := settings.DefaultLadyMTopK
+		if a.loadSettings != nil {
+			if k := a.loadSettings().LadyMTopK; k > 0 {
+				topK = k
+			}
+		}
+		ws := a.memoryWorkspace()
+		go func() {
+			hits, err := eng.Recall(context.WithoutCancel(ctx), query, ws, topK)
+			if err != nil {
+				return
+			}
+			a.memPrefetch.mu.Lock()
+			a.memPrefetch.engineHits = hits
+			a.memPrefetch.mu.Unlock()
+		}()
+		return
+	}
 	if a.memory == nil {
 		return
 	}
@@ -76,6 +105,8 @@ func (a *Agent) takeMemoryAttachments() []messages.Message {
 	a.memPrefetch.mu.Lock()
 	entries := a.memPrefetch.entries
 	a.memPrefetch.entries = nil
+	hits := a.memPrefetch.engineHits
+	a.memPrefetch.engineHits = nil
 	injected := a.memPrefetch.injected
 	a.memPrefetch.mu.Unlock()
 	if injected == nil {
@@ -83,6 +114,29 @@ func (a *Agent) takeMemoryAttachments() []messages.Message {
 	}
 
 	var out []messages.Message
+	for _, h := range hits {
+		if len(out) >= maxMemoryAttachments {
+			break
+		}
+		if injected[h.ID] {
+			continue
+		}
+		injected[h.ID] = true
+		summary := strings.TrimSpace(h.Summary)
+		content := strings.TrimSpace(h.Content)
+		if summary == "" && content == "" {
+			continue
+		}
+		if len(content) > 2000 {
+			content = content[:2000] + "…"
+		}
+		line := fmt.Sprintf("[%s|%s|%.2f] %s", h.Layer, h.Type, h.Score, summary)
+		if content != "" && content != summary {
+			line += "\n" + content
+		}
+		out = append(out, messages.Human(
+			"<relevant-memory>\n"+line+"\n</relevant-memory>"))
+	}
 	for _, e := range entries {
 		if len(out) >= maxMemoryAttachments {
 			break
@@ -111,6 +165,23 @@ func (a *Agent) takeMemoryAttachments() []messages.Message {
 		a.memPrefetch.mu.Unlock()
 	}
 	return out
+}
+
+// lastHumanQuery returns the last human message text (the recall query),
+// clamped to 2000 characters. Unlike memoryTerms it keeps the natural
+// language: semantic recall wants the sentence, not the keywords.
+func lastHumanQuery(msgs []messages.Message) string {
+	last := ""
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == messages.RoleHuman {
+			last = msgs[i].Content
+			break
+		}
+	}
+	if len(last) > 2000 {
+		last = last[:2000]
+	}
+	return strings.TrimSpace(last)
 }
 
 // trimJSONString unwraps a JSON-encoded string value ("\"text\"") when
