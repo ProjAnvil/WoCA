@@ -48,6 +48,14 @@ const (
 	LadyMLLMNone    = "none"
 )
 
+// ladyM numeric defaults and bounds.
+const (
+	DefaultLadyMTopK            = 6
+	DefaultLadyMSystem2Interval = 300
+	MaxLadyMTopK                = 20
+	MinLadyMSystem2Interval     = 60
+)
+
 // Secret names stored encrypted in the secrets table.
 const (
 	SecretAnthropicAPIKey      = "anthropic_api_key"
@@ -141,10 +149,10 @@ func (s Settings) Normalize() (Settings, error) {
 		return out, fmt.Errorf("settings: unknown ladym llm %q", out.LadyMLLM)
 	}
 	if out.LadyMTopK == 0 {
-		out.LadyMTopK = 6
+		out.LadyMTopK = DefaultLadyMTopK
 	}
 	if out.LadyMSystem2Interval == 0 {
-		out.LadyMSystem2Interval = 300
+		out.LadyMSystem2Interval = DefaultLadyMSystem2Interval
 	}
 	return out, nil
 }

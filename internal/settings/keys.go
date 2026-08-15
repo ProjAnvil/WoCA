@@ -201,8 +201,8 @@ func Apply(cfg *Settings, key, value string) error {
 		cfg.LadyMAutoRetain = b
 	case KeyLadyMTopK:
 		n, err := strconv.Atoi(value)
-		if err != nil || n < 1 || n > 20 {
-			return fmt.Errorf("ladym-topk must be an integer in [1,20], got %q", value)
+		if err != nil || n < 1 || n > MaxLadyMTopK {
+			return fmt.Errorf("ladym-topk must be an integer in [1,%d], got %q", MaxLadyMTopK, value)
 		}
 		cfg.LadyMTopK = n
 	case KeyLadyMSystem2:
@@ -213,8 +213,8 @@ func Apply(cfg *Settings, key, value string) error {
 		cfg.LadyMSystem2 = b
 	case KeyLadyMSystem2Interval:
 		n, err := strconv.Atoi(value)
-		if err != nil || n < 60 {
-			return fmt.Errorf("ladym-system2-interval must be an integer >= 60, got %q", value)
+		if err != nil || n < MinLadyMSystem2Interval {
+			return fmt.Errorf("ladym-system2-interval must be an integer >= %d, got %q", MinLadyMSystem2Interval, value)
 		}
 		cfg.LadyMSystem2Interval = n
 	case KeyDebugLog:
@@ -260,9 +260,9 @@ func Describe(cfg Settings, secretSet func(string) bool, dbPath string) string {
 	fmt.Fprintf(&b, "ladym-embedding-api-key: %s\n", mask(SecretLadyMEmbeddingAPIKey))
 	fmt.Fprintf(&b, "ladym-llm: %s\n", orDefault(cfg.LadyMLLM, LadyMLLMInherit))
 	fmt.Fprintf(&b, "ladym-autoretain: %s\n", strconv.FormatBool(cfg.LadyMAutoRetain))
-	fmt.Fprintf(&b, "ladym-topk: %s\n", orDefault(strconv.Itoa(cfg.LadyMTopK), "6"))
+	fmt.Fprintf(&b, "ladym-topk: %s\n", orDefault(strconv.Itoa(cfg.LadyMTopK), strconv.Itoa(DefaultLadyMTopK)))
 	fmt.Fprintf(&b, "ladym-system2: %s\n", strconv.FormatBool(cfg.LadyMSystem2))
-	fmt.Fprintf(&b, "ladym-system2-interval: %s\n", orDefault(strconv.Itoa(cfg.LadyMSystem2Interval), "300"))
+	fmt.Fprintf(&b, "ladym-system2-interval: %s\n", orDefault(strconv.Itoa(cfg.LadyMSystem2Interval), strconv.Itoa(DefaultLadyMSystem2Interval)))
 	fmt.Fprintf(&b, "debug-log: %s\n", strconv.FormatBool(cfg.DebugLog))
 	return b.String()
 }

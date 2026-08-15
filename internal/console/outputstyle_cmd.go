@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/projanvil/woca/internal/prompt"
-	"github.com/projanvil/woca/internal/settings"
 )
 
 // outputStyleCmd implements /output-style (a port of Claude Code's output
@@ -43,8 +42,14 @@ func (c *Console) outputStyleCmd(args []string) (Result, error) {
 	if c.deps.Settings != nil {
 		if st.Name == "default" {
 			_ = c.deps.Settings.Clear("output_style")
-		} else if err := c.deps.Settings.Save(settings.Settings{OutputStyle: st.Name}); err != nil {
-			return Result{Output: "style applied for this session (persist failed: " + err.Error() + ")\n"}, nil
+		} else {
+			// Load-modify-Save: a fresh partial struct would clobber the
+			// explicitly-persisted bools (e.g. ladym_autoretain) with false.
+			cfg := c.deps.Settings.Load()
+			cfg.OutputStyle = st.Name
+			if err := c.deps.Settings.Save(cfg); err != nil {
+				return Result{Output: "style applied for this session (persist failed: " + err.Error() + ")\n"}, nil
+			}
 		}
 	}
 	return Result{Output: "output style set to " + st.Name + "\n"}, nil
