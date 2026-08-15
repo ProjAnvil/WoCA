@@ -92,12 +92,13 @@ export const useMemoryStore = defineStore('memory', () => {
 
   async function add(content: string, tags: string[] = []): Promise<string> {
     const res = await rememberMemory({ workspace: workspace.value, content, tags })
+    await reload()
+    // 注意：必须在 reload() 之后写入 —— reload() 开头会清空 notice，先写会被覆盖。
     if (res.dropped || !res.id) {
       notice.value = '被注意力门丢弃（重复或噪音），未保存'
     } else {
       notice.value = ''
     }
-    await reload()
     return res.id
   }
 

@@ -1714,3 +1714,250 @@ html.dark .shiki-host span {
   color: #b08a2e;
   border-color: color-mix(in srgb, #b08a2e 55%, var(--border));
 }
+
+/* -------------------------------------------------------------------------- */
+/* Memory panel (workspace overlay)                                            */
+
+.memory-card {
+  width: min(720px, 94vw);
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.memory-card .card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.memory-body {
+  overflow-y: auto;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mem-ws {
+  font-weight: 400;
+  opacity: 0.7;
+  margin-left: 6px;
+  font-size: 12px;
+}
+.mem-tagline {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.mem-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mem-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px 10px;
+  color: var(--muted);
+  background: var(--bg);
+}
+.mem-search input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  color: var(--text);
+}
+.mem-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.mem-chip {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.mem-chip:hover {
+  background: var(--surface-hover);
+}
+.mem-chip.active {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.mem-error {
+  color: var(--danger);
+  font-size: 12.5px;
+  margin: 0;
+}
+.mem-notice {
+  color: #b08a2e;
+  font-size: 12.5px;
+  margin: 0;
+}
+.mem-empty {
+  opacity: 0.6;
+  font-size: 13px;
+  margin: 8px 0;
+  text-align: center;
+}
+.mem-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mem-group-title {
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.mem-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mem-item.insight {
+  border-left: 3px solid #8b5cf6;
+}
+.mem-item.L6_predictive {
+  border-left-color: #f59e0b;
+}
+.mem-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mem-badge {
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+}
+.mem-badge.L5_mental {
+  background: rgba(139, 92, 246, 0.2);
+  color: #8b5cf6;
+}
+.mem-badge.L6_predictive {
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+}
+.mem-time {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.5;
+}
+.mem-del {
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.45;
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+}
+.mem-del:hover {
+  opacity: 1;
+  color: var(--danger);
+}
+.mem-summary {
+  font-size: 13px;
+  font-weight: 600;
+}
+.mem-content {
+  font-size: 12.5px;
+  opacity: 0.8;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+.mem-more {
+  align-self: center;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 4px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+  color: var(--text);
+}
+.mem-more:hover {
+  background: var(--surface-hover);
+}
+.mem-add {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mem-add textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.mem-add textarea:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
+.mem-add-row {
+  display: flex;
+  gap: 8px;
+}
+.mem-tags-input {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.mem-tags-input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
+.mem-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  border-radius: var(--radius);
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.mem-add-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mem-privacy {
+  font-size: 11.5px;
+  opacity: 0.5;
+  margin: 4px 0 0;
+  text-align: center;
+}

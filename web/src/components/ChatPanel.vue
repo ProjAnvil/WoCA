@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Bot, PanelRight, Paperclip, Send, Sparkles, Square, Target, X } from 'lucide-vue-next'
+import { Bot, Brain, PanelRight, Paperclip, Send, Sparkles, Square, Target, X } from 'lucide-vue-next'
 import ChatItemView from './ChatItemView.vue'
 import { useSessionStore } from '../stores/sessions'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useCompletionsStore } from '../stores/completions'
+import { useMemoryStore } from '../stores/memory'
 import type { Attachment, CompletionEntry } from '../types'
 
 const store = useSessionStore()
 const workspace = useWorkspaceStore()
 const completions = useCompletionsStore()
+const memory = useMemoryStore()
 const draft = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -220,6 +222,13 @@ function send() {
           <span class="goal-chip-meta">C{{ store.activeGoal.cycles }}/{{ store.activeGoal.max_cycles }}</span>
         </button>
       </div>
+      <button
+        class="icon-btn"
+        title="工作区记忆"
+        @click="memory.open(store.activeWorkspace?.path ?? '', store.activeWorkspace?.name)"
+      >
+        <Brain :size="16" />
+      </button>
       <button
         class="icon-btn panel-toggle"
         :class="{ active: workspace.panelOpen }"
