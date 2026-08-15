@@ -107,6 +107,26 @@ internal/agent
 
 注册位置：`agent.New()` 工具组装序列（agent.go:349-362）taskTools 之后；`newSubagent`（agent.go:1107）按上表过滤。
 
+### 4.5 后台运行（System 2 整理与 decay）——运行级别
+
+**运行级别总表**（明确回答"workspace 级还是项目级"）：
+
+| 层 | 级别 | 说明 |
+|---|---|---|
+| 存储 | **项目级**（整个 woca 进程一份） | 单一 `~/.woca/ladym.db`，所有 workspace 共库，workspace 仅为 memories 行级隔离字段（§3） |
+| 引擎 | **项目级**（进程内单例） | prefetch / auto-retain / 4 工具 / web API 共用一个 `*engine.Engine`，每次调用传 workspace 参数；并发 run 共享（engine 自带 mutex，§2） |
+| System 2 整理（consolidate → proceduralize → L5/L6 → decay） | **workspace 级** | LadyM 的 `RunSystem2Cycle(eng, ws)` 整链按单 workspace 执行，且自带 episode 门槛（近期 episode < `MinEpisodesToRun`=3 时整周期跳过，operations/system2.go:38-42）；woca 以 workspace 为单位独立节流触发 |
+
+**触发模式：机会主义 post-run 触发，无常驻 daemon。**
+
+- 挂点复用 auto-retain 的 runner Done choke point（§4.3）：run 完成后，若 settings `ladym-system2=true` 且该 workspace 距上次周期 ≥ `ladym-system2-interval`（默认 300s，进程内 per-workspace 时间戳节流），起 goroutine 调 `operations.RunSystem2Cycle(eng, ws)`。
+- 为什么不用 LadyM 原生 `StartSystem2` 常驻 daemon（备选记录见 §14）：它是 per-workspace daemon 且自开独立 worker 引擎——woca 单进程多 workspace 需要维护 stop-channel 注册表并与 §5.4 的引擎重建（60s 延迟关闭）做生命周期联动；300s 间隔 daemon 在 TUI 短命进程里几乎永远不触发；而周期自带 episode 门槛，"有新原料才整理"与 post-run 时机天然对齐（没有新 episode 时周期只是一次 count 查询，几乎零成本）。
+- 进程退出兜底：TUI 的 fire-and-forget 周期可能被退出截断——可接受，consolidate/decay 幂等，下次 run 补跑；web 长驻进程可靠。
+- 手动触发：`/memory consolidate`（§8）同步跑一次当前 workspace 周期并输出报告。
+- 失败处理：周期单项失败记日志即可，不影响 run 与引擎；无常驻故无需熔断（下个触发点自然重试）。
+- LLM 成本：`ladym-llm=inherit` 时每个实际执行的周期含模型调用（consolidate 的 ADD/UPDATE/DELETE/NOOP 判定、L5/L6 提取）；默认 `ladym-system2=false` = 零后台用量，开启即知情选择；`ladym-llm=none` 时 L5/L6 自动跳过（LadyM skip-when-no-LLM 契约）。
+- decay：包含在周期链内（`RunSystem2Cycle` 末步），不单独设触发器与设置项。
+
 ## 5. 设置模型与实时生效（D7）
 
 ### 5.1 新 settings 键（internal/settings/keys.go 加常量，DB 存下划线形式）
@@ -122,7 +142,8 @@ internal/agent
 | `ladym-llm` | `inherit` \| `none` | `inherit` | 实时 |
 | `ladym-autoretain` | bool | `true` | 实时（runner 每 run 读） |
 | `ladym-topk` | int 1–20 | `6` | 实时 |
-| `ladym-system2` | bool | `false`（P3 启用） | 实时 |
+| `ladym-system2` | bool | `false`（后台整理开关，机制见 §4.5） | 实时（每 run 读） |
+| `ladym-system2-interval` | int ≥60 | `300`（每 workspace 最小触发间隔，秒） | 实时（每 run 读） |
 
 `Apply()` 加枚举/topk 范围校验；`KeyHelp()` 单行文案照现有格式。
 
@@ -190,6 +211,7 @@ engine 为 nil（`memory-engine=none` 或构建失败）时统一返回 `{engine
 /memory remember <content...> [--tags a,b]   写入事实（source="woca:cmd"）
 /memory stats                 各层计数 + db path + engine 状态
 /memory forget <id>           删除单条
+/memory consolidate           同步跑一次当前 workspace 的 System 2 周期（§4.5），输出报告
 ```
 
 engine 禁用时输出 "memory engine disabled (/settings set memory-engine ladym)"。`internal/slashcmds/slashcmds.go:47` 的 `/memory` 描述同步更新（该表同时喂 web `/api/completions` 补全）。
@@ -230,6 +252,7 @@ engine 禁用时输出 "memory engine disabled (/settings set memory-engine lady
 | 启动时引擎构建失败（db 不可写等） | 记 error 日志，engine=nil 降级（KV prefetch/无记忆），woca 正常启动；settings 页可见 apply_error 状态 |
 | 运行中 Recall 失败（含旧引擎被关闭） | 日志 + 跳过本轮注入 |
 | Remember/RecordEvent 失败 | 日志，不影响 run 结果 |
+| System 2 周期失败（含旧引擎上触发） | 日志，不影响 run；下个触发点重试（§4.5） |
 | PUT settings 时 rebuild 失败 | 保存成功但 `apply_error` 提示（沿用模型切换失败的响应模式） |
 | web API 在 engine=nil | `{engine:"none"}` 空数据 |
 | LadyM db 与外部 `ladym` CLI 并发 | WAL 已覆盖；woca 侧不设 busy_timeout（LadyM store 自管），集成测试验证并发 run 场景 |
@@ -239,7 +262,7 @@ engine 禁用时输出 "memory engine disabled (/settings set memory-engine lady
 LadyM 测试套件 hermetic（hashing embedding 零网络），woca 侧沿用：
 
 - **单元**（internal/memory）：继承解析（provider 组合 → 预期 embedding 配置）、workspace 派生、Config 构造（无 LADYM_* 环境泄漏——测试里 setenv 反向验证）、noop 引擎。
-- **集成**（internal/agent）：tmp db + hashing + llm none —— ① prefetch：写入 N 条 → beginMemoryPrefetch/takeMemoryAttachments 召回与格式断言；② auto-retain：runner 跑完一轮 → DB 有 fact + event；③ 工具：recall_memory/remember_fact 经 Registry 调用；④ subagent 过滤：newSubagent 工具表不含 remember_fact/index_code。
+- **集成**（internal/agent）：tmp db + hashing + llm none —— ① prefetch：写入 N 条 → beginMemoryPrefetch/takeMemoryAttachments 召回与格式断言；② auto-retain：runner 跑完一轮 → DB 有 fact + event；③ 工具：recall_memory/remember_fact 经 Registry 调用；④ subagent 过滤：newSubagent 工具表不含 remember_fact/index_code；⑤ System 2 触发（P3）：episode 不足时周期跳过、per-workspace 间隔节流生效（llm=none 下 L5/L6 跳过不报错）。
 - **web API**（internal/server，httptest）：四个 endpoint 的正常/降级路径。
 - **settings**：Apply 校验、PUT 触发 rebuild 回调（mock）。
 - **手动验收**：settings 页切 embedding hashing→openai（需 key）观察 re-embed；两个 workspace 互不可见记忆。
@@ -251,7 +274,7 @@ LadyM 测试套件 hermetic（hashing embedding 零网络），woca 侧沿用：
 | P0 地基 | go directive 1.25.0→1.26.4；import LadyM（锚 tag）；internal/memory 包（接口/适配器/构建/继承解析/noop）；agent 注入 + prefetch 走 Recall + SetMemoryWorkspace；settings 新键 + 启动构建 + TUI `/settings set` 即时生效；默认 `memory-engine=ladym` | `go test ./...` 过；TUI 两个 run：第二个能召回第一个沉淀的事实 |
 | P1 读写闭环 | 4 工具 + subagent 过滤；runner auto-retain；`/memory` 新子命令 + slashcmds 描述 | 集成测试 ①-④ 过 |
 | P2 web 全量 | LadyM `Engine.List` + tag v0.3.1；4 个 REST endpoint；PUT 实时 rebuild；SettingsPanel 记忆区；MemoryPanel + title bar 入口（npm run build → go build） | 手动验收清单过 |
-| P3 增值 | `ladym-system2` 后台 worker（StartSystem2，进程退出关闭）；runTask 完成事件沉淀；decay 周期 | stats 可见 L3/L5 产出 |
+| P3 增值 | `ladym-system2` 机会主义周期（runner Done 触发 `RunSystem2Cycle`，per-workspace 节流，§4.5）+ `ladym-system2-interval` 键；`/memory consolidate`；runTask 完成事件沉淀 | stats 可见 L3/L5 产出；`/memory consolidate` 输出报告 |
 
 每阶段独立可交付、可提交。开发期可用 `replace github.com/ProjAnvil/LadyM => ../ladyM` 本地联调（不提交该行，发布前移除）。
 
@@ -269,3 +292,4 @@ LadyM 测试套件 hermetic（hashing embedding 零网络），woca 侧沿用：
 - **LadyM langgraph 图节点（路径 3）**：NodeFunc 签名与 woca 自研 graph 不匹配需适配层；且其 RecallNode"prepend SystemMessage"粒度粗于 woca 现有分轮 attachments 机制；其 RetainNode 逻辑已内联吸收进 §4.3。
 - **把 LadyM 塞进 `store.Store` 接口**：KV 与语义记忆形状不匹配（无 query/topK 概念），List(ns,prefix) 语义对不上 recall；故新窄接口并存。
 - **每 workspace 一个 engine**：多连接多内存索引副本，收益为零（行级隔离已够）。
+- **LadyM 原生 System 2 常驻 daemon（`StartSystem2`）**：per-workspace daemon + 自开 worker 引擎，woca 多 workspace 需 stop-channel 注册表并与引擎重建联动；TUI 短命进程收益近零；周期自带 episode 门槛使机会主义 post-run 触发（§4.5）以近零成本覆盖同场景。
