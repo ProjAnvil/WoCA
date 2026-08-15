@@ -181,6 +181,17 @@ export interface AppSettings {
   debug_log: boolean
   /** Where observability logs live (~/.woca/logs), empty when unwired. */
   log_dir: string
+  memory_engine: string
+  ladym_db_path: string
+  ladym_embedding: string
+  ladym_embedding_model: string
+  ladym_embedding_base_url: string
+  ladym_embedding_api_key_set: boolean
+  ladym_llm: string
+  ladym_autoretain: boolean
+  ladym_topk: number
+  ladym_system2: boolean
+  ladym_system2_interval: number
 }
 
 /** PUT /api/settings body — absent fields are unchanged; empty strings clear. */
@@ -198,4 +209,51 @@ export interface AppSettingsUpdate {
   checkpoint_dir?: string
   postgres_url?: string
   debug_log?: boolean
+  memory_engine?: string
+  ladym_db_path?: string
+  ladym_embedding?: string
+  ladym_embedding_model?: string
+  ladym_embedding_base_url?: string
+  ladym_embedding_api_key?: string
+  ladym_llm?: string
+  ladym_autoretain?: boolean
+  ladym_topk?: number
+  ladym_system2?: boolean
+  ladym_system2_interval?: number
+}
+
+// --- memory (mirror /api/memory) ---
+
+export interface MemoryItem {
+  id: string
+  layer: string
+  type: string
+  summary: string
+  content: string
+  source: string
+  tags: string[] | null
+  score?: number
+  updated_at: number
+}
+
+export interface MemoryStats {
+  total: number
+  layers: Record<string, number>
+}
+
+export interface MemoryListResponse {
+  engine: string
+  items: MemoryItem[]
+  total: number
+}
+
+export interface MemoryStatsResponse {
+  engine: string
+  stats: MemoryStats | null
+  workspace?: string
+}
+
+export interface RememberResponse {
+  id: string
+  dropped?: boolean
 }

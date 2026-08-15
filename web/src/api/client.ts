@@ -4,6 +4,9 @@ import type {
   AppSettingsUpdate,
   CompletionEntry,
   Goal,
+  MemoryListResponse,
+  MemoryStatsResponse,
+  RememberResponse,
   SessionSummary,
   TranscriptMessage,
   WorkspaceFile,
@@ -155,6 +158,46 @@ export function sendGoalCommand(
   workspace?: string,
 ): Promise<{ ok: boolean; output: string; goal: Goal | null; run_id: string }> {
   return postJSON(`/api/sessions/${sessionId}/goal`, { command, workspace: workspace ?? '' })
+}
+
+/** Lists (or searches with q) a workspace's memories. */
+export async function listMemory(opts: {
+  workspace?: string
+  q?: string
+  layer?: string
+  limit?: number
+  offset?: number
+}): Promise<MemoryListResponse> {
+  const params = new URLSearchParams()
+  if (opts.workspace) params.set('workspace', opts.workspace)
+  if (opts.q) params.set('q', opts.q)
+  if (opts.layer) params.set('layer', opts.layer)
+  if (opts.limit) params.set('limit', String(opts.limit))
+  if (opts.offset) params.set('offset', String(opts.offset))
+  const resp = await fetch(`/api/memory?${params}`)
+  if (!resp.ok) throw new Error(`加载记忆失败：${resp.status}`)
+  return resp.json()
+}
+
+export async function memoryStats(workspace?: string): Promise<MemoryStatsResponse> {
+  const params = workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''
+  const resp = await fetch(`/api/memory/stats${params}`)
+  if (!resp.ok) throw new Error(`加载记忆统计失败：${resp.status}`)
+  return resp.json()
+}
+
+/** Returns the new memory id, or '' when the attention gate dropped it. */
+export async function rememberMemory(body: {
+  workspace?: string
+  content: string
+  tags?: string[]
+}): Promise<RememberResponse> {
+  return postJSON('/api/memory', body)
+}
+
+export async function forgetMemory(id: string): Promise<void> {
+  const resp = await fetch(`/api/memory/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!resp.ok) throw new Error(`删除失败：${resp.status}`)
 }
 
 /** Opens an SSE stream for a run and dispatches events to handlers. */
