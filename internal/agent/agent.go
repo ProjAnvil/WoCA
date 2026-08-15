@@ -458,7 +458,10 @@ func (a *Agent) SetObsRun(workspace, session, run string) {
 }
 
 // SetMemoryWorkspace scopes subsequent memory-engine calls to one workspace.
-// Harnesses call it at run start (web startRun; the TUI defaults to workdir).
+// The TUI/REPL pins it to the workdir at startup; subagents inherit the
+// parent's value at fork. The web server intentionally does NOT set it
+// per-run: concurrent runs would race on this agent-wide field, so serve
+// mode keeps memory pinned to the startup workdir (spec §4.1 revision).
 func (a *Agent) SetMemoryWorkspace(ws string) {
 	if ws == "" {
 		return

@@ -140,7 +140,7 @@ flowchart TB
 ### 4.1 引擎注入与 per-run workspace
 
 - `agent.Config` 新增 `MemoryEngine memory.Engine`；`Agent` 存私有字段 + mutex（无 setter；热更新走整引擎换指针，见 §5.4）。
-- per-run workspace 沿用 `SetObsRun` 先例：`Agent.SetMemoryWorkspace(ws string)`（mutex 保护），web `startRun` 在 `s.agent.SetObsRun(...)` 旁调用（internal/server/server.go:464）；REPL/TUI 在 run 前设为 workdir；subagent fork 时继承父当前值。
+- per-run workspace 沿用 `SetObsRun` 先例：`Agent.SetMemoryWorkspace(ws string)`（mutex 保护）。**实施修订（2026-08-15 验收）**：web `startRun` 最终**未**按 run 调用——并发 run 会争抢 agent 单一字段产生串扰，省略更安全。实际语义：记忆 workspace 固定为启动 workdir（TUI/REPL 正确）；web 非默认 workspace 的 session 中，auto-retain/prefetch 落 workdir，而记忆面板按 session workspace 显式查询——默认用法（workspace == workdir）完全一致，非默认场景的差异记录为后续改进（run 级记忆 workspace 需经 graph state 传递，属设计变更，见 backlog）。
 - 查询语料：最后一条 Human 消息文本（截 2000 字符），替代现 `memoryTerms` 关键词提取（KV 路径保留原逻辑）。
 
 ### 4.2 读路径（prefetch 替换）
@@ -297,7 +297,7 @@ woca 构造 LadyM Config 时恒置 `EmbeddingAllowDimChange=true`：引擎打开
 | `GET /api/memory?workspace=&q=&limit=&offset=&layer=` | 有 `q` → `Recall`；无 → `List`（按 updated_at 倒序分页；`layer` 可选过滤，如 `L5_mental`/`L6_predictive`，供面板分栏）。返回 `{items:[{id,layer,type,summary,content,source,tags,updated_at,score?}], total}` |
 | `POST /api/memory` `{workspace, content, tags[]}` | `Remember(source="woca:panel")` → `{id}` |
 | `DELETE /api/memory/{id}` | `Forget(id)` → `{ok}` |
-| `GET /api/memory/stats?workspace=` | `{engine:"ladym", total, layers:{L1:n,L2:n,...}, db_path, workspace}` |
+| `GET /api/memory/stats?workspace=` | `{engine:"ladym"|"none", stats:{total, layers}|null, workspace}`（**实施形状**：stats 嵌套一层并回显 workspace；db_path 不在响应中） |
 
 engine 为 nil（`memory-engine=none` 或构建失败）时统一返回 `{engine:"none"}` + 空列表，不报错。`workspace` 参数为空时服务端回退 server workdir（与 `startRun` 的缺省规则一致，见 §3）。
 
