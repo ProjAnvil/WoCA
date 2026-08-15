@@ -74,7 +74,10 @@ type Deps struct {
 	Memory *store.Store
 	// MemoryEngine is the factual-memory engine (/memory engine subcommands).
 	// When set, /memory surfaces the engine; the legacy KV memoryStore moves
-	// under `kv`. Nil falls back to the KV store command.
+	// under `kv`. Nil falls back to the KV store command. /memory resolves
+	// the engine live through Agent.MemoryEngine() when an agent is wired so
+	// rebuilds and enable/disable apply without restarting; this field is the
+	// construction-time fallback.
 	MemoryEngine memory.Engine
 	// MemoryWorkspace resolves the current memory workspace for /memory.
 	MemoryWorkspace func() string

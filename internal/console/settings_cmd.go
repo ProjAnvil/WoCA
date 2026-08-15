@@ -3,7 +3,9 @@ package console
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/settings"
@@ -131,7 +133,15 @@ func (c *Console) applyMemoryChange(key string) error {
 //	/memory index [path] [--force] index source into memory
 //	/memory kv list|get|put|del … legacy KV memoryStore
 func (c *Console) memoryCmd(ctx context.Context, args []string) (Result, error) {
-	if eng := c.deps.MemoryEngine; eng != nil {
+	// Resolve the engine live: the agent's pointer tracks rebuilds and
+	// enable/disable triggered by /settings set memory-engine …, while
+	// deps.MemoryEngine is the construction-time snapshot (used when no
+	// agent is wired, e.g. tests). Both nil → legacy KV fallback.
+	eng := c.deps.MemoryEngine
+	if c.deps.Agent != nil {
+		eng = c.deps.Agent.MemoryEngine()
+	}
+	if eng != nil {
 		return c.memoryEngineCmd(ctx, eng, args)
 	}
 	m := c.deps.Memory
@@ -165,11 +175,7 @@ func (c *Console) memoryEngineCmd(ctx context.Context, eng memory.Engine, args [
 		var b strings.Builder
 		fmt.Fprintf(&b, "memory engine: %s (workspace %s)\n", eng.Description(), ws)
 		for _, h := range hits {
-			line := h.Summary
-			if len(line) > 80 {
-				line = line[:80] + "…"
-			}
-			fmt.Fprintf(&b, "  [%s|%s] %s\n", h.Layer, h.Type, line)
+			fmt.Fprintf(&b, "  [%s|%s] %s\n", h.Layer, h.Type, clampRunes(h.Summary, 80))
 		}
 		return Result{Output: b.String()}, nil
 	case "recall":
@@ -207,8 +213,13 @@ func (c *Console) memoryEngineCmd(ctx context.Context, eng memory.Engine, args [
 		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "engine: %s\nworkspace: %s\ntotal: %d\n", eng.Description(), ws, st.Total)
-		for layer, n := range st.Layers {
-			fmt.Fprintf(&b, "  %s: %d\n", layer, n)
+		layers := make([]string, 0, len(st.Layers))
+		for layer := range st.Layers {
+			layers = append(layers, layer)
+		}
+		sort.Strings(layers)
+		for _, layer := range layers {
+			fmt.Fprintf(&b, "  %s: %d\n", layer, st.Layers[layer])
 		}
 		return Result{Output: b.String()}, nil
 	case "forget":
@@ -245,7 +256,7 @@ func (c *Console) memoryEngineCmd(ctx context.Context, eng memory.Engine, args [
 		return Result{Output: report + "\n"}, nil
 	case "kv":
 		if c.deps.Memory == nil {
-			return Result{}, fmt.Errorf("memoryStore is disabled")
+			return Result{}, fmt.Errorf("memoryStore is disabled (/settings set memory sqlite|memory|postgres and restart)")
 		}
 		return c.memoryKVCmd(ctx, c.deps.Memory, args[1:])
 	default:
@@ -274,11 +285,7 @@ func (c *Console) memoryKVCmd(ctx context.Context, m *store.Store, args []string
 		var b strings.Builder
 		fmt.Fprintf(&b, "memoryStore backend=%s path=%s\n", m.Backend(), m.Path())
 		for _, e := range entries {
-			val := string(e.Value)
-			if len(val) > 80 {
-				val = val[:80] + "…"
-			}
-			fmt.Fprintf(&b, "  %s/%s = %s\n", e.Namespace, e.Key, val)
+			fmt.Fprintf(&b, "  %s/%s = %s\n", e.Namespace, e.Key, clampRunes(string(e.Value), 80))
 		}
 		return Result{Output: b.String()}, nil
 	case "get":
@@ -312,4 +319,17 @@ func (c *Console) memoryKVCmd(ctx context.Context, m *store.Store, args []string
 	default:
 		return Result{}, fmt.Errorf("unknown /memory subcommand %q (use list/get/put/del)", args[0])
 	}
+}
+
+// clampRunes truncates s to at most n bytes, backing off to a rune boundary
+// (like agent.clampUTF8), and marks the cut with an ellipsis. Byte slicing
+// alone would split a multi-byte rune mid-sequence.
+func clampRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }
