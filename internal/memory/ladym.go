@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/ProjAnvil/LadyM/adapter"
 	"github.com/ProjAnvil/LadyM/config"
@@ -99,6 +100,12 @@ func Build(in BuildInput) (*LadyM, error) {
 	if in.DBPath == "" {
 		return nil, fmt.Errorf("memory: db path is required")
 	}
+	// SetWorkspace("") is a no-op in ladyM, so an empty default would leave
+	// the engine parked on whatever workspace the last write retargeted it
+	// to. Refuse to build in that state.
+	if in.DefaultWorkspace == "" {
+		return nil, fmt.Errorf("memory: default workspace is required")
+	}
 	provider, model, baseURL, key := resolveEmbedding(in)
 
 	cfg := config.Default()
@@ -114,6 +121,10 @@ func Build(in BuildInput) (*LadyM, error) {
 	cfg.EmbeddingAPIKeyEnv = embedKeyEnv
 	if key != "" {
 		os.Setenv(embedKeyEnv, key)
+	} else {
+		// A rebuild without a key must not inherit a stale key left in the
+		// process env by an earlier Build.
+		os.Unsetenv(embedKeyEnv)
 	}
 	// The LLM is injected per-op below (host model), never resolved by
 	// ladyM's own provider factories.
@@ -133,22 +144,45 @@ func Build(in BuildInput) (*LadyM, error) {
 	if err != nil {
 		return nil, fmt.Errorf("memory: build ladyM engine: %w", err)
 	}
-	return &LadyM{eng: eng, path: in.DBPath}, nil
+	return &LadyM{eng: eng, path: in.DBPath, defWs: in.DefaultWorkspace}, nil
 }
 
 // LadyM implements Engine over an in-process ladyM engine.
+//
+// ladyM v0.3.1 is entirely unsynchronized (the vector index is a bare slice,
+// and Remember/RecordEvent write to whatever workspace Config.Workspace
+// currently names), so mu guards every engine call and defWs snapshots the
+// default workspace at Build time: writes retarget the engine with
+// SetWorkspace and restore it before the lock is released.
 type LadyM struct {
-	eng  *ladymengine.Engine
-	path string
+	mu    sync.Mutex
+	eng   *ladymengine.Engine
+	path  string
+	defWs string
 }
 
 var _ Engine = (*LadyM)(nil)
 
+// workspace resolves an optional per-call workspace to the engine default.
 func (l *LadyM) workspace(ws string) string {
 	if ws == "" {
-		return l.eng.Config.Workspace
+		return l.defWs
 	}
 	return ws
+}
+
+// withWorkspace runs fn under the engine lock with the engine retargeted to
+// ws, restoring the default workspace before the lock is released. Used for
+// the write path (Remember/RecordEvent), the only ops whose ladyM entry
+// points do not take an explicit workspace.
+func (l *LadyM) withWorkspace(ws string, fn func() error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if ws != l.defWs {
+		l.eng.SetWorkspace(ws)
+		defer l.eng.SetWorkspace(l.defWs)
+	}
+	return fn()
 }
 
 // Recall runs the two-tier semantic retrieval (heuristic, no LLM).
@@ -156,7 +190,9 @@ func (l *LadyM) Recall(_ context.Context, query, workspace string, topK int) ([]
 	if topK <= 0 {
 		topK = 6
 	}
+	l.mu.Lock()
 	resp, err := l.eng.Recall(query, l.workspace(workspace), topK, nil, nil, 0)
+	l.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("memory: recall: %w", err)
 	}
@@ -168,7 +204,9 @@ func (l *LadyM) SearchCode(_ context.Context, query, workspace string, topK int)
 	if topK <= 0 {
 		topK = 8
 	}
+	l.mu.Lock()
 	resp, err := l.eng.SearchCode(query, topK, l.workspace(workspace))
+	l.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("memory: search code: %w", err)
 	}
@@ -176,25 +214,40 @@ func (l *LadyM) SearchCode(_ context.Context, query, workspace string, topK int)
 }
 
 // Remember stores a semantic fact (subject to ladyM's attention gate).
+// It returns an empty id with a nil error when the gate drops the content:
+// ladyM hands back an unpersisted memory marked Metadata["gated"]=="dropped",
+// which this adapter never reports as stored.
 func (l *LadyM) Remember(_ context.Context, workspace, content string, tags []string, source string) (string, error) {
-	ws := l.workspace(workspace)
-	m, err := l.eng.Remember(content, schema.LayerSemantic, schema.TypeFact, tags, map[string]any{"workspace": ws}, source, "")
+	var id string
+	err := l.withWorkspace(l.workspace(workspace), func() error {
+		m, err := l.eng.Remember(content, schema.LayerSemantic, schema.TypeFact, tags, nil, source, "")
+		if err != nil {
+			return fmt.Errorf("memory: remember: %w", err)
+		}
+		if m == nil {
+			return fmt.Errorf("memory: remember returned no memory")
+		}
+		if m.Metadata["gated"] == "dropped" {
+			return nil // dropped by the attention gate; nothing was persisted
+		}
+		id = m.ID
+		return nil
+	})
 	if err != nil {
-		return "", fmt.Errorf("memory: remember: %w", err)
+		return "", err
 	}
-	if m == nil {
-		return "", fmt.Errorf("memory: remember returned no memory")
-	}
-	return m.ID, nil
+	return id, nil
 }
 
 // RecordEvent stores an L1 episodic tuple (food for consolidation).
 func (l *LadyM) RecordEvent(_ context.Context, workspace, agentName, action, observation, outcome string) error {
-	_, err := l.eng.RecordEvent(agentName, action, observation, outcome, nil, nil)
-	if err != nil {
-		return fmt.Errorf("memory: record event: %w", err)
-	}
-	return nil
+	return l.withWorkspace(l.workspace(workspace), func() error {
+		_, err := l.eng.RecordEvent(agentName, action, observation, outcome, nil, nil)
+		if err != nil {
+			return fmt.Errorf("memory: record event: %w", err)
+		}
+		return nil
+	})
 }
 
 // List returns recent memories newest-first (layer may be "" for all).
@@ -204,10 +257,12 @@ func (l *LadyM) List(_ context.Context, workspace, layer string, limit, offset i
 	}
 	var layerPtr *schema.Layer
 	if layer != "" {
-		l := schema.Layer(layer)
-		layerPtr = &l
+		ly := schema.Layer(layer)
+		layerPtr = &ly
 	}
+	l.mu.Lock()
 	items, err := l.eng.List(l.workspace(workspace), layerPtr, limit, offset)
+	l.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("memory: list: %w", err)
 	}
@@ -223,7 +278,10 @@ func (l *LadyM) List(_ context.Context, workspace, layer string, limit, offset i
 
 // Forget deletes one memory by id.
 func (l *LadyM) Forget(_ context.Context, id string) error {
-	if err := l.eng.Forget(id); err != nil {
+	l.mu.Lock()
+	err := l.eng.Forget(id)
+	l.mu.Unlock()
+	if err != nil {
 		return fmt.Errorf("memory: forget: %w", err)
 	}
 	return nil
@@ -231,7 +289,9 @@ func (l *LadyM) Forget(_ context.Context, id string) error {
 
 // Stats counts memories per layer for one workspace.
 func (l *LadyM) Stats(_ context.Context, workspace string) (*Stats, error) {
+	l.mu.Lock()
 	st, err := l.eng.StatsFor(l.workspace(workspace))
+	l.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("memory: stats: %w", err)
 	}
@@ -240,21 +300,31 @@ func (l *LadyM) Stats(_ context.Context, workspace string) (*Stats, error) {
 
 // IndexCode (re)indexes a source root into code memories; returns a report.
 func (l *LadyM) IndexCode(_ context.Context, root, workspace string, force bool) (string, error) {
+	l.mu.Lock()
 	rep, err := l.eng.IndexCode(root, force, l.workspace(workspace), nil)
+	l.mu.Unlock()
 	if err != nil {
 		return "", fmt.Errorf("memory: index code: %w", err)
 	}
-	return fmt.Sprintf("index report: %+v", rep), nil
+	return fmt.Sprintf("indexed %d of %d files (%d symbols, %d refs, %d unchanged, %d errors)",
+		rep.FilesIndexed, rep.FilesSeen, rep.SymbolsWritten, rep.RefsWritten,
+		rep.FilesSkippedUnchanged, len(rep.Errors)), nil
 }
 
 // Consolidate runs one System 2 cycle synchronously; returns a report.
 func (l *LadyM) Consolidate(_ context.Context, workspace string) (string, error) {
+	l.mu.Lock()
 	rep, err := ladymops.RunSystem2Cycle(l.eng, l.workspace(workspace))
+	l.mu.Unlock()
 	if err != nil {
 		return "", fmt.Errorf("memory: consolidate: %w", err)
 	}
-	return fmt.Sprintf("consolidate=%+v proceduralize=%+v skipped_llm_steps=%v decay=%+v",
-		rep.Consolidate, rep.Proceduralize, rep.SkippedLLMSteps, rep.Decay), nil
+	if cons, ok := rep.Consolidate.(*ladymops.ConsolidationReport); ok {
+		return fmt.Sprintf("facts_promoted=%d kept_episodes=%d skipped_llm_steps=%v decay=%+v",
+			cons.PromotedToSemantic, cons.KeptEpisodes, rep.SkippedLLMSteps, rep.Decay), nil
+	}
+	return fmt.Sprintf("consolidate=%+v skipped_llm_steps=%v decay=%+v",
+		rep.Consolidate, rep.SkippedLLMSteps, rep.Decay), nil
 }
 
 // Description names the engine for /memory stats output.
@@ -264,7 +334,10 @@ func (l *LadyM) Description() string {
 
 // Close releases the underlying store.
 func (l *LadyM) Close() error {
-	if err := l.eng.Close(); err != nil {
+	l.mu.Lock()
+	err := l.eng.Close()
+	l.mu.Unlock()
+	if err != nil {
 		return fmt.Errorf("memory: close: %w", err)
 	}
 	return nil

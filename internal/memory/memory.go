@@ -25,15 +25,18 @@ type Stats struct {
 	Layers map[string]int `json:"layers"`
 }
 
-// Engine is the factual-memory subsystem. All methods take a workspace
-// (row-level isolation inside one sqlite db). Implementations must be safe
-// for concurrent use.
+// Engine is the factual-memory subsystem. Reads and writes are
+// workspace-scoped wherever a workspace is passed (row-level isolation
+// inside one sqlite db); Forget is id-addressed and therefore global across
+// workspaces. Implementations must be safe for concurrent use.
 type Engine interface {
 	// Recall runs the two-tier semantic retrieval (heuristic, no LLM).
 	Recall(ctx context.Context, query, workspace string, topK int) ([]Hit, error)
 	// SearchCode searches indexed code symbols.
 	SearchCode(ctx context.Context, query, workspace string, topK int) ([]Hit, error)
 	// Remember stores a semantic fact (subject to ladyM's attention gate).
+	// An empty id with a nil error means the gate dropped the content
+	// (recent duplicate or noise) and nothing was persisted.
 	Remember(ctx context.Context, workspace, content string, tags []string, source string) (string, error)
 	// RecordEvent stores an L1 episodic tuple (food for consolidation).
 	RecordEvent(ctx context.Context, workspace, agentName, action, observation, outcome string) error
