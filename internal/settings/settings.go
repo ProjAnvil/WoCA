@@ -27,28 +27,60 @@ const (
 	MemoryPostgres = "postgres"
 )
 
+// Memory-engine selectors (the ladyM factual-memory subsystem).
+const (
+	MemoryEngineLadyM = "ladym"
+	MemoryEngineNone  = "none"
+)
+
+// ladyM embedding providers.
+const (
+	LadyMEmbeddingInherit = "inherit"
+	LadyMEmbeddingHashing = "hashing"
+	LadyMEmbeddingOpenAI  = "openai"
+	LadyMEmbeddingOllama  = "ollama"
+	LadyMEmbeddingHTTP    = "http"
+)
+
+// ladyM LLM usage for offline consolidation.
+const (
+	LadyMLLMInherit = "inherit"
+	LadyMLLMNone    = "none"
+)
+
 // Secret names stored encrypted in the secrets table.
 const (
-	SecretAnthropicAPIKey = "anthropic_api_key"
-	SecretOpenAIAPIKey    = "openai_api_key"
-	SecretPostgresURL     = "postgres_url"
+	SecretAnthropicAPIKey      = "anthropic_api_key"
+	SecretOpenAIAPIKey         = "openai_api_key"
+	SecretPostgresURL          = "postgres_url"
+	SecretLadyMEmbeddingAPIKey = "ladym_embedding_api_key"
 )
 
 // Settings is the persisted configuration. Secrets (API keys, the postgres
 // DSN) are deliberately not part of this struct; they live in the secrets
 // table and are accessed via Store secrets methods.
 type Settings struct {
-	Provider          string  `json:"provider"`
-	Model             string  `json:"model"`
-	MaxTokens         int     `json:"max_tokens"`
-	Temperature       float64 `json:"temperature"`
-	AnthropicBaseURL  string  `json:"anthropic_base_url"`
-	OpenAIBaseURL     string  `json:"openai_base_url"`
-	CheckpointBackend string  `json:"checkpoint_backend"`
-	MemoryBackend     string  `json:"memory_backend"`
-	CheckpointDir     string  `json:"checkpoint_dir"`
-	OutputStyle       string  `json:"output_style"`
-	DebugLog          bool    `json:"debug_log"`
+	Provider              string  `json:"provider"`
+	Model                 string  `json:"model"`
+	MaxTokens             int     `json:"max_tokens"`
+	Temperature           float64 `json:"temperature"`
+	AnthropicBaseURL      string  `json:"anthropic_base_url"`
+	OpenAIBaseURL         string  `json:"openai_base_url"`
+	CheckpointBackend     string  `json:"checkpoint_backend"`
+	MemoryBackend         string  `json:"memory_backend"`
+	CheckpointDir         string  `json:"checkpoint_dir"`
+	OutputStyle           string  `json:"output_style"`
+	MemoryEngine          string  `json:"memory_engine"`
+	LadyMDBPath           string  `json:"ladym_db_path"`
+	LadyMEmbedding        string  `json:"ladym_embedding"`
+	LadyMEmbeddingModel   string  `json:"ladym_embedding_model"`
+	LadyMEmbeddingBaseURL string  `json:"ladym_embedding_base_url"`
+	LadyMLLM              string  `json:"ladym_llm"`
+	LadyMAutoRetain       bool    `json:"ladym_autoretain"`
+	LadyMTopK             int     `json:"ladym_topk"`
+	LadyMSystem2          bool    `json:"ladym_system2"`
+	LadyMSystem2Interval  int     `json:"ladym_system2_interval"`
+	DebugLog              bool    `json:"debug_log"`
 }
 
 // Default returns the default settings: sqlite storage under ~/.woca.
@@ -57,6 +89,8 @@ func Default() Settings {
 		Provider:          "anthropic",
 		CheckpointBackend: CheckpointSQLite,
 		MemoryBackend:     MemorySQLite,
+		MemoryEngine:      MemoryEngineLadyM,
+		LadyMAutoRetain:   true,
 	}
 }
 
@@ -84,6 +118,33 @@ func (s Settings) Normalize() (Settings, error) {
 	case MemoryInMem, MemorySQLite, MemoryPostgres:
 	default:
 		return out, fmt.Errorf("settings: unknown memory backend %q", out.MemoryBackend)
+	}
+	switch out.MemoryEngine {
+	case "":
+		out.MemoryEngine = MemoryEngineLadyM
+	case MemoryEngineLadyM, MemoryEngineNone:
+	default:
+		return out, fmt.Errorf("settings: unknown memory engine %q", out.MemoryEngine)
+	}
+	switch out.LadyMEmbedding {
+	case "":
+		out.LadyMEmbedding = LadyMEmbeddingInherit
+	case LadyMEmbeddingInherit, LadyMEmbeddingHashing, LadyMEmbeddingOpenAI, LadyMEmbeddingOllama, LadyMEmbeddingHTTP:
+	default:
+		return out, fmt.Errorf("settings: unknown ladym embedding %q", out.LadyMEmbedding)
+	}
+	switch out.LadyMLLM {
+	case "":
+		out.LadyMLLM = LadyMLLMInherit
+	case LadyMLLMInherit, LadyMLLMNone:
+	default:
+		return out, fmt.Errorf("settings: unknown ladym llm %q", out.LadyMLLM)
+	}
+	if out.LadyMTopK == 0 {
+		out.LadyMTopK = 6
+	}
+	if out.LadyMSystem2Interval == 0 {
+		out.LadyMSystem2Interval = 300
 	}
 	return out, nil
 }
@@ -216,6 +277,40 @@ func applyPairs(out *Settings, pairs map[string]string) {
 	if v, ok := pairs["debug_log"]; ok {
 		out.DebugLog, _ = ParseBool(v)
 	}
+	if v, ok := pairs["memory_engine"]; ok {
+		out.MemoryEngine = v
+	}
+	if v, ok := pairs["ladym_db_path"]; ok {
+		out.LadyMDBPath = v
+	}
+	if v, ok := pairs["ladym_embedding"]; ok {
+		out.LadyMEmbedding = v
+	}
+	if v, ok := pairs["ladym_embedding_model"]; ok {
+		out.LadyMEmbeddingModel = v
+	}
+	if v, ok := pairs["ladym_embedding_base_url"]; ok {
+		out.LadyMEmbeddingBaseURL = v
+	}
+	if v, ok := pairs["ladym_llm"]; ok {
+		out.LadyMLLM = v
+	}
+	if v, ok := pairs["ladym_autoretain"]; ok {
+		out.LadyMAutoRetain, _ = ParseBool(v)
+	}
+	if v, ok := pairs["ladym_topk"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			out.LadyMTopK = n
+		}
+	}
+	if v, ok := pairs["ladym_system2"]; ok {
+		out.LadyMSystem2, _ = ParseBool(v)
+	}
+	if v, ok := pairs["ladym_system2_interval"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			out.LadyMSystem2Interval = n
+		}
+	}
 }
 
 // Save persists non-empty settings fields (empty fields are left unchanged so
@@ -237,6 +332,12 @@ func (s *Store) Save(cfg Settings) error {
 		{"memory_backend", cfg.MemoryBackend},
 		{"checkpoint_dir", cfg.CheckpointDir},
 		{"output_style", cfg.OutputStyle},
+		{"memory_engine", cfg.MemoryEngine},
+		{"ladym_db_path", cfg.LadyMDBPath},
+		{"ladym_embedding", cfg.LadyMEmbedding},
+		{"ladym_embedding_model", cfg.LadyMEmbeddingModel},
+		{"ladym_embedding_base_url", cfg.LadyMEmbeddingBaseURL},
+		{"ladym_llm", cfg.LadyMLLM},
 	}
 	if cfg.MaxTokens != 0 {
 		fields = append(fields, field{"max_tokens", strconv.Itoa(cfg.MaxTokens)})
@@ -247,6 +348,14 @@ func (s *Store) Save(cfg Settings) error {
 	// debug_log is always written explicitly (false included) so turning the
 	// observability log off persists, unlike empty-means-skip fields.
 	fields = append(fields, field{"debug_log", strconv.FormatBool(cfg.DebugLog)})
+	fields = append(fields, field{"ladym_autoretain", strconv.FormatBool(cfg.LadyMAutoRetain)})
+	fields = append(fields, field{"ladym_system2", strconv.FormatBool(cfg.LadyMSystem2)})
+	if cfg.LadyMTopK != 0 {
+		fields = append(fields, field{"ladym_topk", strconv.Itoa(cfg.LadyMTopK)})
+	}
+	if cfg.LadyMSystem2Interval != 0 {
+		fields = append(fields, field{"ladym_system2_interval", strconv.Itoa(cfg.LadyMSystem2Interval)})
+	}
 	for _, f := range fields {
 		if f.val == "" {
 			continue
