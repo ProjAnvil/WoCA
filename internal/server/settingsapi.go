@@ -26,6 +26,18 @@ type appSettings struct {
 	Database           string  `json:"database"`
 	DebugLog           bool    `json:"debug_log"`
 	LogDir             string  `json:"log_dir"`
+
+	MemoryEngine            string `json:"memory_engine"`
+	LadyMDBPath             string `json:"ladym_db_path"`
+	LadyMEmbedding          string `json:"ladym_embedding"`
+	LadyMEmbeddingModel     string `json:"ladym_embedding_model"`
+	LadyMEmbeddingBaseURL   string `json:"ladym_embedding_base_url"`
+	LadyMEmbeddingAPIKeySet bool   `json:"ladym_embedding_api_key_set"`
+	LadyMLLM                string `json:"ladym_llm"`
+	LadyMAutoRetain         bool   `json:"ladym_autoretain"`
+	LadyMTopK               int    `json:"ladym_topk"`
+	LadyMSystem2            bool   `json:"ladym_system2"`
+	LadyMSystem2Interval    int    `json:"ladym_system2_interval"`
 }
 
 // appSettingsUpdate is the PUT body. Pointer fields distinguish "unchanged"
@@ -44,6 +56,18 @@ type appSettingsUpdate struct {
 	CheckpointDir     *string  `json:"checkpoint_dir"`
 	PostgresURL       *string  `json:"postgres_url"`
 	DebugLog          *bool    `json:"debug_log"`
+
+	MemoryEngine          *string  `json:"memory_engine"`
+	LadyMDBPath           *string  `json:"ladym_db_path"`
+	LadyMEmbedding        *string  `json:"ladym_embedding"`
+	LadyMEmbeddingModel   *string  `json:"ladym_embedding_model"`
+	LadyMEmbeddingBaseURL *string  `json:"ladym_embedding_base_url"`
+	LadyMEmbeddingAPIKey  *string  `json:"ladym_embedding_api_key"`
+	LadyMLLM              *string  `json:"ladym_llm"`
+	LadyMAutoRetain       *bool    `json:"ladym_autoretain"`
+	LadyMTopK             *int     `json:"ladym_topk"`
+	LadyMSystem2          *bool    `json:"ladym_system2"`
+	LadyMSystem2Interval  *int     `json:"ladym_system2_interval"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
@@ -73,6 +97,18 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		Database:           st.Path(),
 		DebugLog:           cfg.DebugLog,
 		LogDir:             logDir,
+
+		MemoryEngine:            cfg.MemoryEngine,
+		LadyMDBPath:             cfg.LadyMDBPath,
+		LadyMEmbedding:          cfg.LadyMEmbedding,
+		LadyMEmbeddingModel:     cfg.LadyMEmbeddingModel,
+		LadyMEmbeddingBaseURL:   cfg.LadyMEmbeddingBaseURL,
+		LadyMEmbeddingAPIKeySet: st.HasSecret(settings.SecretLadyMEmbeddingAPIKey),
+		LadyMLLM:                cfg.LadyMLLM,
+		LadyMAutoRetain:         cfg.LadyMAutoRetain,
+		LadyMTopK:               cfg.LadyMTopK,
+		LadyMSystem2:            cfg.LadyMSystem2,
+		LadyMSystem2Interval:    cfg.LadyMSystem2Interval,
 	})
 }
 
@@ -91,6 +127,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := st.Load()
 	restartRequired := false
 	modelChanged := false
+	memoryChanged := false
 
 	if req.Provider != nil {
 		if err := settings.Apply(&cfg, settings.KeyProvider, *req.Provider); err != nil {
@@ -155,6 +192,75 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		restartRequired = true
 	}
+	// Memory-engine keys that participate in engine construction trigger a
+	// live rebuild (no restart required).
+	if req.MemoryEngine != nil {
+		if err := settings.Apply(&cfg, settings.KeyMemoryEngine, *req.MemoryEngine); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		memoryChanged = true
+	}
+	if req.LadyMDBPath != nil {
+		if err := settings.Apply(&cfg, settings.KeyLadyMDBPath, *req.LadyMDBPath); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		memoryChanged = true
+	}
+	if req.LadyMEmbedding != nil {
+		if err := settings.Apply(&cfg, settings.KeyLadyMEmbedding, *req.LadyMEmbedding); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		memoryChanged = true
+	}
+	if req.LadyMEmbeddingModel != nil {
+		if err := settings.Apply(&cfg, settings.KeyLadyMEmbeddingModel, *req.LadyMEmbeddingModel); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		memoryChanged = true
+	}
+	if req.LadyMEmbeddingBaseURL != nil {
+		if err := settings.Apply(&cfg, settings.KeyLadyMEmbeddingBaseURL, *req.LadyMEmbeddingBaseURL); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		memoryChanged = true
+	}
+	if req.LadyMLLM != nil {
+		if err := settings.Apply(&cfg, settings.KeyLadyMLLM, *req.LadyMLLM); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		memoryChanged = true
+	}
+	// Per-run keys are re-read on each turn: apply without a rebuild.
+	if req.LadyMAutoRetain != nil {
+		if err := settings.Apply(&cfg, settings.KeyLadyMAutoRetain, strconv.FormatBool(*req.LadyMAutoRetain)); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.LadyMTopK != nil {
+		if err := settings.Apply(&cfg, settings.KeyLadyMTopK, itoa(*req.LadyMTopK)); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.LadyMSystem2 != nil {
+		if err := settings.Apply(&cfg, settings.KeyLadyMSystem2, strconv.FormatBool(*req.LadyMSystem2)); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if req.LadyMSystem2Interval != nil {
+		if err := settings.Apply(&cfg, settings.KeyLadyMSystem2Interval, itoa(*req.LadyMSystem2Interval)); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	debugLogChanged := false
 	if req.DebugLog != nil {
 		if err := settings.Apply(&cfg, settings.KeyDebugLog, strconv.FormatBool(*req.DebugLog)); err != nil {
@@ -190,11 +296,26 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		restartRequired = true
 	}
+	if req.LadyMEmbeddingAPIKey != nil {
+		if err := st.SetSecret(settings.SecretLadyMEmbeddingAPIKey, *req.LadyMEmbeddingAPIKey); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		memoryChanged = true
+	}
 
 	applyErr := ""
 	if modelChanged && s.rebuildModel != nil {
 		if err := s.rebuildModel(); err != nil {
 			applyErr = err.Error()
+		}
+	}
+	if memoryChanged && s.rebuildMemory != nil {
+		if err := s.rebuildMemory(); err != nil {
+			if applyErr != "" {
+				applyErr += "; "
+			}
+			applyErr += err.Error()
 		}
 	}
 	// The observability log toggles live (no restart): flip the store right
