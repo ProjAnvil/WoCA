@@ -56,6 +56,79 @@ internal/agent
 - engine 进程内单例，goroutine 安全（LadyM engine 自带 `sync.Mutex`，storage 有 WAL 并发测试），并发 run 共享。
 - LadyM `Config` 由 woca **纯代码构造**（不调 `ladym.DefaultConfig()` 走的 TOML/LADYM_* 环境变量链，避免 cwd 相对路径 `ladym.db` 与环境变量泄漏；唯一例外是初始结构可从 `config.Default()` 取默认值后**逐一覆盖** woca 关心的字段，DBPath/Workspace/Provider/Model 等必须显式赋值）。
 
+### 2.1 触发时机全景图
+
+```mermaid
+flowchart TB
+    %% ═══ 启动 ═══
+    subgraph BOOT["进程启动（一次性）"]
+        BA["buildAgent() · settings.Load()"] --> BE["memory.BuildEngine()<br/>创建单例 engine.Engine<br/>打开 ~/.woca/ladym.db（换维自动 re-embed）"]
+        BE --> INJ["注入 agent.Config.MemoryEngine<br/>+ server.Config.Memory"]
+    end
+
+    %% ═══ run 循环 ═══
+    subgraph RUN["每次 run（web: POST /api/runs · TUI: 一轮对话）"]
+        SR["startRun · SetMemoryWorkspace(ws)<br/>workspace 绑定"] --> MN
+        subgraph TURN["model → tools 循环（每个 model turn 重复）"]
+            MN["modelNode<br/>beginMemoryPrefetch"]
+            MT["② 模型主动调用工具<br/>recall_memory · search_code（读）<br/>remember_fact · index_code（写）"]
+            TN["toolsNode<br/>takeMemoryAttachments"]
+            MN -->|"① 异步预取<br/>Recall(last human, ws, topK)<br/>两级检索 · 不调 LLM"| ENG
+            MN --> MT
+            MT --> ENG
+            MN --> TN
+            TN -->|"注入 <relevant-memory>（≤5 条/轮）"| NEXT{"还有工具调用？"}
+            NEXT -->|是| MN
+        end
+    end
+
+    NEXT -->|否·run 完成| DONE["③ runner Done（单一 choke point）<br/>auto-retain：Remember(Q/A)→L2<br/>RecordEvent→L1 · attention gate 去噪"]
+    DONE --> S2J{"④ System 2 判定<br/>ladym-system2 开<br/>且该 workspace 距上次 ≥ 300s？"}
+
+    %% ═══ LadyM ═══
+    subgraph LADYM["LadyM（项目级单例 · engine 内置 mutex/WAL）"]
+        ENG["engine.Engine"]
+        DB[("~/.woca/ladym.db<br/>workspace 行级隔离")]
+        L1["L1 经历"]
+        L2["L2 事实 + 代码"]
+        L3["L3 剧本"]
+        L5["L5 洞察"]
+        L6["L6 预判"]
+        ENG --> DB
+        DB --> L1 & L2 & L3 & L5 & L6
+    end
+
+    DONE -.->|同步写入| DB
+
+    %% ═══ System 2 ═══
+    subgraph SYS2["System 2 周期（goroutine fire-and-forget · workspace 级）"]
+        C1["consolidate<br/>L1→L2 (LLM)"] --> C2["proceduralize<br/>L1 簇→L3 (LLM)"] --> G{"近期 episode ≥ 3？"}
+        G -->|是| C3["L5 提取<br/>聚类→抽象 (LLM)"] --> C4["L6 预判<br/>水位线增量 (LLM)"]
+        G -->|否| C5["decay 衰减"]
+        C4 --> C5
+    end
+
+    S2J -->|是| C1
+    C1 & C2 & C3 & C4 -.->|写回| DB
+    L5 & L6 -.->|"recall 全层参与<br/>洞察/预判自动进上下文"| ENG
+
+    %% ═══ 事件驱动 ═══
+    subgraph SIDE["事件驱动（随时）"]
+        SET["⑤ settings PUT → RebuildMemory<br/>引擎换指针 · 旧引擎 60s 后关闭"]
+        PANEL["⑥ 记忆面板<br/>GET/POST/DELETE /api/memory"]
+        CMD["⑥ TUI 命令<br/>/memory recall·remember·stats<br/>·forget·consolidate（同步跑周期）"]
+    end
+    SET --> BE
+    PANEL --> ENG
+    CMD --> ENG
+
+    %% ═══ subagent ═══
+    SUB["Task subagent（fork 时继承 workspace）<br/>只读共享：走 ① prefetch + ② 只读工具<br/>③④ 收口不触发（不经 runner）"]
+    SUB -.-> TURN
+```
+
+编号说明：① 每 model turn 自动读（不调 LLM）② 模型主动调工具 ③ run 完成自动写 ④ run 完成后节流整理（花 LLM）⑤ 配置保存实时重建 ⑥ 用户手动（面板/命令）。
+
 ## 3. 数据布局与 workspace
 
 - DB：`~/.woca/ladym.db`（settings 键 `ladym-db-path` 可改，支持 `~` 展开）。LadyM 自建五表 + 向量 BLOB；WAL 开启（默认），与 `ladym serve`/`ladym worker` CLI 并行访问兼容。
