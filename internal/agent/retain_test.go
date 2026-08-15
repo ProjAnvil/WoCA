@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
@@ -148,4 +149,70 @@ func TestRetainRunNilEngineNoop(t *testing.T) {
 	a := &Agent{workdir: "/ws"}
 	a.RetainRun(context.Background(),
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil) // must not panic
+}
+
+func TestSystem2ThrottledPerWorkspace(t *testing.T) {
+	f := &fakeEngine{}
+	on := settings.Default()
+	on.LadyMSystem2 = true
+	a := &Agent{
+		memEngine:    f,
+		workdir:      "/ws",
+		loadSettings: func() settings.Settings { return on },
+	}
+	hist := []messages.Message{messages.Human("q")}
+	fin := []messages.Message{messages.AI("a")}
+	a.RetainRun(context.Background(), hist, fin, nil)
+	// fire-and-forget goroutine: poll for it to land
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && f.recordedConsolidates() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := f.recordedConsolidates(); got != 1 {
+		t.Fatalf("consolidates = %d, want 1", got)
+	}
+	// second run within the interval: throttled
+	a.RetainRun(context.Background(), hist, fin, nil)
+	time.Sleep(250 * time.Millisecond)
+	if got := f.recordedConsolidates(); got != 1 {
+		t.Fatalf("throttle failed: %d", got)
+	}
+	// different workspace: not throttled by the first
+	a.SetMemoryWorkspace("/ws2")
+	a.RetainRun(context.Background(), hist, fin, nil)
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && f.recordedConsolidates() < 2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := f.recordedConsolidates(); got != 2 {
+		t.Fatalf("per-workspace throttle wrong: %d", got)
+	}
+}
+
+func TestSystem2DisabledNoConsolidate(t *testing.T) {
+	f := &fakeEngine{}
+	a := &Agent{memEngine: f, workdir: "/ws"} // loadSettings nil → defaults (system2 off)
+	a.RetainRun(context.Background(),
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+	time.Sleep(250 * time.Millisecond)
+	if got := f.recordedConsolidates(); got != 0 {
+		t.Fatalf("consolidates = %d, want 0", got)
+	}
+}
+
+func TestSystem2RespectsIntervalSetting(t *testing.T) {
+	f := &fakeEngine{}
+	on := settings.Default()
+	on.LadyMSystem2 = true
+	on.LadyMSystem2Interval = 60 // minimum allowed
+	a := &Agent{memEngine: f, workdir: "/ws", loadSettings: func() settings.Settings { return on }}
+	a.RetainRun(context.Background(),
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && f.recordedConsolidates() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := f.recordedConsolidates(); got != 1 {
+		t.Fatalf("consolidates = %d, want 1", got)
+	}
 }

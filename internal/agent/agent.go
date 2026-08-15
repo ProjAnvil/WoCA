@@ -262,6 +262,9 @@ type Agent struct {
 	// memWorkspace is the current run's memory workspace (defaults to
 	// workdir); set per run by the harnesses alongside SetObsRun.
 	memWorkspace string
+	// lastSystem2 remembers when each workspace last triggered a System 2
+	// cycle (opportunistic post-run throttling).
+	lastSystem2 map[string]int64 // unix seconds
 	// loadSettings re-reads settings for per-run knobs (nil = defaults).
 	loadSettings func() settings.Settings
 	// transcriptMu guards lastTranscript: the most recent model-round input

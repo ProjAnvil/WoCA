@@ -23,6 +23,7 @@ type fakeEngine struct {
 	rememberCalls []string // "ws\x00src\x00content" per Remember call
 	events        []string
 	hits          []memory.Hit
+	consolidates  int   // number of Consolidate calls (System 2 cycles)
 	err           bool  // Recall returns an error when set
 	drop          bool  // Remember returns ("", nil): attention-gate drop
 	rememberErr   error // Remember returns this error when set (overrides drop)
@@ -71,9 +72,14 @@ func (f *fakeEngine) Stats(ctx context.Context, ws string) (*memory.Stats, error
 func (f *fakeEngine) IndexCode(ctx context.Context, root, ws string, force bool) (string, error) {
 	return "", nil
 }
-func (f *fakeEngine) Consolidate(ctx context.Context, ws string) (string, error) { return "", nil }
-func (f *fakeEngine) Description() string                                        { return "fake" }
-func (f *fakeEngine) Close() error                                               { return nil }
+func (f *fakeEngine) Consolidate(ctx context.Context, ws string) (string, error) {
+	f.mu.Lock()
+	f.consolidates++
+	f.mu.Unlock()
+	return "cycle", nil
+}
+func (f *fakeEngine) Description() string { return "fake" }
+func (f *fakeEngine) Close() error        { return nil }
 
 // recordedTopKs returns a copy of the Recall topK arguments (the prefetch
 // goroutine appends concurrently; test goroutines must not read f.topKs
@@ -96,6 +102,14 @@ func (f *fakeEngine) recordedRememberCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.rememberCalls...)
+}
+
+// recordedConsolidates returns the number of Consolidate calls (the System 2
+// goroutine appends concurrently; test goroutines must not read directly).
+func (f *fakeEngine) recordedConsolidates() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.consolidates
 }
 
 func TestPrefetchUsesEngineRecall(t *testing.T) {

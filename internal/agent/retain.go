@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+
+	"github.com/projanvil/woca/internal/settings"
 )
 
 // RetainRun stores a completed run into long-term memory: the Q/A pair as an
@@ -43,15 +46,51 @@ func (a *Agent) RetainRun(ctx context.Context, history, final []messages.Message
 	if err := eng.RecordEvent(ctx, ws, "woca", "run", obs, outcome); err != nil {
 		a.obs.Log("warn", "retain_write_error", map[string]any{"op": "record_event", "error": err.Error()})
 	}
-	answer := lastAIText(final)
-	if answer == "" {
-		return
+	// The fact is optional (no answer, e.g. an errored run), but episodes
+	// alone are consolidation food, so the System 2 trigger below still runs.
+	if answer := lastAIText(final); answer != "" {
+		q := clampUTF8(question, 2000)
+		ans := clampUTF8(answer, 4000)
+		if _, err := eng.Remember(ctx, ws, fmt.Sprintf("Q: %s\nA: %s", q, ans), []string{"woca", "auto"}, "woca:auto"); err != nil {
+			a.obs.Log("warn", "retain_write_error", map[string]any{"op": "remember", "error": err.Error()})
+		}
 	}
-	q := clampUTF8(question, 2000)
-	ans := clampUTF8(answer, 4000)
-	if _, err := eng.Remember(ctx, ws, fmt.Sprintf("Q: %s\nA: %s", q, ans), []string{"woca", "auto"}, "woca:auto"); err != nil {
-		a.obs.Log("warn", "retain_write_error", map[string]any{"op": "remember", "error": err.Error()})
+	// System 2 (opportunistic, per-workspace throttle): consolidate the
+	// fresh episodes into facts/playbooks/insights in the background. The
+	// cycle itself gates on ladyM's episode threshold, so a no-op trigger
+	// is cheap (spec §4.5).
+	if a.loadSettings != nil {
+		if s := a.loadSettings(); s.LadyMSystem2 {
+			interval := int64(settings.DefaultLadyMSystem2Interval)
+			if s.LadyMSystem2Interval >= settings.MinLadyMSystem2Interval {
+				interval = int64(s.LadyMSystem2Interval)
+			}
+			if a.system2Due(ws, interval) {
+				engC := eng
+				go func() {
+					if _, err := engC.Consolidate(context.WithoutCancel(ctx), ws); err != nil && a.obs != nil {
+						a.obs.Log("warn", "system2_error", map[string]any{"workspace": ws, "error": err.Error()})
+					}
+				}()
+			}
+		}
 	}
+}
+
+// system2Due applies the per-workspace minimum interval between System 2
+// cycles and records the trigger time.
+func (a *Agent) system2Due(ws string, intervalS int64) bool {
+	now := time.Now().Unix()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.lastSystem2 == nil {
+		a.lastSystem2 = map[string]int64{}
+	}
+	if last, ok := a.lastSystem2[ws]; ok && now-last < intervalS {
+		return false
+	}
+	a.lastSystem2[ws] = now
+	return true
 }
 
 // runQuestion returns the run's actual request: the last human message at
