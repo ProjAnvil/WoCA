@@ -45,7 +45,8 @@ func (f *fakeMemEngine) SearchCode(ctx context.Context, q, ws string, k int) ([]
 	return nil, nil
 }
 func (f *fakeMemEngine) Remember(ctx context.Context, ws, c string, tags []string, src string) (string, error) {
-	f.mu.Lock(); defer f.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.remembered = append(f.remembered, ws+"|"+src+"|"+c)
 	if f.drop {
 		return "", nil
@@ -54,24 +55,28 @@ func (f *fakeMemEngine) Remember(ctx context.Context, ws, c string, tags []strin
 }
 func (f *fakeMemEngine) RecordEvent(ctx context.Context, ws, a, act, obs, o string) error { return nil }
 func (f *fakeMemEngine) List(ctx context.Context, ws, layer string, limit, off int) ([]memory.Hit, error) {
-	f.mu.Lock(); defer f.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.lastList.ws, f.lastList.layer, f.lastList.limit, f.lastList.offset = ws, layer, limit, off
 	return f.listed, nil
 }
 
 // recordedRecall returns the last Recall call's arguments.
 func (f *fakeMemEngine) recordedRecall() (query, ws string, topK int) {
-	f.mu.Lock(); defer f.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.lastRecall.query, f.lastRecall.ws, f.lastRecall.topK
 }
 
 // recordedList returns the last List call's arguments.
 func (f *fakeMemEngine) recordedList() (ws, layer string, limit, offset int) {
-	f.mu.Lock(); defer f.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.lastList.ws, f.lastList.layer, f.lastList.limit, f.lastList.offset
 }
 func (f *fakeMemEngine) Forget(ctx context.Context, id string) error {
-	f.mu.Lock(); defer f.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.forgotten = append(f.forgotten, id)
 	return nil
 }
@@ -82,8 +87,8 @@ func (f *fakeMemEngine) IndexCode(ctx context.Context, root, ws string, force bo
 	return "ok", nil
 }
 func (f *fakeMemEngine) Consolidate(ctx context.Context, ws string) (string, error) { return "ok", nil }
-func (f *fakeMemEngine) Description() string                                      { return "ladym test.db" }
-func (f *fakeMemEngine) Close() error                                             { return nil }
+func (f *fakeMemEngine) Description() string                                        { return "ladym test.db" }
+func (f *fakeMemEngine) Close() error                                               { return nil }
 
 func newMemoryTestServer(t *testing.T, eng memory.Engine) *httptest.Server {
 	t.Helper()

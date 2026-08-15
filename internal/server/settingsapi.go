@@ -57,17 +57,17 @@ type appSettingsUpdate struct {
 	PostgresURL       *string  `json:"postgres_url"`
 	DebugLog          *bool    `json:"debug_log"`
 
-	MemoryEngine          *string  `json:"memory_engine"`
-	LadyMDBPath           *string  `json:"ladym_db_path"`
-	LadyMEmbedding        *string  `json:"ladym_embedding"`
-	LadyMEmbeddingModel   *string  `json:"ladym_embedding_model"`
-	LadyMEmbeddingBaseURL *string  `json:"ladym_embedding_base_url"`
-	LadyMEmbeddingAPIKey  *string  `json:"ladym_embedding_api_key"`
-	LadyMLLM              *string  `json:"ladym_llm"`
-	LadyMAutoRetain       *bool    `json:"ladym_autoretain"`
-	LadyMTopK             *int     `json:"ladym_topk"`
-	LadyMSystem2          *bool    `json:"ladym_system2"`
-	LadyMSystem2Interval  *int     `json:"ladym_system2_interval"`
+	MemoryEngine          *string `json:"memory_engine"`
+	LadyMDBPath           *string `json:"ladym_db_path"`
+	LadyMEmbedding        *string `json:"ladym_embedding"`
+	LadyMEmbeddingModel   *string `json:"ladym_embedding_model"`
+	LadyMEmbeddingBaseURL *string `json:"ladym_embedding_base_url"`
+	LadyMEmbeddingAPIKey  *string `json:"ladym_embedding_api_key"`
+	LadyMLLM              *string `json:"ladym_llm"`
+	LadyMAutoRetain       *bool   `json:"ladym_autoretain"`
+	LadyMTopK             *int    `json:"ladym_topk"`
+	LadyMSystem2          *bool   `json:"ladym_system2"`
+	LadyMSystem2Interval  *int    `json:"ladym_system2_interval"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
