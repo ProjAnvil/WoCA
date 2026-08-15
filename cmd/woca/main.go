@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -766,14 +767,17 @@ func openBrowser(url string) error {
 }
 
 // app bundles the assembled runtime: the agent, its effective config, the
-// startup flags (for re-resolution), the persistent settings store, and the
-// memoryStore.
+// startup flags (for re-resolution), the persistent settings store, the
+// memoryStore, and the factual-memory engine (ladyM; nil when disabled or
+// unavailable). memMu guards the memEngine swap in rebuildMemory; the
+// agent's own engine pointer carries its own lock.
 type app struct {
 	a         *agent.Agent
 	cfg       config.Config
 	opts      options
 	settings  *settings.Store
 	memory    *store.Store
+	memMu     sync.Mutex
 	memEngine memory.Engine
 }
 
@@ -1071,7 +1075,11 @@ func buildMemoryEngine(ap *app, dbSettings settings.Settings, chatModel language
 		OpenAIKey:        ap.settings.GetSecret(settings.SecretOpenAIAPIKey),
 		OpenAIBaseURL:    dbSettings.OpenAIBaseURL,
 	}
-	return memory.Build(in)
+	eng, err := memory.Build(in)
+	if err != nil {
+		return nil, err
+	}
+	return eng, nil
 }
 
 // rebuildModel reconstructs the chat model from the current effective
@@ -1102,6 +1110,11 @@ func (ap *app) rebuildModel() error {
 	return ap.a.SetModel(m)
 }
 
+// memoryCloseGrace is how long a superseded memory engine stays open after a
+// rebuild so in-flight prefetch/tool calls on it degrade to a logged error
+// instead of racing a Close.
+const memoryCloseGrace = 60 * time.Second
+
 // rebuildMemory reconstructs the memory engine from live settings and swaps
 // it into the agent. The old engine closes after a grace period so
 // in-flight prefetch/tool calls on it degrade to a logged error instead of
@@ -1112,12 +1125,14 @@ func (ap *app) rebuildMemory() error {
 	if err != nil {
 		return err
 	}
+	ap.memMu.Lock()
 	old := ap.memEngine
 	ap.memEngine = eng
+	ap.memMu.Unlock()
 	ap.a.SetMemoryEngine(eng)
 	if old != nil {
 		go func() {
-			time.Sleep(60 * time.Second)
+			time.Sleep(memoryCloseGrace)
 			_ = old.Close()
 		}()
 	}
