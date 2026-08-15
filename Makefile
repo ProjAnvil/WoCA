@@ -5,7 +5,7 @@ web:
 	cd web && npm install && npm run build
 
 build:
-	go build -o bin/woca ./cmd/woca
+	go build -o build/woca ./cmd/woca
 
 test:
 	go test ./...
@@ -29,15 +29,15 @@ run:
 
 # One-click: build and launch the interactive TUI.
 tui: build
-	./bin/woca
+	./build/woca
 
 # Build the frontend + binary and launch the embedded web UI.
 serve: web build
-	./bin/woca serve
+	./build/woca serve
 
 # Install the binary to /usr/local/bin.
 install: build
-	install -m 755 bin/woca /usr/local/bin/woca
+	install -m 755 build/woca /usr/local/bin/woca
 
 clean:
-	rm -rf bin
+	rm -rf build

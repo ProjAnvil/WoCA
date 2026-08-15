@@ -174,12 +174,12 @@ func (s *Store) DumpMessages(msgs []messages.Message, stateSummary map[string]an
 		return
 	}
 	payload := map[string]any{
-		"ts":         time.Now().UTC().Format(time.RFC3339Nano),
-		"workspace":  ctx.Workspace,
-		"session":    ctx.Session,
-		"run":        ctx.Run,
-		"state":      stateSummary,
-		"messages":   msgs,
+		"ts":            time.Now().UTC().Format(time.RFC3339Nano),
+		"workspace":     ctx.Workspace,
+		"session":       ctx.Session,
+		"run":           ctx.Run,
+		"state":         stateSummary,
+		"messages":      msgs,
 		"message_count": len(msgs),
 	}
 	b, err := json.MarshalIndent(payload, "", "  ")
@@ -218,9 +218,9 @@ func (s *Store) ObserveNode(ev graph.NodeEvent) {
 		return
 	}
 	data := map[string]any{
-		"graph":  ev.Graph,
-		"node":   ev.Node,
-		"phase":  ev.Phase,
+		"graph": ev.Graph,
+		"node":  ev.Node,
+		"phase": ev.Phase,
 	}
 	if ev.DurationMS > 0 {
 		data["duration_ms"] = ev.DurationMS

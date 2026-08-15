@@ -1,4 +1,5 @@
-/bin/
+/build/
+/woca
 *.test
 *.out
 web/node_modules/

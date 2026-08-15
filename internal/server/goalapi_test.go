@@ -34,7 +34,7 @@ func newGoalTestServer(t *testing.T) (*Server, *httptest.Server, string) {
 			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
 				ID: "1", Name: "Read", Args: map[string]any{"file_path": "x"},
 			}}},
-			messages.AI("implemented"),                                  // execute final
+			messages.AI("implemented"),                                   // execute final
 			messages.AI(`{"verdict":"complete","evidence":"all green"}`), // evaluate
 		),
 	)

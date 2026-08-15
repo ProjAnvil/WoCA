@@ -83,9 +83,9 @@ func TestStoreSessionTraceAndDump(t *testing.T) {
 		t.Fatalf("dump missing: %v", err)
 	}
 	var dump struct {
-		Session string            `json:"session"`
-		Run     string            `json:"run"`
-		State   map[string]any    `json:"state"`
+		Session  string             `json:"session"`
+		Run      string             `json:"run"`
+		State    map[string]any     `json:"state"`
 		Messages []messages.Message `json:"messages"`
 	}
 	if err := json.Unmarshal(b, &dump); err != nil {
