@@ -151,6 +151,79 @@ func TestRetainRunNilEngineNoop(t *testing.T) {
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil) // must not panic
 }
 
+func TestRetainGoalStoresFactAndEvent(t *testing.T) {
+	f := &fakeEngine{}
+	a := &Agent{memEngine: f, workdir: "/ws"} // loadSettings nil -> defaults (autoretain true)
+	a.SetMemoryWorkspace("/ws/goal")
+	a.RetainGoal(context.Background(), "ship the auth refactor", "complete", "tests pass: 3/3", nil)
+
+	calls := f.recordedRememberCalls()
+	if len(calls) != 1 {
+		t.Fatalf("rememberCalls = %v", calls)
+	}
+	if !strings.Contains(calls[0], "/ws/goal") || !strings.Contains(calls[0], "woca:auto") ||
+		!strings.Contains(calls[0], "GOAL: ship the auth refactor") ||
+		!strings.Contains(calls[0], "RESULT(complete): tests pass: 3/3") {
+		t.Fatalf("content = %q", calls[0])
+	}
+	if len(f.events) != 1 || f.events[0] != "woca/goal:complete/success" {
+		t.Fatalf("events = %v", f.events)
+	}
+}
+
+func TestRetainGoalBlockedOutcome(t *testing.T) {
+	f := &fakeEngine{}
+	a := &Agent{memEngine: f, workdir: "/ws"}
+	a.RetainGoal(context.Background(), "migrate the db", "blocked", "needs credentials", nil)
+	if len(f.events) != 1 || f.events[0] != "woca/goal:blocked/blocked" {
+		t.Fatalf("events = %v", f.events)
+	}
+	if calls := f.recordedRememberCalls(); len(calls) != 1 || !strings.Contains(calls[0], "RESULT(blocked): needs credentials") {
+		t.Fatalf("rememberCalls = %v", calls)
+	}
+}
+
+func TestRetainGoalDisabled(t *testing.T) {
+	f := &fakeEngine{}
+	off := settings.Default()
+	off.LadyMAutoRetain = false
+	a := &Agent{
+		memEngine:    f,
+		workdir:      "/ws",
+		loadSettings: func() settings.Settings { return off },
+	}
+	a.RetainGoal(context.Background(), "objective", "complete", "summary", nil)
+	if len(f.remembered) != 0 || len(f.events) != 0 {
+		t.Fatal("autoretain off should write nothing")
+	}
+}
+
+func TestRetainGoalNilEngineNoop(t *testing.T) {
+	a := &Agent{workdir: "/ws"}
+	a.RetainGoal(context.Background(), "objective", "complete", "summary", nil) // must not panic
+}
+
+func TestRetainGoalErrorOutcome(t *testing.T) {
+	f := &fakeEngine{}
+	a := &Agent{memEngine: f, workdir: "/ws"}
+	a.RetainGoal(context.Background(), "objective", "complete", "summary", errors.New("boom"))
+	if len(f.events) != 1 || f.events[0] != "woca/goal:complete/error" {
+		t.Fatalf("events = %v", f.events)
+	}
+}
+
+func TestRetainGoalEmptySummarySkipsFactRecordsEvent(t *testing.T) {
+	f := &fakeEngine{}
+	a := &Agent{memEngine: f, workdir: "/ws"}
+	a.RetainGoal(context.Background(), "objective", "budget_limited", "", nil)
+	if len(f.remembered) != 0 {
+		t.Fatal("empty summary should not Remember")
+	}
+	if len(f.events) != 1 || f.events[0] != "woca/goal:budget_limited/budget_limited" {
+		t.Fatalf("events = %v", f.events)
+	}
+}
+
 func TestSystem2ThrottledPerWorkspace(t *testing.T) {
 	f := &fakeEngine{}
 	on := settings.Default()

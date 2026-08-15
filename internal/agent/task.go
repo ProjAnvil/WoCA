@@ -187,6 +187,9 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 				report = "Error: " + err.Error()
 			}
 			t.setFinal(TaskCompleted, report)
+			// L1 episode for the completed subagent task (background ctx:
+			// runCtx may already be cancelled by TaskStop).
+			a.recordTaskEvent(subagentName(def, args), args.Description, report, err)
 		}()
 		return coretools.Result{Content: fmt.Sprintf("Started background task %s: %s", t.ID, args.Description)}, nil
 	}
@@ -195,7 +198,19 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 	if err != nil {
 		return coretools.Result{}, err
 	}
+	a.recordTaskEvent(subagentName(def, args), args.Description, report, nil)
 	return coretools.Result{Content: report}, nil
+}
+
+// subagentName resolves the display name for task events.
+func subagentName(def *agents.Definition, args taskArgs) string {
+	if def != nil && def.Name != "" {
+		return def.Name
+	}
+	if args.SubagentType != "" {
+		return args.SubagentType
+	}
+	return "general"
 }
 
 // forkTaskPrompt wraps the fork directive so the subagent knows it inherited

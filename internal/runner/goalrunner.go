@@ -3,12 +3,32 @@ package runner
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/graph"
 )
+
+// goalSummary extracts the terminal narrative from a goal snapshot: the
+// verified evidence for completions, the blocking reason for blocked and
+// budget-limited goals, falling back to the latest executor note.
+func goalSummary(g *agent.Goal) string {
+	if s := strings.TrimSpace(g.Evidence); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(g.BlockedReason); s != "" {
+		return s
+	}
+	if len(g.Notes) > 0 {
+		return g.Notes[len(g.Notes)-1]
+	}
+	if len(g.Progress) > 0 {
+		return g.Progress[len(g.Progress)-1].Note
+	}
+	return ""
+}
 
 // RunGoal drives the agent's goal loop (assess → execute → evaluate cycles)
 // over the session history. It mirrors Run's interrupt handling — permission
@@ -19,11 +39,29 @@ import (
 // (verified completion, blocked, paused, or budget exhaustion); unlike Run
 // there are no stop-hook or token-budget auto-continuations at this layer,
 // because continuation IS the loop.
-func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) ([]messages.Message, error) {
+func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) (final []messages.Message, err error) {
+	// Goal-mode auto-retain: goal runs bypass Run (they execute the goal
+	// graph directly), so this defer is their only hook into memory. It fires
+	// on every return path of an invocation that actually drove the loop — a
+	// refused start (goal already paused/cleared, loop already running) never
+	// ran and retains nothing. Detached ctx so graph teardown doesn't cancel
+	// the writes.
+	started := false
+	defer func() {
+		if !started {
+			return
+		}
+		g := r.agent.Goal()
+		if g == nil {
+			return // cleared before the loop ended: nothing to retain
+		}
+		r.agent.RetainGoal(context.WithoutCancel(ctx), g.Objective, string(g.Status), goalSummary(g), err)
+	}()
 	stream, err := r.agent.GoalStream(ctx, history)
 	if err != nil {
 		return nil, err
 	}
+	started = true
 	defer stream.Close()
 	for {
 		step, ok, err := stream.Next(ctx)

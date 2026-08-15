@@ -162,6 +162,80 @@ func TestRunnerRetainsRunIntoMemory(t *testing.T) {
 	}
 }
 
+// TestRunGoalRetainsGoalIntoMemory checks the goal-mode wiring: goal runs
+// bypass Run, so RunGoal's completion hook must be the one storing the goal's
+// objective, terminal status, and evidence.
+func TestRunGoalRetainsGoalIntoMemory(t *testing.T) {
+	eng := &retainEngine{}
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.AI("done-criteria checklist\nThis cycle: implement it"),             // assess
+			messages.AI("implemented and verified"),                                      // execute
+			messages.AI(`{"verdict":"complete","confidence":0.9,"evidence":"3/3 pass"}`), // evaluate
+		),
+	)
+	a, err := agent.New(agent.Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+		RecursionLimit: 50,
+		MemoryEngine:   eng,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.SetGoal("make the tests pass", "", 5, 1_000_000); err != nil {
+		t.Fatal(err)
+	}
+	r := New(a, nil, nil)
+	if _, err := r.RunGoal(context.Background(), []messages.Message{messages.Human("hello")}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := eng.Events(); len(ev) != 1 || ev[0] != "woca/goal:complete/success" {
+		t.Fatalf("events = %v", ev)
+	}
+	remembered := eng.Remembered()
+	if len(remembered) != 1 {
+		t.Fatalf("remember calls = %v", remembered)
+	}
+	if c := remembered[0]; !strings.Contains(c, "GOAL: make the tests pass") ||
+		!strings.Contains(c, "RESULT(complete): 3/3 pass") {
+		t.Fatalf("remembered = %q", c)
+	}
+}
+
+// TestRunGoalRefusedStartRetainsNothing checks the started guard: a RunGoal
+// call refused because the goal is paused must not re-record the goal.
+func TestRunGoalRefusedStartRetainsNothing(t *testing.T) {
+	eng := &retainEngine{}
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+	)
+	a, err := agent.New(agent.Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+		MemoryEngine:   eng,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.SetGoal("objective", "", 5, 1_000_000); err != nil {
+		t.Fatal(err)
+	}
+	a.PauseGoal()
+	r := New(a, nil, nil)
+	if _, err := r.RunGoal(context.Background(), nil); err == nil {
+		t.Fatal("RunGoal should refuse a paused goal")
+	}
+	if ev := eng.Events(); len(ev) != 0 || len(eng.Remembered()) != 0 {
+		t.Fatalf("refused start must retain nothing: events=%v remembered=%v", eng.Events(), eng.Remembered())
+	}
+}
+
 func TestRunnerStopHookContinuation(t *testing.T) {
 	model := language.NewFakeChatModel(
 		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
