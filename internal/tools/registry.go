@@ -59,6 +59,10 @@ var categoryByName = map[string]Category{
 	"EnterWorktree":   CatShell,
 	"ExitWorktree":    CatShell,
 	"LSP":             CatRead,
+	"recall_memory":   CatRead,
+	"search_code":     CatRead,
+	"remember_fact":   CatWrite,
+	"index_code":      CatWrite,
 }
 
 // CategoryOf returns the permission category of a tool by name. Unknown tools

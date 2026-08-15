@@ -369,6 +369,7 @@ func New(cfg Config) (*Agent, error) {
 	base := cfg.Registry.All()
 	if cfg.Subagent {
 		a.toolList = filterTools(base, "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Task", "TaskOutput", "TaskStop", "Skill", "TaskCreate", "TaskGet", "TaskUpdate", "TaskList", "ScheduleCron", "GetGoal", "UpdateGoal")
+		a.toolList = append(a.toolList, a.memoryTools()...) // self-crops to read-only
 	} else {
 		a.toolList = append(append([]coretools.Tool(nil), base...), a.taskTools()...)
 		a.toolList = append(a.toolList, a.skillTool()...)
@@ -378,6 +379,7 @@ func New(cfg Config) (*Agent, error) {
 		a.toolList = append(a.toolList, a.worktreeTools()...)
 		a.toolList = append(a.toolList, a.mcpAuthTool()...)
 		a.toolList = append(a.toolList, a.goalTools()...)
+		a.toolList = append(a.toolList, a.memoryTools()...)
 		a.toolList = append(a.toolList, cfg.ExtraTools...)
 	}
 	// Split base/extra so between-turn refreshes only rebuild the extra
@@ -1177,6 +1179,8 @@ func (a *Agent) newSubagent(def *agents.Definition) *Agent {
 		RecursionLimit: a.recursionLimit,
 		WorkDir:        a.workdir,
 		Subagent:       true,
+		MemoryEngine:   a.MemoryEngine(), // read-only memory tools stay available
+		LoadSettings:   a.loadSettings,
 	})
 	if err != nil {
 		// Config is valid by construction; a failure here is a programmer bug.
@@ -1194,6 +1198,9 @@ func (a *Agent) newSubagent(def *agents.Definition) *Agent {
 			}
 		}
 	}
+	// Subagents share the parent's memory workspace so reads stay scoped to
+	// the same run (writes are already cropped out of their tool set).
+	sub.SetMemoryWorkspace(a.memoryWorkspace())
 	return sub
 }
 
