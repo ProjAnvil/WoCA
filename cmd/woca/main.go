@@ -694,6 +694,13 @@ func newConsole(ap *app, log zerolog.Logger) *console.Console {
 		OpenBrowser:  open,
 		Settings:     ap.settings,
 		Memory:       ap.memory,
+		MemoryEngine: ap.memEngine,
+		MemoryWorkspace: func() string {
+			return ap.a.MemoryWorkspace()
+		},
+		RebuildMemory: func() error {
+			return ap.rebuildMemory()
+		},
 		RebuildModel: func() error {
 			return ap.rebuildModel()
 		},

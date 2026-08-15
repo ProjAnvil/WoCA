@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/store"
 )
 
 // settingsCmd implements /settings: no args shows the persisted settings
@@ -58,6 +60,14 @@ func (c *Console) settingsSet(st *settings.Store, key, value string) (Result, er
 		if err := st.SetSecret(name, value); err != nil {
 			return Result{}, err
 		}
+		if name == settings.SecretLadyMEmbeddingAPIKey {
+			// The embedding key only feeds the memory engine; rebuild that,
+			// not the chat model.
+			if err := c.applyMemoryChange(key); err != nil {
+				return Result{Output: fmt.Sprintf("%s saved (encrypted); memory engine rebuild failed: %v\n", key, err)}, nil
+			}
+			return Result{Output: fmt.Sprintf("%s saved (encrypted); takes effect immediately\n", key)}, nil
+		}
 		if err := c.applyModelChange(key); err != nil {
 			return Result{Output: fmt.Sprintf("%s saved (encrypted); model rebuild failed: %v\n", key, err)}, nil
 		}
@@ -79,6 +89,16 @@ func (c *Console) settingsSet(st *settings.Store, key, value string) (Result, er
 		return Result{Output: fmt.Sprintf("%s saved; takes effect immediately\n", key)}, nil
 	case settings.KeyCheckpoint, settings.KeyMemory, settings.KeyCheckpointDir, settings.KeyPostgresURL:
 		return Result{Output: fmt.Sprintf("%s saved; restart woca to apply the new backend\n", key)}, nil
+	case settings.KeyMemoryEngine, settings.KeyLadyMDBPath, settings.KeyLadyMEmbedding,
+		settings.KeyLadyMEmbeddingModel, settings.KeyLadyMEmbeddingBaseURL,
+		settings.KeyLadyMLLM:
+		if err := c.applyMemoryChange(key); err != nil {
+			return Result{Output: fmt.Sprintf("%s saved; memory engine rebuild failed: %v\n", key, err)}, nil
+		}
+		return Result{Output: fmt.Sprintf("%s saved; takes effect immediately\n", key)}, nil
+	case settings.KeyLadyMAutoRetain, settings.KeyLadyMTopK,
+		settings.KeyLadyMSystem2, settings.KeyLadyMSystem2Interval:
+		return Result{Output: fmt.Sprintf("%s saved; takes effect next run\n", key)}, nil
 	}
 	return Result{Output: fmt.Sprintf("%s saved\n", key)}, nil
 }
@@ -91,18 +111,150 @@ func (c *Console) applyModelChange(key string) error {
 	return c.deps.RebuildModel()
 }
 
-// memoryCmd implements /memory over the configured memoryStore:
+// applyMemoryChange rebuilds the memory engine when the changed key affects it.
+func (c *Console) applyMemoryChange(key string) error {
+	if c.deps.RebuildMemory == nil {
+		return nil
+	}
+	return c.deps.RebuildMemory()
+}
+
+// memoryCmd implements /memory. With the memory engine wired, the engine
+// surface is primary; the legacy KV memoryStore lives under `kv`:
 //
-//	/memory                       list all entries
-//	/memory list [namespace]      list one namespace
-//	/memory get <ns> <key>        print one value
-//	/memory put <ns> <key> <v>    store a value
-//	/memory del <ns> <key>        delete an entry
+//	/memory                       recent engine memories (workspace-scoped)
+//	/memory recall <query...>     semantic recall
+//	/memory remember <text...>    store a fact (attention-gated)
+//	/memory stats                 layer counts + db path
+//	/memory forget <id>           delete one memory
+//	/memory consolidate           run one System 2 cycle now
+//	/memory index [path] [--force] index source into memory
+//	/memory kv list|get|put|del … legacy KV memoryStore
 func (c *Console) memoryCmd(ctx context.Context, args []string) (Result, error) {
+	if eng := c.deps.MemoryEngine; eng != nil {
+		return c.memoryEngineCmd(ctx, eng, args)
+	}
 	m := c.deps.Memory
 	if m == nil {
-		return Result{}, fmt.Errorf("memoryStore is disabled (enable via /settings set memory sqlite|memory|postgres and restart)")
+		return Result{}, fmt.Errorf("memory is disabled (/settings set memory-engine ladym)")
 	}
+	if len(args) > 0 && args[0] == "kv" {
+		args = args[1:]
+	}
+	return c.memoryKVCmd(ctx, m, args)
+}
+
+// memoryEngineCmd implements /memory over the factual-memory engine.
+func (c *Console) memoryEngineCmd(ctx context.Context, eng memory.Engine, args []string) (Result, error) {
+	if len(args) == 0 {
+		args = []string{"list"}
+	}
+	ws := ""
+	if c.deps.MemoryWorkspace != nil {
+		ws = c.deps.MemoryWorkspace()
+	}
+	switch args[0] {
+	case "list":
+		hits, err := eng.List(ctx, ws, "", 20, 0)
+		if err != nil {
+			return Result{}, err
+		}
+		if len(hits) == 0 {
+			return Result{Output: "no memories yet — they accumulate as you work\n"}, nil
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "memory engine: %s (workspace %s)\n", eng.Description(), ws)
+		for _, h := range hits {
+			line := h.Summary
+			if len(line) > 80 {
+				line = line[:80] + "…"
+			}
+			fmt.Fprintf(&b, "  [%s|%s] %s\n", h.Layer, h.Type, line)
+		}
+		return Result{Output: b.String()}, nil
+	case "recall":
+		if len(args) < 2 {
+			return Result{}, fmt.Errorf("usage: /memory recall <query...>")
+		}
+		hits, err := eng.Recall(ctx, strings.Join(args[1:], " "), ws, 8)
+		if err != nil {
+			return Result{}, err
+		}
+		if len(hits) == 0 {
+			return Result{Output: "(no hits)\n"}, nil
+		}
+		var b strings.Builder
+		for _, h := range hits {
+			fmt.Fprintf(&b, "[%.2f|%s|%s] %s\n", h.Score, h.Layer, h.Type, h.Summary)
+		}
+		return Result{Output: b.String()}, nil
+	case "remember":
+		if len(args) < 2 {
+			return Result{}, fmt.Errorf("usage: /memory remember <content...>")
+		}
+		id, err := eng.Remember(ctx, ws, strings.Join(args[1:], " "), []string{"manual"}, "woca:cmd")
+		if err != nil {
+			return Result{}, err
+		}
+		if id == "" {
+			return Result{Output: "dropped by the attention gate (duplicate or noise)\n"}, nil
+		}
+		return Result{Output: fmt.Sprintf("stored id=%s\n", id)}, nil
+	case "stats":
+		st, err := eng.Stats(ctx, ws)
+		if err != nil {
+			return Result{}, err
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "engine: %s\nworkspace: %s\ntotal: %d\n", eng.Description(), ws, st.Total)
+		for layer, n := range st.Layers {
+			fmt.Fprintf(&b, "  %s: %d\n", layer, n)
+		}
+		return Result{Output: b.String()}, nil
+	case "forget":
+		if len(args) != 2 {
+			return Result{}, fmt.Errorf("usage: /memory forget <id>")
+		}
+		if err := eng.Forget(ctx, args[1]); err != nil {
+			return Result{}, err
+		}
+		return Result{Output: "forgotten\n"}, nil
+	case "consolidate":
+		report, err := eng.Consolidate(ctx, ws)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Output: report + "\n"}, nil
+	case "index":
+		root := ""
+		force := false
+		for _, a := range args[1:] {
+			if a == "--force" || a == "-f" {
+				force = true
+			} else if root == "" {
+				root = a
+			}
+		}
+		if root == "" && c.deps.MemoryWorkspace != nil {
+			root = c.deps.MemoryWorkspace()
+		}
+		report, err := eng.IndexCode(ctx, root, ws, force)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Output: report + "\n"}, nil
+	case "kv":
+		if c.deps.Memory == nil {
+			return Result{}, fmt.Errorf("memoryStore is disabled")
+		}
+		return c.memoryKVCmd(ctx, c.deps.Memory, args[1:])
+	default:
+		return Result{}, fmt.Errorf("unknown /memory subcommand %q (use list/recall/remember/stats/forget/consolidate/index/kv)", args[0])
+	}
+}
+
+// memoryKVCmd implements the legacy KV memoryStore surface (/memory kv …).
+func (c *Console) memoryKVCmd(ctx context.Context, m *store.Store, args []string) (Result, error) {
 	if len(args) == 0 {
 		args = []string{"list"}
 	}

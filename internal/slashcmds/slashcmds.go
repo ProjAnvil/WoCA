@@ -44,7 +44,7 @@ func Builtin() []Command {
 		{Name: "mcp", Description: "list connected MCP servers and tools"},
 		{Name: "settings", Description: "show or update persisted settings (provider, keys, storage backends)"},
 		{Name: "debug-log", Description: "toggle harness observability logging to ~/.woca/logs (on | off)"},
-		{Name: "memory", Description: "inspect the memoryStore (list/get/put/del)"},
+		{Name: "memory", Description: "factual memory: recall/remember/stats/forget/consolidate/index + legacy kv store"},
 		{Name: "web", Description: "start/stop the web GUI"},
 		{Name: "exit", Description: "exit woca"},
 		{Name: "quit", Description: "exit woca"},

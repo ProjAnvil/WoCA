@@ -17,6 +17,7 @@ import (
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
@@ -68,8 +69,18 @@ type Deps struct {
 	// Settings persists runtime configuration (/settings). Nil disables the
 	// command with a helpful message.
 	Settings *settings.Store
-	// Memory is the memoryStore (/memory). Nil disables the command.
+	// Memory is the memoryStore (/memory kv). Nil disables the legacy KV
+	// surface.
 	Memory *store.Store
+	// MemoryEngine is the factual-memory engine (/memory engine subcommands).
+	// When set, /memory surfaces the engine; the legacy KV memoryStore moves
+	// under `kv`. Nil falls back to the KV store command.
+	MemoryEngine memory.Engine
+	// MemoryWorkspace resolves the current memory workspace for /memory.
+	MemoryWorkspace func() string
+	// RebuildMemory rebuilds the memory engine after memory settings changes
+	// made via /settings (optional).
+	RebuildMemory func() error
 	// RebuildModel rebuilds the chat model after provider/credential changes
 	// made via /settings (optional).
 	RebuildModel func() error
