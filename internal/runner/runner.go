@@ -49,7 +49,13 @@ func New(a *agent.Agent, handle InterruptHandler, render Renderer) *Runner {
 // message. Permission interrupts are resolved through the handler; the run is
 // resumed from the graph checkpoint after each answer. On natural completion,
 // Stop hooks run and may inject feedback to continue the turn.
-func (r *Runner) Run(ctx context.Context, history []messages.Message) ([]messages.Message, error) {
+func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []messages.Message, err error) {
+	// Auto-retain (single write choke point): every return path stores the
+	// run's Q/A + outcome into long-term memory. Detached ctx so graph
+	// teardown doesn't cancel the writes.
+	defer func() {
+		r.agent.RetainRun(context.WithoutCancel(ctx), history, final, err)
+	}()
 	hist := history
 	// One Run = one turn for the agent's MaxTurns accounting.
 	r.agent.ResetTurnCounter()
