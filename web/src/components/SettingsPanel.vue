@@ -287,6 +287,21 @@ const modelSuggestions = [
 
               <div class="setting-row">
                 <div>
+                  <div class="row-label">整理间隔（秒）</div>
+                  <div class="row-hint">开启后台整理后，同一工作区两次整理的最小间隔（≥60，默认 300）</div>
+                </div>
+                <input
+                  v-model.number="settings.ladymSystem2Interval"
+                  class="field"
+                  style="max-width: 100px"
+                  type="number"
+                  min="60"
+                  step="30"
+                />
+              </div>
+
+              <div class="setting-row">
+                <div>
                   <div class="row-label">召回条数</div>
                   <div class="row-hint">每轮对话注入的相关记忆条数（1–20）</div>
                 </div>

@@ -51,6 +51,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const ladymTopK = ref(6)
   const ladymDBPath = ref('')
   const ladymSystem2 = ref(false)
+  const ladymSystem2Interval = ref(300)
 
   // Unified credential fields: one Base URL + one API Key input that target
   // the selected provider's stored fields (the user picks a provider, not a
@@ -98,6 +99,7 @@ export const useSettingsStore = defineStore('settings', () => {
       ladymTopK.value = s.ladym_topk || 6
       ladymDBPath.value = s.ladym_db_path ?? ''
       ladymSystem2.value = Boolean(s.ladym_system2)
+      ladymSystem2Interval.value = s.ladym_system2_interval || 300
       ladymEmbeddingAPIKey.value = ''
       anthropicAPIKey.value = ''
       openaiAPIKey.value = ''
@@ -126,6 +128,10 @@ export const useSettingsStore = defineStore('settings', () => {
       ladym_autoretain: ladymAutoRetain.value,
       // 清空输入框会得到 ''/NaN，直接发送会 400 —— 无效值回落到默认 6。
       ladym_topk: Number.isFinite(ladymTopK.value) && ladymTopK.value >= 1 ? ladymTopK.value : 6,
+      ladym_system2_interval:
+        Number.isFinite(ladymSystem2Interval.value) && ladymSystem2Interval.value >= 60
+          ? ladymSystem2Interval.value
+          : 300,
       ladym_db_path: ladymDBPath.value,
       ladym_system2: ladymSystem2.value,
     }
@@ -207,6 +213,7 @@ export const useSettingsStore = defineStore('settings', () => {
     ladymTopK,
     ladymDBPath,
     ladymSystem2,
+    ladymSystem2Interval,
     logDir: computed(() => server.value?.log_dir ?? ''),
     toggleDebugLog,
     loadServer,
