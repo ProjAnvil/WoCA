@@ -1961,3 +1961,15 @@ html.dark .shiki-host span {
   margin: 4px 0 0;
   text-align: center;
 }
+
+/* Settings panel: memory (ladyM) section */
+.mem-intro { margin: 0 0 10px; font-size: 12.5px; color: var(--muted); }
+.setting-subgroup {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

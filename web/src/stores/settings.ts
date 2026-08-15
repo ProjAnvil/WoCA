@@ -40,6 +40,18 @@ export const useSettingsStore = defineStore('settings', () => {
   const postgresURL = ref('')
   const debugLog = ref(false)
 
+  // ladyM factual-memory engine (live-applied server-side on save).
+  const memoryEngine = ref('ladym')
+  const ladymEmbedding = ref('inherit')
+  const ladymEmbeddingModel = ref('')
+  const ladymEmbeddingBaseURL = ref('')
+  const ladymEmbeddingAPIKey = ref('')
+  const ladymLLM = ref('inherit')
+  const ladymAutoRetain = ref(true)
+  const ladymTopK = ref(6)
+  const ladymDBPath = ref('')
+  const ladymSystem2 = ref(false)
+
   // Unified credential fields: one Base URL + one API Key input that target
   // the selected provider's stored fields (the user picks a provider, not a
   // per-provider form). Drafts are kept per provider so switching back and
@@ -63,6 +75,7 @@ export const useSettingsStore = defineStore('settings', () => {
       ? Boolean(server.value?.anthropic_api_key_set)
       : Boolean(server.value?.openai_api_key_set),
   )
+  const ladymEmbeddingKeySet = computed(() => Boolean(server.value?.ladym_embedding_api_key_set))
 
   async function loadServer() {
     serverError.value = ''
@@ -76,6 +89,16 @@ export const useSettingsStore = defineStore('settings', () => {
       checkpointBackend.value = s.checkpoint_backend || 'sqlite'
       memoryBackend.value = s.memory_backend || 'sqlite'
       debugLog.value = Boolean(s.debug_log)
+      memoryEngine.value = s.memory_engine || 'ladym'
+      ladymEmbedding.value = s.ladym_embedding || 'inherit'
+      ladymEmbeddingModel.value = s.ladym_embedding_model ?? ''
+      ladymEmbeddingBaseURL.value = s.ladym_embedding_base_url ?? ''
+      ladymLLM.value = s.ladym_llm || 'inherit'
+      ladymAutoRetain.value = s.ladym_autoretain !== false
+      ladymTopK.value = s.ladym_topk || 6
+      ladymDBPath.value = s.ladym_db_path ?? ''
+      ladymSystem2.value = Boolean(s.ladym_system2)
+      ladymEmbeddingAPIKey.value = ''
       anthropicAPIKey.value = ''
       openaiAPIKey.value = ''
       postgresURL.value = ''
@@ -95,11 +118,21 @@ export const useSettingsStore = defineStore('settings', () => {
       openai_base_url: openaiBaseURL.value,
       checkpoint_backend: checkpointBackend.value,
       memory_backend: memoryBackend.value,
+      memory_engine: memoryEngine.value,
+      ladym_embedding: ladymEmbedding.value,
+      ladym_embedding_model: ladymEmbeddingModel.value,
+      ladym_embedding_base_url: ladymEmbeddingBaseURL.value,
+      ladym_llm: ladymLLM.value,
+      ladym_autoretain: ladymAutoRetain.value,
+      ladym_topk: ladymTopK.value,
+      ladym_db_path: ladymDBPath.value,
+      ladym_system2: ladymSystem2.value,
     }
     // Secrets: only send when the user typed something (empty = unchanged).
     if (anthropicAPIKey.value) patch.anthropic_api_key = anthropicAPIKey.value
     if (openaiAPIKey.value) patch.openai_api_key = openaiAPIKey.value
     if (postgresURL.value) patch.postgres_url = postgresURL.value
+    if (ladymEmbeddingAPIKey.value) patch.ladym_embedding_api_key = ladymEmbeddingAPIKey.value
     try {
       const res = await updateSettings(patch)
       restartRequired.value = res.restart_required
@@ -162,6 +195,17 @@ export const useSettingsStore = defineStore('settings', () => {
     memoryBackend,
     postgresURL,
     debugLog,
+    memoryEngine,
+    ladymEmbedding,
+    ladymEmbeddingModel,
+    ladymEmbeddingBaseURL,
+    ladymEmbeddingAPIKey,
+    ladymEmbeddingKeySet,
+    ladymLLM,
+    ladymAutoRetain,
+    ladymTopK,
+    ladymDBPath,
+    ladymSystem2,
     logDir: computed(() => server.value?.log_dir ?? ''),
     toggleDebugLog,
     loadServer,
