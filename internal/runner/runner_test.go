@@ -17,6 +17,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/hooks"
+	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -69,6 +70,95 @@ func TestRunnerInterruptAndRender(t *testing.T) {
 	}
 	if !strings.Contains(rendered.String(), "Write(") {
 		t.Fatalf("render missing tool call:\n%s", rendered.String())
+	}
+}
+
+// retainEngine is a minimal memory.Engine capturing Remember/RecordEvent for
+// the auto-retain wiring test (the agent-package fakeEngine is not exported).
+type retainEngine struct {
+	mu       sync.Mutex
+	remember []string
+	events   []string
+}
+
+func (e *retainEngine) Remember(_ context.Context, _, content string, _ []string, _ string) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.remember = append(e.remember, content)
+	return "id-1", nil
+}
+
+func (e *retainEngine) RecordEvent(_ context.Context, _, agentName, action, _, outcome string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.events = append(e.events, agentName+"/"+action+"/"+outcome)
+	return nil
+}
+
+func (e *retainEngine) Remembered() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.remember...)
+}
+
+func (e *retainEngine) Events() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.events...)
+}
+
+func (e *retainEngine) Recall(context.Context, string, string, int) ([]memory.Hit, error) {
+	return nil, nil
+}
+func (e *retainEngine) SearchCode(context.Context, string, string, int) ([]memory.Hit, error) {
+	return nil, nil
+}
+func (e *retainEngine) List(context.Context, string, string, int, int) ([]memory.Hit, error) {
+	return nil, nil
+}
+func (e *retainEngine) Forget(context.Context, string) error { return nil }
+func (e *retainEngine) Stats(context.Context, string) (*memory.Stats, error) {
+	return &memory.Stats{Total: 0, Layers: map[string]int{}}, nil
+}
+func (e *retainEngine) IndexCode(context.Context, string, string, bool) (string, error) {
+	return "", nil
+}
+func (e *retainEngine) Consolidate(context.Context, string) (string, error) { return "", nil }
+func (e *retainEngine) Description() string                                 { return "retain-stub" }
+func (e *retainEngine) Close() error                                        { return nil }
+
+// TestRunnerRetainsRunIntoMemory checks the runner-level wiring: with a
+// memory engine configured (and settings defaults, autoretain on), Run's
+// completion hook stores the run's Q/A and outcome.
+func TestRunnerRetainsRunIntoMemory(t *testing.T) {
+	eng := &retainEngine{}
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(messages.AI("stored answer")),
+	)
+	a, err := agent.New(agent.Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+		MemoryEngine:   eng,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := New(a, nil, nil)
+	if _, err := r.Run(context.Background(), []messages.Message{messages.Human("remember me")}); err != nil {
+		t.Fatal(err)
+	}
+	remembered := eng.Remembered()
+	if len(remembered) != 1 {
+		t.Fatalf("remember calls = %v, want 1", remembered)
+	}
+	if c := remembered[0]; !strings.Contains(c, "Q: remember me") || !strings.Contains(c, "A: stored answer") {
+		t.Fatalf("remembered = %q", c)
+	}
+	if ev := eng.Events(); len(ev) != 1 || ev[0] != "woca/run/success" {
+		t.Fatalf("events = %v", ev)
 	}
 }
 

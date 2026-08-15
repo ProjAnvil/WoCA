@@ -23,8 +23,10 @@ type fakeEngine struct {
 	rememberCalls []string // "ws\x00src\x00content" per Remember call
 	events        []string
 	hits          []memory.Hit
-	err           bool // Recall returns an error when set
-	drop          bool // Remember returns ("", nil): attention-gate drop
+	err           bool  // Recall returns an error when set
+	drop          bool  // Remember returns ("", nil): attention-gate drop
+	rememberErr   error // Remember returns this error when set (overrides drop)
+	eventErr      error // RecordEvent returns this error when set (still recorded)
 }
 
 func (f *fakeEngine) Recall(ctx context.Context, query, workspace string, topK int) ([]memory.Hit, error) {
@@ -45,6 +47,9 @@ func (f *fakeEngine) Remember(ctx context.Context, ws, content string, tags []st
 	f.remembered = append(f.remembered, content)
 	f.rememberCalls = append(f.rememberCalls, ws+"\x00"+src+"\x00"+content)
 	f.mu.Unlock()
+	if f.rememberErr != nil {
+		return "", f.rememberErr
+	}
 	if f.drop {
 		return "", nil // attention gate dropped the content
 	}
@@ -54,7 +59,7 @@ func (f *fakeEngine) RecordEvent(ctx context.Context, ws, agentName, action, obs
 	f.mu.Lock()
 	f.events = append(f.events, agentName+"/"+action+"/"+outcome)
 	f.mu.Unlock()
-	return nil
+	return f.eventErr
 }
 func (f *fakeEngine) List(ctx context.Context, ws, layer string, limit, offset int) ([]memory.Hit, error) {
 	return nil, nil

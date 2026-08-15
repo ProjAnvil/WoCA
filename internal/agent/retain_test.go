@@ -2,11 +2,15 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
+	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/settings"
 )
 
@@ -71,9 +75,62 @@ func TestRetainRunErrorOutcome(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{memEngine: f, workdir: "/ws"}
 	a.RetainRun(context.Background(),
-		[]messages.Message{messages.Human("q")}, nil, context.Canceled)
+		[]messages.Message{messages.Human("q")}, nil, errors.New("boom"))
 	if len(f.events) != 1 || !strings.Contains(f.events[0], "error") {
 		t.Fatalf("events = %v", f.events)
+	}
+}
+
+func TestRetainRunCancelledOutcome(t *testing.T) {
+	f := &fakeEngine{}
+	a := &Agent{memEngine: f, workdir: "/ws"}
+	a.RetainRun(context.Background(),
+		[]messages.Message{messages.Human("q")}, nil, context.Canceled)
+	if len(f.events) != 1 || !strings.Contains(f.events[0], "cancelled") {
+		t.Fatalf("events = %v", f.events)
+	}
+	if strings.Contains(f.events[0], "/error") {
+		t.Fatalf("cancel must not map to error: %v", f.events)
+	}
+}
+
+func TestRetainRunUsesLastQuestion(t *testing.T) {
+	f := &fakeEngine{}
+	a := &Agent{memEngine: f, workdir: "/ws"}
+	history := []messages.Message{
+		messages.Human("first question"),
+		messages.AI("first answer"),
+		messages.Human("second question"),
+		// Synthetic wrappers from earlier turns must be skipped.
+		messages.Human("<relevant-memory>\nnoise\n</relevant-memory>"),
+	}
+	a.RetainRun(context.Background(), history, []messages.Message{messages.AI("second answer")}, nil)
+	calls := f.recordedRememberCalls()
+	if len(calls) != 1 {
+		t.Fatalf("rememberCalls = %v", calls)
+	}
+	if !strings.Contains(calls[0], "Q: second question") || strings.Contains(calls[0], "Q: first question") {
+		t.Fatalf("content = %q", calls[0])
+	}
+	if len(f.events) != 1 || !strings.Contains(f.events[0], "success") {
+		t.Fatalf("events = %v", f.events)
+	}
+}
+
+func TestRetainRunLogsWriteErrors(t *testing.T) {
+	f := &fakeEngine{rememberErr: errors.New("db locked"), eventErr: errors.New("disk full")}
+	root := t.TempDir()
+	a := &Agent{memEngine: f, workdir: "/ws", obs: obslog.New(root, true)}
+	a.RetainRun(context.Background(),
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+	data, err := os.ReadFile(filepath.Join(root, "woca.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(data)
+	if !strings.Contains(log, "retain_write_error") || !strings.Contains(log, "db locked") ||
+		!strings.Contains(log, "disk full") {
+		t.Fatalf("obs log = %q", log)
 	}
 }
 
