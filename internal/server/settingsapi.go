@@ -24,6 +24,8 @@ type appSettings struct {
 	CheckpointDir      string  `json:"checkpoint_dir"`
 	PostgresURLSet     bool    `json:"postgres_url_set"`
 	Database           string  `json:"database"`
+	DebugLog           bool    `json:"debug_log"`
+	LogDir             string  `json:"log_dir"`
 }
 
 // appSettingsUpdate is the PUT body. Pointer fields distinguish "unchanged"
@@ -41,6 +43,7 @@ type appSettingsUpdate struct {
 	MemoryBackend     *string  `json:"memory_backend"`
 	CheckpointDir     *string  `json:"checkpoint_dir"`
 	PostgresURL       *string  `json:"postgres_url"`
+	DebugLog          *bool    `json:"debug_log"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
@@ -50,6 +53,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	cfg := st.Load()
+	logDir := ""
+	if s.agent != nil && s.agent.Obs() != nil {
+		logDir = s.agent.Obs().Root()
+	}
 	writeJSON(w, http.StatusOK, appSettings{
 		Provider:           cfg.Provider,
 		Model:              cfg.Model,
@@ -64,6 +71,8 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		CheckpointDir:      cfg.CheckpointDir,
 		PostgresURLSet:     st.HasSecret(settings.SecretPostgresURL),
 		Database:           st.Path(),
+		DebugLog:           cfg.DebugLog,
+		LogDir:             logDir,
 	})
 }
 
@@ -146,6 +155,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		restartRequired = true
 	}
+	debugLogChanged := false
+	if req.DebugLog != nil {
+		if err := settings.Apply(&cfg, settings.KeyDebugLog, strconv.FormatBool(*req.DebugLog)); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		debugLogChanged = true
+	}
 	if err := st.Save(cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -179,6 +196,11 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		if err := s.rebuildModel(); err != nil {
 			applyErr = err.Error()
 		}
+	}
+	// The observability log toggles live (no restart): flip the store right
+	// after the settings row is saved.
+	if debugLogChanged && s.agent != nil && s.agent.Obs() != nil {
+		s.agent.Obs().SetEnabled(cfg.DebugLog)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

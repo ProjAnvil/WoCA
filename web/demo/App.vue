@@ -2,22 +2,27 @@
 import { onMounted } from 'vue'
 import Sidebar from '@/components/Sidebar.vue'
 import ChatPanel from '@/components/ChatPanel.vue'
+import WorkspaceSidebar from '@/components/WorkspaceSidebar.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
-import MarkdownView from '@/components/MarkdownView.vue'
 import InterruptModal from '@/components/InterruptModal.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { useSessionStore } from '@/stores/sessions'
-import { demoItems, demoInterrupts, demoSessions, demoWorkspace } from './data'
+import { useCompletionsStore } from '@/stores/completions'
+import { demoItems, demoInterrupts, demoSessions, demoSkills, demoSubagents, demoWorkspace } from './data'
 
 const settings = useSettingsStore()
 const workspace = useWorkspaceStore()
 const sessions = useSessionStore()
+const completions = useCompletionsStore()
 
 onMounted(() => {
   sessions.setDemo(true)
   sessions.seed(demoSessions, demoItems)
+  workspace.setDemo(true)
   workspace.tree = demoWorkspace
+  workspace.openPanel()
+  completions.seed(demoSkills, demoSubagents)
 })
 </script>
 
@@ -39,8 +44,8 @@ onMounted(() => {
       </div>
       <ChatPanel />
     </main>
+    <WorkspaceSidebar />
     <SettingsPanel v-if="settings.panelOpen" />
-    <MarkdownView v-if="workspace.preview" />
     <InterruptModal v-if="sessions.activeInterrupt" />
   </div>
 </template>

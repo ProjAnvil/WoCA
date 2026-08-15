@@ -5,16 +5,19 @@ import coretools "github.com/projanvil/langchain-golang/core/tools"
 // defaultTools assembles the built-in tool set, bound to the harness working
 // directory and sharing the session todo store. Task-family tools (subagents)
 // are built by the agent package because they need the subagent runner.
-func defaultTools(workdir string, todos *TodoStore) []coretools.Tool {
+func defaultTools(d *Dir, todos *TodoStore, bg *BackgroundShells) []coretools.Tool {
 	return []coretools.Tool{
-		bashTool(workdir),
-		readTool(workdir),
-		writeTool(workdir),
-		editTool(workdir),
-		notebookEditTool(workdir),
-		globTool(workdir),
-		grepTool(workdir),
-		listDirTool(workdir),
+		bashTool(d, bg),
+		bashOutputTool(bg),
+		killShellTool(bg),
+		readTool(d),
+		writeTool(d),
+		editTool(d),
+		notebookEditTool(d),
+		globTool(d),
+		grepTool(d),
+		listDirTool(d),
+		lspTool(d),
 		todoWriteTool(todos),
 		webFetchTool(),
 		webSearchTool(),

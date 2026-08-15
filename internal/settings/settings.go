@@ -47,6 +47,8 @@ type Settings struct {
 	CheckpointBackend string  `json:"checkpoint_backend"`
 	MemoryBackend     string  `json:"memory_backend"`
 	CheckpointDir     string  `json:"checkpoint_dir"`
+	OutputStyle       string  `json:"output_style"`
+	DebugLog          bool    `json:"debug_log"`
 }
 
 // Default returns the default settings: sqlite storage under ~/.woca.
@@ -88,8 +90,24 @@ func (s Settings) Normalize() (Settings, error) {
 
 // Store reads and writes settings plus encrypted secrets in a woca database.
 type Store struct {
-	db     *wocadb.DB
-	crypto *wocadb.Crypto
+	db      *wocadb.DB
+	crypto  *wocadb.Crypto
+	managed managedState
+}
+
+// SetManaged installs the enterprise managed-settings overlay: its values
+// override database reads and are locked against writes.
+func (s *Store) SetManaged(m Settings) {
+	if s == nil {
+		return
+	}
+	s.managed.mu.Lock()
+	defer s.managed.mu.Unlock()
+	if m == (Settings{}) {
+		s.managed.overlay = nil
+		return
+	}
+	s.managed.overlay = &m
 }
 
 // Open opens the database at target (see wocadb.Open) and prepares the
@@ -154,8 +172,9 @@ func (s *Store) Load() Settings {
 	}
 	applyPairs(&out, pairs)
 	if n, err := out.Normalize(); err == nil {
-		return n
+		out = n
 	}
+	s.managed.applyOverlay(&out)
 	return out
 }
 
@@ -191,6 +210,12 @@ func applyPairs(out *Settings, pairs map[string]string) {
 	if v, ok := pairs["checkpoint_dir"]; ok {
 		out.CheckpointDir = v
 	}
+	if v, ok := pairs["output_style"]; ok {
+		out.OutputStyle = v
+	}
+	if v, ok := pairs["debug_log"]; ok {
+		out.DebugLog, _ = ParseBool(v)
+	}
 }
 
 // Save persists non-empty settings fields (empty fields are left unchanged so
@@ -198,6 +223,9 @@ func applyPairs(out *Settings, pairs map[string]string) {
 func (s *Store) Save(cfg Settings) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("settings: store disabled")
+	}
+	if err := s.managed.checkWritable(cfg); err != nil {
+		return err
 	}
 	type field struct{ key, val string }
 	fields := []field{
@@ -208,6 +236,7 @@ func (s *Store) Save(cfg Settings) error {
 		{"checkpoint_backend", cfg.CheckpointBackend},
 		{"memory_backend", cfg.MemoryBackend},
 		{"checkpoint_dir", cfg.CheckpointDir},
+		{"output_style", cfg.OutputStyle},
 	}
 	if cfg.MaxTokens != 0 {
 		fields = append(fields, field{"max_tokens", strconv.Itoa(cfg.MaxTokens)})
@@ -215,6 +244,9 @@ func (s *Store) Save(cfg Settings) error {
 	if cfg.Temperature != 0 {
 		fields = append(fields, field{"temperature", strconv.FormatFloat(cfg.Temperature, 'f', -1, 64)})
 	}
+	// debug_log is always written explicitly (false included) so turning the
+	// observability log off persists, unlike empty-means-skip fields.
+	fields = append(fields, field{"debug_log", strconv.FormatBool(cfg.DebugLog)})
 	for _, f := range fields {
 		if f.val == "" {
 			continue

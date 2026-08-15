@@ -97,6 +97,53 @@ hooks wrap each call; a Pre hook exiting `2` denies the tool, and a Post hook
 exiting `2` feeds feedback back to the model. State is a single `messages`
 channel with an `add_messages` reducer.
 
+### Observability log
+
+`--debug-log` (or the persisted `debug-log` setting — the web settings panel
+and `/debug-log on|off` toggle it live) turns on full harness logging under
+`~/.woca/logs/`, size-rotated (8 MB × 5 per file):
+
+```
+logs/woca.log                            main log: run lifecycle, model usage, summaries
+logs/ws-<name>-<hash8>/<session>.jsonl   session trace: one JSON event per line
+logs/ws-<name>-<hash8>/<session>/<run>.json   message-level dump (full transcript)
+```
+
+Every graph-node dispatch (the agent graph and the goal graph) is recorded
+with its phase, duration, and state-update summary through the graph runtime's
+observer hook. In the web UI, each assistant bubble gains a hover action bar:
+**copy as markdown**, plus a **debug 🐞 button** (visible while the log is on)
+that copies the workspace/session/run context and log locations for quick
+troubleshooting.
+
+### Goal mode (persistent objectives)
+
+`/goal set <objective>` switches the agent from ask-answer to an autonomous
+loop that keeps working until the objective is **verified** complete, blocked,
+paused, or out of budget — expressed as its own graph on top of the agent
+graph:
+
+```
+START ─▶ assess ─▶ execute ─▶ evaluate ─┬─ active   ─▶ assess (next cycle)
+                                        └─ terminal ─▶ END
+```
+
+- **assess** plans the cycle (done-criteria checklist + this cycle's actions);
+- **execute** runs a full nested agent turn (tools, permissions, hooks,
+  compaction) seeded with a `<goal-cycle N>` message;
+- **evaluate** is a skeptical verification gate: the model may
+  `claim_complete` via the `UpdateGoal` tool, but only evidence verified by
+  the evaluator completes the goal;
+- budgets (`--cycles N`, `--tokens N`), idle auto-continue, empty-cycle
+  suppression, and mid-cycle interrupt/resume all apply; state follows the
+  Codex-style machine `active ↔ paused → blocked / complete / budget_limited`.
+
+The web UI shows a goal chip + detail panel (cycle/token meters, per-cycle
+verdicts, pause/resume/clear) with live `goal` SSE events; the TUI footer
+shows `goal[status] cycle n/N · xk/2M tok`. Goal state persists per session
+(`<id>.goal.json` sidecar) and survives server restarts. See
+`docs/agent-loop-comparison.md` §16.
+
 ### System prompt
 
 `internal/prompt` mirrors Claude Code's system-prompt structure with original
@@ -346,6 +393,7 @@ interrupt a run, and `pgup`/`pgdown` to scroll the transcript.
 | tool-use summaries (`toolUseSummaryGenerator.ts`) | `internal/agent/toolsummary.go` — async labels, UI-only, consumed while the next round streams |
 | interactive permission approval (`useCanUseTool`) | `internal/tui` pending approval box — y/enter allows, n/esc denies, run resumes |
 | token-budget auto-continue (`tokenBudget.ts`) | `internal/runner/tokenbudget.go` — 500k nudge continuations with diminishing-returns stop |
+| goal mode (`/goal` autonomous loop; Codex goal state machine) | `internal/agent/goalgraph.go` — assess → execute → evaluate graph with skeptical verification, budgets, idle continuation, mid-cycle interrupt/resume |
 | maxTurns + between-turn tool refresh (stage 28) | `internal/agent/maxturns.go` + `refreshtools.go` (`--max-turns`, MCP re-list) |
 | task summaries (`claude ps`) | `internal/agent/tasksummary.go` — periodic one-liner surfaced by `/status` |
 | memory prefetch/attachments | `internal/agent/memorystore.go` — relevant memories attached after tool rounds |

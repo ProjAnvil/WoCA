@@ -3,6 +3,7 @@
 package agents
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ type Definition struct {
 	Description string
 	Prompt      string   // markdown body used as the subagent's system prompt
 	Tools       []string // allowed tool names; empty = inherit the parent tool set
+	Source      string   // file the definition was loaded from ("" for inline)
 }
 
 // Load walks root and loads every *.md file. Each file has optional YAML-style
@@ -42,7 +44,9 @@ func Load(root string) ([]Definition, error) {
 			return nil
 		}
 		defaultName := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))
-		out = append(out, parseDefinition(defaultName, data))
+		def := parseDefinition(defaultName, data)
+		def.Source = path
+		out = append(out, def)
 		return nil
 	})
 	if err != nil {
@@ -60,6 +64,24 @@ func Find(list []Definition, name string) (Definition, bool) {
 		}
 	}
 	return Definition{}, false
+}
+
+// Render encodes a definition back into its markdown file format (inverse of
+// parseDefinition; used by the /agents manager).
+func Render(d Definition) string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	fmt.Fprintf(&b, "name: %s\n", d.Name)
+	if d.Description != "" {
+		fmt.Fprintf(&b, "description: %s\n", d.Description)
+	}
+	if len(d.Tools) > 0 {
+		fmt.Fprintf(&b, "tools: %s\n", strings.Join(d.Tools, ", "))
+	}
+	b.WriteString("---\n\n")
+	b.WriteString(d.Prompt)
+	b.WriteString("\n")
+	return b.String()
 }
 
 // parseDefinition parses a markdown file with optional YAML frontmatter

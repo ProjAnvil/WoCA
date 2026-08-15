@@ -21,10 +21,10 @@ type listDirArgs struct {
 	Path string `json:"path,omitempty"`
 }
 
-func listDirTool(baseWorkdir string) coretools.Tool {
+func listDirTool(d *Dir) coretools.Tool {
 	t, err := coretools.FromFunc("ListDir", listDirDescription,
 		func(ctx context.Context, a listDirArgs) (coretools.Result, error) {
-			dir := resolvePath(baseWorkdir, a.Path)
+			dir := resolvePath(d.Current(), a.Path)
 			entries, err := os.ReadDir(dir)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("list %s: %w", a.Path, err)
@@ -53,10 +53,10 @@ type globArgs struct {
 	Path    string `json:"path,omitempty"`
 }
 
-func globTool(baseWorkdir string) coretools.Tool {
+func globTool(d *Dir) coretools.Tool {
 	t, err := coretools.FromFunc("Glob", globDescription,
 		func(ctx context.Context, a globArgs) (coretools.Result, error) {
-			base := resolvePath(baseWorkdir, a.Path)
+			base := resolvePath(d.Current(), a.Path)
 			matches, err := walkMatches(base, a.Pattern, nil)
 			if err != nil {
 				return coretools.Result{}, err
@@ -77,14 +77,14 @@ type grepArgs struct {
 	Include string `json:"include,omitempty"`
 }
 
-func grepTool(baseWorkdir string) coretools.Tool {
+func grepTool(d *Dir) coretools.Tool {
 	t, err := coretools.FromFunc("Grep", grepDescription,
 		func(ctx context.Context, a grepArgs) (coretools.Result, error) {
 			re, err := regexp.Compile(a.Pattern)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("invalid regexp %q: %w", a.Pattern, err)
 			}
-			base := resolvePath(baseWorkdir, a.Path)
+			base := resolvePath(d.Current(), a.Path)
 
 			var include *regexp.Regexp
 			if a.Include != "" {

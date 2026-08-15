@@ -1,11 +1,20 @@
 import { fetchEventSource } from '@microsoft/fetch-event-source'
-import type { AppSettings, AppSettingsUpdate, SessionSummary, TranscriptMessage, WorkspaceFile } from '../types'
+import type {
+  AppSettings,
+  AppSettingsUpdate,
+  CompletionEntry,
+  Goal,
+  SessionSummary,
+  TranscriptMessage,
+  WorkspaceFile,
+} from '../types'
 
 export interface StreamHandlers {
   onDelta: (text: string) => void
   onToolCall: (tc: { id: string; name: string; args: Record<string, unknown> }) => void
   onToolResult: (tr: { tool_call_id: string; content: string }) => void
   onInterrupt: (ev: { kind: string; payload: unknown }) => void
+  onGoal?: (ev: { goal: Goal | null; running: boolean }) => void
   onDone: (cancelled: boolean) => void
   onError: (message: string) => void
 }
@@ -20,8 +29,12 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
   return (await resp.json()) as T
 }
 
-export function createSession(): Promise<string> {
-  return postJSON<{ session_id: string }>('/api/sessions', {}).then((d) => d.session_id)
+export function createSession(workspace?: string): Promise<{
+  session_id: string
+  workspace?: string
+  workspace_name?: string
+}> {
+  return postJSON('/api/sessions', { workspace: workspace ?? '' })
 }
 
 export function listSessions(): Promise<SessionSummary[]> {
@@ -42,6 +55,19 @@ export async function getSession(
 export async function getWorkspace(): Promise<WorkspaceFile | null> {
   const resp = await fetch('/api/workspace')
   if (!resp.ok) throw new Error(`加载工作区失败：${resp.status}`)
+  return resp.json()
+}
+
+/** Fetches one workspace file's content for the right-sidebar preview. */
+export async function getWorkspaceFile(path: string): Promise<WorkspaceFile> {
+  const resp = await fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`)
+  if (!resp.ok) {
+    const msg = await resp
+      .json()
+      .then((d) => (d as { error?: string }).error)
+      .catch(() => '')
+    throw new Error(msg || `读取文件失败：${resp.status}`)
+  }
   return resp.json()
 }
 
@@ -69,13 +95,27 @@ export async function updateSettings(
   return resp.json()
 }
 
+/** Lists skills ("/" commands) and subagents ("@" mentions) for autocomplete. */
+export async function getCompletions(): Promise<{
+  skills: CompletionEntry[]
+  agents: CompletionEntry[]
+}> {
+  const resp = await fetch('/api/completions')
+  if (!resp.ok) throw new Error(`加载补全列表失败：${resp.status}`)
+  return resp.json()
+}
+
 export function createRun(
   sessionId: string,
   prompt: string,
+  workspace?: string,
+  attachments?: Array<{ name: string; mime_type: string; data: string }>,
 ): Promise<{ run_id: string; session_id: string }> {
   return postJSON<{ run_id: string; session_id: string }>('/api/runs', {
     session_id: sessionId,
     prompt,
+    workspace: workspace ?? '',
+    attachments: attachments ?? [],
   })
 }
 
@@ -94,6 +134,27 @@ export async function cancelRun(runId: string): Promise<void> {
 /** Buffers user input for a run in flight; attached after the current tool round. */
 export function queueRunInput(runId: string, text: string): Promise<void> {
   return postJSON<void>(`/api/runs/${runId}/input`, { text })
+}
+
+/** Fetches a session's goal state (live, or the persisted sidecar after a restart). */
+export async function getGoal(
+  sessionId: string,
+): Promise<{ goal: Goal | null; running: boolean }> {
+  const resp = await fetch(`/api/sessions/${sessionId}/goal`)
+  if (!resp.ok) throw new Error(`加载目标失败：${resp.status}`)
+  return resp.json()
+}
+
+/**
+ * Runs a /goal command server-side (no model turn). set/resume additionally
+ * start the goal loop; a non-empty run_id means "subscribe to this run".
+ */
+export function sendGoalCommand(
+  sessionId: string,
+  command: string,
+  workspace?: string,
+): Promise<{ ok: boolean; output: string; goal: Goal | null; run_id: string }> {
+  return postJSON(`/api/sessions/${sessionId}/goal`, { command, workspace: workspace ?? '' })
 }
 
 /** Opens an SSE stream for a run and dispatches events to handlers. */
@@ -126,6 +187,9 @@ export function streamRun(runId: string, handlers: StreamHandlers): Promise<void
           break
         case 'interrupt':
           handlers.onInterrupt(data as { kind: string; payload: unknown })
+          break
+        case 'goal':
+          handlers.onGoal?.(data as { goal: Goal | null; running: boolean })
           break
         case 'done':
           handlers.onDone((data as { cancelled?: boolean }).cancelled ?? false)

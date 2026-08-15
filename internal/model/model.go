@@ -275,9 +275,16 @@ func (s *retryStream) Next(ctx context.Context) (messages.Message, bool, error) 
 // output was already delivered. It returns false when the error is fatal
 // and must propagate to the consumer.
 func (s *retryStream) scheduleRetry(err error) bool {
-	if s.ctx.Err() != nil || ctxCanceled(err) {
+	if s.ctx.Err() != nil {
 		return false // consumer cancelled: no retry
 	}
+	// A "context canceled" error with a live consumer ctx is NOT a user
+	// cancellation: it is the connection layer dying under a request — most
+	// commonly a gateway (DeepSeek and similar OpenAI-compatible endpoints)
+	// closing a keep-alive connection right after a previous stream ended,
+	// resetting the next in-flight request that reused it. Treat it as a
+	// transient transport error and retry; only a cancelled consumer ctx is
+	// fatal.
 	if !s.r.retryableFn()(err) {
 		return false
 	}
@@ -308,11 +315,6 @@ func (s *retryStream) scheduleRetry(err error) bool {
 		s.pending = &marker
 	}
 	return true
-}
-
-func ctxCanceled(err error) bool {
-	return err == context.Canceled || err == context.DeadlineExceeded ||
-		strings.Contains(err.Error(), "context canceled")
 }
 
 // Close closes the underlying stream when one is open.

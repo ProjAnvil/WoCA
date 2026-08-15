@@ -1,13 +1,33 @@
-import type { ChatItem, Interrupt, Session, WorkspaceFile } from '@/types'
+import type { ChatItem, CompletionEntry, Interrupt, Session, WorkspaceFile } from '@/types'
 
 // Rich mock data for the standalone demo. The real app fetches all of this
 // from the Go backend; this file only exists to preview the UI in isolation.
 
+export const demoSkills: CompletionEntry[] = [
+  { name: 'clear', description: 'clear the conversation and start fresh' },
+  { name: 'compact', description: 'summarize the conversation to free context' },
+  { name: 'model', description: 'show or switch the model' },
+  { name: 'status', description: 'show version, model, mode, and session stats' },
+  { name: 'commit', description: '为暂存区的变更创建一条 conventional commit 提交' },
+  { name: 'pr', description: '创建、查看或合并 GitHub Pull Request' },
+  { name: 'review', description: '对当前分支的改动做代码审查，输出逐条意见' },
+  { name: 'test', description: '运行测试套件并总结失败原因' },
+]
+
+export const demoSubagents: CompletionEntry[] = [
+  { name: 'reviewer', description: '代码审查子代理：检查正确性、可读性与安全隐患' },
+  { name: 'frontend', description: '前端专家：Vue/TS 组件与样式实现' },
+  { name: 'backend', description: '后端专家：Go 服务、API 与存储设计' },
+]
+
+const WS_WOCA = '/Users/demo/code/woca'
+const WS_DOCS = '/Users/demo/code/woca-docs'
+
 export const demoSessions: Session[] = [
-  { id: 'demo-s1', title: '接入 Web UI 的可行性调研', updatedAt: '', loaded: true },
-  { id: 'demo-s2', title: '修复 Bash 工具权限判断', updatedAt: '', loaded: true },
-  { id: 'demo-s3', title: '为 graph 增加文件检查点', updatedAt: '', loaded: true },
-  { id: 'demo-s4', title: '重构 runner 的流式渲染', updatedAt: '', loaded: true },
+  { id: 'demo-s1', title: '接入 Web UI 的可行性调研', updatedAt: '', loaded: true, workspace: WS_WOCA, workspaceName: 'woca' },
+  { id: 'demo-s3', title: '为 graph 增加文件检查点', updatedAt: '', loaded: true, workspace: WS_WOCA, workspaceName: 'woca' },
+  { id: 'demo-s4', title: '重构 runner 的流式渲染', updatedAt: '', loaded: true, workspace: WS_WOCA, workspaceName: 'woca' },
+  { id: 'demo-s2', title: '修复 Bash 工具权限判断', updatedAt: '', loaded: true, workspace: WS_DOCS, workspaceName: 'woca-docs' },
 ]
 
 export const demoItems: Record<string, ChatItem[]> = {
@@ -237,13 +257,80 @@ web/                Vue 3 前端（embed 进二进制）
 \`\`\`
 `
 
+const mainGo = `package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+)
+
+func main() {
+	prompt := flag.String("p", "", "one-shot prompt")
+	flag.Parse()
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	if *prompt == "" {
+		fmt.Fprintln(os.Stderr, "usage: woca -p \\"prompt\\"")
+		os.Exit(1)
+	}
+	run(ctx, *prompt)
+}
+
+func run(ctx context.Context, prompt string) error {
+	fmt.Println(prompt)
+	return nil
+}
+`
+
+const agentGo = `package agent
+
+// Agent wires the model, tools and permission gate into a runnable graph.
+type Agent struct {
+	model      ChatModel
+	registry   *Registry
+	permission PermissionMode
+}
+
+// Run streams one conversation turn as a sequence of Steps.
+func (a *Agent) Run(ctx context.Context, msgs []Message) error {
+	for step := range a.graph.Invoke(ctx, msgs) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		a.emit(step)
+	}
+	return nil
+}
+`
+
+const chatVue = `<script setup lang="ts">
+import { computed, ref } from 'vue'
+import ChatItemView from './ChatItemView.vue'
+import { useSessionStore } from '../stores/sessions'
+
+const store = useSessionStore()
+const draft = ref('')
+const busy = computed(() => store.activeStatus === 'running')
+</script>
+
+<template>
+  <div class="chat">
+    <ChatItemView v-for="item in store.activeItems" :key="item.id" :item="item" />
+  </div>
+</template>
+`
+
 export const demoWorkspace: WorkspaceFile = {
   name: 'woca',
   path: 'woca',
   kind: 'dir',
   children: [
     { name: 'README.md', path: 'woca/README.md', kind: 'file', content: readmeMd },
-    { name: 'go.mod', path: 'woca/go.mod', kind: 'file' },
+    { name: 'go.mod', path: 'woca/go.mod', kind: 'file', content: 'module github.com/projanvil/woca\n\ngo 1.24\n' },
     { name: 'Makefile', path: 'woca/Makefile', kind: 'file' },
     {
       name: 'cmd',
@@ -255,7 +342,7 @@ export const demoWorkspace: WorkspaceFile = {
           path: 'woca/cmd/woca',
           kind: 'dir',
           children: [
-            { name: 'main.go', path: 'woca/cmd/woca/main.go', kind: 'file' },
+            { name: 'main.go', path: 'woca/cmd/woca/main.go', kind: 'file', content: mainGo },
             { name: 'main_test.go', path: 'woca/cmd/woca/main_test.go', kind: 'file' },
           ],
         },
@@ -271,7 +358,7 @@ export const demoWorkspace: WorkspaceFile = {
           path: 'woca/internal/agent',
           kind: 'dir',
           children: [
-            { name: 'agent.go', path: 'woca/internal/agent/agent.go', kind: 'file' },
+            { name: 'agent.go', path: 'woca/internal/agent/agent.go', kind: 'file', content: agentGo },
             { name: 'task.go', path: 'woca/internal/agent/task.go', kind: 'file' },
           ],
         },
@@ -319,7 +406,7 @@ export const demoWorkspace: WorkspaceFile = {
               path: 'woca/web/src/components',
               kind: 'dir',
               children: [
-                { name: 'ChatPanel.vue', path: 'woca/web/src/components/ChatPanel.vue', kind: 'file' },
+                { name: 'ChatPanel.vue', path: 'woca/web/src/components/ChatPanel.vue', kind: 'file', content: chatVue },
                 { name: 'Sidebar.vue', path: 'woca/web/src/components/Sidebar.vue', kind: 'file' },
               ],
             },

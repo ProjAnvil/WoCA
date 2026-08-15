@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/hooks"
 	"github.com/projanvil/woca/internal/model"
+	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/permissions"
 	"github.com/projanvil/woca/internal/prompt"
 	"github.com/projanvil/woca/internal/skills"
@@ -169,6 +171,12 @@ type Config struct {
 	MaxTurns int
 	// BashPolicy, when non-empty, gates Bash commands (allow/deny).
 	BashPolicy tools.CommandPolicy
+	// McpAuth, when set, runs the OAuth flow for an MCP server (the McpAuth
+	// tool); nil omits the tool.
+	McpAuth func(ctx context.Context, server string) error
+	// Obs is the observability log (graph/state/session/message tracing).
+	// Nil disables recording; the store's own enabled flag gates every write.
+	Obs *obslog.Store
 }
 
 // Agent is the compiled coding-agent graph plus its runtime dependencies.
@@ -225,12 +233,42 @@ type Agent struct {
 	turns    turnCounter
 	// taskState tracks the periodic task summary (claude ps).
 	taskState taskSummaryState
+	// cron schedules session-scoped scheduled prompts (ScheduleCron).
+	cron cronState
+	// goal holds the persistent-objective state and the running goal loop
+	// (goal mode; see goal.go and goalgraph.go).
+	goal goalManager
+	// mcpAuth runs MCP OAuth flows (the McpAuth tool; optional).
+	mcpAuth func(ctx context.Context, server string) error
+	// obs records graph/state/session/message events (nil = disabled).
+	obs *obslog.Store
+	// usage accumulates provider-reported token counts across model calls.
+	usage usageTracker
 	// memPrefetch holds the turn's relevant-memory prefetch.
 	memPrefetch memoryPrefetch
+	// transcriptMu guards lastTranscript: the most recent model-round input
+	// state, used by Task fork=true to copy the live conversation.
+	transcriptMu   sync.Mutex
+	lastTranscript []messages.Message
 	// compactFails counts consecutive summarization failures; after
 	// maxCompactFails auto-compaction is disabled until a manual compact
 	// succeeds (mirrors Claude Code's auto-compact circuit breaker).
 	compactFails int
+}
+
+// setTranscript records the newest model-round input state (fork source).
+func (a *Agent) setTranscript(msgs []messages.Message) {
+	cp := append([]messages.Message(nil), msgs...)
+	a.transcriptMu.Lock()
+	a.lastTranscript = cp
+	a.transcriptMu.Unlock()
+}
+
+// transcriptSnapshot returns a copy of the latest conversation state.
+func (a *Agent) transcriptSnapshot() []messages.Message {
+	a.transcriptMu.Lock()
+	defer a.transcriptMu.Unlock()
+	return append([]messages.Message(nil), a.lastTranscript...)
 }
 
 // maxCompactFails is the number of consecutive failed summaries after which
@@ -276,12 +314,14 @@ func New(cfg Config) (*Agent, error) {
 		perms:          cfg.Permissions,
 		agentDefs:      cfg.Agents,
 		bashPolicy:     cfg.BashPolicy,
+		mcpAuth:        cfg.McpAuth,
 		escalate:       cfg.MaxTokensEscalator,
 		emitSummaries:  cfg.EmitToolUseSummaries,
 		subagent:       cfg.Subagent,
 		refreshTools:   cfg.RefreshTools,
 		memory:         cfg.Memory,
 		maxTurns:       cfg.MaxTurns,
+		obs:            cfg.Obs,
 	}
 	if cfg.ToolResultBudgetChars == 0 {
 		a.toolBudget = DefaultToolResultBudgetChars
@@ -308,12 +348,16 @@ func New(cfg Config) (*Agent, error) {
 
 	base := cfg.Registry.All()
 	if cfg.Subagent {
-		a.toolList = filterTools(base, "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Task", "TaskOutput", "TaskStop", "Skill", "TaskCreate", "TaskGet", "TaskUpdate", "TaskList")
+		a.toolList = filterTools(base, "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "Task", "TaskOutput", "TaskStop", "Skill", "TaskCreate", "TaskGet", "TaskUpdate", "TaskList", "ScheduleCron", "GetGoal", "UpdateGoal")
 	} else {
 		a.toolList = append(append([]coretools.Tool(nil), base...), a.taskTools()...)
 		a.toolList = append(a.toolList, a.skillTool()...)
 		a.toolList = append(a.toolList, a.taskListTools()...)
 		a.toolList = append(a.toolList, a.sendMessageTool()...)
+		a.toolList = append(a.toolList, a.scheduleCronTool()...)
+		a.toolList = append(a.toolList, a.worktreeTools()...)
+		a.toolList = append(a.toolList, a.mcpAuthTool()...)
+		a.toolList = append(a.toolList, a.goalTools()...)
 		a.toolList = append(a.toolList, cfg.ExtraTools...)
 	}
 	// Split base/extra so between-turn refreshes only rebuild the extra
@@ -346,6 +390,9 @@ func New(cfg Config) (*Agent, error) {
 	g.SetEntryPoint(nodeModel)
 
 	compileOpts := []graph.CompileOption{graph.WithRecursionLimit(cfg.RecursionLimit)}
+	if a.obs != nil {
+		compileOpts = append(compileOpts, graph.WithObserver("agent", a.obs))
+	}
 	switch {
 	case cfg.Checkpointer != nil:
 		compileOpts = append(compileOpts, graph.WithCheckpointer(cfg.Checkpointer))
@@ -357,11 +404,33 @@ func New(cfg Config) (*Agent, error) {
 		return nil, err
 	}
 	a.graph = cg
+	// Background-shell completions (Bash run_in_background) are delivered as
+	// tagged queue notifications after the next tool round.
+	a.registry.Background().SetNotify(func(text string) {
+		a.QueueNotification("background-task-completed", strings.TrimSpace(text))
+	})
 	return a, nil
 }
 
 // Graph returns the compiled graph for streaming/resume.
 func (a *Agent) Graph() *graph.CompiledGraph { return a.graph }
+
+// Obs returns the observability store (nil when not wired).
+func (a *Agent) Obs() *obslog.Store { return a.obs }
+
+// SetObsRun scopes subsequent observability events to one workspace/session/
+// run. Harnesses call it at run start; recording itself is gated by the
+// store's enabled flag.
+func (a *Agent) SetObsRun(workspace, session, run string) {
+	if a.obs == nil {
+		return
+	}
+	name := workspace
+	if name != "" {
+		name = filepath.Base(name)
+	}
+	a.obs.SetContext(workspace, name, session, run)
+}
 
 // SystemPrompt returns the agent's system prompt.
 func (a *Agent) SystemPrompt() string { return a.systemPrompt }
@@ -403,6 +472,45 @@ func (a *Agent) Tasks() []TaskRecord { return a.taskList.List() }
 
 // Skills returns the loaded skills.
 func (a *Agent) Skills() []skills.Skill { return a.skills }
+
+// SetSkills replaces the loaded skills at runtime (tests, hot reload).
+func (a *Agent) SetSkills(list []skills.Skill) { a.skills = list }
+
+// HookSummary lists configured hook events (for /doctor); nil when no hook
+// runner is attached.
+func (a *Agent) HookSummary() []string {
+	if a.hooks == nil {
+		return nil
+	}
+	return a.hooks.Configured()
+}
+
+// PermissionRuleCounts reports the explicit allow/deny/ask rule counts (for
+// /doctor); zeros when no rules file was loaded.
+func (a *Agent) PermissionRuleCounts() (allow, deny, ask int) {
+	if a.perms == nil {
+		return 0, 0, 0
+	}
+	return len(a.perms.Allow), len(a.perms.Deny), len(a.perms.Ask)
+}
+
+// AgentDefinitions returns the loaded custom subagent definitions (/agents).
+func (a *Agent) AgentDefinitions() []agents.Definition { return a.agentDefs }
+
+// SetAgentDefinitions replaces the custom subagent definitions at runtime
+// (used by the /agents manager to refresh after edits; call when idle).
+func (a *Agent) SetAgentDefinitions(defs []agents.Definition) { a.agentDefs = defs }
+
+// SetSystemPrompt swaps the system prompt at runtime (the /output-style
+// command). Call when idle, not while a run is in flight.
+func (a *Agent) SetSystemPrompt(s string) {
+	if s == "" {
+		return
+	}
+	a.mu.Lock()
+	a.systemPrompt = s
+	a.mu.Unlock()
+}
 
 // CompactThreshold returns the configured auto-compaction token threshold
 // (0 = disabled).
@@ -492,6 +600,15 @@ func (a *Agent) CurrentModel() language.ChatModel {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.model
+}
+
+// CurrentModelName returns a display name for the active model (observability
+// events; falls back to the struct's type when unnamed).
+func (a *Agent) CurrentModelName() string {
+	if m, ok := a.CurrentModel().(interface{ Name() string }); ok {
+		return m.Name()
+	}
+	return fmt.Sprintf("%T", a.CurrentModel())
 }
 
 // Stream runs the agent and streams graph progress steps.
@@ -597,6 +714,17 @@ func (a *Agent) RunSessionStart(ctx context.Context) (string, error) {
 	return a.hooks.SessionStart(ctx)
 }
 
+// RunSessionEnd runs SessionEnd hooks (session teardown: exit, EOF, or
+// one-shot completion). Best-effort; the returned error is usually only
+// logged by the caller.
+func (a *Agent) RunSessionEnd(ctx context.Context, reason string) error {
+	if a.hooks == nil {
+		return nil
+	}
+	_, err := a.hooks.SessionEnd(ctx, reason)
+	return err
+}
+
 // modelNode streams the (tool-bound) model, emitting text deltas and
 // accumulating the full message (including tool calls). Tool calls that
 // arrive stream-complete are started in the background (streaming tool
@@ -608,6 +736,9 @@ func (a *Agent) RunSessionStart(ctx context.Context) (string, error) {
 func (a *Agent) modelNode() graph.StreamingNodeFunc {
 	return func(ctx context.Context, state graph.State, emit func(any)) (any, error) {
 		msgs := MessagesFrom(state)
+		// Record the conversation for Task fork=true (Claude Code's
+		// forkSubagent copies the live transcript into the subagent).
+		a.setTranscript(msgs)
 		// Relevant-memory prefetch (Claude Code's turn-start prefetch): the
 		// store is searched in the background while the model streams; the
 		// attachments are consumed after tool rounds.
@@ -659,6 +790,20 @@ func (a *Agent) modelNode() graph.StreamingNodeFunc {
 		}
 		if full.Role == "" {
 			full = messages.AI("")
+		}
+		// Session usage accounting (Claude Code's cost tracker): fold this
+		// call's reported tokens into the running totals for /cost.
+		a.usage.recordUsage(full.UsageMetadata)
+		if a.obs != nil {
+			a.obs.LogUsage(a.CurrentModelName(), full.UsageMetadata)
+		}
+		// PostSampling hooks analyze the response asynchronously (Claude
+		// Code's post-sampling evaluators); detached from the stream ctx so
+		// graph teardown does not kill an in-flight analysis.
+		if a.hooks != nil && (full.Content != "" || len(full.ToolCalls) > 0) {
+			resp := full.Content
+			hooks := a.hooks
+			go func() { _ = hooks.PostSampling(context.WithoutCancel(ctx), resp) }()
 		}
 		return graph.State{"messages": []messages.Message{full}}, nil
 	}
@@ -750,7 +895,7 @@ func (a *Agent) toolsNode() graph.NodeFunc {
 						content += "\n" + p.Feedback
 					}
 				}
-				results[i] = messages.Tool(call.ID, content)
+				results[i] = toolMessageFromResult(call.ID, content, &res)
 			}(i, call)
 		}
 		wg.Wait()
@@ -936,6 +1081,14 @@ func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bo
 }
 
 func (a *Agent) askPermission(ctx context.Context, call messages.ToolCall) (bool, error) {
+	// PermissionRequest hooks run before the interrupt: a hook may
+	// pre-approve or pre-deny without bothering the user.
+	if a.hooks != nil {
+		d, err := a.hooks.PermissionRequest(ctx, call.Name, call.Args)
+		if err == nil && d.Decision != "" {
+			return d.Decision == "allow", nil
+		}
+	}
 	req := PermissionRequest{
 		ToolName:   call.Name,
 		ToolArgs:   call.Args,

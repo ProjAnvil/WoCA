@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -20,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
@@ -40,10 +42,13 @@ import (
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/mcp"
 	"github.com/projanvil/woca/internal/oauth"
+	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/permissions"
+	"github.com/projanvil/woca/internal/plugins"
 	"github.com/projanvil/woca/internal/prompt"
 	"github.com/projanvil/woca/internal/repl"
 	"github.com/projanvil/woca/internal/runner"
+	"github.com/projanvil/woca/internal/sdkout"
 	"github.com/projanvil/woca/internal/searchapi"
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
@@ -52,6 +57,7 @@ import (
 	"github.com/projanvil/woca/internal/store"
 	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/tui"
+	"github.com/projanvil/woca/internal/webd"
 	"github.com/projanvil/woca/internal/webgui"
 	"github.com/projanvil/woca/internal/wocadb"
 )
@@ -65,6 +71,9 @@ type options struct {
 	apiKey           string
 	baseURL          string
 	maxTokens        int
+	thinkingBudget   int
+	outputFormat     string
+	managedSettings  string
 	temperature      float64
 	mode             string
 	skipPerms        bool
@@ -87,6 +96,7 @@ type options struct {
 	denyCommands     []string
 	db               string
 	maxTurns         int
+	debugLog         bool
 }
 
 func main() {
@@ -116,6 +126,9 @@ func newRootCmd() *cobra.Command {
 	fl.StringVar(&opts.apiKey, "api-key", "", "API key (falls back to ANTHROPIC_API_KEY / OPENAI_API_KEY)")
 	fl.StringVar(&opts.baseURL, "base-url", "", "provider base URL")
 	fl.IntVar(&opts.maxTokens, "max-tokens", 0, "maximum output tokens")
+	fl.IntVar(&opts.thinkingBudget, "thinking-budget", 0, "extended-thinking budget in tokens (0 = off; anthropic provider only, minimum 1024)")
+	fl.StringVar(&opts.outputFormat, "output-format", "", "headless output format for --prompt runs: json or stream-json (default plain text)")
+	fl.StringVar(&opts.managedSettings, "managed-settings", "", "enterprise managed settings file (overrides and locks settings; env WOCA_MANAGED_SETTINGS)")
 	fl.Float64Var(&opts.temperature, "temperature", 0, "sampling temperature")
 	fl.StringVar(&opts.mode, "permission-mode", "", "default | acceptEdits | bypassPermissions | readOnly | plan")
 	fl.BoolVar(&opts.skipPerms, "dangerously-skip-permissions", false, "allow all tools without prompting")
@@ -138,6 +151,7 @@ func newRootCmd() *cobra.Command {
 	fl.StringArrayVar(&opts.denyCommands, "deny-command", nil, "Bash command substring to block (repeatable)")
 	fl.IntVar(&opts.maxTurns, "max-turns", 0, "cap the model rounds per turn (0 = unlimited)")
 	fl.StringVar(&opts.db, "db", "", "settings database: sqlite path, postgres:// DSN, or \"none\" (default ~/.woca/woca.db; env WOCA_DB)")
+	fl.BoolVar(&opts.debugLog, "debug-log", false, "enable the harness observability log (graph/state/session/message traces to ~/.woca/logs; also settable via settings debug-log)")
 
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
@@ -160,7 +174,9 @@ func newRootCmd() *cobra.Command {
 				return err
 			}
 			cons := newConsole(ap, log)
-			return tui.Run(ap.a, nil, ap.cfg, version, tui.WithConsole(cons))
+			runErr := tui.Run(ap.a, nil, ap.cfg, version, tui.WithConsole(cons), tui.WithSettingsStore(ap.settings))
+			_ = ap.a.RunSessionEnd(cmd.Context(), "exit")
+			return runErr
 		},
 	})
 	root.AddCommand(&cobra.Command{
@@ -185,7 +201,200 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(serveCmd)
 
 	root.AddCommand(newConfigCmd(*opts))
+	root.AddCommand(newPluginCmd())
+	root.AddCommand(newMcpAuthCmd(*opts))
+	root.AddCommand(newWebCmd())
 	return root
+}
+
+// newWebCmd builds `woca web start|stop|restart|status`: manage the web GUI
+// as a background daemon (detached `woca serve`, pid/addr in ~/.woca/web.json,
+// output in ~/.woca/web.log).
+func newWebCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "web",
+		Short: "Manage the background web GUI (start | stop | restart | status)",
+	}
+	addrFlag := func(sub *cobra.Command) *string {
+		return sub.Flags().String("addr", "", "listen address (default 127.0.0.1:3484; a bare port is accepted)")
+	}
+
+	start := &cobra.Command{
+		Use:   "start",
+		Short: "Start the web GUI in the background",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			m := webd.New()
+			addr, _ := cmd.Flags().GetString("addr")
+			rec, started, err := m.Start(webd.ParseAddr(addr))
+			if err != nil {
+				return err
+			}
+			if started {
+				fmt.Printf("web gui started in the background: http://%s (pid %d, log %s)\n", rec.Addr, rec.PID, m.LogPath())
+			} else {
+				fmt.Printf("web gui already running: http://%s (pid %d)\n", rec.Addr, rec.PID)
+			}
+			return nil
+		},
+	}
+	addrFlag(start)
+	cmd.AddCommand(start)
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "stop",
+		Short: "Stop the background web GUI",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			m := webd.New()
+			stopped, err := m.Stop()
+			if err != nil {
+				return err
+			}
+			if stopped {
+				fmt.Println("web gui stopped")
+			} else {
+				fmt.Println("web gui not running")
+			}
+			return nil
+		},
+	})
+
+	restart := &cobra.Command{
+		Use:   "restart",
+		Short: "Restart the background web GUI",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			m := webd.New()
+			addr, _ := cmd.Flags().GetString("addr")
+			rec, err := m.Restart(webd.ParseAddr(addr))
+			if err != nil {
+				return err
+			}
+			fmt.Printf("web gui restarted: http://%s (pid %d)\n", rec.Addr, rec.PID)
+			return nil
+		},
+	}
+	addrFlag(restart)
+	cmd.AddCommand(restart)
+
+	cmd.AddCommand(&cobra.Command{
+		Use:   "status",
+		Short: "Show whether the background web GUI is running",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			m := webd.New()
+			if rec := m.Status(); rec != nil {
+				fmt.Printf("running: http://%s (pid %d, started %s)\n", rec.Addr, rec.PID, rec.Started)
+				return nil
+			}
+			fmt.Println("not running (woca web start to launch)")
+			return nil
+		},
+	})
+	return cmd
+}
+
+// newMcpAuthCmd builds `woca mcp auth <name> <https-endpoint>`: run the MCP
+// OAuth flow for an HTTP-transport server and store the token encrypted.
+func newMcpAuthCmd(opts options) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "mcp",
+		Short: "MCP server utilities",
+	}
+	auth := &cobra.Command{
+		Use:   "auth <name> <https-endpoint>",
+		Short: "Authorize an MCP server via OAuth (stores the token encrypted)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dbTarget := opts.db
+			if dbTarget == "" {
+				dbTarget = os.Getenv("WOCA_DB")
+			}
+			st, err := settings.Open(dbTarget)
+			if err != nil {
+				return err
+			}
+			if st == nil {
+				return fmt.Errorf("settings database disabled (--db none)")
+			}
+			flow := mcp.OAuthFlow{
+				ServerName: args[0],
+				Endpoint:   args[1],
+				Client:     &http.Client{Timeout: 15 * time.Second},
+				OpenBrowser: func(u string) error {
+					if os.Getenv("WOCA_NO_BROWSER") == "" {
+						_ = openBrowser(u)
+					}
+					return nil
+				},
+				SaveToken: func(token string) error {
+					return st.SetSecret(mcp.McpTokenSecretPrefix+args[0]+"_token", token)
+				},
+			}
+			fmt.Printf("Authorizing MCP server %s (%s) — a browser window should open…\n", args[0], args[1])
+			if err := mcp.RunOAuth(cmd.Context(), flow); err != nil {
+				return err
+			}
+			fmt.Println("Authorized. Connect with --mcp", args[0]+"="+args[1])
+			return nil
+		},
+	}
+	cmd.AddCommand(auth)
+	return cmd
+}
+
+// newPluginCmd builds `woca plugin list|install|remove` for managing the
+// plugin root (~/.woca/plugins) outside the interactive UIs.
+func newPluginCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "plugin",
+		Short: "Manage plugins (skills and subagent bundles)",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List installed plugins",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			list, errs := plugins.Load(plugins.DefaultRoot())
+			for _, err := range errs {
+				fmt.Fprintln(os.Stderr, "woca:", err)
+			}
+			if len(list) == 0 {
+				fmt.Println("no plugins installed (woca plugin install <path-or-git-url>)")
+				return nil
+			}
+			for _, p := range list {
+				extra := ""
+				if n := len(p.Skills) + len(p.Agents); n > 0 {
+					extra = fmt.Sprintf(" (%d skills, %d agents)", len(p.Skills), len(p.Agents))
+				}
+				fmt.Printf("%-20s %-8s %s%s\n", p.Manifest.Name, p.Manifest.Version, p.Manifest.Description, extra)
+			}
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "install <path-or-git-url>",
+		Short: "Install a plugin from a local directory or git URL",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := plugins.Install(args[0], plugins.DefaultRoot())
+			if err != nil {
+				return err
+			}
+			fmt.Println("installed:", path)
+			return nil
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "remove <name>",
+		Short: "Remove an installed plugin",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := plugins.Uninstall(args[0], plugins.DefaultRoot()); err != nil {
+				return err
+			}
+			fmt.Println("removed:", args[0])
+			return nil
+		},
+	})
+	return cmd
 }
 
 // newConfigCmd builds `woca config list|get|set` for managing persisted
@@ -347,8 +556,27 @@ func run(ctx context.Context, opts options, stdin io.Reader, stdout, stderr io.W
 	in := bufio.NewReader(stdin)
 	interactive := opts.prompt == ""
 	handle := interruptHandler(in, interactive, stderr)
-	r := runner.New(a, handle, runner.DefaultRenderer(stdout))
+
+	// SDK output (--output-format json | stream-json with --prompt): machine
+	// readable output instead of the human renderer.
+	var sdk *sdkout.Writer
+	if opts.prompt != "" && opts.outputFormat != "" {
+		w, err := sdkout.New(opts.outputFormat, stdout)
+		if err != nil {
+			return err
+		}
+		sdk = w
+	}
+
+	var render runner.Renderer = runner.DefaultRenderer(stdout)
+	if sdk != nil {
+		render = sdk.Step
+	}
+	r := runner.New(a, handle, render)
 	r.RenderSummary = runner.DefaultSummaryRenderer(stdout)
+	if sdk != nil {
+		r.RenderSummary = nil
+	}
 	r.TokenBudget = turnTokenBudgetFromEnv()
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -381,10 +609,20 @@ func run(ctx context.Context, opts options, stdin io.Reader, stdout, stderr io.W
 
 	if opts.prompt != "" {
 		history = append(history, messages.Human(submitHooks(ctx, a, opts.prompt)))
-		if _, err := r.Run(ctx, history); err != nil {
-			return err
+		result, err := r.Run(ctx, history)
+		if sdk != nil {
+			turns := 1
+			for _, m := range stripSystem(result) {
+				if m.Role == messages.RoleTool {
+					turns++
+				}
+			}
+			sdk.Final(result, a.Usage(), cfg.Model, turns, err)
 		}
-		return nil
+		if endErr := a.RunSessionEnd(ctx, "oneshot"); endErr != nil && err == nil {
+			err = endErr
+		}
+		return err
 	}
 
 	// Interactive REPL with a slash-command registry.
@@ -393,7 +631,9 @@ func run(ctx context.Context, opts options, stdin io.Reader, stdout, stderr io.W
 	// Interactive: launch the TUI on a terminal, else fall back to the plain
 	// line-based REPL (piped input / tests).
 	if isTerminal(stdin) {
-		return tui.Run(a, history, cfg, version, tui.WithConsole(cons))
+		err := tui.Run(a, history, cfg, version, tui.WithConsole(cons), tui.WithSettingsStore(ap.settings))
+		_ = a.RunSessionEnd(context.Background(), "exit")
+		return err
 	}
 	loop := newREPLLoop(r, history, in, stdout, stderr, a, cons)
 	return loop.Loop(ctx)
@@ -450,6 +690,11 @@ func newConsole(ap *app, log zerolog.Logger) *console.Console {
 		Memory:       ap.memory,
 		RebuildModel: func() error {
 			return ap.rebuildModel()
+		},
+		ApplyTheme: tui.SetTheme,
+		SetVimModeToggle: func() bool {
+			tui.SetVimMode(!tui.VimMode())
+			return tui.VimMode()
 		},
 	})
 }
@@ -549,6 +794,15 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		log.Warn().Err(err).Msg("settings database unavailable; continuing without persisted settings")
 		st = nil
 	}
+	// Enterprise managed settings: override and lock (highest precedence).
+	if managed := managedSettingsPath(opts.managedSettings); managed != "" {
+		if m, err := settings.LoadManaged(managed); err != nil {
+			log.Warn().Err(err).Msg("managed settings file unreadable; ignoring")
+		} else {
+			st.SetManaged(m)
+			log.Info().Str("path", managed).Msg("managed settings applied")
+		}
+	}
 	dbSettings := st.Load()
 
 	provider := opts.provider
@@ -578,6 +832,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		PermissionMode:    mode,
 		WorkDir:           workdir,
 		ExtraSystemPrompt: opts.extraPrompt,
+		ThinkingBudget:    opts.thinkingBudget,
 	}
 	cfg, err = cfg.Normalize()
 	if err != nil {
@@ -602,14 +857,25 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 	}
 
 	// Assemble the system prompt with collected context.
-	sysPrompt := prompt.Build(cfg.WorkDir, cfg.ExtraSystemPrompt, cfg.Model)
+	sysPrompt := prompt.BuildWithStyle(cfg.WorkDir, cfg.ExtraSystemPrompt, cfg.Model, dbSettings.OutputStyle)
 	if c := contextx.Collect(cfg.WorkDir); c != "" {
 		sysPrompt += "\n\n" + c
 	}
 
 	hookRunner := hooks.NewRunner(loadHooksConfig(workdir), workdir, "woca", hooks.WithLogger(log))
 	skillList := loadSkills(workdir)
-	extraTools, mcpClients := connectMCP(ctx, log, opts.mcpServers)
+	agentDefs := loadAgents(workdir)
+	// Plugins (marketplace-level units under ~/.woca/plugins) contribute
+	// namespaced skills and subagent definitions.
+	pluginList, pluginErrs := plugins.Load(plugins.DefaultRoot())
+	for _, perr := range pluginErrs {
+		log.Warn().Err(perr).Msg("plugin skipped")
+	}
+	for _, pl := range pluginList {
+		skillList = append(skillList, pl.Skills...)
+		agentDefs = append(agentDefs, pl.Agents...)
+	}
+	extraTools, mcpClients := connectMCP(ctx, log, opts.mcpServers, st)
 
 	reg := tools.NewRegistry(cfg.WorkDir)
 	if opts.searchAPI != "" {
@@ -692,7 +958,8 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 
 	// Max-output-tokens escalation for the recovery path (Claude Code's
 	// 8k→64k retry): wire the escalator only when the user did not set an
-	// explicit cap, mirroring Claude Code's default-cap condition.
+	// explicit cap, mirroring Claude Code's default-cap condition. BuildModel
+	// keeps the thinking budget enabled and the cap above it when linked.
 	var escalator func() (language.ChatModel, error)
 	if opts.maxTokens == 0 && dbSettings.MaxTokens == 0 {
 		escCfg := cfg
@@ -700,6 +967,20 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		escalator = func() (language.ChatModel, error) {
 			return config.BuildModel(escCfg)
 		}
+	}
+
+	// Observability log (default off): the flag forces it on; otherwise the
+	// persisted debug-log setting decides. The store itself gates writes, so
+	// it can be toggled live from the web settings UI or /debug-log.
+	obsRoot := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		obsRoot = filepath.Join(home, ".woca", "logs")
+	}
+	obs := obslog.New(obsRoot, opts.debugLog || dbSettings.DebugLog)
+	if opts.debugLog {
+		// The flag forces the log on for the whole process: dynamic refreshes
+		// from the settings database cannot turn it back off.
+		obs.LockOpen()
 	}
 
 	a, err := agent.New(agent.Config{
@@ -717,7 +998,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		CompactThreshold:   opts.compactLimit,
 		Summarizer:         model,
 		Permissions:        loadPermissions(workdir),
-		Agents:             loadAgents(workdir),
+		Agents:             agentDefs,
 		CheckpointDir:      opts.checkpointDir,
 		Checkpointer:       checkpointer,
 		BashPolicy:         tools.NewCommandPolicy(opts.allowCommands, opts.denyCommands),
@@ -734,6 +1015,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		// Long-term memory attachments: prefetch relevant entries per turn.
 		Memory:   memory,
 		MaxTurns: opts.maxTurns,
+		Obs:      obs,
 	})
 	if err != nil {
 		return nil, err
@@ -816,7 +1098,7 @@ func (r *replLoop) Loop(ctx context.Context) error {
 		action := repl.Parse(line)
 		switch action.Kind {
 		case repl.KindQuit:
-			saveLastSession(r.history, r.agent)
+			endSession(ctx, r.history, r.agent)
 			return nil
 		case repl.KindCommand:
 			session := &console.Session{History: r.history}
@@ -830,26 +1112,37 @@ func (r *replLoop) Loop(ctx context.Context) error {
 				fmt.Fprint(r.stdout, res.Output)
 			}
 			if res.Exit {
-				saveLastSession(r.history, r.agent)
+				endSession(ctx, r.history, r.agent)
 				return nil
+			}
+			if res.Prompt != "" {
+				// /init-style commands hand back a prompt to submit as a full
+				// user turn.
+				r.submit(ctx, res.Prompt)
 			}
 		case repl.KindShell:
 			out := runShellCommand(action.Text)
 			fmt.Fprint(r.stdout, out)
 			r.history = append(r.history, messages.Human("[shell]\n$ "+action.Text+"\n"+out))
 		default: // KindPrompt
-			r.history = append(r.history, messages.Human(submitHooks(ctx, r.agent, action.Text)))
-			result, err := r.r.Run(ctx, r.history)
-			if err != nil {
-				fmt.Fprintln(r.stderr, "woca:", err)
-				r.history = r.history[:len(r.history)-1]
-				continue
-			}
-			r.history = stripSystem(result)
+			r.submit(ctx, submitHooks(ctx, r.agent, action.Text))
 		}
 	}
-	saveLastSession(r.history, r.agent)
+	endSession(ctx, r.history, r.agent)
 	return nil
+}
+
+// submit appends a user message and runs one agent turn, keeping the history
+// in sync on both success and failure.
+func (r *replLoop) submit(ctx context.Context, text string) {
+	r.history = append(r.history, messages.Human(text))
+	result, err := r.r.Run(ctx, r.history)
+	if err != nil {
+		fmt.Fprintln(r.stderr, "woca:", err)
+		r.history = r.history[:len(r.history)-1]
+		return
+	}
+	r.history = stripSystem(result)
 }
 
 // runShellCommand executes a `!command` line and returns its combined output.
@@ -1032,7 +1325,7 @@ func loadAgents(workdir string) []agents.Definition {
 // connectMCP starts MCP servers and returns their tools.
 // connectMCP starts MCP servers and returns their tools plus the clients
 // (kept for between-turn tool refreshes).
-func connectMCP(ctx context.Context, log zerolog.Logger, servers []string) ([]coretools.Tool, []*mcp.Client) {
+func connectMCP(ctx context.Context, log zerolog.Logger, servers []string, st *settings.Store) ([]coretools.Tool, []*mcp.Client) {
 	var out []coretools.Tool
 	var clients []*mcp.Client
 	for _, spec := range servers {
@@ -1043,7 +1336,16 @@ func connectMCP(ctx context.Context, log zerolog.Logger, servers []string) ([]co
 		}
 		var client *mcp.Client
 		if strings.HasPrefix(command, "http://") || strings.HasPrefix(command, "https://") {
-			client = mcp.NewStreamableHTTP(name, command)
+			// OAuth-authorized servers carry their stored token (encrypted
+			// in the secrets table by `woca mcp auth` / the McpAuth tool).
+			var token func() string
+			if st != nil {
+				secret := mcp.McpTokenSecretPrefix + name + "_token"
+				if st.HasSecret(secret) {
+					token = func() string { return st.GetSecret(secret) }
+				}
+			}
+			client = mcp.NewStreamableHTTPAuth(name, command, token)
 		} else {
 			client = mcp.NewStdio(name, "sh", "-c", command)
 		}
@@ -1170,6 +1472,14 @@ func readYesNo(stdin *bufio.Reader) (any, error) {
 	return line, nil
 }
 
+// endSession persists the last-session snapshot and runs SessionEnd hooks.
+func endSession(ctx context.Context, history []messages.Message, a *agent.Agent) {
+	saveLastSession(history, a)
+	if a != nil {
+		_ = a.RunSessionEnd(ctx, "exit")
+	}
+}
+
 func saveLastSession(history []messages.Message, a *agent.Agent) {
 	if len(history) == 0 && a == nil {
 		return
@@ -1230,4 +1540,57 @@ func stripSystem(msgs []messages.Message) []messages.Message {
 		}
 	}
 	return out
+}
+
+// managedSettingsPath resolves the enterprise managed-settings file: flag →
+// env → /etc/woca/managed-settings.json when present.
+func managedSettingsPath(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if v := os.Getenv("WOCA_MANAGED_SETTINGS"); v != "" {
+		return v
+	}
+	if _, err := os.Stat("/etc/woca/managed-settings.json"); err == nil {
+		return "/etc/woca/managed-settings.json"
+	}
+	return ""
+}
+
+// newMcpAuthRunner builds the OAuth runner shared by the McpAuth tool and
+// `woca mcp auth`: tokens persist encrypted in the secrets table.
+func newMcpAuthRunner(st *settings.Store) func(ctx context.Context, server string) error {
+	return func(ctx context.Context, server string) error {
+		if st == nil {
+			return fmt.Errorf("settings store unavailable; run `woca mcp auth %s <endpoint>` with the database enabled", server)
+		}
+		for _, spec := range os.Args {
+			_, command, ok := strings.Cut(spec, "=")
+			if !ok {
+				continue
+			}
+			if name, _, found := strings.Cut(spec, "="); found && name != server {
+				continue
+			}
+			if !strings.HasPrefix(command, "http://") && !strings.HasPrefix(command, "https://") {
+				continue
+			}
+			flow := mcp.OAuthFlow{
+				ServerName: server,
+				Endpoint:   command,
+				Client:     &http.Client{Timeout: 15 * time.Second},
+				OpenBrowser: func(u string) error {
+					if os.Getenv("WOCA_NO_BROWSER") == "" {
+						_ = openBrowser(u)
+					}
+					return nil
+				},
+				SaveToken: func(token string) error {
+					return st.SetSecret(mcp.McpTokenSecretPrefix+server+"_token", token)
+				},
+			}
+			return mcp.RunOAuth(ctx, flow)
+		}
+		return fmt.Errorf("MCP server %q is not configured with an https endpoint (start woca with --mcp %s=https://…)", server, server)
+	}
 }

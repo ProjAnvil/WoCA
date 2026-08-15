@@ -21,7 +21,10 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/skills"
+	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -166,7 +169,7 @@ func TestSessionStoreRoundTrip(t *testing.T) {
 		{Role: messages.RoleTool, ToolCallID: "1", Content: "tool result"},
 		messages.AI("done"),
 	}
-	if err := st.save("s1", msgs); err != nil {
+	if err := st.save("s1", msgs, ""); err != nil {
 		t.Fatal(err)
 	}
 	got := st.load("s1")
@@ -314,6 +317,208 @@ func TestWorkspace(t *testing.T) {
 	}
 	if !foundDesign {
 		t.Fatal("docs/design.md not found with content")
+	}
+}
+
+func TestWorkspaceFileEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("main.go", "package main\n")
+	write("img.png", "\x00\x01\x02binary")
+	write("README.md", "# hello")
+
+	s := New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop(), WorkDir: dir})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	get := func(path string) (int, string) {
+		resp, err := http.Get(ts.URL + "/api/workspace/file?path=" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+
+	if code, body := get("main.go"); code != http.StatusOK || !strings.Contains(body, "package main") {
+		t.Fatalf("main.go: status %d body %s", code, body)
+	}
+	if code, body := get("README.md"); code != http.StatusOK || !strings.Contains(body, "# hello") {
+		t.Fatalf("README.md: status %d body %s", code, body)
+	}
+	if code, _ := get("img.png"); code != http.StatusUnsupportedMediaType {
+		t.Fatalf("img.png: status %d, want 415", code)
+	}
+	if code, _ := get("missing.go"); code != http.StatusNotFound {
+		t.Fatalf("missing.go: status %d, want 404", code)
+	}
+	if code, _ := get("../escape.go"); code != http.StatusNotFound {
+		t.Fatalf("traversal: status %d, want 404", code)
+	}
+}
+
+func TestSessionListGroupsByWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	st := newSessionStore(dir)
+	st.defaultWorkspace = "/tmp/current-project"
+
+	// Legacy session (no metadata recorded) falls back to the default workspace.
+	if err := st.save("legacy", []messages.Message{messages.Human("old")}, ""); err != nil {
+		t.Fatal(err)
+	}
+	// New session explicitly tagged with another workspace.
+	if err := st.save("tagged", []messages.Message{messages.Human("new")}, "/tmp/other-project"); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := st.list()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]sessionSummary{}
+	for _, s := range list {
+		byID[s.ID] = s
+	}
+	if byID["legacy"].Workspace != "/tmp/current-project" {
+		t.Fatalf("legacy workspace = %q, want default", byID["legacy"].Workspace)
+	}
+	if byID["legacy"].WorkspaceName != "current-project" {
+		t.Fatalf("legacy workspace name = %q", byID["legacy"].WorkspaceName)
+	}
+	if byID["tagged"].Workspace != "/tmp/other-project" || byID["tagged"].WorkspaceName != "other-project" {
+		t.Fatalf("tagged workspace = %+v", byID["tagged"])
+	}
+}
+
+func TestCompletionsEndpoint(t *testing.T) {
+	s := New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop()})
+	s.agent.SetSkills([]skills.Skill{{Name: "commit", Description: "create a commit"}})
+	s.agent.SetAgentDefinitions([]agents.Definition{{Name: "reviewer", Description: "code review"}})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/completions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got struct {
+		Skills []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"skills"`
+		Agents []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"agents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+
+	byName := map[string]string{}
+	for _, e := range got.Skills {
+		byName[e.Name] = e.Description
+	}
+	// Builtin slash commands (the TUI console's table) are all present…
+	for _, c := range slashcmds.Builtin() {
+		if byName[c.Name] != c.Description {
+			t.Fatalf("builtin command %q missing from completions (got %q)", c.Name, byName[c.Name])
+		}
+	}
+	// …and the agent's skills are merged in.
+	if byName["commit"] != "create a commit" {
+		t.Fatalf("skill commit missing: %+v", byName)
+	}
+	if len(got.Skills) != len(slashcmds.Builtin())+1 {
+		t.Fatalf("skills count = %d, want %d", len(got.Skills), len(slashcmds.Builtin())+1)
+	}
+	if len(got.Agents) != 1 || got.Agents[0].Name != "reviewer" || got.Agents[0].Description != "code review" {
+		t.Fatalf("agents = %+v", got.Agents)
+	}
+}
+
+func TestRunWithImageAttachment(t *testing.T) {
+	dir := t.TempDir()
+	s := New(Config{
+		Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop(),
+		SessionDir: dir,
+	})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	// 1x1 red PNG.
+	png := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+	body := fmt.Sprintf(`{"prompt":"what is this?","attachments":[{"name":"shot.png","mime_type":"image/png","data":%q}]}`, png)
+	resp, err := http.Post(ts.URL+"/api/runs", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		RunID     string `json:"run_id"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if created.RunID == "" {
+		t.Fatal("no run id")
+	}
+	driveToDone(t, ts.URL, created.RunID)
+
+	// The persisted transcript carries the image block on the human message.
+	sess, err := http.Get(ts.URL + "/api/sessions/" + created.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Body.Close()
+	var transcript struct {
+		Messages []struct {
+			Role          string `json:"role"`
+			ContentBlocks []struct {
+				Type     string `json:"type"`
+				MimeType string `json:"mime_type"`
+				Base64   string `json:"base64"`
+			} `json:"content_blocks"`
+		} `json:"messages"`
+	}
+	if err := json.NewDecoder(sess.Body).Decode(&transcript); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range transcript.Messages {
+		if m.Role != "human" {
+			continue
+		}
+		for _, b := range m.ContentBlocks {
+			if b.Type == "image" && b.MimeType == "image/png" && b.Base64 == png {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("human message should carry the image block, got %+v", transcript.Messages)
+	}
+
+	// Invalid attachments are rejected before the run starts.
+	bad := `{"prompt":"x","attachments":[{"name":"a.exe","mime_type":"application/octet-stream","data":"YQ=="}]}`
+	resp, err = http.Post(ts.URL+"/api/runs", "application/json", strings.NewReader(bad))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad attachment status = %d, want 400", resp.StatusCode)
 	}
 }
 

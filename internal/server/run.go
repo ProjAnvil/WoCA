@@ -80,13 +80,40 @@ func (r *Run) start(history []messages.Message, onDone func([]messages.Message))
 	}()
 }
 
+// startGoal launches the goal loop (assess → execute → evaluate cycles) as a
+// run, streaming its progress through the same SSE event vocabulary plus
+// "goal" events pushed by the server on every goal-state change.
+func (r *Run) startGoal(history []messages.Message, onDone func([]messages.Message)) {
+	go func() {
+		final, err := runner.New(r.a, r.handleInterrupt, r.render).RunGoal(r.ctx, history)
+		if err != nil {
+			if r.ctx.Err() != nil {
+				r.emit(Event{Type: "done", Data: map[string]any{"cancelled": true}})
+			} else {
+				r.emit(Event{Type: "error", Data: map[string]any{"message": err.Error()}})
+			}
+			return
+		}
+		r.emit(Event{Type: "done", Data: map[string]any{"cancelled": false}})
+		if onDone != nil {
+			onDone(final)
+		}
+	}()
+}
+
 // render translates one graph step into SSE events.
 func (r *Run) render(step graph.Step) {
 	if s, ok := step.Delta.(string); ok && s != "" {
 		r.emit(Event{Type: "delta", Data: map[string]any{"text": s}})
 		return
 	}
-	for _, m := range agent.MessagesFrom(step.Update) {
+	msgs := agent.MessagesFrom(step.Update)
+	if g, ok := step.Delta.(agent.GoalDelta); ok {
+		// Messages produced inside a goal execute cycle stream through the
+		// delta channel; render them exactly like normal-run messages.
+		msgs = append(msgs, g.Message)
+	}
+	for _, m := range msgs {
 		switch m.Role {
 		case messages.RoleAI:
 			for _, tc := range m.ToolCalls {

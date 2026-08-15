@@ -21,6 +21,7 @@ const (
 	KeyMemory           = "memory"
 	KeyCheckpointDir    = "checkpoint-dir"
 	KeyPostgresURL      = "postgres-url"
+	KeyDebugLog         = "debug-log"
 )
 
 // KeyNames lists all settable keys in display order.
@@ -29,6 +30,7 @@ func KeyNames() []string {
 		KeyProvider, KeyModel, KeyMaxTokens, KeyTemperature,
 		KeyAnthropicBaseURL, KeyOpenAIBaseURL, KeyAnthropicAPIKey, KeyOpenAIAPIKey,
 		KeyCheckpoint, KeyMemory, KeyCheckpointDir, KeyPostgresURL,
+		KeyDebugLog,
 	}
 }
 
@@ -73,6 +75,8 @@ func KeyHelp(key string) string {
 		return "directory for the file checkpoint backend"
 	case KeyPostgresURL:
 		return "postgres DSN for postgres backends (stored encrypted)"
+	case KeyDebugLog:
+		return "harness observability log (graph/state/session/message traces to ~/.woca/logs): true | false"
 	}
 	return "unknown key"
 }
@@ -124,6 +128,12 @@ func Apply(cfg *Settings, key, value string) error {
 		cfg.MemoryBackend = value
 	case KeyCheckpointDir:
 		cfg.CheckpointDir = value
+	case KeyDebugLog:
+		b, err := ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.DebugLog = b
 	default:
 		return fmt.Errorf("unknown settings key %q", key)
 	}
@@ -153,6 +163,7 @@ func Describe(cfg Settings, secretSet func(string) bool, dbPath string) string {
 	fmt.Fprintf(&b, "memory: %s\n", orDefault(cfg.MemoryBackend, MemorySQLite))
 	fmt.Fprintf(&b, "checkpoint-dir: %s\n", orDefault(cfg.CheckpointDir, "(default)"))
 	fmt.Fprintf(&b, "postgres-url: %s\n", mask(SecretPostgresURL))
+	fmt.Fprintf(&b, "debug-log: %s\n", strconv.FormatBool(cfg.DebugLog))
 	return b.String()
 }
 
@@ -178,8 +189,21 @@ func KeyValue(cfg Settings, key string) string {
 		return cfg.MemoryBackend
 	case KeyCheckpointDir:
 		return cfg.CheckpointDir
+	case KeyDebugLog:
+		return strconv.FormatBool(cfg.DebugLog)
 	}
 	return ""
+}
+
+// ParseBool accepts the spellings users actually type for boolean settings.
+func ParseBool(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "on", "yes", "y":
+		return true, nil
+	case "false", "0", "off", "no", "n":
+		return false, nil
+	}
+	return false, fmt.Errorf("expected true/false, got %q", v)
 }
 
 func orDefault(v, def string) string {

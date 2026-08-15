@@ -267,6 +267,11 @@ func TestStreamNoFallbackExhausted(t *testing.T) {
 
 func TestStreamCancelledContextNoRetry(t *testing.T) {
 	shortBackoff(t)
+	// A bare context.Canceled with a LIVE consumer ctx is a connection-layer
+	// failure (e.g. a gateway closing a reused keep-alive connection under
+	// the request), not a user cancellation — it must be retried. Only a
+	// cancelled consumer ctx skips retries (TestStreamRealCancelIsNotRetried
+	// in retrycancel_test.go).
 	primary := &flakyModel{scripts: []streamScript{
 		{failAfter: 0, err: context.Canceled},
 	}}
@@ -281,10 +286,10 @@ func TestStreamCancelledContextNoRetry(t *testing.T) {
 	defer st.Close()
 	_, err = drain(context.Background(), st)
 	if err == nil {
-		t.Fatal("expected the cancellation error to surface")
+		t.Fatal("expected the cancellation error to surface after exhausting retries")
 	}
-	if got := primary.streamCalls(); got != 1 {
-		t.Fatalf("primary stream calls = %d, want 1 (no retry on cancel)", got)
+	if got := primary.streamCalls(); got != 4 {
+		t.Fatalf("primary stream calls = %d, want 4 (initial + 3 retries on connection-layer cancel)", got)
 	}
 }
 

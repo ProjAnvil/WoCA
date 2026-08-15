@@ -134,6 +134,8 @@ func (g *StateGraph) Compile(opts ...CompileOption) (*CompiledGraph, error) {
 		entry:          g.entry,
 		recursionLimit: cfg.recursionLimit,
 		checkpointer:   cfg.checkpointer,
+		obsName:        cfg.obsName,
+		observer:       cfg.observer,
 	}, nil
 }
 

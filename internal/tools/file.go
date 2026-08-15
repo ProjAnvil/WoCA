@@ -12,7 +12,9 @@ import (
 
 const maxReadLines = 2000
 
-const readDescription = `Read a UTF-8 text file and return its content with line numbers. Use offset/limit to read a slice. Truncates very large files with a note.`
+const readDescription = `Read a UTF-8 text file and return its content with line numbers. Use offset/limit to read a slice. Truncates very large files with a note.
+
+Reading an image file (png/jpg/jpeg/gif/webp) attaches it to the tool result as an image block the model can see — use it for screenshots, diagrams, and photos; do not read images as text.`
 
 type readArgs struct {
 	FilePath string `json:"file_path"`
@@ -20,10 +22,18 @@ type readArgs struct {
 	Limit    int    `json:"limit,omitempty"`
 }
 
-func readTool(baseWorkdir string) coretools.Tool {
+func readTool(d *Dir) coretools.Tool {
 	t, err := coretools.FromFunc("Read", readDescription,
 		func(ctx context.Context, a readArgs) (coretools.Result, error) {
-			path := resolvePath(baseWorkdir, a.FilePath)
+			path := resolvePath(d.Current(), a.FilePath)
+			if IsImagePath(a.FilePath) {
+				p, err := ProcessImage(path)
+				if err != nil {
+					return coretools.Result{Content: fmt.Sprintf("Error: %s is not readable as an image: %v", a.FilePath, err)}, nil
+				}
+				content, meta := FormatImageResult(a.FilePath, p)
+				return coretools.Result{Content: content, Metadata: meta}, nil
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("read %s: %w", a.FilePath, err)
@@ -69,10 +79,10 @@ type writeArgs struct {
 	Content  string `json:"content"`
 }
 
-func writeTool(baseWorkdir string) coretools.Tool {
+func writeTool(d *Dir) coretools.Tool {
 	t, err := coretools.FromFunc("Write", writeDescription,
 		func(ctx context.Context, a writeArgs) (coretools.Result, error) {
-			path := resolvePath(baseWorkdir, a.FilePath)
+			path := resolvePath(d.Current(), a.FilePath)
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return coretools.Result{}, fmt.Errorf("write %s: %w", a.FilePath, err)
 			}
@@ -96,10 +106,10 @@ type editArgs struct {
 	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
-func editTool(baseWorkdir string) coretools.Tool {
+func editTool(d *Dir) coretools.Tool {
 	t, err := coretools.FromFunc("Edit", editDescription,
 		func(ctx context.Context, a editArgs) (coretools.Result, error) {
-			path := resolvePath(baseWorkdir, a.FilePath)
+			path := resolvePath(d.Current(), a.FilePath)
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("edit %s: %w", a.FilePath, err)

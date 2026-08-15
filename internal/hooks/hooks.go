@@ -44,15 +44,18 @@ type Entry struct {
 
 // Config holds all hook events.
 type Config struct {
-	PreToolUse       []Entry `json:"PreToolUse"`
-	PostToolUse      []Entry `json:"PostToolUse"`
-	UserPromptSubmit []Entry `json:"UserPromptSubmit"`
-	Stop             []Entry `json:"Stop"`
-	SessionStart     []Entry `json:"SessionStart"`
-	SubagentStop     []Entry `json:"SubagentStop"`
-	Notification     []Entry `json:"Notification"`
-	PreCompact       []Entry `json:"PreCompact"`
-	PostCompact      []Entry `json:"PostCompact"`
+	PreToolUse        []Entry `json:"PreToolUse"`
+	PostToolUse       []Entry `json:"PostToolUse"`
+	UserPromptSubmit  []Entry `json:"UserPromptSubmit"`
+	Stop              []Entry `json:"Stop"`
+	SessionStart      []Entry `json:"SessionStart"`
+	SessionEnd        []Entry `json:"SessionEnd"`
+	SubagentStop      []Entry `json:"SubagentStop"`
+	Notification      []Entry `json:"Notification"`
+	PreCompact        []Entry `json:"PreCompact"`
+	PostCompact       []Entry `json:"PostCompact"`
+	PermissionRequest []Entry `json:"PermissionRequest"`
+	PostSampling      []Entry `json:"PostSampling"`
 }
 
 // Load reads hook configuration from a JSON settings file of the form
@@ -305,6 +308,92 @@ func (r *Runner) PostCompact(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(stdout), nil
+}
+
+// SessionEnd runs when a session terminates (exit, EOF, or one-shot
+// completion); its output is informational only.
+func (r *Runner) SessionEnd(ctx context.Context, reason string) (string, error) {
+	ev := Event{SessionID: r.sessionID, CWD: r.cwd, StopReason: reason}
+	stdout, _, _, err := r.runMatching(ctx, r.cfg.SessionEnd, "", nil, ev)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(stdout), nil
+}
+
+// PermissionDecision is a PermissionRequest hook's outcome: "allow" or "deny"
+// decides without asking the user; "" means no opinion and the normal
+// permission interrupt runs.
+type PermissionDecision struct {
+	Decision string
+	Reason   string
+}
+
+// PermissionRequest runs before the permission interrupt, letting a hook
+// pre-approve or pre-deny a tool call. Exit code 2 denies; stdout
+// "allow"/"approve" allows and "deny"/"no" denies; anything else defers to
+// the interactive prompt.
+func (r *Runner) PermissionRequest(ctx context.Context, toolName string, input map[string]any) (PermissionDecision, error) {
+	ev := Event{SessionID: r.sessionID, CWD: r.cwd, ToolName: toolName, ToolInput: input}
+	stdout, _, denied, err := r.runMatching(ctx, r.cfg.PermissionRequest, toolName, input, ev)
+	if err != nil {
+		return PermissionDecision{}, err
+	}
+	if denied {
+		return PermissionDecision{Decision: "deny", Reason: strings.TrimSpace(stdout)}, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(stdout)) {
+	case "allow", "approve", "yes", "y", "true":
+		return PermissionDecision{Decision: "allow"}, nil
+	case "deny", "no", "n", "false":
+		return PermissionDecision{Decision: "deny", Reason: strings.TrimSpace(stdout)}, nil
+	}
+	return PermissionDecision{}, nil
+}
+
+// PostSampling runs after each model response (asynchronous analysis:
+// logging, evaluation, telemetry). Callers decide whether to await it.
+func (r *Runner) PostSampling(ctx context.Context, response string) error {
+	ev := Event{SessionID: r.sessionID, CWD: r.cwd, Message: response}
+	_, _, _, err := r.runMatching(ctx, r.cfg.PostSampling, "", nil, ev)
+	return err
+}
+
+// Configured summarizes which events have hooks configured (for /doctor):
+// one "Event(count)" entry per configured event, in canonical order.
+func (r *Runner) Configured() []string {
+	type pair struct {
+		name  string
+		count int
+	}
+	entries := []struct {
+		name string
+		list []Entry
+	}{
+		{"PreToolUse", r.cfg.PreToolUse},
+		{"PostToolUse", r.cfg.PostToolUse},
+		{"UserPromptSubmit", r.cfg.UserPromptSubmit},
+		{"Stop", r.cfg.Stop},
+		{"SessionStart", r.cfg.SessionStart},
+		{"SessionEnd", r.cfg.SessionEnd},
+		{"SubagentStop", r.cfg.SubagentStop},
+		{"Notification", r.cfg.Notification},
+		{"PreCompact", r.cfg.PreCompact},
+		{"PostCompact", r.cfg.PostCompact},
+		{"PermissionRequest", r.cfg.PermissionRequest},
+		{"PostSampling", r.cfg.PostSampling},
+	}
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		n := 0
+		for _, entry := range e.list {
+			n += len(entry.Hooks)
+		}
+		if n > 0 {
+			out = append(out, fmt.Sprintf("%s(%d)", e.name, n))
+		}
+	}
+	return out
 }
 
 // runEntries runs PreToolUse semantics (deny on exit 2).

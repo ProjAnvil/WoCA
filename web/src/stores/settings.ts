@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { useDark, useToggle } from '@vueuse/core'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { getSettings, updateSettings } from '../api/client'
 import type { AppSettings, AppSettingsUpdate } from '../types'
 
@@ -38,6 +38,31 @@ export const useSettingsStore = defineStore('settings', () => {
   const checkpointBackend = ref('sqlite')
   const memoryBackend = ref('sqlite')
   const postgresURL = ref('')
+  const debugLog = ref(false)
+
+  // Unified credential fields: one Base URL + one API Key input that target
+  // the selected provider's stored fields (the user picks a provider, not a
+  // per-provider form). Drafts are kept per provider so switching back and
+  // forth does not lose typed values.
+  const baseURL = computed({
+    get: () => (provider.value === 'anthropic' ? anthropicBaseURL.value : openaiBaseURL.value),
+    set: (v: string) => {
+      if (provider.value === 'anthropic') anthropicBaseURL.value = v
+      else openaiBaseURL.value = v
+    },
+  })
+  const apiKey = computed({
+    get: () => (provider.value === 'anthropic' ? anthropicAPIKey.value : openaiAPIKey.value),
+    set: (v: string) => {
+      if (provider.value === 'anthropic') anthropicAPIKey.value = v
+      else openaiAPIKey.value = v
+    },
+  })
+  const apiKeySet = computed(() =>
+    provider.value === 'anthropic'
+      ? Boolean(server.value?.anthropic_api_key_set)
+      : Boolean(server.value?.openai_api_key_set),
+  )
 
   async function loadServer() {
     serverError.value = ''
@@ -50,6 +75,7 @@ export const useSettingsStore = defineStore('settings', () => {
       openaiBaseURL.value = s.openai_base_url
       checkpointBackend.value = s.checkpoint_backend || 'sqlite'
       memoryBackend.value = s.memory_backend || 'sqlite'
+      debugLog.value = Boolean(s.debug_log)
       anthropicAPIKey.value = ''
       openaiAPIKey.value = ''
       postgresURL.value = ''
@@ -91,6 +117,17 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  async function toggleDebugLog() {
+    const next = !debugLog.value
+    try {
+      await updateSettings({ debug_log: next })
+      debugLog.value = next
+      await loadServer()
+    } catch (e) {
+      serverError.value = e instanceof Error ? e.message : String(e)
+    }
+  }
+
   function openPanel() {
     panelOpen.value = true
     void loadServer()
@@ -114,6 +151,9 @@ export const useSettingsStore = defineStore('settings', () => {
     restartRequired,
     provider,
     serverModel,
+    baseURL,
+    apiKey,
+    apiKeySet,
     anthropicBaseURL,
     openaiBaseURL,
     anthropicAPIKey,
@@ -121,6 +161,9 @@ export const useSettingsStore = defineStore('settings', () => {
     checkpointBackend,
     memoryBackend,
     postgresURL,
+    debugLog,
+    logDir: computed(() => server.value?.log_dir ?? ''),
+    toggleDebugLog,
     loadServer,
     saveServer,
     openPanel,

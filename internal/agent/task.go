@@ -108,13 +108,14 @@ func (m *TaskManager) list() []*backgroundTask {
 	return out
 }
 
-const taskDescription = `Launch a subagent to handle a self-contained piece of work and return a concise report. Set run_in_background to run it asynchronously (poll with TaskOutput, stop with TaskStop).`
+const taskDescription = `Launch a subagent to handle a self-contained piece of work and return a concise report. Set run_in_background to run it asynchronously (poll with TaskOutput, stop with TaskStop). Set fork=true to copy the current conversation into the subagent first — it starts with your full context instead of a blank slate, which fits "continue this thread in parallel" tasks.`
 
 type taskArgs struct {
 	Description     string `json:"description"`
 	Prompt          string `json:"prompt"`
 	SubagentType    string `json:"subagent_type,omitempty"`
 	RunInBackground bool   `json:"run_in_background,omitempty"`
+	Fork            bool   `json:"fork,omitempty"`
 }
 
 const taskOutputDescription = `Fetch the current output and status of a background task launched with the Task tool.`
@@ -165,12 +166,23 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 		def = &d
 	}
 
+	history := []messages.Message{messages.Human(prompt)}
+	if args.Fork {
+		// forkSubagent: the subagent inherits the parent's live transcript
+		// (minus the system prompt) and continues with the task at hand.
+		base := a.transcriptSnapshot()
+		for len(base) > 0 && base[0].Role == messages.RoleSystem {
+			base = base[1:]
+		}
+		history = append(base, messages.Human(forkTaskPrompt(prompt)))
+	}
+
 	if args.RunInBackground {
 		t := a.tasks.start(args.Description, prompt)
 		runCtx, cancel := context.WithCancel(ctx)
 		t.cancel = cancel
 		go func() {
-			report, err := a.runSubagent(runCtx, prompt, func(text string) { t.appendOutput(text) }, def)
+			report, err := a.runSubagent(runCtx, history, func(text string) { t.appendOutput(text) }, def)
 			if err != nil {
 				report = "Error: " + err.Error()
 			}
@@ -179,11 +191,17 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 		return coretools.Result{Content: fmt.Sprintf("Started background task %s: %s", t.ID, args.Description)}, nil
 	}
 
-	report, err := a.runSubagent(ctx, prompt, nil, def)
+	report, err := a.runSubagent(ctx, history, nil, def)
 	if err != nil {
 		return coretools.Result{}, err
 	}
 	return coretools.Result{Content: report}, nil
+}
+
+// forkTaskPrompt wraps the fork directive so the subagent knows it inherited
+// the conversation above.
+func forkTaskPrompt(prompt string) string {
+	return "<task-fork>\nYou are a fork of the conversation above and inherit its full context. Complete the following task yourself:\n" + prompt + "\n</task-fork>"
 }
 
 func (a *Agent) taskOutput(ctx context.Context, args taskOutputArgs) (coretools.Result, error) {
@@ -217,12 +235,11 @@ func (a *Agent) taskStop(ctx context.Context, args taskStopArgs) (coretools.Resu
 	return coretools.Result{Content: fmt.Sprintf("Stopped task %s.", t.ID)}, nil
 }
 
-// runSubagent runs a subagent to completion. If onText is non-nil it streams
-// model text into the callback (used for background task output). Returns the
-// subagent's final assistant text.
-func (a *Agent) runSubagent(ctx context.Context, prompt string, onText func(string), def *agents.Definition) (string, error) {
+// runSubagent runs a subagent to completion from the given history. If onText
+// is non-nil it streams model text into the callback (used for background
+// task output). Returns the subagent's final assistant text.
+func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onText func(string), def *agents.Definition) (string, error) {
 	sub := a.newSubagent(def)
-	history := []messages.Message{messages.Human(prompt)}
 	if onText == nil {
 		msgs, err := sub.Invoke(ctx, history)
 		if err != nil {

@@ -31,6 +31,8 @@ func (c Category) Safe() bool { return c == CatRead || c == CatWeb || c == CatMe
 
 var categoryByName = map[string]Category{
 	"Bash":            CatShell,
+	"BashOutput":      CatRead,
+	"KillShell":       CatMeta,
 	"Read":            CatRead,
 	"Write":           CatWrite,
 	"Edit":            CatWrite,
@@ -50,6 +52,13 @@ var categoryByName = map[string]Category{
 	"TaskList":        CatMeta,
 	"TaskGet":         CatMeta,
 	"TaskUpdate":      CatMeta,
+	"ScheduleCron":    CatMeta,
+	"GetGoal":         CatMeta,
+	"UpdateGoal":      CatMeta,
+	"McpAuth":         CatMeta,
+	"EnterWorktree":   CatShell,
+	"ExitWorktree":    CatShell,
+	"LSP":             CatRead,
 }
 
 // CategoryOf returns the permission category of a tool by name. Unknown tools
@@ -81,10 +90,11 @@ func IsReadOnly(name string, args map[string]any) bool {
 
 // Registry is an ordered, name-indexed collection of tools.
 type Registry struct {
-	byName  map[string]coretools.Tool
-	order   []string
-	todos   *TodoStore
-	workdir string
+	byName map[string]coretools.Tool
+	order  []string
+	todos  *TodoStore
+	dir    *Dir
+	bg     *BackgroundShells
 }
 
 // NewRegistry builds a registry populated with the default tool set, bound to
@@ -94,15 +104,23 @@ func NewRegistry(workdir string) *Registry {
 		workdir = "."
 	}
 	r := &Registry{
-		byName:  map[string]coretools.Tool{},
-		todos:   NewTodoStore(),
-		workdir: workdir,
+		byName: map[string]coretools.Tool{},
+		todos:  NewTodoStore(),
+		dir:    NewDir(workdir),
+		bg:     NewBackgroundShells(),
 	}
-	for _, t := range defaultTools(workdir, r.todos) {
+	for _, t := range defaultTools(r.dir, r.todos, r.bg) {
 		r.Register(t)
 	}
 	return r
 }
+
+// Background returns the manager for run_in_background Bash commands,
+// BashOutput, and KillShell.
+func (r *Registry) Background() *BackgroundShells { return r.bg }
+
+// Dir returns the session's mutable working directory (worktree switching).
+func (r *Registry) Dir() *Dir { return r.dir }
 
 // Register adds (or replaces) a tool.
 func (r *Registry) Register(t coretools.Tool) {

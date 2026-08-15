@@ -51,6 +51,11 @@ type Config struct {
 	Debug          bool
 	// ExtraSystemPrompt is appended to the base coding-agent system prompt.
 	ExtraSystemPrompt string
+	// ThinkingBudget enables provider extended thinking (request-side
+	// budget, Claude Code's thinkingConfig) when > 0. The Anthropic API
+	// requires the budget to be ≥1024 tokens and max_tokens to exceed it;
+	// Normalize enforces both.
+	ThinkingBudget int
 }
 
 // Default returns a sane default configuration. The model name is a
@@ -90,16 +95,58 @@ func (c Config) Normalize() (Config, error) {
 	if out.MaxTokens <= 0 {
 		out.MaxTokens = 8192
 	}
+	if out.ThinkingBudget > 0 {
+		if out.ThinkingBudget < MinThinkingBudget {
+			out.ThinkingBudget = MinThinkingBudget
+		}
+		if out.ThinkingBudget > MaxThinkingBudget {
+			out.ThinkingBudget = MaxThinkingBudget
+		}
+		// The API requires max_tokens > budget_tokens; raise the output cap
+		// when the budget would swallow it (Claude Code's linked caps).
+		if out.MaxTokens <= out.ThinkingBudget {
+			out.MaxTokens = out.ThinkingBudget + ThinkingOutputHeadroom
+		}
+	}
 	if out.WorkDir == "" {
 		out.WorkDir = "."
 	}
 	return out, nil
 }
 
+// Thinking-budget constraints (Anthropic extended thinking). The budget is
+// clamped to [1024, 31999] — Claude Code's MAX_THINKING_TOKENS semantics —
+// which keeps the 64k escalation cap comfortably above any budget.
+const (
+	MinThinkingBudget      = 1024
+	MaxThinkingBudget      = 31999
+	ThinkingOutputHeadroom = 8192
+)
+
 // BuildModel constructs a language.ChatModel from the configuration using the
-// partner adapters in langchain-golang.
+// partner adapters in langchain-golang. When a thinking budget is set it also
+// enforces the provider invariants (budget within [1024, 31999] and a
+// max_tokens cap above the budget) even on un-normalized input, so every
+// construction site stays valid.
 func BuildModel(cfg Config) (language.ChatModel, error) {
+	if cfg.ThinkingBudget > 0 {
+		if cfg.ThinkingBudget < MinThinkingBudget {
+			cfg.ThinkingBudget = MinThinkingBudget
+		}
+		if cfg.ThinkingBudget > MaxThinkingBudget {
+			cfg.ThinkingBudget = MaxThinkingBudget
+		}
+		if cfg.MaxTokens <= cfg.ThinkingBudget {
+			cfg.MaxTokens = cfg.ThinkingBudget + ThinkingOutputHeadroom
+		}
+	}
 	opts := []modelconfig.Option{modelconfig.WithModel(cfg.Model)}
+	if hc := modelHTTPClient(); hc != nil {
+		// One connection per provider request: gateways that close keep-alive
+		// connections after a stream would otherwise reset the next reused
+		// request ("context canceled" mid-turn). See modelhttp.go.
+		opts = append(opts, modelconfig.WithHTTPClient(hc))
+	}
 	if cfg.APIKey != "" {
 		opts = append(opts, modelconfig.WithAPIKey(cfg.APIKey))
 	}
@@ -114,9 +161,23 @@ func BuildModel(cfg Config) (language.ChatModel, error) {
 	}
 	switch cfg.Provider {
 	case ProviderAnthropic:
-		return anthropic.NewChatModel(opts...), nil
+		am := anthropic.NewChatModel(opts...)
+		if cfg.ThinkingBudget > 0 {
+			am = am.WithThinking(map[string]any{
+				"type":          "enabled",
+				"budget_tokens": cfg.ThinkingBudget,
+			})
+		}
+		return am, nil
 	case ProviderOpenAI:
-		return openai.NewChatModel(opts...), nil
+		// The OpenAI partner defaults to the Responses API, whose input
+		// schema (function_call_output items) is not understood by the
+		// OpenAI-COMPATIBLE gateways users point base-url at (DeepSeek and
+		// friends reject the tool-result shape with a 400). The classic
+		// Chat Completions API is the lowest common denominator for every
+		// compatible endpoint, including OpenAI itself, so it is the
+		// default here.
+		return openai.NewChatModel(opts...).WithChatCompletions(), nil
 	default:
 		return nil, fmt.Errorf("config: unknown provider %q", cfg.Provider)
 	}

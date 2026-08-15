@@ -2,8 +2,9 @@
 import { onMounted } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
+import WorkspaceSidebar from './components/WorkspaceSidebar.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
-import MarkdownView from './components/MarkdownView.vue'
+import GoalPanel from './components/GoalPanel.vue'
 import InterruptModal from './components/InterruptModal.vue'
 import { useSettingsStore } from './stores/settings'
 import { useWorkspaceStore } from './stores/workspace'
@@ -26,8 +27,9 @@ onMounted(() => {
     <main class="main">
       <ChatPanel />
     </main>
+    <WorkspaceSidebar />
     <SettingsPanel v-if="settings.panelOpen" />
-    <MarkdownView v-if="workspace.preview" />
+    <GoalPanel v-if="sessions.goalPanelOpen" />
     <InterruptModal v-if="sessions.activeInterrupt" />
   </div>
 </template>

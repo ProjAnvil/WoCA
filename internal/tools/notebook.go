@@ -19,10 +19,10 @@ type notebookEditArgs struct {
 	NewSource    string `json:"new_source"`
 }
 
-func notebookEditTool(baseWorkdir string) coretools.Tool {
+func notebookEditTool(d *Dir) coretools.Tool {
 	t, err := coretools.FromFunc("NotebookEdit", notebookEditDescription,
 		func(ctx context.Context, a notebookEditArgs) (coretools.Result, error) {
-			path := resolvePath(baseWorkdir, a.NotebookPath)
+			path := resolvePath(d.Current(), a.NotebookPath)
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("notebook %s: %w", a.NotebookPath, err)

@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/permissions"
@@ -199,5 +200,26 @@ func (a *Agent) runToolCall(ctx context.Context, call messages.ToolCall) message
 			content += "\n" + p.Feedback
 		}
 	}
-	return messages.Tool(call.ID, content)
+	return toolMessageFromResult(call.ID, content, &res)
+}
+
+// toolMessageFromResult builds the tool-result message, attaching the image
+// content block a tool may carry in its metadata (Read on an image file) —
+// Claude Code's image attachments. Providers without tool-result images drop
+// the block at translation.
+func toolMessageFromResult(callID, content string, res *coretools.Result) messages.Message {
+	m := messages.Tool(callID, content)
+	if res == nil || len(res.Metadata) == 0 {
+		return m
+	}
+	b64, _ := res.Metadata[tools.MetaImageBase64].(string)
+	if b64 == "" {
+		return m
+	}
+	mime, _ := res.Metadata[tools.MetaImageMime].(string)
+	m.ContentBlocks = []messages.ContentBlock{messages.ImageBlock{
+		Base64:   b64,
+		MimeType: mime,
+	}}
+	return m
 }

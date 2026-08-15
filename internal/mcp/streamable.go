@@ -22,6 +22,8 @@ import (
 type httpTransport struct {
 	client   *http.Client
 	endpoint string
+	// token, when set, supplies a Bearer token for every request (MCP OAuth).
+	token func() string
 
 	// sessionMu guards session, which is updated concurrently by roundTrip.
 	sessionMu sync.Mutex
@@ -37,6 +39,27 @@ func newHTTPTransport(endpoint string) *httpTransport {
 	return &httpTransport{
 		client:   &http.Client{Timeout: 60 * time.Second},
 		endpoint: endpoint,
+	}
+}
+
+// NewStreamableHTTPAuth builds an MCP client whose HTTP requests carry a
+// Bearer token from the supplier (MCP OAuth; empty tokens are skipped).
+func NewStreamableHTTPAuth(name, endpoint string, token func() string) *Client {
+	t := newHTTPTransport(endpoint)
+	if t == nil {
+		return nil
+	}
+	t.token = token
+	return newClient(name, t)
+}
+
+// applyAuth sets the Authorization header when a token supplier is wired.
+func (t *httpTransport) applyAuth(req *http.Request) {
+	if t.token == nil {
+		return
+	}
+	if tok := t.token(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 }
 
@@ -92,6 +115,7 @@ func (t *httpTransport) roundTrip(ctx context.Context, id int64, req []byte) (rp
 	if sid := t.getSession(); sid != "" {
 		httpReq.Header.Set("Mcp-Session-Id", sid)
 	}
+	t.applyAuth(httpReq)
 
 	resp, err := t.client.Do(httpReq)
 	if err != nil {
@@ -131,6 +155,7 @@ func (t *httpTransport) send(req []byte) error {
 	if sid := t.getSession(); sid != "" {
 		httpReq.Header.Set("Mcp-Session-Id", sid)
 	}
+	t.applyAuth(httpReq)
 	resp, err := t.client.Do(httpReq)
 	if err != nil {
 		return err
@@ -153,6 +178,7 @@ func (t *httpTransport) listen(ctx context.Context) error {
 	if sid := t.getSession(); sid != "" {
 		httpReq.Header.Set("Mcp-Session-Id", sid)
 	}
+	t.applyAuth(httpReq)
 	// The listen connection is intentionally long-lived, so use a client
 	// without a timeout; its lifetime is governed by ctx.
 	c := *t.client

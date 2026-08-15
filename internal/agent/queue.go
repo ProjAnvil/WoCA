@@ -16,9 +16,12 @@ import (
 // (separate Agent instances) never receive the parent's queued input —
 // Claude Code's per-agent drain scoping.
 
-// QueuedInput is one unit of mid-turn user input.
+// QueuedInput is one unit of mid-turn input. A non-empty Tag wraps the text
+// in a differently-named element (e.g. background-task completions) so the
+// model can tell machine notifications apart from typed user input.
 type QueuedInput struct {
 	Text string
+	Tag  string
 }
 
 // queuedInputTag wraps queued text so the model can tell it apart from the
@@ -27,7 +30,11 @@ const queuedInputTag = "queued-user-input"
 
 // formatQueuedInput renders one queued input as a message.
 func formatQueuedInput(q QueuedInput) messages.Message {
-	return messages.Human("<" + queuedInputTag + ">\n" + strings.TrimSpace(q.Text) + "\n</" + queuedInputTag + ">")
+	tag := q.Tag
+	if tag == "" {
+		tag = queuedInputTag
+	}
+	return messages.Human("<" + tag + ">\n" + strings.TrimSpace(q.Text) + "\n</" + tag + ">")
 }
 
 // queue is the thread-safe mid-turn input buffer.
@@ -43,6 +50,16 @@ func (q *queue) add(text string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.items = append(q.items, QueuedInput{Text: text})
+}
+
+// addTagged buffers a tagged notification (machine-generated input).
+func (q *queue) addTagged(tag, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.items = append(q.items, QueuedInput{Text: text, Tag: tag})
 }
 
 // drain returns and clears all queued inputs in arrival order.
@@ -66,6 +83,13 @@ func (q *queue) len() int {
 // tool round. Safe for concurrent use.
 func (a *Agent) QueueInput(text string) {
 	a.inputs.add(text)
+}
+
+// QueueNotification buffers a machine-generated notification (e.g. a
+// background-shell completion) for delivery after the next tool round,
+// wrapped in its own tag so the model can tell it from typed user input.
+func (a *Agent) QueueNotification(tag, text string) {
+	a.inputs.addTagged(tag, text)
 }
 
 // DrainQueuedInputs returns and clears the queued mid-turn inputs.

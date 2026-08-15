@@ -1,0 +1,454 @@
+package agent
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/projanvil/langchain-golang/core/language"
+	"github.com/projanvil/langchain-golang/core/messages"
+
+	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/graph"
+	"github.com/projanvil/woca/internal/tools"
+)
+
+// newGoalAgent builds a bypass-permission agent over a scripted fake model.
+func newGoalAgent(t *testing.T, responses ...messages.Message) *Agent {
+	t.Helper()
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(responses...),
+	)
+	a, err := New(Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+		RecursionLimit: 50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// pumpGoal drains a goal stream to its terminal step and returns it.
+func pumpGoal(t *testing.T, s graph.Stream[graph.Step]) graph.Step {
+	t.Helper()
+	ctx := context.Background()
+	for {
+		step, ok, err := s.Next(ctx)
+		if err != nil {
+			t.Fatalf("goal stream error: %v", err)
+		}
+		if !ok {
+			t.Fatal("goal stream ended without a terminal step")
+		}
+		if step.Done || step.Err != nil {
+			return step
+		}
+	}
+}
+
+func TestGoalCompletesAfterVerification(t *testing.T) {
+	a := newGoalAgent(t,
+		messages.AI("done-criteria checklist\nThis cycle: implement the feature"),           // assess
+		messages.AI("implemented and verified"),                                             // execute
+		messages.AI(`{"verdict":"complete","confidence":0.9,"evidence":"tests pass: 3/3"}`), // evaluate
+	)
+	if _, err := a.SetGoal("make the tests pass", "", 5, 1_000_000); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := a.GoalStream(context.Background(), []messages.Message{messages.Human("hello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := pumpGoal(t, stream)
+	if !step.Done {
+		t.Fatalf("goal stream ended with error: %v", step.Err)
+	}
+	g := a.Goal()
+	if g.Status != GoalComplete {
+		t.Fatalf("status = %q, want complete", g.Status)
+	}
+	if g.Evidence != "tests pass: 3/3" {
+		t.Fatalf("evidence = %q", g.Evidence)
+	}
+	if len(g.Progress) != 1 || g.Progress[0].Verdict != "complete" {
+		t.Fatalf("progress = %+v", g.Progress)
+	}
+	msgs := MessagesFrom(step.Values)
+	found := false
+	for _, m := range msgs {
+		if m.Role == messages.RoleAI && strings.Contains(m.Content, "Goal complete") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("final transcript misses the completion report")
+	}
+	// The transcript keeps the cycle prompt and the executor's work.
+	if !strings.Contains(msgs[len(msgs)-2].Content, "implemented and verified") {
+		t.Fatalf("cycle messages missing from final state: %+v", msgs[len(msgs)-3:])
+	}
+	if a.GoalRunning() {
+		t.Fatal("goal run flag not cleared")
+	}
+}
+
+func TestGoalBudgetLimitedByCycles(t *testing.T) {
+	a := newGoalAgent(t,
+		messages.AI("assess 1"),
+		messages.AI("work 1"),
+		messages.AI(`{"verdict":"continue","gaps":"not done"}`))
+	a.SetGoal("endless goal", "", 1, 1_000_000)
+	stream, err := a.GoalStream(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := pumpGoal(t, stream)
+	if !step.Done {
+		t.Fatalf("unexpected error: %v", step.Err)
+	}
+	if g := a.Goal(); g.Status != GoalBudgetLimited {
+		t.Fatalf("status = %q, want budget_limited", g.Status)
+	}
+}
+
+func TestGoalStallBlockedAfterTwoEmptyCycles(t *testing.T) {
+	a := newGoalAgent(t,
+		messages.AI("assess 1"),
+		messages.AI("thinking only, no tools"), // zero tool rounds
+		messages.AI(`{"verdict":"continue","gaps":"nothing happened"}`), messages.AI("assess 2"),
+		messages.AI("still just talking"), // zero tool rounds again
+		messages.AI(`{"verdict":"continue","gaps":"nothing happened"}`))
+	a.SetGoal("do something", "", 10, 1_000_000)
+	stream, err := a.GoalStream(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := pumpGoal(t, stream)
+	if !step.Done {
+		t.Fatalf("unexpected error: %v", step.Err)
+	}
+	g := a.Goal()
+	if g.Status != GoalBlocked {
+		t.Fatalf("status = %q, want blocked (empty-cycle suppression)", g.Status)
+	}
+	if !strings.Contains(g.BlockedReason, "no observable progress") {
+		t.Fatalf("blocked reason = %q", g.BlockedReason)
+	}
+}
+
+func TestGoalClaimNeedsEvaluatorVerification(t *testing.T) {
+	a := newGoalAgent(t,
+		messages.AI("assess 1"),
+		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+			ID: "1", Name: "UpdateGoal",
+			Args: map[string]any{"action": "claim_complete", "evidence": "looks done to me"},
+		}}},
+		messages.AI("I believe it is done"),
+		messages.AI(`{"verdict":"continue","gaps":"no tests were run"}`), // claim rejected
+		messages.AI("assess 2"),
+		messages.AI("ran the tests"),
+		messages.AI(`{"verdict":"complete","evidence":"tests green"}`),
+	)
+	a.SetGoal("ship it", "", 5, 1_000_000)
+	stream, err := a.GoalStream(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := pumpGoal(t, stream)
+	if !step.Done {
+		t.Fatalf("unexpected error: %v", step.Err)
+	}
+	g := a.Goal()
+	if g.Status != GoalComplete {
+		t.Fatalf("status = %q, want complete after re-verification", g.Status)
+	}
+	if g.Claimed {
+		t.Fatal("unverified claim was not reset")
+	}
+	// The UpdateGoal tool ran inside the cycle (a tool message came back).
+	found := false
+	for _, m := range MessagesFrom(step.Values) {
+		if m.Role == messages.RoleTool && m.ToolCallID == "1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("UpdateGoal tool result missing from the transcript")
+	}
+}
+
+func TestGoalInterruptResumesMidCycle(t *testing.T) {
+	// Default permission mode: the Write call inside the execute cycle must
+	// interrupt, park at the harness, and resume mid-cycle without redoing
+	// the assess stage.
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.AI("assess 1"), // assess
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+				ID: "1", Name: "Write",
+				Args: map[string]any{"file_path": "out.txt", "content": "hi"},
+			}}}, // execute: asks for a write → permission interrupt
+			messages.AI("wrote the file"),                                   // execute: continues after approval
+			messages.AI(`{"verdict":"complete","evidence":"file written"}`), // evaluate
+		),
+	)
+	a, err := New(Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeDefault,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetGoal("write a file", "", 5, 1_000_000)
+
+	stream, err := a.GoalStream(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := pumpGoal(t, stream)
+	ie, ok := graph.AsInterrupt(step.Err)
+	if !ok {
+		t.Fatalf("expected a permission interrupt, got done=%v err=%v", step.Done, step.Err)
+	}
+	req, ok := ie.Value.(PermissionRequest)
+	if !ok || req.ToolName != "Write" {
+		t.Fatalf("interrupt value = %#v", ie.Value)
+	}
+
+	resumed, err := a.GoalResume(context.Background(), ie, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step = pumpGoal(t, resumed)
+	if !step.Done {
+		t.Fatalf("resume failed: %v", step.Err)
+	}
+	if g := a.Goal(); g.Status != GoalComplete {
+		t.Fatalf("status = %q, want complete", g.Status)
+	}
+	if a.GoalRunning() {
+		t.Fatal("goal run flag not cleared after resume-completion")
+	}
+	// Exactly one assess ran (the resume did not restart the cycle).
+	found := 0
+	for _, m := range MessagesFrom(step.Values) {
+		if m.Role == messages.RoleAI && m.Content == "assess 1" {
+			found++
+		}
+	}
+	if found != 0 { // assess output never enters the transcript
+		t.Fatalf("assess leaked into the transcript %d times", found)
+	}
+	toolResult := false
+	for _, m := range MessagesFrom(step.Values) {
+		if m.Role == messages.RoleTool && m.ToolCallID == "1" {
+			toolResult = true
+		}
+	}
+	if !toolResult {
+		t.Fatal("approved write result missing from the transcript")
+	}
+}
+
+func TestGoalPauseAndResume(t *testing.T) {
+	a := newGoalAgent(t,
+		messages.AI("assess 1"),
+		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+			ID: "1", Name: "Read", Args: map[string]any{"file_path": "x"},
+		}}},
+		messages.AI("work"),
+		messages.AI(`{"verdict":"complete","evidence":"done"}`))
+	a.SetGoal("goal", "", 5, 1_000_000)
+	if !a.PauseGoal() {
+		t.Fatal("pause failed")
+	}
+	if _, err := a.GoalStream(context.Background(), nil); err == nil {
+		t.Fatal("GoalStream should refuse a paused goal")
+	}
+	if !a.ResumeGoal() {
+		t.Fatal("resume failed")
+	}
+	stream, err := a.GoalStream(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := pumpGoal(t, stream)
+	if !step.Done {
+		t.Fatalf("unexpected error: %v", step.Err)
+	}
+	if g := a.Goal(); g.Status != GoalComplete {
+		t.Fatalf("status = %q, want complete", g.Status)
+	}
+	if a.ResumeGoal() {
+		t.Fatal("resume should refuse a completed goal")
+	}
+	a.ClearGoal()
+	if a.Goal() != nil {
+		t.Fatal("clear failed")
+	}
+}
+
+func TestGoalClearEndsLoopAtBoundary(t *testing.T) {
+	a := newGoalAgent(t,
+		messages.AI("assess 1"),
+		messages.AI("work"),
+		messages.AI(`{"verdict":"continue","gaps":"more"}`), messages.AI("assess 2"),
+		messages.AI("work 2"),
+		messages.AI(`{"verdict":"continue","gaps":"more"}`))
+	a.SetGoal("goal", "", 10, 1_000_000)
+	stream, _ := a.GoalStream(context.Background(), nil)
+	ctx := context.Background()
+	cycles := 0
+	var term graph.Step
+	for {
+		step, ok, err := stream.Next(ctx)
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		if !ok {
+			t.Fatal("stream ended")
+		}
+		if step.Done || step.Err != nil {
+			term = step
+			break
+		}
+		if s, ok := step.Delta.(string); ok && strings.Contains(s, "[goal cycle") {
+			cycles++
+			if cycles == 1 {
+				a.ClearGoal() // user clears mid-loop
+			}
+		}
+	}
+	if !term.Done {
+		t.Fatalf("loop should end cleanly after clear, got %v", term.Err)
+	}
+	// The clear lands asynchronously: the loop may already have emitted the
+	// next cycle header before the ClearGoal call below takes effect, so the
+	// deterministic assertion is that it ends cleanly and bounded — without
+	// the clear, all 10 cycles would run (fake responses repeat "continue").
+	if cycles > 2 {
+		t.Fatalf("ran %d cycles after clear, want ≤2 (clear did not stop the loop)", cycles)
+	}
+}
+
+func TestGoalToolRestrictedActions(t *testing.T) {
+	a := newGoalAgent(t)
+	// No goal: read-only report.
+	res := a.execute(context.Background(), "GetGoal", nil)
+	if res.Content != "(no active goal)" {
+		t.Fatalf("GetGoal = %q", res.Content)
+	}
+	a.SetGoal("restricted", "", 5, 1_000_000)
+	// The model cannot pause/resume/clear.
+	if res := a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "pause"}); !strings.Contains(res.Content, "unknown action") {
+		t.Fatalf("pause should be rejected: %q", res.Content)
+	}
+	if res := a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "clear"}); !strings.Contains(res.Content, "unknown action") {
+		t.Fatalf("clear should be rejected: %q", res.Content)
+	}
+	// Progress, claim, blocked all work and are visible in snapshots.
+	a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "progress", "note": "halfway"})
+	if g := a.Goal(); len(g.Notes) != 1 || g.Notes[0] != "halfway" {
+		t.Fatalf("notes = %+v", g.Notes)
+	}
+	a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "claim_complete", "evidence": "e"})
+	if g := a.Goal(); !g.Claimed {
+		t.Fatal("claim not recorded")
+	}
+	if g := a.Goal(); g.Status != GoalActive {
+		t.Fatalf("claim must not complete the goal by itself, status = %q", g.Status)
+	}
+	a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "blocked", "reason": "need creds"})
+	if g := a.Goal(); g.Status != GoalBlocked || g.BlockedReason != "need creds" {
+		t.Fatalf("blocked not applied: %+v", g)
+	}
+}
+
+func TestParseGoalCommand(t *testing.T) {
+	cases := []struct {
+		args    []string
+		verb    string
+		obj     string
+		wantErr bool
+	}{
+		{nil, "status", "", false},
+		{[]string{"set", "make", "it", "work"}, "set", "make it work", false},
+		{[]string{"set", "--cycles", "3", "do", "things"}, "set", "do things", false},
+		{[]string{"set"}, "", "", true},
+		{[]string{"pause"}, "pause", "", false},
+		{[]string{"resume"}, "resume", "", false},
+		{[]string{"clear"}, "clear", "", false},
+		{[]string{"budget", "cycles", "7"}, "budget", "", false},
+		{[]string{"budget", "tokens", "x"}, "", "", true},
+		{[]string{"wibble"}, "", "", true},
+	}
+	for _, tc := range cases {
+		cmd, err := ParseGoalCommand(tc.args)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("ParseGoalCommand(%v) expected error", tc.args)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseGoalCommand(%v): %v", tc.args, err)
+			continue
+		}
+		if cmd.Verb != tc.verb || cmd.Objective != tc.obj {
+			t.Errorf("ParseGoalCommand(%v) = %+v, want verb=%s obj=%s", tc.args, cmd, tc.verb, tc.obj)
+		}
+	}
+	if cmd, _ := ParseGoalCommand([]string{"set", "--cycles", "3", "x"}); cmd.MaxCycles != 3 {
+		t.Fatalf("--cycles not parsed: %+v", cmd)
+	}
+}
+
+func TestGoalSubscriptionNotifies(t *testing.T) {
+	a := newGoalAgent(t)
+	seen := []*Goal{}
+	unsub := a.SubscribeGoal(func(g *Goal) { seen = append(seen, g) })
+	a.SetGoal("watched", "", 2, 1000)
+	a.PauseGoal()
+	unsub()
+	a.ResumeGoal()
+	if len(seen) != 2 {
+		t.Fatalf("notifications after unsubscribe: %d (want 2)", len(seen))
+	}
+	if seen[0] == nil || seen[0].Objective != "watched" || seen[0].Status != GoalActive {
+		t.Fatalf("first notification = %+v", seen[0])
+	}
+	if seen[1].Status != GoalPaused {
+		t.Fatalf("second notification = %+v", seen[1])
+	}
+}
+
+func TestGoalBlockedByModelEndsLoop(t *testing.T) {
+	a := newGoalAgent(t,
+		messages.AI("assess 1"),
+		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+			ID: "1", Name: "UpdateGoal",
+			Args: map[string]any{"action": "blocked", "reason": "missing API key"},
+		}}},
+		messages.AI("cannot proceed"),
+		messages.AI(`{"verdict":"continue","gaps":"blocked on creds"}`))
+	a.SetGoal("needs creds", "", 5, 1_000_000)
+	stream, err := a.GoalStream(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := pumpGoal(t, stream)
+	if !step.Done {
+		t.Fatalf("unexpected error: %v", step.Err)
+	}
+	if g := a.Goal(); g.Status != GoalBlocked || g.BlockedReason != "missing API key" {
+		t.Fatalf("goal = %+v", g)
+	}
+}

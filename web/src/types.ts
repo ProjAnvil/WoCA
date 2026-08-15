@@ -6,16 +6,86 @@ export interface Session {
   updatedAt: string
   /** Whether the transcript has been fetched from the backend. */
   loaded: boolean
+  /** Absolute workdir path this session belongs to ('' when unknown). */
+  workspace: string
+  /** Display name of the workspace (project dir basename). */
+  workspaceName: string
+}
+
+/** A named group of sessions sharing one workspace. */
+export interface WorkspaceGroup {
+  /** Unique key: workspace path (or display name as fallback). */
+  key: string
+  /** Workspace absolute path ('' for the unnamed default group). */
+  path: string
+  name: string
+  sessions: Session[]
 }
 
 // A conversation is a flat, ordered list of items produced by the agent.
 export type ChatItem =
-  | { id: string; kind: 'user'; content: string }
-  | { id: string; kind: 'assistant'; content: string; streaming: boolean }
+  | { id: string; kind: 'user'; content: string; attachments?: Attachment[] }
+  | {
+      id: string
+      kind: 'assistant'
+      content: string
+      streaming: boolean
+      /** Unix ms when the bubble first appeared (debug copy button). */
+      ts?: number
+      /** Backend run that produced this bubble (debug copy button). */
+      srcRun?: string
+    }
   | { id: string; kind: 'tool_call'; toolCallId: string; name: string; args: Record<string, unknown> }
   | { id: string; kind: 'tool_result'; toolCallId: string; content: string }
 
+/** An image attached to a prompt (paste or file picker). */
+export interface Attachment {
+  id: string
+  name: string
+  mimeType: string
+  /** `data:image/png;base64,…` — used directly in <img :src>. */
+  dataUrl: string
+  /** Bare base64 payload sent to the run API. */
+  base64: string
+}
+
+/** One autocomplete entry (skill or subagent) with its description. */
+export interface CompletionEntry {
+  name: string
+  description: string
+}
+
 export type RunStatus = 'idle' | 'running' | 'awaiting' | 'done' | 'error'
+
+// --- goal mode (mirror the Go agent's Goal JSON) ---
+
+export type GoalStatus = 'active' | 'paused' | 'blocked' | 'complete' | 'budget_limited'
+
+export interface GoalProgressEntry {
+  cycle: number
+  summary: string
+  verdict: string
+  note?: string
+}
+
+export interface Goal {
+  objective: string
+  status: GoalStatus
+  session_id?: string
+  cycles: number
+  max_cycles: number
+  tokens_used: number
+  max_tokens: number
+  progress?: GoalProgressEntry[]
+  notes?: string[]
+  /** Executor's completion claim awaiting skeptical verification. */
+  claimed?: boolean
+  claim_evidence?: string
+  blocked_reason?: string
+  evidence?: string
+  created_at: string
+  updated_at: string
+}
 
 // --- interrupts (mirror the Go server's JSON payloads) ---
 
@@ -58,6 +128,13 @@ export interface TranscriptMessage {
   content?: string
   tool_calls?: Array<{ id?: string; name: string; args?: Record<string, unknown> }>
   tool_call_id?: string
+  /** Multimodal content blocks ({type:"image", mime_type, base64} etc.). */
+  content_blocks?: Array<{
+    type?: string
+    mime_type?: string
+    base64?: string
+    text?: string
+  }>
 }
 
 export interface SessionSummary {
@@ -65,6 +142,8 @@ export interface SessionSummary {
   title: string
   updated_at: string
   message_count: number
+  workspace?: string
+  workspace_name?: string
 }
 
 // --- workspace (markdown preview) ---
@@ -98,6 +177,10 @@ export interface AppSettings {
   checkpoint_dir: string
   postgres_url_set: boolean
   database: string
+  /** Harness observability log (graph/state/session/message traces). */
+  debug_log: boolean
+  /** Where observability logs live (~/.woca/logs), empty when unwired. */
+  log_dir: string
 }
 
 /** PUT /api/settings body — absent fields are unchanged; empty strings clear. */
@@ -114,4 +197,5 @@ export interface AppSettingsUpdate {
   memory_backend?: string
   checkpoint_dir?: string
   postgres_url?: string
+  debug_log?: boolean
 }

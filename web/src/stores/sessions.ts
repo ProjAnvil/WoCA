@@ -1,6 +1,15 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { ChatItem, Interrupt, RunStatus, Session, TranscriptMessage } from '../types'
+import type {
+  Attachment,
+  ChatItem,
+  Goal,
+  Interrupt,
+  RunStatus,
+  Session,
+  TranscriptMessage,
+  WorkspaceGroup,
+} from '../types'
 import * as api from '../api/client'
 
 let seq = 0
@@ -9,6 +18,12 @@ const nid = () => `i${Date.now().toString(36)}${(seq++).toString(36)}`
 function truncate(s: string, n: number): string {
   const t = s.trim()
   return t.length > n ? t.slice(0, n) + '…' : t
+}
+
+function baseName(path: string): string {
+  const p = path.replace(/\/+$/, '')
+  const i = p.lastIndexOf('/')
+  return i >= 0 ? p.slice(i + 1) : p
 }
 
 // demoReply is a canned assistant answer used when the store runs in demo mode
@@ -27,14 +42,20 @@ function demoReply(prompt: string): string {
 }
 
 // Rebuild the UI item list from the backend's transcript (messages.Message
-// JSON). Tool calls and results are preserved across turns this way.
+// JSON). Tool calls and results are preserved across turns this way. Human
+// multimodal blocks become attachment thumbnails.
 function messagesToItems(msgs: TranscriptMessage[]): ChatItem[] {
   const out: ChatItem[] = []
   for (const m of msgs) {
     switch (m.role) {
       case 'human':
       case 'user':
-        out.push({ id: nid(), kind: 'user', content: m.content ?? '' })
+        out.push({
+          id: nid(),
+          kind: 'user',
+          content: m.content ?? '',
+          attachments: imageAttachments(m),
+        })
         break
       case 'ai':
       case 'assistant':
@@ -64,6 +85,19 @@ function messagesToItems(msgs: TranscriptMessage[]): ChatItem[] {
   return out
 }
 
+// imageAttachments extracts image content blocks from a human message.
+function imageAttachments(m: TranscriptMessage): Attachment[] | undefined {
+  const imgs = (m.content_blocks ?? []).filter((b) => b.type === 'image' && b.base64)
+  if (!imgs.length) return undefined
+  return imgs.map((b, i) => ({
+    id: nid() + i,
+    name: `image-${i + 1}`,
+    mimeType: b.mime_type ?? 'image/png',
+    dataUrl: `data:${b.mime_type ?? 'image/png'};base64,${b.base64}`,
+    base64: b.base64 ?? '',
+  }))
+}
+
 export const useSessionStore = defineStore('sessions', () => {
   const sessions = ref<Session[]>([])
   const activeId = ref('')
@@ -74,18 +108,59 @@ export const useSessionStore = defineStore('sessions', () => {
   const runId = ref<Record<string, string>>({})
   const interrupt = ref<Record<string, Interrupt | null>>({})
   const streamingId = ref<Record<string, string | null>>({})
+  // Goal mode: per-session goal snapshot + whether the goal loop is running.
+  const goal = ref<Record<string, Goal | null>>({})
+  const goalRunning = ref<Record<string, boolean>>({})
+  const goalPanelOpen = ref(false)
 
   const activeSession = computed(() => sessions.value.find((s) => s.id === activeId.value))
   const activeItems = computed(() => items.value[activeId.value] ?? [])
   const activeStatus = computed(() => status.value[activeId.value] ?? 'idle')
   const activeError = computed(() => error.value[activeId.value] ?? '')
   const activeInterrupt = computed(() => interrupt.value[activeId.value] ?? null)
+  const activeGoal = computed(() => goal.value[activeId.value] ?? null)
+
+  // Sessions grouped by workspace (list is newest-first, so groups are too).
+  // The key is the workspace path when known, falling back to its name.
+  const workspaceGroups = computed<WorkspaceGroup[]>(() => {
+    const groups: WorkspaceGroup[] = []
+    const byKey = new Map<string, WorkspaceGroup>()
+    for (const s of sessions.value) {
+      const path = s.workspace ?? ''
+      const name = s.workspaceName || (path ? baseName(path) : '') || '默认工作区'
+      const key = path || `name:${name}`
+      let g = byKey.get(key)
+      if (!g) {
+        g = { key, path, name, sessions: [] }
+        byKey.set(key, g)
+        groups.push(g)
+      }
+      g.sessions.push(s)
+    }
+    return groups
+  })
+
+  const activeWorkspace = computed(() => {
+    const s = activeSession.value
+    if (s) {
+      return { path: s.workspace ?? '', name: s.workspaceName || (s.workspace ? baseName(s.workspace) : '') || '默认工作区' }
+    }
+    const g = workspaceGroups.value[0]
+    return g ? { path: g.path, name: g.name } : { path: '', name: '默认工作区' }
+  })
+
+  const activeWorkspaceKey = computed(() => {
+    const ws = activeWorkspace.value
+    return ws.path || `name:${ws.name}`
+  })
 
   function ensureMaps(id: string) {
     if (!items.value[id]) items.value[id] = []
     if (!status.value[id]) status.value[id] = 'idle'
     if (!interrupt.value[id]) interrupt.value[id] = null
     if (!streamingId.value[id]) streamingId.value[id] = null
+    if (!(id in goal.value)) goal.value[id] = null
+    if (!(id in goalRunning.value)) goalRunning.value[id] = false
   }
 
   // --- demo mode (the standalone demo app seeds this instead of the backend) ---
@@ -94,7 +169,11 @@ export const useSessionStore = defineStore('sessions', () => {
     demo.value = v
   }
   function seed(seedSessions: Session[], itemsMap: Record<string, ChatItem[]>) {
-    sessions.value = seedSessions
+    sessions.value = seedSessions.map((s) => ({
+      ...s,
+      workspace: s.workspace ?? '',
+      workspaceName: s.workspaceName ?? '',
+    }))
     items.value = { ...itemsMap }
     if (seedSessions.length) {
       activeId.value = seedSessions[0].id
@@ -120,6 +199,8 @@ export const useSessionStore = defineStore('sessions', () => {
         title: s.title,
         updatedAt: s.updated_at,
         loaded: false,
+        workspace: s.workspace ?? '',
+        workspaceName: s.workspace_name ?? (s.workspace ? baseName(s.workspace) : '默认工作区'),
       }))
       activeId.value = sessions.value[0].id
       await loadSession(sessions.value[0].id)
@@ -128,14 +209,20 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
 
-  async function createSession() {
+  async function createSession(workspace?: { path?: string; name?: string }) {
+    const wsPath = workspace?.path ?? activeWorkspace.value.path
+    const wsName = workspace?.name ?? activeWorkspace.value.name
     let id = ''
     try {
-      id = await api.createSession()
+      const resp = await api.createSession(wsPath)
+      id = resp.session_id
     } catch {
       id = `tmp-${nid()}`
     }
-    sessions.value = [{ id, title: '新会话', updatedAt: '', loaded: true }, ...sessions.value]
+    sessions.value = [
+      { id, title: '新会话', updatedAt: '', loaded: true, workspace: wsPath, workspaceName: wsName },
+      ...sessions.value,
+    ]
     ensureMaps(id)
     activeId.value = id
   }
@@ -153,6 +240,11 @@ export const useSessionStore = defineStore('sessions', () => {
         items.value[id] = []
       }
     }
+    // Refresh the goal chip (sidecar-backed after a server restart).
+    api.getGoal(id).then((g) => {
+      goal.value[id] = g.goal
+      goalRunning.value[id] = g.running
+    }).catch(() => {})
   }
 
   async function setActive(id: string) {
@@ -187,7 +279,7 @@ export const useSessionStore = defineStore('sessions', () => {
     const existing = streamingId.value[sid]
     if (existing) return existing
     const id = nid()
-    push(sid, { id, kind: 'assistant', content: '', streaming: true })
+    push(sid, { id, kind: 'assistant', content: '', streaming: true, ts: Date.now(), srcRun: runId.value[sid] })
     streamingId.value[sid] = id
     return id
   }
@@ -215,14 +307,86 @@ export const useSessionStore = defineStore('sessions', () => {
 
   // --- run lifecycle ---
 
-  async function send(text: string) {
+  // attachStream subscribes to a run's SSE stream, updating this session's
+  // chat items and goal chip. afterDone runs once the stream ends (used for
+  // the goal loop's idle auto-continue after an interjected user run).
+  async function attachStream(
+    sid: string,
+    rid: string,
+    afterDone?: () => void,
+  ) {
+    runId.value[sid] = rid
+    try {
+      await api.streamRun(rid, {
+        onDelta: (t) => appendDelta(sid, t),
+        onToolCall: (tc) => addToolCall(sid, tc),
+        onToolResult: (tr) => addToolResult(sid, tr),
+        onInterrupt: (ev) => {
+          interrupt.value[sid] = { kind: ev.kind, payload: ev.payload } as unknown as Interrupt
+          status.value[sid] = 'awaiting'
+        },
+        onGoal: (ev) => {
+          goal.value[sid] = ev.goal
+          goalRunning.value[sid] = ev.running
+        },
+        onDone: () => {
+          closeStreaming(sid)
+          status.value[sid] = 'done'
+          afterDone?.()
+        },
+        onError: (msg) => {
+          closeStreaming(sid)
+          error.value[sid] = msg
+          status.value[sid] = 'error'
+        },
+      })
+    } catch (e) {
+      closeStreaming(sid)
+      error.value[sid] = e instanceof Error ? e.message : String(e)
+      status.value[sid] = 'error'
+    }
+  }
+
+  // continueGoalLoop implements idle-detection continuation: when a session
+  // holds an active (non-running) goal, ask the server to keep looping — the
+  // ensure-semantics POST is a no-op unless a run should start.
+  async function continueGoalLoop(sid: string) {
+    if (demo.value) return
+    try {
+      const { goal: g } = await api.getGoal(sid)
+      goal.value[sid] = g
+      if (!g || g.status !== 'active') return
+      const s = sessions.value.find((x) => x.id === sid)
+      const resp = await api.sendGoalCommand(sid, 'resume', s?.workspace ?? '')
+      goal.value[sid] = resp.goal
+      if (!resp.run_id) return
+      status.value[sid] = 'running'
+      await attachStream(sid, resp.run_id)
+    } catch {
+      /* continuation is best-effort; the resume button remains available */
+    }
+  }
+
+  async function send(text: string, attachments?: Attachment[]) {
     const sid = activeId.value
     const prompt = text.trim()
-    if (!prompt || !sid) return
+    if ((!prompt && !attachments?.length) || !sid) return
     const st = status.value[sid] ?? 'idle'
     if (st === 'running' || st === 'awaiting') return
 
-    push(sid, { id: nid(), kind: 'user', content: prompt })
+    // /goal commands execute server-side without a model turn; set/resume
+    // start the goal loop and stream it like a normal run.
+    if (prompt.startsWith('/goal')) {
+      await sendGoalCommand(prompt.slice('/goal'.length).trim())
+      return
+    }
+
+    push(sid, {
+      id: nid(),
+      kind: 'user',
+      content: prompt,
+      attachments: attachments?.length ? attachments : undefined,
+    })
     status.value[sid] = 'running'
     error.value[sid] = ''
     interrupt.value[sid] = null
@@ -230,7 +394,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
     const s = sessions.value.find((x) => x.id === sid)
     if (s && (s.title === '新会话' || !s.title)) {
-      s.title = truncate(prompt, 40)
+      s.title = truncate(prompt || attachments?.[0]?.name || '图片消息', 40)
     }
 
     if (demo.value) {
@@ -240,34 +404,47 @@ export const useSessionStore = defineStore('sessions', () => {
     }
 
     try {
-      const { run_id } = await api.createRun(sid, prompt)
-      runId.value[sid] = run_id
-      await api
-        .streamRun(run_id, {
-          onDelta: (t) => appendDelta(sid, t),
-          onToolCall: (tc) => addToolCall(sid, tc),
-          onToolResult: (tr) => addToolResult(sid, tr),
-          onInterrupt: (ev) => {
-            interrupt.value[sid] = { kind: ev.kind, payload: ev.payload } as unknown as Interrupt
-            status.value[sid] = 'awaiting'
-          },
-          onDone: () => {
-            closeStreaming(sid)
-            status.value[sid] = 'done'
-          },
-          onError: (msg) => {
-            closeStreaming(sid)
-            error.value[sid] = msg
-            status.value[sid] = 'error'
-          },
-        })
-        .catch((e) => {
-          closeStreaming(sid)
-          error.value[sid] = e instanceof Error ? e.message : String(e)
-          status.value[sid] = 'error'
-        })
+      const payload = (attachments ?? []).map((a) => ({
+        name: a.name,
+        mime_type: a.mimeType,
+        data: a.base64,
+      }))
+      const { run_id } = await api.createRun(sid, prompt, activeWorkspace.value.path, payload)
+      // After an interjected user run finishes, an active goal keeps looping
+      // (Codex's session-idle continuation scheduling).
+      await attachStream(sid, run_id, () => void continueGoalLoop(sid))
     } catch (e) {
       closeStreaming(sid)
+      error.value[sid] = e instanceof Error ? e.message : String(e)
+      status.value[sid] = 'error'
+    }
+  }
+
+  // sendGoalCommand runs a /goal command against the active session and shows
+  // its output in the chat; when it starts the loop, the run streams in place.
+  async function sendGoalCommand(command: string) {
+    const sid = activeId.value
+    if (!sid) return
+    const st = status.value[sid] ?? 'idle'
+    if (st === 'running' || st === 'awaiting') return
+    if (demo.value) return
+
+    push(sid, { id: nid(), kind: 'user', content: `/goal ${command}`.trim() })
+    status.value[sid] = 'running'
+    error.value[sid] = ''
+    streamingId.value[sid] = null
+    try {
+      const resp = await api.sendGoalCommand(sid, command, activeWorkspace.value.path)
+      goal.value[sid] = resp.goal
+      if (resp.output) {
+        push(sid, { id: nid(), kind: 'assistant', content: resp.output, streaming: false, ts: Date.now(), srcRun: resp.run_id || undefined })
+      }
+      if (resp.run_id) {
+        await attachStream(sid, resp.run_id)
+      } else {
+        status.value[sid] = 'done'
+      }
+    } catch (e) {
       error.value[sid] = e instanceof Error ? e.message : String(e)
       status.value[sid] = 'error'
     }
@@ -313,10 +490,20 @@ export const useSessionStore = defineStore('sessions', () => {
     activeStatus,
     activeError,
     activeInterrupt,
+    activeGoal,
+    goal,
+    goalRunning,
+    goalPanelOpen,
+    runId,
+    workspaceGroups,
+    activeWorkspace,
+    activeWorkspaceKey,
     init,
     createSession,
     setActive,
     send,
+    sendGoalCommand,
+    continueGoalLoop,
     answerInterrupt,
     cancel,
     setDemo,

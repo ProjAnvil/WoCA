@@ -131,8 +131,9 @@ func TestSuggestions(t *testing.T) {
 	if got := suggestions("hi"); got != nil {
 		t.Fatalf("suggestions(hi) = %v, want nil", got)
 	}
-	if got := suggestions("/p"); len(got) != 1 || got[0].name != "/permissions" {
-		t.Fatalf("suggestions(/p) = %v", got)
+	pms := suggestions("/p")
+	if len(pms) < 1 || pms[0].name != "/permissions" || !containsCmd(pms, "/plugins") {
+		t.Fatalf("suggestions(/p) = %v", pms)
 	}
 }
 
@@ -200,4 +201,13 @@ func TestCommandPaletteNavigationClamps(t *testing.T) {
 	if m.input != cmds[1].name {
 		t.Fatalf("down input = %q", m.input)
 	}
+}
+
+func containsCmd(list []command, name string) bool {
+	for _, c := range list {
+		if c.name == name {
+			return true
+		}
+	}
+	return false
 }

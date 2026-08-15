@@ -6,8 +6,10 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,7 +21,9 @@ import (
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/console"
 	"github.com/projanvil/woca/internal/graph"
+	"github.com/projanvil/woca/internal/notify"
 	"github.com/projanvil/woca/internal/runner"
+	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -120,6 +124,15 @@ type Model struct {
 	// pending is the interrupt awaiting a user decision (permission
 	// approval, plan approval, or an AskUserQuestion batch).
 	pending *interruptMsg
+	// vimInsert is the insert/normal sub-state of vim input mode (only
+	// meaningful when VimMode() is on).
+	vimInsert bool
+	// vimPendingD tracks a pending "dd" (delete line) in normal mode.
+	vimPendingD bool
+	// lastPrompt feeds the observability run_start event.
+	lastPrompt string
+	// settings backs the per-run debug-log dynamic refresh (optional).
+	settings *settings.Store
 }
 
 // New creates the TUI model.
@@ -158,9 +171,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pending != nil {
 			return m.resolvePendingKey(msg)
 		}
+		// Vim modal input (Claude Code's /vim): in normal mode keys edit,
+		// enter still submits. Interception happens before the standard
+		// handling; enter falls through to it.
+		if VimMode() && !m.vimInsert && !m.running {
+			if handled := m.vimKey(msg); handled {
+				return m, nil
+			}
+		}
 		switch msg.String() {
 		case "ctrl+c", "ctrl+d":
 			return m, tea.Quit
+		case "esc":
+			if VimMode() && m.vimInsert {
+				m.vimInsert = false
+			}
 		case "ctrl+a":
 			if !m.running {
 				m.cursor = 0
@@ -267,13 +292,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "/exit" || text == "/quit" || text == "/q" {
 				return m, tea.Quit
 			}
-			if handled := m.handleCommand(text); handled {
-				return m, nil
+			if handled, cmd := m.handleCommand(text); handled {
+				return m, cmd
 			}
-			m.write(userStyle.Render("❯ "+text) + "\n")
-			m.history = append(m.history, messages.Human(text))
-			m.running = true
-			return m, m.run()
+			return m, m.submit(text)
 		case "backspace":
 			if !m.running && m.cursor > 0 {
 				m.input = m.input[:m.cursor-1] + m.input[m.cursor:]
@@ -310,6 +332,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A run is paused awaiting this decision; render the approval UI and
 		// keep draining the run channel while the user decides.
 		m.pending = &msg
+		notify.Attention(os.Stdout, "woca: awaiting your decision")
 		if m.ch != nil {
 			return m, readCmd(m.ch)
 		}
@@ -323,14 +346,53 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ch = nil
 		if msg.err != nil {
 			m.write("Error: " + msg.err.Error() + "\n")
+			notify.Attention(os.Stdout, "woca: run failed")
 		} else {
 			m.history = stripSystem(msg.result)
+			notify.Attention(os.Stdout, "woca: response ready")
 		}
 		if m.agent != nil {
 			m.todos = m.agent.Todos()
 		}
+		// Goal continuation scheduling (Codex's idle detection): after a run
+		// finishes and the session is idle, an active goal keeps looping.
+		if msg.err == nil {
+			return m, m.maybeKickGoal()
+		}
 	}
 	return m, nil
+}
+
+// obsSeq numbers TUI runs for the observability log.
+var obsSeq int32
+
+// obsBegin scopes observability events to this run and logs its start. The
+// debug-log setting is re-read first so toggles made in other processes (the
+// web UI on another serve instance) apply here dynamically.
+func (m *Model) obsBegin(prompt string) string {
+	if m.agent == nil || m.agent.Obs() == nil {
+		return ""
+	}
+	if m.settings != nil {
+		m.agent.Obs().SetEnabled(m.settings.Load().DebugLog)
+	}
+	run := fmt.Sprintf("tui-run-%d", atomic.AddInt32(&obsSeq, 1))
+	m.agent.SetObsRun(m.cfg.WorkDir, "tui", run)
+	m.agent.Obs().Log("info", "run_start", map[string]any{"prompt": prompt})
+	return run
+}
+
+// obsEnd logs the run's completion and persists the message-level dump.
+func (m *Model) obsEnd(run string, final []messages.Message, err error) {
+	if m.agent == nil || m.agent.Obs() == nil || run == "" {
+		return
+	}
+	data := map[string]any{"messages": len(final)}
+	if err != nil {
+		data["error"] = err.Error()
+	}
+	m.agent.Obs().Log("info", "run_end", data)
+	m.agent.Obs().DumpMessages(final, map[string]any{"mode": "tui"})
 }
 
 // run starts the agent in a goroutine and returns a command that reads from
@@ -338,13 +400,46 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) run() tea.Cmd {
 	ch := make(chan tea.Msg, 512)
 	m.ch = ch
+	obsRun := m.obsBegin(m.lastPrompt)
 	go func() {
 		r := runner.New(m.agent, interruptHandler(ch), m.renderer(ch))
 		result, err := r.Run(context.Background(), m.history)
+		m.obsEnd(obsRun, result, err)
 		ch <- runDone{result: result, err: err}
 		close(ch)
 	}()
 	return readCmd(ch)
+}
+
+// runGoal starts the goal loop in a goroutine; its steps render exactly like
+// a normal run (cycle headers and verdicts as deltas, tool use as chips).
+func (m *Model) runGoal() tea.Cmd {
+	ch := make(chan tea.Msg, 512)
+	m.ch = ch
+	obsRun := m.obsBegin("(goal loop)")
+	go func() {
+		r := runner.New(m.agent, interruptHandler(ch), m.renderer(ch))
+		result, err := r.RunGoal(context.Background(), m.history)
+		m.obsEnd(obsRun, result, err)
+		ch <- runDone{result: result, err: err}
+		close(ch)
+	}()
+	return readCmd(ch)
+}
+
+// maybeKickGoal starts the goal loop when a goal is active and the session is
+// idle (after /goal set, /goal resume, or any finished run).
+func (m *Model) maybeKickGoal() tea.Cmd {
+	if m.running || m.agent == nil {
+		return nil
+	}
+	g := m.agent.Goal()
+	if g == nil || g.Status != agent.GoalActive || m.agent.GoalRunning() {
+		return nil
+	}
+	m.write(dimStyle.Render("⏵ goal loop running (esc-free; /goal pause to stop at the next cycle)") + "\n")
+	m.running = true
+	return m.runGoal()
 }
 
 func readCmd(ch <-chan tea.Msg) tea.Cmd {
@@ -362,32 +457,40 @@ func readCmd(ch <-chan tea.Msg) tea.Cmd {
 // snapshots, and an in-flight tool spinner tree.
 func (m *Model) renderer(ch chan<- tea.Msg) runner.Renderer {
 	running := map[string]string{} // toolCallID -> tool name
+	renderMsg := func(msg messages.Message) {
+		switch msg.Role {
+		case messages.RoleAI:
+			for _, tc := range msg.ToolCalls {
+				running[tc.ID] = tc.Name
+				ch <- streamMsg("\n" + toolColor(tc.Name).Render("⏺ "+tc.Name) + " " + dimStyle.Render(fmt.Sprintf("%v", tc.Args)) + "\n")
+				if tc.Name == "Edit" || tc.Name == "Write" {
+					for _, l := range diffLines(tc.Args) {
+						ch <- streamMsg("  " + l + "\n")
+					}
+				}
+			}
+			ch <- inFlightMsg(sortedValues(running))
+		case messages.RoleTool:
+			delete(running, msg.ToolCallID)
+			ch <- streamMsg(dimStyle.Render("  ⎿ "+summarize(msg.Content)) + "\n")
+			if m.agent != nil {
+				ch <- todosMsg(m.agent.Todos())
+			}
+			ch <- inFlightMsg(sortedValues(running))
+		}
+	}
 	return func(step graph.Step) {
 		if s, ok := step.Delta.(string); ok && s != "" {
 			ch <- streamMsg(s)
 			return
 		}
+		// Goal cycles stream their tool use through the delta channel.
+		if g, ok := step.Delta.(agent.GoalDelta); ok {
+			renderMsg(g.Message)
+			return
+		}
 		for _, msg := range agent.MessagesFrom(step.Update) {
-			switch msg.Role {
-			case messages.RoleAI:
-				for _, tc := range msg.ToolCalls {
-					running[tc.ID] = tc.Name
-					ch <- streamMsg("\n" + toolColor(tc.Name).Render("⏺ "+tc.Name) + " " + dimStyle.Render(fmt.Sprintf("%v", tc.Args)) + "\n")
-					if tc.Name == "Edit" || tc.Name == "Write" {
-						for _, l := range diffLines(tc.Args) {
-							ch <- streamMsg("  " + l + "\n")
-						}
-					}
-				}
-				ch <- inFlightMsg(sortedValues(running))
-			case messages.RoleTool:
-				delete(running, msg.ToolCallID)
-				ch <- streamMsg(dimStyle.Render("  ⎿ "+summarize(msg.Content)) + "\n")
-				if m.agent != nil {
-					ch <- todosMsg(m.agent.Todos())
-				}
-				ch <- inFlightMsg(sortedValues(running))
-			}
+			renderMsg(msg)
 		}
 	}
 }
@@ -551,6 +654,16 @@ func summarize(content string) string {
 	return content
 }
 
+// goalFooter renders the footer's goal segment: cycle/token budget (and the
+// pending completion claim, if any).
+func goalFooter(g *agent.Goal) string {
+	s := fmt.Sprintf("cycle %d/%d · %s/%s tok", g.Cycles, g.MaxCycles, agent.FormatGoalTokens(g.TokensUsed), agent.FormatGoalTokens(g.MaxTokens))
+	if g.Claimed {
+		s += " · claim pending verification"
+	}
+	return s
+}
+
 // write appends a fragment, splitting complete lines into the transcript.
 func (m *Model) write(s string) {
 	m.cur += s
@@ -659,7 +772,20 @@ func (m *Model) View() string {
 		live := m.console.Cfg()
 		model, mode = live.Model, live.PermissionMode
 	}
-	b.WriteString(dimStyle.Render(fmt.Sprintf("model=%s · mode=%s", model, mode)))
+	status := fmt.Sprintf("model=%s · mode=%s", model, mode)
+	if m.agent != nil {
+		if g := m.agent.Goal(); g != nil {
+			status += fmt.Sprintf(" · goal[%s] %s", g.Status, goalFooter(g))
+		}
+	}
+	if VimMode() {
+		if m.vimInsert {
+			status += " · vim: INSERT"
+		} else {
+			status += " · vim: NORMAL"
+		}
+	}
+	b.WriteString(dimStyle.Render(status))
 	b.WriteString("\n")
 	return b.String()
 }
@@ -672,6 +798,100 @@ func (m *Model) renderInput() string {
 	return m.input[:m.cursor] + cursorStyle.Render(m.input[m.cursor:m.cursor+1]) + m.input[m.cursor+1:]
 }
 
+// vimKey handles one keystroke in vim normal mode. It reports whether the
+// key was consumed; enter and unrecognized printable keys fall through to
+// the caller's standard handling.
+func (m *Model) vimKey(msg tea.KeyMsg) bool {
+	s := msg.String()
+	if m.vimPendingD && s != "d" {
+		m.vimPendingD = false
+	}
+	switch s {
+	case "i":
+		m.vimInsert = true
+	case "a":
+		m.vimInsert = true
+		if m.cursor < len(m.input) {
+			m.cursor++
+		}
+	case "A":
+		m.vimInsert = true
+		m.cursor = len(m.input)
+	case "h":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "l":
+		if m.cursor < len(m.input) {
+			m.cursor++
+		}
+	case "0":
+		m.cursor = 0
+	case "$":
+		m.cursor = len(m.input)
+	case "w":
+		m.cursor = vimWordForward(m.input, m.cursor)
+	case "b":
+		m.cursor = vimWordBackward(m.input, m.cursor)
+	case "x":
+		if m.cursor < len(m.input) {
+			m.input = m.input[:m.cursor] + m.input[m.cursor+1:]
+		}
+	case "D":
+		m.input = m.input[:m.cursor]
+	case "d":
+		if m.vimPendingD {
+			m.input = ""
+			m.cursor = 0
+			m.vimPendingD = false
+		} else {
+			m.vimPendingD = true
+		}
+	case "esc":
+		// already normal mode
+	case "backspace":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "delete":
+		if m.cursor < len(m.input) {
+			m.input = m.input[:m.cursor] + m.input[m.cursor+1:]
+		}
+	default:
+		// Unknown single runes are consumed silently (normal mode never
+		// types); multi-key combos (ctrl/arrow/enter) fall through to the
+		// standard handling.
+		return len(msg.Runes) == 1 && msg.Type == tea.KeyRunes
+	}
+	return true
+}
+
+// vimWordForward moves the cursor to the start of the next word.
+func vimWordForward(s string, pos int) int {
+	i := pos
+	for i < len(s) && !isWordBreak(s[i]) {
+		i++
+	}
+	for i < len(s) && isWordBreak(s[i]) {
+		i++
+	}
+	return i
+}
+
+// vimWordBackward moves the cursor to the start of the previous word.
+func vimWordBackward(s string, pos int) int {
+	i := pos
+	for i > 0 && isWordBreak(s[i-1]) {
+		i--
+	}
+	for i > 0 && !isWordBreak(s[i-1]) {
+		i--
+	}
+	return i
+}
+
+func isWordBreak(c byte) bool { return c == ' ' || c == '\t' }
+
 func stripSystem(msgs []messages.Message) []messages.Message {
 	if len(msgs) > 0 && msgs[0].Role == messages.RoleSystem {
 		return msgs[1:]
@@ -679,25 +899,27 @@ func stripSystem(msgs []messages.Message) []messages.Message {
 	return msgs
 }
 
-// handleCommand processes slash commands; returns true when the input was a
-// command (so it is not sent to the agent).
-func (m *Model) handleCommand(text string) bool {
+// handleCommand processes slash commands; returns (true, cmd) when the input
+// was a command (so it is not sent to the agent) — cmd may start a run when
+// the command hands back a prompt (/init). Returns (false, nil) for plain
+// prompts.
+func (m *Model) handleCommand(text string) (bool, tea.Cmd) {
 	if m.console == nil {
 		if text == "/help" {
 			m.write("Commands: /help /exit /quit (attach a console for the full set)\n")
-			return true
+			return true, nil
 		}
-		return false
+		return false, nil
 	}
 	parts := strings.Fields(strings.TrimPrefix(text, "/"))
 	if len(parts) == 0 {
-		return false
+		return false, nil
 	}
 	session := &console.Session{History: m.history}
 	res, err := m.console.Execute(context.Background(), parts[0], parts[1:], session)
 	if err != nil {
 		m.write("Error: " + err.Error() + "\n")
-		return true
+		return true, nil
 	}
 	m.history = session.History
 	if res.Clear {
@@ -708,7 +930,21 @@ func (m *Model) handleCommand(text string) bool {
 	if res.Output != "" {
 		m.write(res.Output)
 	}
-	return true
+	if res.Prompt != "" {
+		return true, m.submit(res.Prompt)
+	}
+	// /goal set and /goal resume (or any command, really) may have left an
+	// active idle goal — kick the loop.
+	return true, m.maybeKickGoal()
+}
+
+// submit appends a user message and starts one agent run.
+func (m *Model) submit(text string) tea.Cmd {
+	m.write(userStyle.Render("❯ "+text) + "\n")
+	m.history = append(m.history, messages.Human(text))
+	m.running = true
+	m.lastPrompt = text
+	return m.run()
 }
 
 // command is a slash command with its description.
@@ -748,6 +984,12 @@ type Option func(*Model)
 // WithConsole attaches the shared console command layer.
 func WithConsole(c *console.Console) Option {
 	return func(m *Model) { m.console = c }
+}
+
+// WithSettingsStore enables the per-run debug-log dynamic refresh (toggles
+// made in other processes apply to this TUI on its next run).
+func WithSettingsStore(st *settings.Store) Option {
+	return func(m *Model) { m.settings = st }
 }
 
 // Run starts the TUI program and blocks until it exits.

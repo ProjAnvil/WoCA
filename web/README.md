@@ -10,7 +10,12 @@ woca 的 Web 前端（Vue 3 + TypeScript + Vite）。构建产物会被 Go 二�
 - @vueuse/core（`useDark` 主题切换）
 - lucide-vue-next（图标）
 - marked + dompurify（Markdown 渲染 + XSS 消毒）
+- shiki（文件预览代码高亮，VitePress/Nuxt 同款；细粒度按需加载）
 - @microsoft/fetch-event-source（SSE 流式客户端）
+
+聊天输入支持：图片附件（回形针上传 / Cmd+V·Ctrl+V 粘贴截图，随消息以
+多模态 content blocks 发送）；`/` 前缀补全 skills、`@` 前缀补全 subagents
+（上下键选择、Enter/Tab 确认、Esc 取消，高亮项展示 description）。
 
 ## 开发
 
@@ -46,21 +51,27 @@ src/
 ├─ style.css               # 设计令牌（灰白 + 阴影，light/dark）
 ├─ types.ts                # 会话 / 消息 / 工作区文件 / transcript 类型
 ├─ lib/markdown.ts         # marked + dompurify 渲染
+├─ lib/highlight.ts        # shiki 高亮封装（扩展名 → 语言映射）
+├─ lib/highlighter-engine.ts # shiki 语法包（懒加载 chunk）
+├─ lib/files.ts            # 文件是否可预览的客户端判断
 ├─ api/client.ts           # REST + SSE 客户端（fetch-event-source）
 ├─ stores/
 │  ├─ settings.ts          # 主题 + 设置面板开关 + 偏好
 │  ├─ sessions.ts          # 会话 + 消息 + 运行状态（含 demo 模式）
-│  └─ workspace.ts         # 工作区文件树 + Markdown 预览
+│  ├─ completions.ts       # / 命令与 @ 子代理补全列表
+│  └─ workspace.ts         # 工作区文件树 + 预览
 └─ components/
-   ├─ Sidebar.vue          # 左侧：会话 + 工作区 + 底部设置入口
-   ├─ SessionList.vue
+   ├─ Sidebar.vue          # 左侧：workspace 分组会话 + 底部设置入口
+   ├─ SessionList.vue      # workspace 分组（可展开/收起）的会话列表
+   ├─ Avatar.vue           # 聊天气泡头像（woca 机器人 / 用户）
+   ├─ WorkspaceSidebar.vue # 右侧：工作区文件浏览 sidebar（可收起）
    ├─ WorkspaceTree.vue    # 递归文件树
+   ├─ FilePreview.vue      # 文件预览（markdown / shiki 代码高亮）
    ├─ TreeNode.vue
    ├─ SettingsPanel.vue    # 卡片式设置（主题/偏好/模型）
-   ├─ ChatPanel.vue        # 右侧对话窗口
-   ├─ ChatItemView.vue     # 消息 / 工具调用 / 工具结果卡片
-   ├─ InterruptModal.vue   # 权限 / 提问 / 计划审批弹窗
-   └─ MarkdownView.vue     # 文件 Markdown 预览弹层
+   ├─ ChatPanel.vue        # 对话窗口 + 附件栏（上传/粘贴截图）+ 自动补全弹层
+   ├─ ChatItemView.vue     # 消息气泡（用户右 / woca 左）+ 工具卡片
+   └─ InterruptModal.vue   # 权限 / 提问 / 计划审批弹窗
 demo/
 ├─ index.html              # 演示入口
 ├─ main.ts

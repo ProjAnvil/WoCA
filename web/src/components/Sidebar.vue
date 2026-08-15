@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { Plus, Settings } from 'lucide-vue-next'
 import SessionList from './SessionList.vue'
-import WorkspaceTree from './WorkspaceTree.vue'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
 
@@ -19,19 +18,16 @@ const settings = useSettingsStore()
     <div class="sidebar-body">
       <section class="side-section">
         <div class="side-section-head">
-          <span class="side-section-title">会话</span>
-          <button class="icon-btn" title="新建会话" @click="sessions.createSession()">
+          <span class="side-section-title">工作区</span>
+          <button
+            class="icon-btn"
+            title="在当前工作区新建会话"
+            @click="sessions.createSession()"
+          >
             <Plus :size="16" />
           </button>
         </div>
         <SessionList />
-      </section>
-
-      <section class="side-section">
-        <div class="side-section-head">
-          <span class="side-section-title">工作区</span>
-        </div>
-        <WorkspaceTree />
       </section>
     </div>
 

@@ -18,6 +18,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
 	"github.com/projanvil/woca/internal/tokens"
 	"github.com/projanvil/woca/internal/webgui"
@@ -37,6 +38,9 @@ type Result struct {
 	Exit bool
 	// Clear asks the caller to clear the transcript display (used by /clear).
 	Clear bool
+	// Prompt, when non-empty, is submitted to the agent as a user turn right
+	// after the command (used by /init, which drives a full analysis run).
+	Prompt string
 }
 
 // Command describes one slash command for help and completion.
@@ -69,6 +73,21 @@ type Deps struct {
 	// RebuildModel rebuilds the chat model after provider/credential changes
 	// made via /settings (optional).
 	RebuildModel func() error
+	// SessionDir overrides where /branch writes session snapshots (tests);
+	// empty uses ~/.woca/sessions.
+	SessionDir string
+	// AgentsDir overrides where /agents new writes definitions (tests);
+	// empty uses ~/.woca/agents.
+	AgentsDir string
+	// PluginsRoot overrides the plugin installation root (tests); empty
+	// uses ~/.woca/plugins.
+	PluginsRoot string
+	// ApplyTheme switches the TUI palette live (/theme); nil disables the
+	// command with a helpful message.
+	ApplyTheme func(name string) error
+	// SetVimModeToggle flips the TUI vim input mode and reports the new
+	// state (/vim); nil disables the command.
+	SetVimModeToggle func() bool
 }
 
 // Console executes slash commands against a Deps set.
@@ -88,28 +107,14 @@ func New(deps Deps) *Console {
 // Cfg returns the live configuration (updated by /model).
 func (c *Console) Cfg() config.Config { return *c.deps.Cfg }
 
-// Commands returns the command table sorted by name.
+// Commands returns the command table sorted by name. The builtin table is
+// shared with the web server's autocomplete via internal/slashcmds.
 func Commands() []Command {
-	list := []Command{
-		{Name: "help", Description: "list available commands"},
-		{Name: "status", Description: "show version, model, mode, and session stats"},
-		{Name: "config", Description: "alias for /status"},
-		{Name: "permissions", Description: "show or set the permission mode"},
-		{Name: "model", Description: "show or switch the model"},
-		{Name: "clear", Description: "clear the conversation and start fresh"},
-		{Name: "compact", Description: "summarize the conversation to free context"},
-		{Name: "context", Description: "show context window usage"},
-		{Name: "todos", Description: "show the current todo list"},
-		{Name: "tasks", Description: "show the shared task list"},
-		{Name: "skills", Description: "list loaded skills"},
-		{Name: "mcp", Description: "list connected MCP servers and tools"},
-		{Name: "settings", Description: "show or update persisted settings (provider, keys, storage backends)"},
-		{Name: "memory", Description: "inspect the memoryStore (list/get/put/del)"},
-		{Name: "web", Description: "start/stop the web GUI (default port " + strconv.Itoa(webgui.DefaultPort) + ")"},
-		{Name: "exit", Description: "exit woca"},
-		{Name: "quit", Description: "exit woca"},
+	builtin := slashcmds.Builtin()
+	list := make([]Command, len(builtin))
+	for i, c := range builtin {
+		list[i] = Command{Name: c.Name, Description: c.Description}
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	return list
 }
 
@@ -132,8 +137,36 @@ func (c *Console) Execute(ctx context.Context, name string, args []string, sessi
 		return c.compact(ctx, session)
 	case "context":
 		return Result{Output: c.context(session)}, nil
+	case "cost":
+		return Result{Output: c.cost()}, nil
+	case "init":
+		return c.initCmd(session)
+	case "rewind":
+		return c.rewind(args, session)
+	case "branch":
+		return c.branch(args, session)
+	case "doctor":
+		return c.doctorCmd(), nil
+	case "export":
+		return c.exportCmd(args, session)
+	case "rename":
+		return c.renameCmd(args, session)
+	case "agents":
+		return c.agentsCmd(args)
+	case "output-style":
+		return c.outputStyleCmd(args)
+	case "plugins":
+		return c.pluginsCmd(args)
+	case "theme":
+		return c.themeCmd(args)
+	case "vim":
+		return c.vimCmd(), nil
+	case "keybindings":
+		return c.keybindingsCmd(), nil
 	case "todos":
 		return Result{Output: c.todos()}, nil
+	case "goal":
+		return c.goalCmd(args)
 	case "tasks":
 		return Result{Output: c.tasks()}, nil
 	case "skills":
@@ -142,6 +175,8 @@ func (c *Console) Execute(ctx context.Context, name string, args []string, sessi
 		return Result{Output: c.mcp()}, nil
 	case "settings":
 		return c.settingsCmd(args)
+	case "debug-log":
+		return c.debugLogCmd(args)
 	case "memory":
 		return c.memoryCmd(ctx, args)
 	case "web":
@@ -250,6 +285,12 @@ func (c *Console) context(session *Session) string {
 		fmt.Fprintf(&b, "auto-compact threshold: %d tokens (now ~%d%%)\n", limit, pct)
 	} else {
 		b.WriteString("auto-compact: disabled (enable with --auto-compact <tokens>)\n")
+	}
+	// Session usage line (/cost lite): provider-reported totals survive
+	// compaction, unlike the history estimate above.
+	if u := c.deps.Agent.Usage(); u.Requests > 0 {
+		fmt.Fprintf(&b, "session usage: %d requests · %d in / %d out tokens (see /cost)\n",
+			u.Requests, u.InputTokens, u.OutputTokens)
 	}
 	return b.String()
 }

@@ -4,12 +4,14 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
 )
 
@@ -61,6 +64,11 @@ type Server struct {
 	settings     *settings.Store
 	memory       *store.Store
 	rebuildModel func() error
+
+	// goalMu guards goalOwner: the session whose sidecar mirrors the live
+	// goal (so a clear can delete the right file).
+	goalMu    sync.Mutex
+	goalOwner string
 }
 
 var (
@@ -70,17 +78,47 @@ var (
 
 // New creates a Server.
 func New(cfg Config) *Server {
-	return &Server{
+	defaultWorkspace := ""
+	if cfg.WorkDir != "" {
+		if abs, err := filepath.Abs(cfg.WorkDir); err == nil {
+			defaultWorkspace = abs
+		} else {
+			defaultWorkspace = cfg.WorkDir
+		}
+	}
+	store := newSessionStore(cfg.SessionDir)
+	store.defaultWorkspace = defaultWorkspace
+	s := &Server{
 		agent:        cfg.Agent,
 		static:       cfg.Static,
 		log:          cfg.Logger,
 		runs:         map[string]*Run{},
-		sessions:     newSessionStore(cfg.SessionDir),
+		sessions:     store,
 		workdir:      cfg.WorkDir,
 		settings:     cfg.Settings,
 		memory:       cfg.Memory,
 		rebuildModel: cfg.RebuildModel,
 	}
+	if cfg.Agent != nil {
+		// Goal persistence: every live goal change mirrors to the owning
+		// session's sidecar; a clear deletes it.
+		cfg.Agent.SubscribeGoal(func(g *agent.Goal) {
+			s.goalMu.Lock()
+			owner := s.goalOwner
+			if g != nil && g.SessionID != "" {
+				owner = g.SessionID
+				s.goalOwner = owner
+			} else if g == nil {
+				s.goalOwner = ""
+			}
+			s.goalMu.Unlock()
+			if owner == "" {
+				return
+			}
+			s.sessions.saveGoal(owner, g)
+		})
+	}
+	return s
 }
 
 // Handler returns the full HTTP handler (API + embedded frontend).
@@ -95,7 +133,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
+	mux.HandleFunc("GET /api/sessions/{id}/goal", s.handleGetGoal)
+	mux.HandleFunc("POST /api/sessions/{id}/goal", s.handleGoalCommand)
 	mux.HandleFunc("GET /api/workspace", s.handleWorkspace)
+	mux.HandleFunc("GET /api/workspace/file", s.handleWorkspaceFile)
+	mux.HandleFunc("GET /api/completions", s.handleCompletions)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handleUpdateSettings)
 	mux.Handle("/", s.staticHandler())
@@ -128,10 +170,30 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// runAttachment is one image attached to a prompt (base64-encoded).
+type runAttachment struct {
+	Name     string `json:"name"`
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
+}
+
+// attachmentLimits bound prompt attachments.
+const (
+	maxAttachments     = 6
+	maxAttachmentBytes = 8 << 20 // decoded, across all attachments
+)
+
+var attachmentMIMEs = map[string]bool{
+	"image/png": true, "image/jpeg": true, "image/gif": true,
+	"image/webp": true,
+}
+
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SessionID string `json:"session_id"`
-		Prompt    string `json:"prompt"`
+		SessionID   string          `json:"session_id"`
+		Prompt      string          `json:"prompt"`
+		Workspace   string          `json:"workspace"`
+		Attachments []runAttachment `json:"attachments"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -141,13 +203,55 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
+	human, err := humanMessage(req.Prompt, req.Attachments)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	run, sessionID := s.startRun(req.SessionID, req.Prompt)
+	run, sessionID := s.startRun(req.SessionID, human, req.Workspace)
 	writeJSON(w, http.StatusOK, map[string]any{"run_id": run.ID(), "session_id": sessionID})
 }
 
-func (s *Server) handleCreateSession(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"session_id": newSessionID()})
+// humanMessage builds the prompt message, upgrading it to multimodal content
+// blocks when image attachments are present.
+func humanMessage(prompt string, atts []runAttachment) (messages.Message, error) {
+	if len(atts) == 0 {
+		return messages.Human(prompt), nil
+	}
+	if len(atts) > maxAttachments {
+		return messages.Message{}, fmt.Errorf("too many attachments (max %d)", maxAttachments)
+	}
+	blocks := []messages.ContentBlock{messages.TextBlock{Text: prompt}}
+	total := 0
+	for _, a := range atts {
+		if !attachmentMIMEs[a.MimeType] {
+			return messages.Message{}, fmt.Errorf("unsupported attachment type %q", a.MimeType)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(a.Data)
+		if err != nil {
+			return messages.Message{}, fmt.Errorf("attachment %q is not valid base64", a.Name)
+		}
+		total += len(decoded)
+		if total > maxAttachmentBytes {
+			return messages.Message{}, fmt.Errorf("attachments exceed the %d MB limit", maxAttachmentBytes>>20)
+		}
+		blocks = append(blocks, messages.ImageBlock{MimeType: a.MimeType, Base64: a.Data})
+	}
+	return messages.Message{Role: messages.RoleHuman, Content: prompt, ContentBlocks: blocks}, nil
+}
+
+func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Workspace string `json:"workspace"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req) // body optional; empty workspace is fine
+	resp := map[string]any{"session_id": newSessionID()}
+	if req.Workspace != "" {
+		resp["workspace"] = req.Workspace
+		resp["workspace_name"] = workspaceDisplayName(req.Workspace)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
@@ -173,6 +277,59 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleWorkspace(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, buildWorkspaceTree(s.workdir))
+}
+
+// handleWorkspaceFile returns a single workspace file's content for the
+// right-sidebar preview (bounded, text files only).
+func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request) {
+	node, err := readWorkspaceFile(s.workdir, r.URL.Query().Get("path"))
+	if err != nil {
+		var status int
+		switch err {
+		case errNotPreviewable:
+			status = http.StatusUnsupportedMediaType
+		case errFileTooLarge:
+			status = http.StatusRequestEntityTooLarge
+		default:
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, node)
+}
+
+// handleCompletions lists slash commands (builtin + skills, for the chat
+// input's "/" popup) and subagents (for the "@" popup).
+func (s *Server) handleCompletions(w http.ResponseWriter, _ *http.Request) {
+	type entry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	resp := struct {
+		Skills []entry `json:"skills"`
+		Agents []entry `json:"agents"`
+	}{Skills: []entry{}, Agents: []entry{}}
+	// Builtin commands come first so a same-named skill cannot shadow them.
+	for _, c := range slashcmds.Builtin() {
+		resp.Skills = append(resp.Skills, entry{Name: c.Name, Description: c.Description})
+	}
+	if s.agent != nil {
+		builtin := make(map[string]bool, len(resp.Skills))
+		for _, e := range resp.Skills {
+			builtin[e.Name] = true
+		}
+		for _, sk := range s.agent.Skills() {
+			if builtin[sk.Name] {
+				continue
+			}
+			resp.Skills = append(resp.Skills, entry{Name: sk.Name, Description: sk.Description})
+		}
+		for _, d := range s.agent.AgentDefinitions() {
+			resp.Agents = append(resp.Agents, entry{Name: d.Name, Description: d.Description})
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
@@ -266,10 +423,24 @@ func (s *Server) handleQueueInput(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": s.agent.QueuedInputCount()})
 }
 
+// refreshDebugLog re-reads the persisted debug-log setting before each run so
+// a toggle made from ANOTHER process (another serve instance, a TUI session)
+// applies here dynamically; the store itself stays cheap while off. A store
+// locked open by --debug-log ignores disables.
+func (s *Server) refreshDebugLog() {
+	if s.agent == nil || s.agent.Obs() == nil || s.settings == nil {
+		return
+	}
+	s.agent.Obs().SetEnabled(s.settings.Load().DebugLog)
+}
+
 // startRun creates a run that continues the given session (or a new one when
 // sessionID is empty) and persists the resulting transcript back to the
-// session on completion.
-func (s *Server) startRun(sessionID, prompt string) (*Run, string) {
+// session on completion. workspace records which project the session belongs
+// to (empty falls back to the server's workdir) so the UI can group sessions.
+// human is the fully-built prompt message (possibly with image content
+// blocks).
+func (s *Server) startRun(sessionID string, human messages.Message, workspace string) (*Run, string) {
 	id := fmt.Sprintf("run-%d", atomic.AddInt64(&runSeq, 1))
 	ctx, cancel := context.WithCancel(context.Background())
 	run := newRun(id, s.agent, ctx, cancel)
@@ -282,13 +453,47 @@ func (s *Server) startRun(sessionID, prompt string) (*Run, string) {
 	if sid == "" {
 		sid = newSessionID()
 	}
+	if workspace == "" {
+		workspace = s.workdir
+	}
 	history := s.sessions.load(sid)
 
 	s.log.Info().Str("run", id).Str("session", sid).Msg("run started")
-	run.start(append(history, messages.Human(prompt)), func(final []messages.Message) {
-		_ = s.sessions.save(sid, stripSystem(final))
+	s.refreshDebugLog()
+	if obs := s.agent.Obs(); obs != nil {
+		s.agent.SetObsRun(workspace, sid, id)
+		obs.Log("info", "run_start", map[string]any{
+			"prompt": previewForLog(human.Content),
+		})
+	}
+	run.start(append(history, human), func(final []messages.Message) {
+		_ = s.sessions.save(sid, stripSystem(final), workspace)
+		s.logObsRunEnd(sid, id, final)
 	})
 	return run, sid
+}
+
+// logObsRunEnd records the run's completion and persists the message-level
+// dump (full transcript + state summary) for observability.
+func (s *Server) logObsRunEnd(sid, runID string, final []messages.Message) {
+	obs := s.agent.Obs()
+	if obs == nil {
+		return
+	}
+	obs.Log("info", "run_end", map[string]any{"messages": len(final)})
+	obs.DumpMessages(final, map[string]any{
+		"sessions_dir": s.sessions.dir,
+		"workdir":      s.workdir,
+	})
+}
+
+// previewForLog bounds a prompt preview in observability events.
+func previewForLog(s string) string {
+	r := []rune(s)
+	if len(r) > 200 {
+		return string(r[:200]) + "…"
+	}
+	return s
 }
 
 // newSessionID returns a unique, restart-safe session identifier.

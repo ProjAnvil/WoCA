@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 const defaultRecursionLimit = 25
@@ -12,6 +13,8 @@ const defaultRecursionLimit = 25
 type compileConfig struct {
 	recursionLimit int
 	checkpointer   Checkpointer
+	obsName        string
+	observer       Observer
 }
 
 // CompileOption configures compilation.
@@ -20,6 +23,12 @@ type CompileOption func(*compileConfig)
 // WithRecursionLimit caps the number of node dispatches per run.
 func WithRecursionLimit(limit int) CompileOption {
 	return func(c *compileConfig) { c.recursionLimit = limit }
+}
+
+// WithObserver installs a per-dispatch observer under a graph name (used by
+// the harness observability log).
+func WithObserver(name string, o Observer) CompileOption {
+	return func(c *compileConfig) { c.obsName, c.observer = name, o }
 }
 
 // WithCheckpointer installs a checkpointer for interrupt/resume persistence.
@@ -68,6 +77,8 @@ type CompiledGraph struct {
 
 	recursionLimit int
 	checkpointer   Checkpointer
+	obsName        string
+	observer       Observer
 }
 
 // Step is one unit of streamed progress. Node identifies the node that just
@@ -176,7 +187,30 @@ func (g *CompiledGraph) runInternal(ctx context.Context, input State, opts runOp
 			opts.resumeNode = ""
 		}
 
+		if g.observer != nil {
+			g.observer.ObserveNode(NodeEvent{Graph: g.obsName, Node: node, Phase: PhaseStart, Values: state})
+		}
+		start := time.Now()
 		out, err := g.dispatch(runCtx, node, state, emit)
+		if g.observer != nil {
+			phase, errText := PhaseEnd, ""
+			if err != nil {
+				errText = err.Error()
+				if _, isInterrupt := AsInterrupt(err); isInterrupt {
+					phase = PhaseInterrupt
+				} else {
+					phase = PhaseError
+				}
+			}
+			g.observer.ObserveNode(NodeEvent{
+				Graph:      g.obsName,
+				Node:       node,
+				Phase:      phase,
+				DurationMS: float64(time.Since(start).Nanoseconds()) / 1e6,
+				Err:        errText,
+				Update:     out,
+			})
+		}
 		if err != nil {
 			var ie *InterruptError
 			if errors.As(err, &ie) {

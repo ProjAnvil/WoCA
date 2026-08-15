@@ -103,6 +103,14 @@ type EnvInfo struct {
 // Build assembles the full system prompt, including project memory files and
 // environment info.
 func Build(workDir, extra, model string) string {
+	return BuildWithStyle(workDir, extra, model, "")
+}
+
+// BuildWithStyle assembles the system prompt with an output style appended
+// (see Styles; "" is the default style). Memory-file and environment segments
+// are served from the segment cache, so rebuilds are byte-identical while
+// their inputs are unchanged.
+func BuildWithStyle(workDir, extra, model, style string) string {
 	var b strings.Builder
 	b.WriteString(intro)
 	b.WriteString("\n\n")
@@ -121,19 +129,9 @@ func Build(workDir, extra, model string) string {
 	b.WriteString(sessionGuidance)
 
 	for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
-		path := filepath.Join(workDir, name)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
+		if section, ok := memoryFileSection(workDir, name); ok {
+			b.WriteString(section)
 		}
-		content := strings.TrimSpace(string(data))
-		if content == "" {
-			continue
-		}
-		b.WriteString("\n\n# Project instructions (")
-		b.WriteString(name)
-		b.WriteString(")\n\n")
-		b.WriteString(content)
 	}
 
 	b.WriteString("\n\n# Environment\n\n")
@@ -154,6 +152,11 @@ func Build(workDir, extra, model string) string {
 		b.WriteString("\nYou are powered by the model ")
 		b.WriteString(model)
 		b.WriteString(".")
+	}
+
+	if st, ok := FindStyle(style); ok && st.Text != "" {
+		b.WriteString("\n\n")
+		b.WriteString(st.Text)
 	}
 
 	if extra != "" {
