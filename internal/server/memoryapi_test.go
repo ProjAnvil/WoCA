@@ -20,9 +20,25 @@ type fakeMemEngine struct {
 	remembered []string
 	listed     []memory.Hit
 	forgotten  []string
+	drop       bool // Remember returns ("", nil): the attention gate dropped it
+
+	lastRecall struct {
+		query string
+		ws    string
+		topK  int
+	}
+	lastList struct {
+		ws     string
+		layer  string
+		limit  int
+		offset int
+	}
 }
 
 func (f *fakeMemEngine) Recall(ctx context.Context, q, ws string, k int) ([]memory.Hit, error) {
+	f.mu.Lock()
+	f.lastRecall.query, f.lastRecall.ws, f.lastRecall.topK = q, ws, k
+	f.mu.Unlock()
 	return f.hits, nil
 }
 func (f *fakeMemEngine) SearchCode(ctx context.Context, q, ws string, k int) ([]memory.Hit, error) {
@@ -31,12 +47,28 @@ func (f *fakeMemEngine) SearchCode(ctx context.Context, q, ws string, k int) ([]
 func (f *fakeMemEngine) Remember(ctx context.Context, ws, c string, tags []string, src string) (string, error) {
 	f.mu.Lock(); defer f.mu.Unlock()
 	f.remembered = append(f.remembered, ws+"|"+src+"|"+c)
+	if f.drop {
+		return "", nil
+	}
 	return "srv-1", nil
 }
 func (f *fakeMemEngine) RecordEvent(ctx context.Context, ws, a, act, obs, o string) error { return nil }
 func (f *fakeMemEngine) List(ctx context.Context, ws, layer string, limit, off int) ([]memory.Hit, error) {
 	f.mu.Lock(); defer f.mu.Unlock()
+	f.lastList.ws, f.lastList.layer, f.lastList.limit, f.lastList.offset = ws, layer, limit, off
 	return f.listed, nil
+}
+
+// recordedRecall returns the last Recall call's arguments.
+func (f *fakeMemEngine) recordedRecall() (query, ws string, topK int) {
+	f.mu.Lock(); defer f.mu.Unlock()
+	return f.lastRecall.query, f.lastRecall.ws, f.lastRecall.topK
+}
+
+// recordedList returns the last List call's arguments.
+func (f *fakeMemEngine) recordedList() (ws, layer string, limit, offset int) {
+	f.mu.Lock(); defer f.mu.Unlock()
+	return f.lastList.ws, f.lastList.layer, f.lastList.limit, f.lastList.offset
 }
 func (f *fakeMemEngine) Forget(ctx context.Context, id string) error {
 	f.mu.Lock(); defer f.mu.Unlock()
@@ -62,10 +94,11 @@ func newMemoryTestServer(t *testing.T, eng memory.Engine) *httptest.Server {
 }
 
 func TestMemoryListAndSearch(t *testing.T) {
-	srv := newMemoryTestServer(t, &fakeMemEngine{
-		hits:   []memory.Hit{{ID: "m1", Layer: "L2_semantic", Type: "fact", Summary: "JWT", UpdatedAt: 1}},
-		listed: []memory.Hit{{ID: "m1", Layer: "L2_semantic", Type: "fact", Summary: "JWT", UpdatedAt: 1}},
-	})
+	f := &fakeMemEngine{
+		hits:   []memory.Hit{{ID: "recall-1", Layer: "L2_semantic", Type: "fact", Summary: "JWT auth flow", UpdatedAt: 1}},
+		listed: []memory.Hit{{ID: "list-1", Layer: "L2_semantic", Type: "fact", Summary: "prefers tabs", UpdatedAt: 1}},
+	}
+	srv := newMemoryTestServer(t, f)
 	// no q -> List
 	resp, err := http.Get(srv.URL + "/api/memory?workspace=/ws")
 	if err != nil {
@@ -80,10 +113,10 @@ func TestMemoryListAndSearch(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body.Engine != "ladym" || len(body.Items) != 1 || body.Items[0].ID != "m1" || body.Total != 1 {
+	if body.Engine != "ladym" || len(body.Items) != 1 || body.Items[0].ID != "list-1" || body.Total != 1 {
 		t.Fatalf("list body = %+v", body)
 	}
-	// with q -> Recall
+	// with q -> Recall (a DIFFERENT item than List returned)
 	resp2, err := http.Get(srv.URL + "/api/memory?workspace=/ws&q=auth")
 	if err != nil {
 		t.Fatal(err)
@@ -95,8 +128,11 @@ func TestMemoryListAndSearch(t *testing.T) {
 	if err := json.NewDecoder(resp2.Body).Decode(&b2); err != nil {
 		t.Fatal(err)
 	}
-	if len(b2.Items) != 1 {
+	if len(b2.Items) != 1 || b2.Items[0].ID != "recall-1" {
 		t.Fatalf("search body = %+v", b2)
+	}
+	if q, ws, k := f.recordedRecall(); q != "auth" || ws != "/ws" || k != 20 {
+		t.Fatalf("recorded recall = q %q ws %q topK %d", q, ws, k)
 	}
 }
 
@@ -199,7 +235,12 @@ func TestMemoryDefaultsWorkspaceAndLimits(t *testing.T) {
 	if len(body.Items) != 1 {
 		t.Fatalf("expected default-workspace list, got %+v", body)
 	}
-	// bad limit clamps
+	// Missing workspace falls back to the server workdir; missing limit
+	// defaults to 20.
+	if ws, _, limit, _ := f.recordedList(); ws != "/ws/default" || limit != 20 {
+		t.Fatalf("default list call = ws %q limit %d, want /ws/default 20", ws, limit)
+	}
+	// bad limit clamps back to 20 (workspace still defaults to workdir)
 	resp2, err := http.Get(srv.URL + "/api/memory?limit=9999")
 	if err != nil {
 		t.Fatal(err)
@@ -207,5 +248,50 @@ func TestMemoryDefaultsWorkspaceAndLimits(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("clamped limit status = %d", resp2.StatusCode)
+	}
+	if ws, _, limit, _ := f.recordedList(); ws != "/ws/default" || limit != 20 {
+		t.Fatalf("clamped list call = ws %q limit %d, want /ws/default 20", ws, limit)
+	}
+}
+
+func TestMemoryRememberGateDrop(t *testing.T) {
+	f := &fakeMemEngine{drop: true}
+	srv := newMemoryTestServer(t, f)
+	resp, err := http.Post(srv.URL+"/api/memory", "application/json",
+		strings.NewReader(`{"workspace":"/ws","content":"recent duplicate"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var created struct {
+		ID      string `json:"id"`
+		Dropped bool   `json:"dropped"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.ID != "" || !created.Dropped {
+		t.Fatalf("gate drop = %+v, want empty id + dropped=true", created)
+	}
+	// The engine was still consulted (and recorded the attempt).
+	if len(f.remembered) != 1 || f.remembered[0] != "/ws|woca:panel|recent duplicate" {
+		t.Fatalf("remembered = %v", f.remembered)
+	}
+}
+
+func TestMemoryRememberBodyCap(t *testing.T) {
+	f := &fakeMemEngine{}
+	srv := newMemoryTestServer(t, f)
+	big := `{"content":"` + strings.Repeat("a", 1<<20+8) + `"}`
+	resp, err := http.Post(srv.URL+"/api/memory", "application/json", strings.NewReader(big))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized body status = %d, want 400", resp.StatusCode)
+	}
+	if len(f.remembered) != 0 {
+		t.Fatalf("oversized body must not reach the engine: %v", f.remembered)
 	}
 }

@@ -98,6 +98,8 @@ func (s *Server) handleRememberMemory(w http.ResponseWriter, r *http.Request) {
 		Content   string   `json:"content"`
 		Tags      []string `json:"tags"`
 	}
+	// Facts are short; cap the body at 1MiB to keep a runaway client honest.
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
