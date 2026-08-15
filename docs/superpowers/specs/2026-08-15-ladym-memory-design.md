@@ -164,8 +164,8 @@ flowchart TB
 
 单一 choke point：`internal/runner/runner.go` 的 Done 步（web 与 TUI 都经 runner 驱动；subagent 走 `Invoke/Stream` 不经 runner，天然不触发）。条件：engine 非 nil && settings `ladym-autoretain`（默认 true）&& 最终 AI 文本非空。
 
-1. `engine.Remember(ws, "Q: {首条 human}\nA: {最终 AI}", tags=["woca","auto"], metadata={session_id, workspace}, source="woca:auto")` → LadyM attention gate 自动去噪去重（dedup 窗口 1h）。
-2. `engine.RecordEvent(agent="woca", action="run", observation={首条 human 截 500 字}, outcome="success"|"error")` → L1 episodic，喂 consolidate/L3/L5/L6。
+1. `engine.Remember(ws, "Q: {本 run 的请求}\nA: {最终 AI}", tags=["woca","auto"], metadata={session_id, workspace}, source="woca:auto")` → LadyM attention gate 自动去噪去重（dedup 窗口 1h）。注：runner 入参 history 是整个会话历史，Q 取**最后一条非合成 human 消息**（跳过 `<relevant-memory>`/`<queued-user-input`/`<stop-hook>`/`<task-fork>` 包装），即本 run 的真实请求。
+2. `engine.RecordEvent(agent="woca", action="run", observation={请求截 500 字}, outcome="success"|"cancelled"|"error")` → L1 episodic，喂 consolidate/L3/L5/L6。`context.Canceled` 记为 "cancelled"（与 web 侧 cancelled 语义对齐），不混入 error。
 
 ### 4.4 工具面（internal/agent/memorytools.go，新文件）
 
