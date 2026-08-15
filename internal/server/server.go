@@ -151,6 +151,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/completions", s.handleCompletions)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handleUpdateSettings)
+	mux.HandleFunc("GET /api/memory", s.handleListMemory)
+	mux.HandleFunc("GET /api/memory/stats", s.handleMemoryStats)
+	mux.HandleFunc("POST /api/memory", s.handleRememberMemory)
+	mux.HandleFunc("DELETE /api/memory/{id}", s.handleForgetMemory)
 	mux.Handle("/", s.staticHandler())
 	return mux
 }
