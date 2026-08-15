@@ -91,7 +91,7 @@ woca 的 `interrupt.go` 提供 human-in-the-loop：Interrupt 值经 context 注�
 | 设置文件 | `~/.claude/settings.json` 分层合并（user/project/managed） | `~/.woca/settings.json` 仅承载 hooks + 权限规则 |
 | Provider 配置 | OAuth + apiKey helper + 设置内 model/provider | 仅 CLI flags + 环境变量（`resolveKey`/`resolveBaseURL`，`main.go:590-640`），**无持久化 provider 配置** |
 | 密钥存储 | 系统钥匙串/keychain | `~/.woca/credentials.json` **明文**（0600） |
-| memoryStore | 完整记忆系统（prefetch + attachments + extractMemories） | **无** |
+| memoryStore | 完整记忆系统（prefetch + attachments + extractMemories） | 已对齐——ladyM 记忆引擎 auto-retain/prefetch/工具面（见 [docs/superpowers/specs/2026-08-15-ladym-memory-design.md](superpowers/specs/2026-08-15-ladym-memory-design.md)） |
 | TUI 设置界面 | `/config` 完整设置 UI | `/config` 是 `/status` 别名（只读） |
 | WebUI 设置界面 | — | SettingsPanel 纯前端 localStorage，无后端 API |
 
