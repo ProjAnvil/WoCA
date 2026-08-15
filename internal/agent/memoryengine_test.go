@@ -155,7 +155,39 @@ func TestEngineRecallErrorSkipsSilently(t *testing.T) {
 	a := &Agent{memEngine: f, workdir: "/ws"}
 	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("q")})
 	time.Sleep(150 * time.Millisecond)
+	if recalls := f.recordedRecalls(); len(recalls) != 1 {
+		t.Fatalf("error path should have executed exactly one Recall, got %v", recalls)
+	}
 	if got := a.takeMemoryAttachments(); len(got) != 0 {
 		t.Fatalf("error path should produce no attachments: %v", got)
+	}
+}
+
+func TestClampUTF8(t *testing.T) {
+	cases := []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"", 10, ""},                     // empty
+		{"short", 10, "short"},           // under the limit
+		{"exactly10!", 10, "exactly10!"}, // at the limit
+		{"0123456789abcdef", 10, "0123456789"},
+		{"aut-aut-aut-aut", 4, "aut-"}, // ASCII boundary
+		{"中文记忆引擎", 9, "中文记"},           // 3-byte runes, n=9 is a boundary
+		{"中文记忆引擎", 8, "中文"},            // n=8 splits a rune: back off to 6
+		{"中文记忆引擎", 7, "中文"},            // back off to 6
+		{"中文记忆引擎", 2, ""},              // backs off to empty
+		{"中文记忆引擎", 1, ""},              // no complete rune fits
+		{"中a中a中a", 5, "中a"},            // mixed widths
+		{"anything", -1, ""},           // negative n
+	}
+	for _, c := range cases {
+		if got := clampUTF8(c.in, c.n); got != c.want {
+			t.Errorf("clampUTF8(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
+		}
+		if n := len(c.want); n > max(c.n, 0) {
+			t.Errorf("clampUTF8(%q, %d) exceeded n", c.in, c.n)
+		}
 	}
 }

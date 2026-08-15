@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
@@ -128,7 +129,7 @@ func (a *Agent) takeMemoryAttachments() []messages.Message {
 			continue
 		}
 		if len(content) > 2000 {
-			content = content[:2000] + "…"
+			content = clampUTF8(content, 2000) + "…"
 		}
 		line := fmt.Sprintf("[%s|%s|%.2f] %s", h.Layer, h.Type, h.Score, summary)
 		if content != "" && content != summary {
@@ -151,7 +152,7 @@ func (a *Agent) takeMemoryAttachments() []messages.Message {
 			continue
 		}
 		if len(value) > 2000 {
-			value = value[:2000] + "…"
+			value = clampUTF8(value, 2000) + "…"
 		}
 		out = append(out, messages.Human(
 			"<relevant-memory>\n"+id+"\n"+value+"\n</relevant-memory>"))
@@ -178,10 +179,22 @@ func lastHumanQuery(msgs []messages.Message) string {
 			break
 		}
 	}
-	if len(last) > 2000 {
-		last = last[:2000]
+	return strings.TrimSpace(clampUTF8(last, 2000))
+}
+
+// clampUTF8 truncates s to at most n bytes, backing off to a rune boundary
+// so a multi-byte character is never split. n < 0 yields "".
+func clampUTF8(s string, n int) string {
+	if n < 0 {
+		return ""
 	}
-	return strings.TrimSpace(last)
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // trimJSONString unwraps a JSON-encoded string value ("\"text\"") when
