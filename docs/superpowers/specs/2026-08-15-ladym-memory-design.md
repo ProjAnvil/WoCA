@@ -115,17 +115,45 @@ internal/agent
 |---|---|---|
 | 存储 | **项目级**（整个 woca 进程一份） | 单一 `~/.woca/ladym.db`，所有 workspace 共库，workspace 仅为 memories 行级隔离字段（§3） |
 | 引擎 | **项目级**（进程内单例） | prefetch / auto-retain / 4 工具 / web API 共用一个 `*engine.Engine`，每次调用传 workspace 参数；并发 run 共享（engine 自带 mutex，§2） |
-| System 2 整理（consolidate → proceduralize → L5/L6 → decay） | **workspace 级** | LadyM 的 `RunSystem2Cycle(eng, ws)` 整链按单 workspace 执行，且自带 episode 门槛（近期 episode < `MinEpisodesToRun`=3 时整周期跳过，operations/system2.go:38-42）；woca 以 workspace 为单位独立节流触发 |
+| System 2 整理（consolidate → proceduralize → L5/L6 → decay） | **workspace 级** | LadyM 的 `RunSystem2Cycle(eng, ws)` 整链按单 workspace 执行，其中 L5/L6 两步自带 episode 门槛（近期 episode < `MinEpisodesToRun`=3 时仅跳过 L5/L6、consolidate/proceduralize/decay 照常，operations/system2.go:38-52）；woca 以 workspace 为单位独立节流触发 |
 
 **触发模式：机会主义 post-run 触发，无常驻 daemon。**
 
 - 挂点复用 auto-retain 的 runner Done choke point（§4.3）：run 完成后，若 settings `ladym-system2=true` 且该 workspace 距上次周期 ≥ `ladym-system2-interval`（默认 300s，进程内 per-workspace 时间戳节流），起 goroutine 调 `operations.RunSystem2Cycle(eng, ws)`。
-- 为什么不用 LadyM 原生 `StartSystem2` 常驻 daemon（备选记录见 §14）：它是 per-workspace daemon 且自开独立 worker 引擎——woca 单进程多 workspace 需要维护 stop-channel 注册表并与 §5.4 的引擎重建（60s 延迟关闭）做生命周期联动；300s 间隔 daemon 在 TUI 短命进程里几乎永远不触发；而周期自带 episode 门槛，"有新原料才整理"与 post-run 时机天然对齐（没有新 episode 时周期只是一次 count 查询，几乎零成本）。
+- 为什么不用 LadyM 原生 `StartSystem2` 常驻 daemon（备选记录见 §14）：它是 per-workspace daemon 且自开独立 worker 引擎——woca 单进程多 workspace 需要维护 stop-channel 注册表并与 §5.4 的引擎重建（60s 延迟关闭）做生命周期联动；300s 间隔 daemon 在 TUI 短命进程里几乎永远不触发；而周期自带原料门槛（consolidate 的 `MinEpisodesToTrigger`、L5/L6 的 `MinEpisodesToRun`），"有新原料才整理"与 post-run 时机天然对齐（无新原料时各步近乎空转）。
 - 进程退出兜底：TUI 的 fire-and-forget 周期可能被退出截断——可接受，consolidate/decay 幂等，下次 run 补跑；web 长驻进程可靠。
 - 手动触发：`/memory consolidate`（§8）同步跑一次当前 workspace 周期并输出报告。
 - 失败处理：周期单项失败记日志即可，不影响 run 与引擎；无常驻故无需熔断（下个触发点自然重试）。
 - LLM 成本：`ladym-llm=inherit` 时每个实际执行的周期含模型调用（consolidate 的 ADD/UPDATE/DELETE/NOOP 判定、L5/L6 提取）；默认 `ladym-system2=false` = 零后台用量，开启即知情选择；`ladym-llm=none` 时 L5/L6 自动跳过（LadyM skip-when-no-LLM 契约）。
 - decay：包含在周期链内（`RunSystem2Cycle` 末步），不单独设触发器与设置项。
+
+### 4.6 L5 洞察与 L6 预判：后台如何产生、如何被消费
+
+System 2 周期链中 L5/L6 是仅有的两个**需要 LLM** 且**需要 episode 原料门槛**的步骤（门槛见 §4.5 表）。
+
+**L5 洞察（mental model，"woca 对这个工作区的理解"）**
+
+- 输入：workspace 内 L2 的 fact/note + L3 的 playbook/snippet（`abstractable` 白名单，operations/l5.go）。
+- 聚类：按 embedding 余弦相似度 ≥ `L5ClusterSimilarity`（0.65）做连通分量聚类；簇内"未被现有 L5 覆盖"的成员 ≥ `L5MinClusterSize`（3）才处理。
+- 抽象：LLM 把每簇抽象为**一条**高阶模型 `{"title"（≤8 词）, "model"（1-3 句）}`，存为 L5 记忆；同时建 L4 `abstracts` 边指向各成员——下轮已覆盖成员自动跳过（增量，不重复花钱）。
+- 合并：既有 L5 之间相似度 ≥ `L5MergeSimilarity`（0.80）时，每 `L5MergeEveryNCycles`（5）轮合并一次（报告 NewModels/MergedModels）。
+- 演化：新旧模型走 supersedes 链，旧模型**退役不删除**（IsRetired 过滤，时间有效性语义）。
+- 语义示例：三条"用 Makefile 管理 build""前端用 npm scripts""CI 里调 make" → L5「该项目用 Makefile 作为统一构建入口」。
+
+**L6 预判（forward intent，"woca 预判你接下来要做什么"）**
+
+- 输入：水位线 `l6_last_episode_ts` 之后的**新** L1 episode（上限 `L6MaxEpisodes`=50）——增量消费，不重复处理。
+- 预测：LLM 产出 1-5 个 `{intent（具体下一步）, confidence(0-1), horizon_s（有效秒数，默认 `L6HorizonS`=3 天）}`，存为 L6 记忆。
+- 过期：每周期先做过期清扫，TTL 到期的预判退役（ExpiredRetired）。
+- 语义示例：episode 流"改了 auth middleware → 跑了测试 → 测试红" → 预判「修复失败的测试用例（0.8）」。
+
+**消费路径（关键设计事实）**：recall 的 `layers` 参数为 nil 时**不过滤层**（operations/recall.go:108，woca 的调用形态）——L5/L6 与 L1-L3 全量参与向量检索与 ACT-R 激活排序。因此：
+
+1. **自动进上下文**：prefetch 注入与 `recall_memory` 工具结果中会出现 `[L5|mental_model|0.81] 项目用 Makefile 统一构建` 这样的条目——洞察/预判无需专门机制即进入对话。
+2. **面板可见**：`GET /api/memory?layer=L5_mental`（§7）按层拉取，MemoryPanel 独立呈现（§9.4）。
+3. **不主动 push**：L6 预判只在面板展示与 recall 命中时出现，不做输入区提示条/弹窗——避免打扰，也收窄 prompt 注入面。
+
+**成本模型**：L5 = 每个新簇 1 次 LLM 调用；L6 = 每周期 1 次；全部只发生在 `ladym-system2=true` 且周期通过门槛时。
 
 ## 5. 设置模型与实时生效（D7）
 
@@ -193,14 +221,14 @@ woca 构造 LadyM Config 时恒置 `EmbeddingAllowDimChange=true`：引擎打开
 
 | Endpoint | 行为 |
 |---|---|
-| `GET /api/memory?workspace=&q=&limit=&offset=` | 有 `q` → `Recall`；无 → `List`（按 updated_at 倒序分页）。返回 `{items:[{id,layer,type,summary,content,source,tags,updated_at,score?}], total}` |
+| `GET /api/memory?workspace=&q=&limit=&offset=&layer=` | 有 `q` → `Recall`；无 → `List`（按 updated_at 倒序分页；`layer` 可选过滤，如 `L5_mental`/`L6_predictive`，供面板分栏）。返回 `{items:[{id,layer,type,summary,content,source,tags,updated_at,score?}], total}` |
 | `POST /api/memory` `{workspace, content, tags[]}` | `Remember(source="woca:panel")` → `{id}` |
 | `DELETE /api/memory/{id}` | `Forget(id)` → `{ok}` |
 | `GET /api/memory/stats?workspace=` | `{engine:"ladym", total, layers:{L1:n,L2:n,...}, db_path, workspace}` |
 
 engine 为 nil（`memory-engine=none` 或构建失败）时统一返回 `{engine:"none"}` + 空列表，不报错。`workspace` 参数为空时服务端回退 server workdir（与 `startRun` 的缺省规则一致，见 §3）。
 
-**LadyM 侧需新增一个只读 API**（用户同为本仓库作者）：`func (e *Engine) List(workspace string, layer *Layer, limit, offset int) ([]schema.Memory, error)`（ordered by updated_at desc），随 v0.3.1 tag 发布；woca 依赖锚定 `v0.3.1`。
+**LadyM 侧需新增一个只读 API**（用户同为本仓库作者）：`func (e *Engine) List(workspace string, layer *Layer, limit, offset int) ([]schema.Memory, error)`（ordered by updated_at desc，**排除 retired**——供面板过滤过期预判/退役模型），随 v0.3.1 tag 发布；woca 依赖锚定 `v0.3.1`。
 
 ## 8. TUI / REPL 命令扩展
 
@@ -245,6 +273,45 @@ engine 禁用时输出 "memory engine disabled (/settings set memory-engine lady
 
 **构建顺序约束**：改前端必须先 `npm run build` 再 `go build`（dist.go 嵌入）。
 
+### 9.4 产品叙事与文案（L1-L6 的用户语言）
+
+**竞品话术参照**（2026-08 调研）：ChatGPT Memory 用 "saved memories" 与 chat history 区分，强调控制感（随时关闭/审查，[官方公告](https://openai.com/index/memory-and-new-controls-for-chatgpt/)）；Cursor 生态的 Cortex 定位 "remember, learn, and build context"（[Cursor 论坛](https://forum.cursor.com/t/cortex-production-ready-memory-for-ai-agents-built-with-cursor/148436)）；AutoGen teachable agent "learns as you use it"。共性三要素：**拟人动词**（记住/学习/更懂你）+ **控制保证**（可看可删可关）+ **安静生长**（不打扰）。woca 照此包装，另加本地优先卖点。
+
+**概念包装**
+
+- 功能名：**「记忆」**（面板「工作区记忆」；设置分区「记忆」；工具名维持 recall_memory/remember_fact 不动——工具是给模型看的，文案是给人看的）。
+- 一句话定位（设置区顶部、面板空态共用）：
+  > **woca 会记住这个工作区的决策、偏好与代码知识——越用越懂你的项目。**
+- 控制文案（面板底部一行小字）：
+  > 所有记忆只保存在本地（~/.woca/ladym.db），随时查看、编辑或删除。
+
+**层的用户命名**（前端一律用产品名，L1-L6 术语只留在 API/日志）：
+
+| 内部层 | 产品名 | 一句话说明（tooltip） | 面板呈现 |
+|---|---|---|---|
+| L1 episodic | 经历 | 每次任务的原始流水，后台整理的原料 | 默认折叠，筛选可见 |
+| L2 semantic（fact/note） | 事实 | 沉淀下来的决策与知识 | 默认列表主体 |
+| L2 semantic（code_*） | 代码索引 | 已建索引的代码符号，供 search_code | 筛选可见 |
+| L3 procedural | 剧本 | 验证过的做法与可复用片段 | 筛选可见 |
+| L5 mental | 洞察 | 从重复模式中提炼的规律——woca 对这个工作区的理解 | **独立分组置顶**，卡片样式区别于普通条目 |
+| L6 predictive | 预判 | 根据最近经历预测的下一步（带置信度与有效期） | 独立分组，卡片带 TTL |
+
+**MemoryPanel 呈现细节**（在 §9.2 基础上叠加）：
+
+- 头部 stats chips 用产品名：`事实 12 · 剧本 2 · 洞察 1 · 预判 3`；chip 即筛选器（点击 = `layer` 过滤）。
+- **洞察卡片（L5）**：title 加粗为卡片标题（「Makefile 是统一构建入口」），model 正文为描述，右上角角标「洞察」+ 更新时间；删除按钮文案「忘记」。
+- **预判卡片（L6）**：intent 正文 + confidence 进度条 + 「约剩 X 天」（horizon 折算，TTL 过期即消失——过期清扫在后台完成，面板查询时过滤 retired）。
+- 空态：`还没有记忆。和 woca 聊几句，它会自动记住重要的东西。`（附上面那句话定位语）
+- 注入反馈：v1 不做"已记住"toast（避免打扰，ChatGPT 式提醒记为 future）；沉淀结果在面板与 stats 可见即闭环。
+- **预判不主动 push**：L6 不做输入区提示条/弹窗——只在面板展示、recall 命中时随 `<relevant-memory>` 进入上下文（§4.6），控制感优先。
+
+**设置区文案**：
+
+- `memory-engine`：**记忆引擎**——"启用 woca 记忆（ladym）。关闭后不再读写记忆。"（选项：启用（默认）/关闭）
+- `ladym-autoretain`：**自动记忆**——"对话结束后自动沉淀值得记住的决策与偏好"
+- `ladym-system2`：**后台整理**——"定期把经历提炼为事实与洞察、预判下一步（消耗少量模型调用）"
+- embedding/llm 分组标题：**模型**——"默认继承上方模型配置；也可单独指定（如用便宜的 embedding 模型）"
+
 ## 10. 错误处理与降级
 
 | 场景 | 行为 |
@@ -274,7 +341,7 @@ LadyM 测试套件 hermetic（hashing embedding 零网络），woca 侧沿用：
 | P0 地基 | go directive 1.25.0→1.26.4；import LadyM（锚 tag）；internal/memory 包（接口/适配器/构建/继承解析/noop）；agent 注入 + prefetch 走 Recall + SetMemoryWorkspace；settings 新键 + 启动构建 + TUI `/settings set` 即时生效；默认 `memory-engine=ladym` | `go test ./...` 过；TUI 两个 run：第二个能召回第一个沉淀的事实 |
 | P1 读写闭环 | 4 工具 + subagent 过滤；runner auto-retain；`/memory` 新子命令 + slashcmds 描述 | 集成测试 ①-④ 过 |
 | P2 web 全量 | LadyM `Engine.List` + tag v0.3.1；4 个 REST endpoint；PUT 实时 rebuild；SettingsPanel 记忆区；MemoryPanel + title bar 入口（npm run build → go build） | 手动验收清单过 |
-| P3 增值 | `ladym-system2` 机会主义周期（runner Done 触发 `RunSystem2Cycle`，per-workspace 节流，§4.5）+ `ladym-system2-interval` 键；`/memory consolidate`；runTask 完成事件沉淀 | stats 可见 L3/L5 产出；`/memory consolidate` 输出报告 |
+| P3 增值 | `ladym-system2` 机会主义周期（runner Done 触发 `RunSystem2Cycle`，per-workspace 节流，§4.5）；L5/L6 面板呈现（洞察/预判分组卡片 + layer 筛选，§9.4）；`/memory consolidate`；runTask 完成事件沉淀 | stats 与面板可见 L3/L5/L6 产出（llm=none 时 L5/L6 缺席属预期）；`/memory consolidate` 输出报告 |
 
 每阶段独立可交付、可提交。开发期可用 `replace github.com/ProjAnvil/LadyM => ../ladyM` 本地联调（不提交该行，发布前移除）。
 
