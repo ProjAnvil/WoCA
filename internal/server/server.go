@@ -22,6 +22,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
@@ -46,6 +47,12 @@ type Config struct {
 	// Memory is the memoryStore (currently informational; used by future
 	// memory APIs).
 	Memory *store.Store
+	// MemoryEngine is the factual-memory engine backing /api/memory (nil
+	// disables the memory API).
+	MemoryEngine memory.Engine
+	// RebuildMemory rebuilds the memory engine after memory settings changes
+	// submitted through /api/settings (optional).
+	RebuildMemory func() error
 	// RebuildModel rebuilds the agent's chat model after credential changes
 	// submitted through /api/settings (optional).
 	RebuildModel func() error
@@ -57,13 +64,15 @@ type Server struct {
 	static fs.FS
 	log    zerolog.Logger
 
-	mu           sync.Mutex
-	runs         map[string]*Run
-	sessions     *sessionStore
-	workdir      string
-	settings     *settings.Store
-	memory       *store.Store
-	rebuildModel func() error
+	mu            sync.Mutex
+	runs          map[string]*Run
+	sessions      *sessionStore
+	workdir       string
+	settings      *settings.Store
+	memory        *store.Store
+	memEngine     memory.Engine
+	rebuildMemory func() error
+	rebuildModel  func() error
 
 	// goalMu guards goalOwner: the session whose sidecar mirrors the live
 	// goal (so a clear can delete the right file).
@@ -89,15 +98,17 @@ func New(cfg Config) *Server {
 	store := newSessionStore(cfg.SessionDir)
 	store.defaultWorkspace = defaultWorkspace
 	s := &Server{
-		agent:        cfg.Agent,
-		static:       cfg.Static,
-		log:          cfg.Logger,
-		runs:         map[string]*Run{},
-		sessions:     store,
-		workdir:      cfg.WorkDir,
-		settings:     cfg.Settings,
-		memory:       cfg.Memory,
-		rebuildModel: cfg.RebuildModel,
+		agent:         cfg.Agent,
+		static:        cfg.Static,
+		log:           cfg.Logger,
+		runs:          map[string]*Run{},
+		sessions:      store,
+		workdir:       cfg.WorkDir,
+		settings:      cfg.Settings,
+		memory:        cfg.Memory,
+		memEngine:     cfg.MemoryEngine,
+		rebuildMemory: cfg.RebuildMemory,
+		rebuildModel:  cfg.RebuildModel,
 	}
 	if cfg.Agent != nil {
 		// Goal persistence: every live goal change mirrors to the owning

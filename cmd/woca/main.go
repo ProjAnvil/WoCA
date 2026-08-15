@@ -41,6 +41,7 @@ import (
 	"github.com/projanvil/woca/internal/hooks"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/mcp"
+	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/oauth"
 	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/permissions"
@@ -648,13 +649,17 @@ func newConsole(ap *app, log zerolog.Logger) *console.Console {
 		sessionDir = filepath.Join(d, "sessions")
 	}
 	web := webgui.New(server.Config{
-		Agent:      a,
-		Static:     woca.DistFS(),
-		Logger:     log,
-		SessionDir: sessionDir,
-		WorkDir:    cfg.WorkDir,
-		Settings:   ap.settings,
-		Memory:     ap.memory,
+		Agent:        a,
+		Static:       woca.DistFS(),
+		Logger:       log,
+		SessionDir:   sessionDir,
+		WorkDir:      cfg.WorkDir,
+		Settings:     ap.settings,
+		Memory:       ap.memory,
+		MemoryEngine: ap.memEngine,
+		RebuildMemory: func() error {
+			return ap.rebuildMemory()
+		},
 		RebuildModel: func() error {
 			return ap.rebuildModel()
 		},
@@ -717,13 +722,17 @@ func serve(ctx context.Context, opts options, addr string, noBrowser bool) error
 		sessionDir = filepath.Join(d, "sessions")
 	}
 	srv := server.New(server.Config{
-		Agent:      ap.a,
-		Static:     woca.DistFS(),
-		Logger:     log,
-		SessionDir: sessionDir,
-		WorkDir:    ap.cfg.WorkDir,
-		Settings:   ap.settings,
-		Memory:     ap.memory,
+		Agent:        ap.a,
+		Static:       woca.DistFS(),
+		Logger:       log,
+		SessionDir:   sessionDir,
+		WorkDir:      ap.cfg.WorkDir,
+		Settings:     ap.settings,
+		Memory:       ap.memory,
+		MemoryEngine: ap.memEngine,
+		RebuildMemory: func() error {
+			return ap.rebuildMemory()
+		},
 		RebuildModel: func() error {
 			return ap.rebuildModel()
 		},
@@ -760,11 +769,12 @@ func openBrowser(url string) error {
 // startup flags (for re-resolution), the persistent settings store, and the
 // memoryStore.
 type app struct {
-	a        *agent.Agent
-	cfg      config.Config
-	opts     options
-	settings *settings.Store
-	memory   *store.Store
+	a         *agent.Agent
+	cfg       config.Config
+	opts      options
+	settings  *settings.Store
+	memory    *store.Store
+	memEngine memory.Engine
 }
 
 // buildAgent constructs the configured agent (model, prompt, hooks, skills,
@@ -956,6 +966,15 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		}
 	}
 
+	// Factual-memory engine (ladyM): startup build degrades to nil on
+	// failure so the harness always comes up; settings changes rebuild it
+	// live via app.rebuildMemory.
+	memEngine, memErr := buildMemoryEngine(&app{cfg: cfg, settings: st}, dbSettings, model)
+	if memErr != nil {
+		log.Warn().Err(memErr).Msg("memory engine unavailable; continuing without memory")
+		memEngine = nil
+	}
+
 	// Max-output-tokens escalation for the recovery path (Claude Code's
 	// 8k→64k retry): wire the escalator only when the user did not set an
 	// explicit cap, mirroring Claude Code's default-cap condition. BuildModel
@@ -1013,14 +1032,46 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 			return refreshMCPTools(ctx, log, mcpClients)
 		},
 		// Long-term memory attachments: prefetch relevant entries per turn.
-		Memory:   memory,
-		MaxTurns: opts.maxTurns,
-		Obs:      obs,
+		Memory:       memory,
+		MemoryEngine: memEngine,
+		// Live settings for the memory-engine paths (top-k, autoretain…);
+		// Store.Load is nil-safe so a failed settings open keeps working.
+		LoadSettings: st.Load,
+		MaxTurns:     opts.maxTurns,
+		Obs:          obs,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &app{a: a, cfg: cfg, opts: opts, settings: st, memory: memory}, nil
+	a.SetMemoryWorkspace(cfg.WorkDir)
+	return &app{a: a, cfg: cfg, opts: opts, settings: st, memory: memory, memEngine: memEngine}, nil
+}
+
+// buildMemoryEngine constructs the memory engine from current settings.
+// engine=none returns (nil, nil); build failures degrade to nil (logged by
+// the caller) so woca always starts.
+func buildMemoryEngine(ap *app, dbSettings settings.Settings, chatModel language.ChatModel) (memory.Engine, error) {
+	if dbSettings.MemoryEngine == settings.MemoryEngineNone {
+		return nil, nil
+	}
+	dbPath := memory.ExpandHome(dbSettings.LadyMDBPath)
+	if dbPath == "" {
+		dbPath = memory.DefaultDBPath()
+	}
+	in := memory.BuildInput{
+		EngineEnabled:    true,
+		DBPath:           dbPath,
+		DefaultWorkspace: ap.cfg.WorkDir,
+		Embedding:        dbSettings.LadyMEmbedding,
+		EmbeddingModel:   dbSettings.LadyMEmbeddingModel,
+		EmbeddingBaseURL: dbSettings.LadyMEmbeddingBaseURL,
+		EmbeddingAPIKey:  ap.settings.GetSecret(settings.SecretLadyMEmbeddingAPIKey),
+		LLM:              dbSettings.LadyMLLM,
+		ChatModel:        chatModel,
+		OpenAIKey:        ap.settings.GetSecret(settings.SecretOpenAIAPIKey),
+		OpenAIBaseURL:    dbSettings.OpenAIBaseURL,
+	}
+	return memory.Build(in)
 }
 
 // rebuildModel reconstructs the chat model from the current effective
@@ -1049,6 +1100,28 @@ func (ap *app) rebuildModel() error {
 		return err
 	}
 	return ap.a.SetModel(m)
+}
+
+// rebuildMemory reconstructs the memory engine from live settings and swaps
+// it into the agent. The old engine closes after a grace period so
+// in-flight prefetch/tool calls on it degrade to a logged error instead of
+// racing a Close.
+func (ap *app) rebuildMemory() error {
+	dbSettings := ap.settings.Load()
+	eng, err := buildMemoryEngine(ap, dbSettings, ap.a.CurrentModel())
+	if err != nil {
+		return err
+	}
+	old := ap.memEngine
+	ap.memEngine = eng
+	ap.a.SetMemoryEngine(eng)
+	if old != nil {
+		go func() {
+			time.Sleep(60 * time.Second)
+			_ = old.Close()
+		}()
+	}
+	return nil
 }
 
 // submitHooks runs UserPromptSubmit hooks and prepends their feedback.
