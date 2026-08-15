@@ -1,0 +1,6 @@
+/bin/
+*.test
+*.out
+web/node_modules/
+.claude/
+.woca/

@@ -1,0 +1,108 @@
+// Package agents loads custom subagent definitions from markdown files with
+// optional YAML frontmatter, mirroring the skills package's loading style.
+package agents
+
+import (
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// Definition is a custom subagent definition loaded from a markdown file.
+type Definition struct {
+	Name        string
+	Description string
+	Prompt      string   // markdown body used as the subagent's system prompt
+	Tools       []string // allowed tool names; empty = inherit the parent tool set
+}
+
+// Load walks root and loads every *.md file. Each file has optional YAML-style
+// frontmatter between leading "---" lines with keys: name, description, tools
+// (comma-separated). The remaining body is the prompt. The default name is the
+// filename without extension.
+func Load(root string) ([]Definition, error) {
+	var out []Definition
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if path == root {
+				return err // surface a missing/unreadable root
+			}
+			return nil // skip unreadable nested entries
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Ext(d.Name()) != ".md" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		defaultName := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))
+		out = append(out, parseDefinition(defaultName, data))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// Find returns the definition with the given name.
+func Find(list []Definition, name string) (Definition, bool) {
+	for _, d := range list {
+		if d.Name == name {
+			return d, true
+		}
+	}
+	return Definition{}, false
+}
+
+// parseDefinition parses a markdown file with optional YAML frontmatter
+// delimited by leading "---" lines.
+func parseDefinition(defaultName string, data []byte) Definition {
+	text := strings.TrimSpace(string(data))
+	d := Definition{Name: defaultName}
+
+	if strings.HasPrefix(text, "---") {
+		parts := strings.SplitN(text, "---", 3)
+		if len(parts) == 3 {
+			for _, line := range strings.Split(parts[1], "\n") {
+				k, v, ok := strings.Cut(line, ":")
+				if !ok {
+					continue
+				}
+				switch strings.TrimSpace(k) {
+				case "name":
+					d.Name = strings.TrimSpace(v)
+				case "description":
+					d.Description = strings.TrimSpace(v)
+				case "tools":
+					d.Tools = splitTools(v)
+				}
+			}
+			d.Prompt = strings.TrimSpace(parts[2])
+		} else {
+			d.Prompt = text
+		}
+	} else {
+		d.Prompt = text
+	}
+	return d
+}
+
+// splitTools splits a comma-separated tool list, trimming and dropping empty
+// entries.
+func splitTools(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
