@@ -64,6 +64,22 @@ func (f *fakeEngine) Consolidate(ctx context.Context, ws string) (string, error)
 func (f *fakeEngine) Description() string                                        { return "fake" }
 func (f *fakeEngine) Close() error                                               { return nil }
 
+// recordedTopKs returns a copy of the Recall topK arguments (the prefetch
+// goroutine appends concurrently; test goroutines must not read f.topKs
+// directly).
+func (f *fakeEngine) recordedTopKs() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.topKs...)
+}
+
+// recordedRecalls returns a copy of the "workspace|query" Recall records.
+func (f *fakeEngine) recordedRecalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.recalls...)
+}
+
 func TestPrefetchUsesEngineRecall(t *testing.T) {
 	f := &fakeEngine{hits: []memory.Hit{{
 		ID: "h1", Layer: "L2_semantic", Type: "fact",
@@ -90,8 +106,8 @@ func TestPrefetchUsesEngineRecall(t *testing.T) {
 	if !strings.Contains(body, "auth uses JWT") {
 		t.Fatalf("attachment content: %q", body)
 	}
-	if len(f.recalls) != 1 || f.recalls[0] != "/ws/custom|how does auth work?" {
-		t.Fatalf("recalls = %v", f.recalls)
+	if recalls := f.recordedRecalls(); len(recalls) != 1 || recalls[0] != "/ws/custom|how does auth work?" {
+		t.Fatalf("recalls = %v", f.recordedRecalls())
 	}
 	if more := a.takeMemoryAttachments(); len(more) != 0 {
 		t.Fatalf("dedup failed: %v", more)
@@ -111,11 +127,11 @@ func TestPrefetchEngineTopKFromSettings(t *testing.T) {
 	}
 	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("q")})
 	deadline := time.Now().Add(2 * time.Second)
-	for len(f.topKs) == 0 && time.Now().Before(deadline) {
+	for len(f.recordedTopKs()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if len(f.topKs) != 1 || f.topKs[0] != 12 {
-		t.Fatalf("topKs = %v", f.topKs)
+	if topKs := f.recordedTopKs(); len(topKs) != 1 || topKs[0] != 12 {
+		t.Fatalf("topKs = %v", topKs)
 	}
 }
 
