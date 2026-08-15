@@ -22,6 +22,7 @@ type fakeEngine struct {
 	remembered    []string
 	rememberCalls []string // "ws\x00src\x00content" per Remember call
 	events        []string
+	eventWSs      []string // workspace per RecordEvent call (parallel to events)
 	hits          []memory.Hit
 	consolidates  int   // number of Consolidate calls (System 2 cycles)
 	err           bool  // Recall returns an error when set
@@ -59,6 +60,7 @@ func (f *fakeEngine) Remember(ctx context.Context, ws, content string, tags []st
 func (f *fakeEngine) RecordEvent(ctx context.Context, ws, agentName, action, observation, outcome string) error {
 	f.mu.Lock()
 	f.events = append(f.events, agentName+"/"+action+"/"+outcome)
+	f.eventWSs = append(f.eventWSs, ws)
 	f.mu.Unlock()
 	return f.eventErr
 }
@@ -102,6 +104,13 @@ func (f *fakeEngine) recordedRememberCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.rememberCalls...)
+}
+
+// recordedEventWSs returns a copy of the per-RecordEvent workspaces.
+func (f *fakeEngine) recordedEventWSs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.eventWSs...)
 }
 
 // recordedConsolidates returns the number of Consolidate calls (the System 2

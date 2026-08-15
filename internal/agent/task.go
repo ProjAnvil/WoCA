@@ -187,9 +187,10 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 				report = "Error: " + err.Error()
 			}
 			t.setFinal(TaskCompleted, report)
-			// L1 episode for the completed subagent task (background ctx:
-			// runCtx may already be cancelled by TaskStop).
-			a.recordTaskEvent(subagentName(def, args), args.Description, report, err)
+			// L1 episode for the completed subagent task. runCtx may already
+			// be cancelled by TaskStop, but its values (run workspace) are
+			// still readable; the write itself is detached.
+			a.recordTaskEvent(runCtx, subagentName(def, args), args.Description, report, err)
 		}()
 		return coretools.Result{Content: fmt.Sprintf("Started background task %s: %s", t.ID, args.Description)}, nil
 	}
@@ -198,7 +199,7 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 	if err != nil {
 		return coretools.Result{}, err
 	}
-	a.recordTaskEvent(subagentName(def, args), args.Description, report, nil)
+	a.recordTaskEvent(ctx, subagentName(def, args), args.Description, report, nil)
 	return coretools.Result{Content: report}, nil
 }
 

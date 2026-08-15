@@ -30,7 +30,7 @@ func (a *Agent) RetainRun(ctx context.Context, history, final []messages.Message
 	if !auto {
 		return
 	}
-	ws := a.MemoryWorkspace()
+	ws := a.memoryWorkspaceCtx(ctx)
 	question := runQuestion(history)
 	if question == "" {
 		return
@@ -93,7 +93,7 @@ func (a *Agent) RetainGoal(ctx context.Context, objective, status, summary strin
 	if !auto || strings.TrimSpace(objective) == "" {
 		return
 	}
-	ws := a.MemoryWorkspace()
+	ws := a.memoryWorkspaceCtx(ctx)
 	outcome := "success"
 	switch {
 	case runErr != nil:
@@ -116,7 +116,9 @@ func (a *Agent) RetainGoal(ctx context.Context, objective, status, summary strin
 
 // recordTaskEvent logs a completed subagent task as an L1 episode (reads
 // shared, writes governed: subagents report events, not facts). Best-effort.
-func (a *Agent) recordTaskEvent(name, description, report string, taskErr error) {
+// The workspace resolves from the run ctx (values survive cancellation); the
+// write itself runs detached so a TaskStop-cancelled ctx can still record.
+func (a *Agent) recordTaskEvent(ctx context.Context, name, description, report string, taskErr error) {
 	eng := a.MemoryEngine()
 	if eng == nil || a.subagent {
 		return
@@ -127,7 +129,8 @@ func (a *Agent) recordTaskEvent(name, description, report string, taskErr error)
 	}
 	action := clampUTF8("task:"+description, 200)
 	obs := clampUTF8(report, 500)
-	if err := eng.RecordEvent(context.Background(), a.memoryWorkspace(), "subagent:"+name, action, obs, outcome); err != nil && a.obs != nil {
+	ws := a.memoryWorkspaceCtx(ctx)
+	if err := eng.RecordEvent(context.WithoutCancel(ctx), ws, "subagent:"+name, action, obs, outcome); err != nil && a.obs != nil {
 		a.obs.Log("warn", "retain_write_error", map[string]any{"op": "task_event", "error": err.Error()})
 	}
 }

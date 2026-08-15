@@ -457,11 +457,12 @@ func (a *Agent) SetObsRun(workspace, session, run string) {
 	a.obs.SetContext(workspace, name, session, run)
 }
 
-// SetMemoryWorkspace scopes subsequent memory-engine calls to one workspace.
-// The TUI/REPL pins it to the workdir at startup; subagents inherit the
-// parent's value at fork. The web server intentionally does NOT set it
-// per-run: concurrent runs would race on this agent-wide field, so serve
-// mode keeps memory pinned to the startup workdir (spec §4.1 revision).
+// SetMemoryWorkspace scopes memory-engine calls to one workspace for runs
+// without a ctx-scoped value: the TUI/REPL pins it to the workdir at startup
+// and subagents inherit the parent's value at fork. The web server does NOT
+// set it per-run (concurrent runs would race on this agent-wide field);
+// instead each serve-mode run wraps its ctx with WithMemoryWorkspace, which
+// resolution prefers (ctx value → this field → workdir; see memws.go).
 func (a *Agent) SetMemoryWorkspace(ws string) {
 	if ws == "" {
 		return

@@ -177,7 +177,9 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 		workspace = s.workdir
 	}
 	id := fmt.Sprintf("run-%d", atomic.AddInt64(&runSeq, 1))
-	ctx, cancel := context.WithCancel(context.Background())
+	// Same run-scoped memory workspace as startRun: the ctx value feeds
+	// RetainGoal (WithoutCancel preserves it) and the goal graph's prefetch.
+	ctx, cancel := context.WithCancel(agent.WithMemoryWorkspace(context.Background(), workspace))
 	run := newRun(id, a, ctx, cancel)
 
 	s.mu.Lock()

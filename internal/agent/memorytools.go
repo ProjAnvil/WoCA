@@ -42,7 +42,7 @@ func (a *Agent) memoryTools() []coretools.Tool {
 			if e == nil {
 				return coretools.Result{Content: "memory disabled"}, nil
 			}
-			hits, err := e.Recall(ctx, in.Query, a.MemoryWorkspace(), in.TopK)
+			hits, err := e.Recall(ctx, in.Query, a.memoryWorkspaceCtx(ctx), in.TopK)
 			if err != nil {
 				return coretools.Result{}, err
 			}
@@ -62,7 +62,7 @@ func (a *Agent) memoryTools() []coretools.Tool {
 			if e == nil {
 				return coretools.Result{Content: "memory disabled"}, nil
 			}
-			hits, err := e.SearchCode(ctx, in.Query, a.MemoryWorkspace(), in.TopK)
+			hits, err := e.SearchCode(ctx, in.Query, a.memoryWorkspaceCtx(ctx), in.TopK)
 			if err != nil {
 				return coretools.Result{}, err
 			}
@@ -84,7 +84,7 @@ func (a *Agent) memoryTools() []coretools.Tool {
 				if e == nil {
 					return coretools.Result{Content: "memory disabled"}, nil
 				}
-				id, err := e.Remember(ctx, a.MemoryWorkspace(), in.Content, in.Tags, "woca:tool")
+				id, err := e.Remember(ctx, a.memoryWorkspaceCtx(ctx), in.Content, in.Tags, "woca:tool")
 				if err != nil {
 					return coretools.Result{}, err
 				}
@@ -110,7 +110,7 @@ func (a *Agent) memoryTools() []coretools.Tool {
 				if root == "" {
 					root = a.workdir
 				}
-				report, err := e.IndexCode(ctx, root, a.MemoryWorkspace(), in.Force)
+				report, err := e.IndexCode(ctx, root, a.memoryWorkspaceCtx(ctx), in.Force)
 				if err != nil {
 					return coretools.Result{}, err
 				}

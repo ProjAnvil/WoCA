@@ -522,6 +522,53 @@ func TestRunWithImageAttachment(t *testing.T) {
 	}
 }
 
+// TestRunScopesMemoryToSessionWorkspace drives a full run whose session
+// belongs to a non-default workspace and asserts the memory subsystem agrees
+// with the panel: auto-retain writes AND turn prefetch both resolve the
+// request workspace through the run ctx (not the agent-global field).
+func TestRunScopesMemoryToSessionWorkspace(t *testing.T) {
+	f := &fakeMemEngine{}
+	a := newTestAgent(t)
+	a.SetMemoryEngine(f)
+	s := New(Config{Agent: a, Static: fstest.MapFS{}, Logger: zerolog.Nop(), WorkDir: "/ws/server"})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	body := `{"prompt":"how does auth work?","workspace":"/ws/session"}`
+	resp, err := http.Post(ts.URL+"/api/runs", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		RunID     string `json:"run_id"`
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if created.RunID == "" {
+		t.Fatal("no run id")
+	}
+	driveToDone(t, ts.URL, created.RunID)
+
+	// RetainRun completes before the "done" event, so the fact is already in.
+	if len(f.remembered) != 1 || !strings.HasPrefix(f.remembered[0], "/ws/session|woca:auto|") {
+		t.Fatalf("remembered = %v, want the retained fact in /ws/session", f.remembered)
+	}
+	// Prefetch is asynchronous: poll for its Recall to land on the same
+	// workspace the memory panel would query.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ws, _ := f.recordedRecall(); ws == "/ws/session" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, ws, _ := f.recordedRecall()
+	t.Fatalf("prefetch recall workspace = %q, want /ws/session", ws)
+}
+
 func TestHealth(t *testing.T) {
 	s := New(Config{Static: fstest.MapFS{}, Logger: zerolog.Nop()})
 	ts := httptest.NewServer(s.Handler())

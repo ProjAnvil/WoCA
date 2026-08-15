@@ -460,7 +460,14 @@ func (s *Server) refreshDebugLog() {
 // blocks).
 func (s *Server) startRun(sessionID string, human messages.Message, workspace string) (*Run, string) {
 	id := fmt.Sprintf("run-%d", atomic.AddInt64(&runSeq, 1))
-	ctx, cancel := context.WithCancel(context.Background())
+	if workspace == "" {
+		workspace = s.workdir
+	}
+	// Run-scoped memory workspace: a values-only ctx decoration, so prefetch,
+	// memory tools, and auto-retain all resolve the session workspace while
+	// concurrent runs share the agent safely (ctx value > agent field >
+	// workdir; see agent.WithMemoryWorkspace).
+	ctx, cancel := context.WithCancel(agent.WithMemoryWorkspace(context.Background(), workspace))
 	run := newRun(id, s.agent, ctx, cancel)
 
 	s.mu.Lock()
@@ -470,9 +477,6 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 	sid := sessionID
 	if sid == "" {
 		sid = newSessionID()
-	}
-	if workspace == "" {
-		workspace = s.workdir
 	}
 	history := s.sessions.load(sid)
 

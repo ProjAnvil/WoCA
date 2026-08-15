@@ -55,7 +55,7 @@ func (a *Agent) beginMemoryPrefetch(ctx context.Context, msgs []messages.Message
 				topK = k
 			}
 		}
-		ws := a.memoryWorkspace()
+		ws := a.memoryWorkspaceCtx(ctx)
 		go func() {
 			hits, err := eng.Recall(context.WithoutCancel(ctx), query, ws, topK)
 			if err != nil {

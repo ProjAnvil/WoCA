@@ -140,7 +140,7 @@ flowchart TB
 ### 4.1 引擎注入与 per-run workspace
 
 - `agent.Config` 新增 `MemoryEngine memory.Engine`；`Agent` 存私有字段 + mutex（无 setter；热更新走整引擎换指针，见 §5.4）。
-- per-run workspace 沿用 `SetObsRun` 先例：`Agent.SetMemoryWorkspace(ws string)`（mutex 保护）。**实施修订（2026-08-15 验收）**：web `startRun` 最终**未**按 run 调用——并发 run 会争抢 agent 单一字段产生串扰，省略更安全。实际语义：记忆 workspace 固定为启动 workdir（TUI/REPL 正确）；web 非默认 workspace 的 session 中，auto-retain/prefetch 落 workdir，而记忆面板按 session workspace 显式查询——默认用法（workspace == workdir）完全一致，非默认场景的差异记录为后续改进（run 级记忆 workspace 需经 graph state 传递，属设计变更，见 backlog）。
+- per-run workspace 沿用 `SetObsRun` 先例：`Agent.SetMemoryWorkspace(ws string)`（mutex 保护）。**实施修订（2026-08-15，ctx 值方案落地）**：run 级 workspace 改经 context 值传递（`agent.WithMemoryWorkspace(ctx, ws)`，见 `internal/agent/memws.go`），并发 run 下无竞争——resolve 顺序为 **ctx 值 → agent 字段（TUI/REPL 启动 pin、subagent fork 继承）→ workdir**。web `startRun`/`startGoalRun` 在构造 run ctx 时包裹 session workspace（值在 `context.WithoutCancel` 与取消后均存活，runner defer 的 RetainRun、graph 内的 prefetch、记忆工具全部读到同一 workspace）；agent 字段保留为 TUI 回退层，`SetMemoryWorkspace`/`MemoryWorkspace()` 语义不变。serve 模式下 auto-retain/prefetch 与记忆面板（按 session workspace 查询）现在一致。
 - 查询语料：最后一条 Human 消息文本（截 2000 字符），替代现 `memoryTerms` 关键词提取（KV 路径保留原逻辑）。
 
 ### 4.2 读路径（prefetch 替换）
