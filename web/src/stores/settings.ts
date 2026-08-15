@@ -124,7 +124,8 @@ export const useSettingsStore = defineStore('settings', () => {
       ladym_embedding_base_url: ladymEmbeddingBaseURL.value,
       ladym_llm: ladymLLM.value,
       ladym_autoretain: ladymAutoRetain.value,
-      ladym_topk: ladymTopK.value,
+      // 清空输入框会得到 ''/NaN，直接发送会 400 —— 无效值回落到默认 6。
+      ladym_topk: Number.isFinite(ladymTopK.value) && ladymTopK.value >= 1 ? ladymTopK.value : 6,
       ladym_db_path: ladymDBPath.value,
       ladym_system2: ladymSystem2.value,
     }

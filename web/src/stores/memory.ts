@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { forgetMemory, listMemory, memoryStats, rememberMemory } from '../api/client'
-import type { MemoryItem, MemoryStats } from '../types'
+import type { MemoryItem, MemoryStats, RememberResponse } from '../types'
 
 // Workspace-scoped memory panel state. open(ws) fixes the workspace for the
 // panel's lifetime; reopening refreshes it.
@@ -87,11 +87,19 @@ export const useMemoryStore = defineStore('memory', () => {
   }
 
   function hasMore(): boolean {
+    // 搜索模式下后端 Recall 忽略 offset，加载更多会重复追加第一页，因此只在浏览模式分页。
+    if (query.value.trim()) return false
     return items.value.length >= pageSize && items.value.length % pageSize === 0
   }
 
   async function add(content: string, tags: string[] = []): Promise<string> {
-    const res = await rememberMemory({ workspace: workspace.value, content, tags })
+    let res: RememberResponse
+    try {
+      res = await rememberMemory({ workspace: workspace.value, content, tags })
+    } catch (e) {
+      error.value = e instanceof Error ? `记住失败：${e.message}` : '记住失败，请稍后重试'
+      return ''
+    }
     await reload()
     // 注意：必须在 reload() 之后写入 —— reload() 开头会清空 notice，先写会被覆盖。
     if (res.dropped || !res.id) {
@@ -103,7 +111,12 @@ export const useMemoryStore = defineStore('memory', () => {
   }
 
   async function remove(id: string) {
-    await forgetMemory(id)
+    try {
+      await forgetMemory(id)
+    } catch (e) {
+      error.value = e instanceof Error ? `忘记失败：${e.message}` : '忘记失败，请稍后重试'
+      return
+    }
     items.value = items.value.filter((m) => m.id !== id)
     void reload()
   }

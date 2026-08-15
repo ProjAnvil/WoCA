@@ -50,11 +50,8 @@ function fmtTime(ts: number): string {
 
 async function removeItem(m: MemoryItem) {
   if (!window.confirm('忘记这条记忆？')) return
-  try {
-    await memory.remove(m.id)
-  } catch {
-    // remove() 的错误已在 store 中写入 error
-  }
+  // remove() 内部捕获错误并写入 store 的 error，由 mem-error 行展示。
+  await memory.remove(m.id)
 }
 
 async function addMemory() {
@@ -154,7 +151,7 @@ function toggleLayer(layer: string) {
           加载更多
         </button>
 
-        <div class="mem-add">
+        <div v-if="memory.engine !== 'none'" class="mem-add">
           <textarea
             v-model="newContent"
             rows="2"
@@ -168,7 +165,7 @@ function toggleLayer(layer: string) {
           </div>
         </div>
 
-        <p class="mem-privacy">所有记忆只保存在本地（~/.woca/ladym.db），随时查看、编辑或删除。</p>
+        <p class="mem-privacy">所有记忆只保存在本地（~/.woca/ladym.db），随时查看或删除。</p>
       </div>
     </div>
   </div>
