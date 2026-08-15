@@ -250,7 +250,7 @@ System 2 周期链中 L5/L6 是仅有的两个**需要 LLM** 且**需要 episode
 
 ### 5.2 继承解析（internal/memory/resolve.go）
 
-- **embedding `inherit`**：woca 侧有 OpenAI 兼容配置（provider=openai 或 openai-base-url 已设或 openai key 已设）→ `openai` embedding（base-url/key/model 按上表继承链）；否则 → `hashing`（离线确定性，记一条 info 日志说明降级）。
+- **embedding `inherit`**（2026-08-16 修订）：仅当**显式配置了 ladym-embedding-api-key**，或 **openai key 已设且 openai-base-url 未设/指向官方 api.openai.com** 时 → `openai` embedding（base-url/key/model 按上表继承链）；其余情况（含 deepseek 等只有 chat-completions 的 OpenAI 兼容端点——它们的 /embeddings 会 404 并导致引擎构建失败）→ `hashing`（离线确定性）。显式选 `openai` 不受此规则保护，配错会响亮失败。
 - **llm `inherit`**：把 woca 当前活跃模型经 `adapter.WrapChatModel(model, "function_calling")` 注入（consolidate/L5/L6 用；`ModelRouting.Consolidate` 一项即可，LadyM 会为各认知操作复用）；`none` → 纯启发式，L5/L6 自动跳过（LadyM 有 skip-when-no-LLM 契约测试）。
 - 注入用 `ladym.NewEngineWithModels(cfg, &adapter.ModelRouting{Embedding: WrapEmbeddings(...), Consolidate: WrapChatModel(...)})`；inherit 且无可用模型时不注入，落 LadyM 自建 provider。
 

@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -67,9 +68,23 @@ func orDefault(v, def string) string {
 	return v
 }
 
+// officialOpenAI reports whether a base URL points at the official OpenAI
+// API (the only inherited endpoint we can assume serves /embeddings —
+// chat-completions-only OpenAI-compatible servers like deepseek do not).
+func officialOpenAI(baseURL string) bool {
+	u, err := url.Parse(orDefault(baseURL, "https://api.openai.com/v1"))
+	if err != nil {
+		return false
+	}
+	return u.Host == "api.openai.com"
+}
+
 // resolveEmbedding maps settings values to a concrete ladyM embedding
-// provider config: inherit falls back to woca's OpenAI-compatible setup when
-// present, else to the offline hashing provider.
+// provider config. inherit chooses the OpenAI embeddings API only when the
+// inherited endpoint is trustworthy: an explicit embedding key, or woca's
+// OpenAI config pointing at the official api.openai.com. Chat-only
+// OpenAI-compatible providers (deepseek etc.) fall back to the offline
+// hashing provider instead of breaking engine startup with a 404 probe.
 func resolveEmbedding(in BuildInput) (provider, model, baseURL, key string) {
 	switch in.Embedding {
 	case "hashing", "ollama", "http":
@@ -80,7 +95,8 @@ func resolveEmbedding(in BuildInput) (provider, model, baseURL, key string) {
 			orDefault(in.EmbeddingBaseURL, in.OpenAIBaseURL),
 			orDefault(in.EmbeddingAPIKey, in.OpenAIKey)
 	default: // inherit
-		if in.OpenAIKey != "" || in.OpenAIBaseURL != "" || in.EmbeddingAPIKey != "" {
+		if in.EmbeddingAPIKey != "" ||
+			(in.OpenAIKey != "" && officialOpenAI(in.OpenAIBaseURL)) {
 			return "openai",
 				orDefault(in.EmbeddingModel, "text-embedding-3-small"),
 				orDefault(in.EmbeddingBaseURL, in.OpenAIBaseURL),

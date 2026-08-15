@@ -84,21 +84,69 @@ func TestRememberRecallListStatsForget(t *testing.T) {
 }
 
 func TestResolveEmbeddingInherit(t *testing.T) {
+	// inherit + official OpenAI base (or no base = official default) + key → openai
 	p, m, u, k := resolveEmbedding(BuildInput{
-		Embedding: "inherit", OpenAIKey: "sk-1", OpenAIBaseURL: "https://api.example.com",
+		Embedding: "inherit", OpenAIKey: "sk-1", OpenAIBaseURL: "https://api.openai.com/v1",
 	})
-	if p != "openai" || m != "text-embedding-3-small" || u != "https://api.example.com" || k != "sk-1" {
-		t.Fatalf("inherit/openai = %q %q %q %q", p, m, u, k)
+	if p != "openai" || m != "text-embedding-3-small" || u != "https://api.openai.com/v1" || k != "sk-1" {
+		t.Fatalf("inherit/official = %q %q %q %q", p, m, u, k)
 	}
+	p, _, _, k = resolveEmbedding(BuildInput{Embedding: "inherit", OpenAIKey: "sk-1"})
+	if p != "openai" || k != "sk-1" {
+		t.Fatalf("inherit/default-base = %q %q, want openai sk-1", p, k)
+	}
+	// inherit + chat-only OpenAI-compatible endpoint (deepseek et al.) → hashing
+	// (their /embeddings 404s and would break engine startup)
+	p, _, _, _ = resolveEmbedding(BuildInput{
+		Embedding: "inherit", OpenAIKey: "sk-1", OpenAIBaseURL: "https://api.deepseek.com",
+	})
+	if p != "hashing" {
+		t.Fatalf("inherit/chat-only = %q, want hashing", p)
+	}
+	// explicit embedding key overrides the endpoint check (user knows best)
+	p, _, _, k = resolveEmbedding(BuildInput{
+		Embedding: "inherit", OpenAIBaseURL: "https://api.deepseek.com", EmbeddingAPIKey: "sk-embed",
+	})
+	if p != "openai" || k != "sk-embed" {
+		t.Fatalf("inherit/explicit-key = %q %q, want openai sk-embed", p, k)
+	}
+	// inherit with nothing usable → hashing
 	p, _, _, _ = resolveEmbedding(BuildInput{Embedding: "inherit"})
 	if p != "hashing" {
 		t.Fatalf("inherit/none = %q, want hashing", p)
 	}
+	// explicit openai keeps the key-precedence rule
 	_, _, _, k = resolveEmbedding(BuildInput{
 		Embedding: "openai", OpenAIKey: "sk-old", EmbeddingAPIKey: "sk-new",
 	})
 	if k != "sk-new" {
 		t.Fatalf("explicit key should win, got %q", k)
+	}
+}
+
+// TestBuildInheritChatOnlyEndpointFallsBackToHashing reproduces the
+// deepseek-style startup failure: inherit + a chat-completions-only base
+// used to probe the missing /embeddings endpoint and kill the whole engine.
+func TestBuildInheritChatOnlyEndpointFallsBackToHashing(t *testing.T) {
+	eng, err := Build(BuildInput{
+		EngineEnabled:    true,
+		DBPath:           filepath.Join(t.TempDir(), "mem.db"),
+		DefaultWorkspace: "/ws",
+		Embedding:        "inherit",
+		LLM:              "none",
+		OpenAIKey:        "sk-deepseek",
+		OpenAIBaseURL:    "https://api.deepseek.com",
+	})
+	if err != nil {
+		t.Fatalf("Build should fall back to hashing, got: %v", err)
+	}
+	defer eng.Close()
+	if _, err := eng.Remember(context.Background(), "/ws", "auth uses JWT", nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := eng.Recall(context.Background(), "auth", "/ws", 5)
+	if err != nil || len(hits) == 0 {
+		t.Fatalf("hashing engine should work offline: %v %v", hits, err)
 	}
 }
 
