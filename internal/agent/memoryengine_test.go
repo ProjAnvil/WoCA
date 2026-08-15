@@ -16,13 +16,15 @@ import (
 
 // fakeEngine is a minimal memory.Engine for agent-side tests (shared by later tasks).
 type fakeEngine struct {
-	mu         sync.Mutex
-	recalls    []string
-	topKs      []int
-	remembered []string
-	events     []string
-	hits       []memory.Hit
-	err        bool // Recall returns an error when set
+	mu            sync.Mutex
+	recalls       []string
+	topKs         []int
+	remembered    []string
+	rememberCalls []string // "ws\x00src\x00content" per Remember call
+	events        []string
+	hits          []memory.Hit
+	err           bool // Recall returns an error when set
+	drop          bool // Remember returns ("", nil): attention-gate drop
 }
 
 func (f *fakeEngine) Recall(ctx context.Context, query, workspace string, topK int) ([]memory.Hit, error) {
@@ -41,7 +43,11 @@ func (f *fakeEngine) SearchCode(ctx context.Context, q, ws string, k int) ([]mem
 func (f *fakeEngine) Remember(ctx context.Context, ws, content string, tags []string, src string) (string, error) {
 	f.mu.Lock()
 	f.remembered = append(f.remembered, content)
+	f.rememberCalls = append(f.rememberCalls, ws+"\x00"+src+"\x00"+content)
 	f.mu.Unlock()
+	if f.drop {
+		return "", nil // attention gate dropped the content
+	}
 	return "id-1", nil
 }
 func (f *fakeEngine) RecordEvent(ctx context.Context, ws, agentName, action, observation, outcome string) error {
@@ -78,6 +84,13 @@ func (f *fakeEngine) recordedRecalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.recalls...)
+}
+
+// recordedRememberCalls returns a copy of the "ws\x00src\x00content" Remember records.
+func (f *fakeEngine) recordedRememberCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.rememberCalls...)
 }
 
 func TestPrefetchUsesEngineRecall(t *testing.T) {

@@ -1232,6 +1232,17 @@ func toolReason(call messages.ToolCall) string {
 		if p, ok := call.Args["file_path"].(string); ok {
 			return call.Name + " " + p
 		}
+	case "remember_fact":
+		if c, ok := call.Args["content"].(string); ok {
+			return call.Name + ": " + c
+		}
+	case "index_code":
+		root := "(working directory)"
+		if r, ok := call.Args["root"].(string); ok && r != "" {
+			root = r
+		}
+		return "Index source into memory DB: " + root +
+			" (reads source tree; writes only to the memory DB)"
 	}
 	return call.Name
 }

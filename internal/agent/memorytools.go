@@ -49,13 +49,14 @@ func (a *Agent) memoryTools() []coretools.Tool {
 			return coretools.Result{Content: formatMemoryHits(hits)}, nil
 		})
 	if err != nil {
-		return nil
+		panic(err) // static schema reflection; unreachable unless the args struct is invalid
 	}
 	out = append(out, recall)
 
 	search, err := coretools.FromFunc("search_code",
 		"Search indexed source symbols/files. Use for 'how does X work in the codebase' "+
-			"against previously indexed source (index_code).",
+			"against previously indexed source (index_code). \"(no hits)\" usually means the root was "+
+			"never indexed — call index_code first. Prefer Grep for literal searches of the live tree.",
 		func(ctx context.Context, in recallArgs) (coretools.Result, error) {
 			e := a.MemoryEngine()
 			if e == nil {
@@ -68,7 +69,7 @@ func (a *Agent) memoryTools() []coretools.Tool {
 			return coretools.Result{Content: formatMemoryHits(hits)}, nil
 		})
 	if err != nil {
-		return nil
+		panic(err)
 	}
 	out = append(out, search)
 
@@ -76,8 +77,8 @@ func (a *Agent) memoryTools() []coretools.Tool {
 		remember, err := coretools.FromFunc("remember_fact",
 			"Persist a durable fact worth recalling later (user preference, key decision, verified answer). "+
 				"Do NOT store ephemeral/transactional state.\n\n"+
-				"Subject to the attention gate: low-value or duplicate content may be dropped automatically "+
-				"(empty id in the result means dropped).",
+				"Subject to the attention gate: if the result says 'dropped by the attention gate', "+
+				"the content was judged a duplicate or noise — do not retry or rephrase it.",
 			func(ctx context.Context, in rememberArgs) (coretools.Result, error) {
 				e := a.MemoryEngine()
 				if e == nil {
@@ -93,7 +94,7 @@ func (a *Agent) memoryTools() []coretools.Tool {
 				return coretools.Result{Content: fmt.Sprintf("stored id=%s", id)}, nil
 			})
 		if err != nil {
-			return nil
+			panic(err)
 		}
 		out = append(out, remember)
 
@@ -116,7 +117,7 @@ func (a *Agent) memoryTools() []coretools.Tool {
 				return coretools.Result{Content: report}, nil
 			})
 		if err != nil {
-			return nil
+			panic(err)
 		}
 		out = append(out, index)
 	}

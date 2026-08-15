@@ -77,8 +77,11 @@ func TestRememberFactToolUsesWorkspaceAndSource(t *testing.T) {
 	if len(f.remembered) != 1 || f.remembered[0] != "prefers tabs" {
 		t.Fatalf("remembered = %v", f.remembered)
 	}
-	// fakeEngine.Remember does not record ws; assert via Recall channel instead:
-	// call recall_memory and check the workspace reaches the engine.
+	// The engine must see the scoped workspace and the tool's source tag.
+	if calls := f.recordedRememberCalls(); len(calls) != 1 || calls[0] != "/ws/tool\x00woca:tool\x00prefers tabs" {
+		t.Fatalf("rememberCalls = %v", calls)
+	}
+	// recall_memory threads the same workspace.
 	tool2 := toolsByName(a.memoryTools())["recall_memory"]
 	if _, err := tool2.Invoke(context.Background(), map[string]any{"query": "x"}); err != nil {
 		t.Fatal(err)
@@ -86,5 +89,18 @@ func TestRememberFactToolUsesWorkspaceAndSource(t *testing.T) {
 	recalls := f.recordedRecalls()
 	if len(recalls) == 0 || !strings.HasPrefix(recalls[len(recalls)-1], "/ws/tool|") {
 		t.Fatalf("workspace not threaded: %v", recalls)
+	}
+}
+
+func TestRememberFactDroppedByGate(t *testing.T) {
+	f := &fakeEngine{drop: true}
+	a := &Agent{memEngine: f, workdir: "/ws"}
+	tool := toolsByName(a.memoryTools())["remember_fact"]
+	res, err := tool.Invoke(context.Background(), map[string]any{"content": "duplicate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Content, "dropped by the attention gate") {
+		t.Fatalf("result = %q", res.Content)
 	}
 }

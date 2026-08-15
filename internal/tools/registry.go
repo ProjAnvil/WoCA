@@ -61,8 +61,8 @@ var categoryByName = map[string]Category{
 	"LSP":             CatRead,
 	"recall_memory":   CatRead,
 	"search_code":     CatRead,
-	"remember_fact":   CatWrite,
-	"index_code":      CatWrite,
+	"remember_fact":   CatMeta,  // one row into the local memory DB (TodoWrite class)
+	"index_code":      CatWrite, // cost consent gate: walks and indexes a source tree
 }
 
 // CategoryOf returns the permission category of a tool by name. Unknown tools
