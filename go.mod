@@ -9,7 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/muesli/termenv v0.16.0
-	github.com/projanvil/langchain-golang v0.5.0
+	github.com/projanvil/langchain-golang v0.5.1
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/image v0.45.0
