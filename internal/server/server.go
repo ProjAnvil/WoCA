@@ -47,8 +47,11 @@ type Config struct {
 	// Memory is the memoryStore (currently informational; used by future
 	// memory APIs).
 	Memory *store.Store
-	// MemoryEngine is the factual-memory engine backing /api/memory (nil
-	// disables the memory API).
+	// MemoryEngine is the construction-time fallback engine for /api/memory:
+	// handlers resolve the engine live per request via memEngineLive (the
+	// agent's accessor first, which survives live rebuilds), so this field is
+	// only consulted when Agent is nil (tests, embedders). Nil makes the
+	// memory API degrade gracefully to engine "none".
 	MemoryEngine memory.Engine
 	// RebuildMemory rebuilds the memory engine after memory settings changes
 	// submitted through /api/settings (optional).

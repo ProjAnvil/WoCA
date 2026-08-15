@@ -45,6 +45,42 @@ func TestManagedOverridesAndLocks(t *testing.T) {
 	}
 }
 
+func TestManagedMemoryOverlay(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	// User preference first.
+	if err := st.Save(Settings{Model: "user-model", LadyMTopK: 3}); err != nil {
+		t.Fatal(err)
+	}
+	st.SetManaged(Settings{
+		MemoryEngine:   MemoryEngineNone,
+		LadyMTopK:      12,
+		LadyMEmbedding: LadyMEmbeddingHashing,
+	})
+
+	// Reads: managed wins.
+	got := st.Load()
+	if got.MemoryEngine != MemoryEngineNone || got.LadyMTopK != 12 || got.LadyMEmbedding != LadyMEmbeddingHashing {
+		t.Fatalf("load = %+v", got)
+	}
+
+	// Writes to locked memory keys are rejected…
+	if err := st.Save(Settings{MemoryEngine: MemoryEngineLadyM}); err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("memory_engine write should be locked, got %v", err)
+	}
+	if err := st.Save(Settings{LadyMTopK: 8}); err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("ladym_topk write should be locked, got %v", err)
+	}
+	// …but unlocked fields stay writable.
+	if err := st.Save(Settings{Model: "user-model-2"}); err != nil {
+		t.Fatalf("unmanaged field write: %v", err)
+	}
+}
+
 func TestLoadManagedFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "managed.json")
