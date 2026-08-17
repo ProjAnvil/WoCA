@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -75,6 +77,23 @@ func TestLoadSkillsSameDirWocaBeatsClaude(t *testing.T) {
 	}
 }
 
+func TestLoadSkillsNearClaudeBeatsFarWoca(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	deep := filepath.Join(root, "a")
+	writeFileT(t, filepath.Join(root, ".git", ".keep"), "")
+	writeFileT(t, filepath.Join(root, ".woca", "skills", "dup", "SKILL.md"), "FAR WOCA")
+	writeFileT(t, filepath.Join(deep, ".claude", "skills", "dup", "SKILL.md"), "NEAR CLAUDE")
+	merge.ResetWorkspaceCache()
+	t.Cleanup(merge.ResetWorkspaceCache)
+
+	list := loadSkills(deep, zerolog.Nop())
+	if len(list) != 1 || list[0].Body != "NEAR CLAUDE" {
+		t.Fatalf("near .claude must beat far .woca, got %+v", list)
+	}
+}
+
 func TestLoadAgentsLayered(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -102,5 +121,27 @@ func TestLoadAgentsLayered(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "config merge conflict resolved") {
 		t.Fatalf("conflicts not logged: %q", buf.String())
+	}
+}
+
+func TestMergeMCPSpecs(t *testing.T) {
+	var buf bytes.Buffer
+	got := mergeMCPSpecs(
+		[]string{"dup=flag-cmd", "flagonly=flag-cmd", "dup2=flag-a", "dup2=flag-b", "bad-no-eq"},
+		[]string{"dup=ws-cmd", "wsonly=ws-cmd"},
+		[]string{"dup=user-cmd", "useronly=user-cmd"},
+		zerolog.New(&buf),
+	)
+	sort.Strings(got)
+	want := []string{"dup2=flag-a", "dup=flag-cmd", "flagonly=flag-cmd", "useronly=user-cmd", "wsonly=ws-cmd"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	logs := buf.String()
+	if !strings.Contains(logs, "config merge conflict resolved") {
+		t.Fatalf("conflicts not logged: %q", logs)
+	}
+	if !strings.Contains(logs, "invalid mcp spec") {
+		t.Fatalf("invalid spec not warned: %q", logs)
 	}
 }

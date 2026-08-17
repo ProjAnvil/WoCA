@@ -1014,14 +1014,22 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		skillList = append(skillList, pl.Skills...)
 		agentDefs = append(agentDefs, pl.Agents...)
 	}
-	mcpSpecs := append([]string{}, opts.mcpServers...)
+	// MCP servers resolve as three layers: --mcp flags (highest), the
+	// workspace file workDir/.woca/mcp.json (no upward walk, D5), and the
+	// user ~/.woca/mcp.json kept in sync with the Claude Code import
+	// selection. Same-name servers connect once, from the winning layer.
+	var userSpecs []string
 	if specs, err := claudeMCPStartupSpecs(wocaRoot(), dbSettings.ClaudeMCP); err != nil {
 		log.Warn().Err(err).Msg("claude mcp import failed")
 	} else if len(specs) > 0 {
 		log.Info().Strs("servers", specs).Msg("imported claude mcp servers via ~/.woca/mcp.json")
-		mcpSpecs = append(mcpSpecs, specs...)
+		userSpecs = specs
 	}
-	extraTools, mcpClients := connectMCP(ctx, log, mcpSpecs, st)
+	wsSpecs, err := claudeenv.LoadMCPConfig(filepath.Join(workdir, ".woca"))
+	if err != nil {
+		log.Warn().Err(err).Msg("workspace mcp.json unreadable")
+	}
+	extraTools, mcpClients := connectMCP(ctx, log, mergeMCPSpecs(opts.mcpServers, wsSpecs, userSpecs, log), st)
 
 	// Built-in capability plugins (browser via pinchtab, python/pdf via uv):
 	// tools register when enabled in settings; runtimes install on demand
@@ -1757,6 +1765,37 @@ func loadAgents(workdir string, log zerolog.Logger) []agents.Definition {
 	merged, conflicts := merge.Entries(es)
 	logMergeConflicts(log, "agent", conflicts)
 	out := make([]agents.Definition, 0, len(merged))
+	for _, e := range merged {
+		out = append(out, e.Value)
+	}
+	return out
+}
+
+// mergeMCPSpecs deduplicates name=command MCP specs across the three layers:
+// --mcp flags beat workDir/.woca/mcp.json beat ~/.woca/mcp.json (D5/D6).
+// Same-layer duplicates keep the first occurrence; invalid specs are warned
+// and dropped. Connecting the merged list fixes the same-name
+// double-connect bug.
+func mergeMCPSpecs(flag, workspace, user []string, log zerolog.Logger) []string {
+	layer := func(specs []string, lvl merge.Level) []merge.Entry[string] {
+		var es []merge.Entry[string]
+		for i, spec := range specs {
+			name, _, ok := strings.Cut(spec, "=")
+			if !ok || strings.TrimSpace(name) == "" {
+				log.Warn().Str("spec", spec).Str("layer", lvl.String()).Msg("invalid mcp spec, expected name=command")
+				continue
+			}
+			es = append(es, merge.Entry[string]{
+				Name: name, Value: spec, Level: lvl, Order: i,
+				Source: lvl.String(),
+			})
+		}
+		return es
+	}
+	es := append(append(layer(flag, merge.LevelFlag), layer(workspace, merge.LevelWorkspace)...), layer(user, merge.LevelUser)...)
+	merged, conflicts := merge.Entries(es)
+	logMergeConflicts(log, "mcp", conflicts)
+	out := make([]string, 0, len(merged))
 	for _, e := range merged {
 		out = append(out, e.Value)
 	}
