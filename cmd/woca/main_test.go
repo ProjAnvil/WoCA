@@ -1,15 +1,17 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
-	"testing"
-
-	"github.com/rs/zerolog"
-
+	"fmt"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/webgui"
+	"github.com/rs/zerolog"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"testing"
 )
 
 func TestResolveMode(t *testing.T) {
@@ -98,3 +100,30 @@ func TestLoadSkills(t *testing.T) {
 		t.Fatalf("skills = %+v", list)
 	}
 }
+
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "serve" {
+		addr := webgui.DefaultAddr
+		for i := 1; i < len(os.Args)-1; i++ {
+			if os.Args[i] == "--addr" {
+				addr = os.Args[i+1]
+			}
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintln(w, `{"ok":true}`)
+		})
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			os.Exit(1)
+		}
+		_ = (&http.Server{Handler: mux}).Serve(ln)
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+// fakeOpenBinary installs a fake `open` command on PATH that fetches the URL
+// with curl (following redirects), standing in for a browser visit. The
+// WOCA_NO_BROWSER guard is cleared so the guarded openBrowser calls run.

@@ -277,3 +277,12 @@ func TestNewRootCmdPersistentFlags(t *testing.T) {
 		t.Fatalf("persistent flags found = %d", found)
 	}
 }
+
+func TestTuiCmdBuildAgentError(t *testing.T) {
+	isolateEnv(t)
+	// Valid log level but an invalid provider: the command wires the
+	// console, fails building the agent, and returns before the TUI runs.
+	if err := execCmd(t, "tui", "--provider", "nope"); err == nil {
+		t.Fatal("expected buildAgent error")
+	}
+}

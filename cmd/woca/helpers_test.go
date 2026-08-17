@@ -5,23 +5,23 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
-	"github.com/rs/zerolog"
-
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/hooks"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/skills"
 	"github.com/projanvil/woca/internal/tools"
+	"github.com/rs/zerolog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
 )
 
 // isolateEnv points HOME and the woca env overrides at a temp directory so
@@ -491,5 +491,305 @@ func TestLoadAgents(t *testing.T) {
 	list := loadAgents(dir, zerolog.Nop())
 	if len(list) != 1 || list[0].Name != "reviewer" {
 		t.Fatalf("agents = %+v", list)
+	}
+}
+
+func http_Mux(t *testing.T, routes ...string) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	for i := 0; i+1 < len(routes); i += 2 {
+		body := routes[i+1]
+		mux.HandleFunc(routes[i], func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(body, "invalid_grant") {
+				w.WriteHeader(http.StatusBadRequest)
+			}
+			w.Write([]byte(body))
+		})
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// TestRunREPLCommands drives the console command surface through the REPL so
+// the closures wired in newConsole (model factory, quota, thinking, theme,
+// settings rebuilds, memory workspace) execute.
+
+func fakeOpenAIToolFlow(t *testing.T, final string) string {
+	t.Helper()
+	var calls int32
+	srv := newFakeStreamServer(t, func() []map[string]any {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return []map[string]any{{
+				"index": 0,
+				"delta": map[string]any{
+					"role": "assistant",
+					"tool_calls": []map[string]any{{
+						"index": 0,
+						"id":    "call_1",
+						"type":  "function",
+						"function": map[string]any{
+							"name":      "Write",
+							"arguments": `{"file_path":"note.txt","content":"written"}`,
+						},
+					}},
+				},
+				"finish_reason": nil,
+			}, {
+				"index":         0,
+				"delta":         map[string]any{},
+				"finish_reason": "tool_calls",
+			}}
+		}
+		return []map[string]any{{
+			"index":         0,
+			"delta":         map[string]any{"role": "assistant", "content": final},
+			"finish_reason": nil,
+		}, {
+			"index":         0,
+			"delta":         map[string]any{},
+			"finish_reason": "stop",
+		}}
+	})
+	return srv
+}
+
+// newFakeStreamServer starts a chat-completions SSE server driven by a
+// per-request choice producer.
+
+func newFakeStreamServer(t *testing.T, choices func() []map[string]any) string {
+	t.Helper()
+	srv := startHTTPServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, ch := range choices() {
+			chunk := map[string]any{"id": "c1", "object": "chat.completion.chunk", "choices": []map[string]any{ch}}
+			b, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "data: %s\n\n", b)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	})
+	return srv
+}
+
+func startHTTPServer(t *testing.T, h http.HandlerFunc) string {
+	t.Helper()
+	srv := &http.Server{Handler: h}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return "http://" + ln.Addr().String()
+}
+
+// TestRunResumeCheckpointSuccess covers the --resume-checkpoint flow end to
+// end: run one produces a persisted interrupt checkpoint (a Write permission
+// request denied non-interactively), run two resumes it and approves.
+
+func quoteJSONString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func fakeOpenAICustomToolFlow(t *testing.T, tool string, args string, final string) string {
+	t.Helper()
+	var calls int32
+	return newFakeStreamServer(t, func() []map[string]any {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return []map[string]any{{
+				"index": 0,
+				"delta": map[string]any{
+					"role": "assistant",
+					"tool_calls": []map[string]any{{
+						"index": 0, "id": "call_1", "type": "function",
+						"function": map[string]any{"name": tool, "arguments": args},
+					}},
+				},
+				"finish_reason": nil,
+			}, {
+				"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls",
+			}}
+		}
+		return []map[string]any{{
+			"index": 0, "delta": map[string]any{"role": "assistant", "content": final}, "finish_reason": nil,
+		}, {
+			"index": 0, "delta": map[string]any{}, "finish_reason": "stop",
+		}}
+	})
+}
+
+func fakeOpenBinary(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\nexec /usr/bin/curl -s -o /dev/null -L \"$1\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "open"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("WOCA_NO_BROWSER", "")
+}
+
+// fakeAuthServerMux serves the MCP OAuth discovery/register/authorize/token
+// endpoints; the authorize step redirects straight to the callback.
+
+func TestHomeUnsetBranches(t *testing.T) {
+	t.Setenv("HOME", "")
+	if got := wocaRoot(); got != ".woca" {
+		t.Fatalf("wocaRoot = %q", got)
+	}
+	if got := loadOAuthAccessToken(); got != "" {
+		t.Fatalf("loadOAuthAccessToken = %q", got)
+	}
+	if cfg := loadHooksConfig(t.TempDir()); len(cfg.PreToolUse) != 0 {
+		t.Fatal("hooks should be empty without home")
+	}
+	if rules := loadPermissions(t.TempDir()); len(rules.Allow) != 0 {
+		t.Fatal("permissions should be empty without home")
+	}
+	if got := loadSkills(t.TempDir(), zerolog.Nop()); len(got) != 0 {
+		t.Fatal("skills should be empty without home")
+	}
+	if got := loadAgents(t.TempDir(), zerolog.Nop()); len(got) != 0 {
+		t.Fatal("agents should be empty without home")
+	}
+}
+
+func TestIsTerminalStdin(t *testing.T) {
+	// os.Stdin implements Fd(); under go test it is not a TTY.
+	if isTerminal(os.Stdin) {
+		t.Fatal("test stdin should not be a terminal")
+	}
+}
+
+func TestInterruptHandlerAskUserShortInput(t *testing.T) {
+	var stderr bytes.Buffer
+	// Two questions but input for only one: the second read errors and the
+	// answer is appended empty.
+	h := interruptHandler(bufio.NewReader(strings.NewReader("one\n")), true, &stderr)
+	ans, err := h(agent.AskUserRequest{Questions: []tools.Question{{Question: "a"}, {Question: "b"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aa := ans.(agent.AskUserAnswer)
+	if len(aa.Answers) != 2 || aa.Answers[0] != "one" || aa.Answers[1] != "" {
+		t.Fatalf("answers = %#v", aa.Answers)
+	}
+}
+
+func TestSaveLastSessionNoHome(t *testing.T) {
+	// HOME unset: DefaultDir is "" and the snapshot lands relative to the
+	// (temp) working directory without crashing.
+	t.Setenv("HOME", "")
+	t.Chdir(t.TempDir())
+	saveLastSession([]messages.Message{messages.Human("x")}, nil)
+}
+
+func TestSaveLastSessionWriteError(t *testing.T) {
+	home := isolateEnv(t)
+	// last-session.jsonl exists as a directory: the snapshot write fails
+	// and prints an error instead of crashing.
+	dir := filepath.Join(home, ".woca", "last-session.jsonl")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	endSession(t.Context(), []messages.Message{messages.Human("x")}, nil)
+}
+
+func TestResolveBaseURLFromSettings(t *testing.T) {
+	db := settings.Settings{
+		GLMBaseURL:      "http://db-glm",
+		DeepSeekBaseURL: "http://db-deepseek",
+	}
+	if got := resolveBaseURL("", "glm", db); got != "http://db-glm" {
+		t.Fatalf("glm db = %q", got)
+	}
+	if got := resolveBaseURL("", "deepseek", db); got != "http://db-deepseek" {
+		t.Fatalf("deepseek db = %q", got)
+	}
+}
+
+func TestLoadHooksPermissionsInvalidJSON(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".woca", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := loadHooksConfig(dir); len(cfg.PreToolUse) != 0 {
+		t.Fatal("invalid hooks json should be skipped")
+	}
+	if rules := loadPermissions(dir); rules == nil || len(rules.Allow) != 0 {
+		t.Fatal("invalid permissions json should be skipped")
+	}
+}
+
+func TestPluginListWithContent(t *testing.T) {
+	home := isolateEnv(t)
+	root := filepath.Join(home, ".woca", "plugins")
+
+	// One broken plugin (invalid manifest) and one with skills and agents.
+	broken := filepath.Join(root, "broken")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, "plugin.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	good := filepath.Join(root, "good")
+	for _, d := range []string{filepath.Join(good, "skills", "s1"), filepath.Join(good, "agents")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(good, "plugin.json"), []byte(`{"name":"good","version":"2.0.0","description":"has things"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(good, "skills", "s1", "SKILL.md"), []byte("---\nname: s1\ndescription: skill\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(good, "agents", "a1.md"), []byte("---\nname: a1\ndescription: agent\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := execCmd(t, "plugin", "list"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfigSecretRoundTripAndEnvDB(t *testing.T) {
+	home := isolateEnv(t)
+
+	// Without --db the WOCA_DB env target is used.
+	if err := execCmd(t, "config", "list"); err != nil {
+		t.Fatal(err)
+	}
+	if err := execCmd(t, "config", "set", "anthropic-api-key", "sk-x"); err != nil {
+		t.Fatal(err)
+	}
+	// A set secret reads back masked.
+	if err := execCmd(t, "config", "get", "anthropic-api-key"); err != nil {
+		t.Fatal(err)
+	}
+	// mcp auth without --db also resolves via env.
+	if err := execCmd(t, "mcp", "auth", "srv", "http://127.0.0.1:1/mcp"); err == nil {
+		t.Fatal("expected oauth failure")
+	}
+	_ = home
+}
+
+func TestConfigOpenError(t *testing.T) {
+	home := t.TempDir()
+	blocker := filepath.Join(home, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if err := execCmd(t, "--db", filepath.Join(blocker, "woca.db"), "config", "list"); err == nil {
+		t.Fatal("expected settings open error")
 	}
 }

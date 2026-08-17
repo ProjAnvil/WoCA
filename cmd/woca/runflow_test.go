@@ -3,15 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/woca/internal/session"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/projanvil/langchain-golang/core/messages"
-
-	"github.com/projanvil/woca/internal/session"
 )
 
 func TestRunOneShotSuccess(t *testing.T) {
@@ -256,5 +256,223 @@ func TestRunSessionStartHookFeedback(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	if err := run(t.Context(), opts, strings.NewReader("/exit\n"), &out, &errBuf); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunREPLCommands(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAI(t, "cmd-ok")
+	opts := baseOpts(t, url)
+
+	input := strings.Join([]string{
+		"/model other-model",
+		"/thinking 2048",
+		"/quota",
+		"/theme dark",
+		"/theme no-such-theme",
+		"/vim",
+		"/vim",
+		"/settings",
+		"/settings help",
+		"/settings get provider",
+		"/settings set provider openai",
+		"/settings set memory-engine none",
+		"/settings set no-such-key x",
+		"/memory",
+		"/undo",
+		"/redo",
+		"/cost",
+		"/context",
+		"/permissions",
+		"/permissions bypassPermissions",
+		"/status",
+		"/clear",
+		"/agents",
+		"run the model please",
+		"/exit",
+	}, "\n") + "\n"
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader(input), &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	combined := out.String() + errBuf.String()
+	for _, want := range []string{"cmd-ok", "woca", "provider"} {
+		if !strings.Contains(combined, want) {
+			t.Errorf("missing %q in REPL output", want)
+		}
+	}
+}
+
+func TestRunREPLDebugLog(t *testing.T) {
+	home := isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAI(t, "dbg")
+	opts := baseOpts(t, url)
+	opts.debugLog = true
+
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader("/exit\n"), &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	// The observability log directory exists under the isolated home.
+	if _, err := os.Stat(filepath.Join(home, ".woca", "logs")); err != nil {
+		t.Fatalf("obs log dir: %v", err)
+	}
+}
+
+func TestRunREPLModelFromSettingsAndMemory(t *testing.T) {
+	isolateEnv(t)
+	// No provider flag: the model factory resolves from live settings. The
+	// default memory engine (ladym) is built so /memory lists it.
+	url := fakeOpenAI(t, "mem-ok")
+	opts := options{apiKey: "k", baseURL: url, workdir: t.TempDir()}
+
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader("/model other\n/memory\n/quit\n"), &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunResumeCheckpointSuccess(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAIToolFlow(t, "resumed and approved")
+	ckptDir := t.TempDir()
+
+	// Run one: the model asks to write a file; non-interactive mode denies
+	// and the turn completes, leaving the checkpoint file behind.
+	opts := baseOpts(t, url)
+	opts.prompt = "write a note"
+	opts.checkpointDir = ckptDir
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader(""), &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(ckptDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no checkpoint persisted: %v (%d entries)", err, len(entries))
+	}
+	key := strings.TrimSuffix(entries[0].Name(), ".json")
+
+	// Run two: resume the checkpoint, approve the write, JSON output. The
+	// model only needs to produce the final text now.
+	opts2 := baseOpts(t, fakeOpenAI(t, "resumed and approved"))
+	opts2.checkpointDir = ckptDir
+	opts2.resumeCheckpoint = key
+	opts2.resumeValue = "y"
+	opts2.outputFormat = "json"
+	var out2, errBuf2 bytes.Buffer
+	if err := run(t.Context(), opts2, strings.NewReader(""), &out2, &errBuf2); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out2.String(), "resumed and approved") {
+		t.Fatalf("resume output = %q", out2.String())
+	}
+}
+
+func TestRunResumeLegacyCorrupt(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	path := filepath.Join(t.TempDir(), "bad.jsonl")
+	// The first object decodes as an empty State; the second line is not a
+	// message, so the legacy fallback load fails.
+	if err := os.WriteFile(path, []byte("{}\nnot-json-at-all\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := baseOpts(t, fakeOpenAI(t, "hi"))
+	opts.resume = path
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader(""), &out, &errBuf); err == nil {
+		t.Fatal("expected legacy resume error")
+	}
+}
+
+func TestRunResumeDecodeError(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	path := filepath.Join(t.TempDir(), "garbage.jsonl")
+	// The file does not start with a JSON object, so LoadState's decode of
+	// the first value fails.
+	if err := os.WriteFile(path, []byte("garbage-not-json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := baseOpts(t, fakeOpenAI(t, "hi"))
+	opts.resume = path
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader(""), &out, &errBuf); err == nil {
+		t.Fatal("expected resume decode error")
+	}
+}
+
+func TestRunBuildAgentError(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	opts := baseOpts(t, fakeOpenAI(t, "hi"))
+	opts.provider = "nope"
+	opts.prompt = "x"
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader(""), &out, &errBuf); err == nil {
+		t.Fatal("expected buildAgent error")
+	}
+}
+
+func TestRunOneShotToolTurnsJSON(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	// The model requests a Write; non-interactive mode denies it, producing
+	// a tool result message, then finishes with text.
+	url := fakeOpenAIToolFlow(t, "after tool")
+	opts := baseOpts(t, url)
+	opts.prompt = "write a note"
+	opts.outputFormat = "json"
+
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader(""), &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "after tool") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestRunWebSearchBackendError(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	// --search-api registers the WebSearch tool with the custom backend; the
+	// model calls it and the unreachable search endpoint surfaces as an
+	// error result (then the turn completes).
+	url := fakeOpenAICustomToolFlow(t, "WebSearch", `{"query":"anything"}`, "search failed but ok")
+	opts := baseOpts(t, url)
+	opts.prompt = "search the web"
+	opts.searchAPI = "http://127.0.0.1:1/{q}"
+
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader(""), &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "search failed but ok") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestRunWebSearchBackendSuccess(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	// A working search endpoint: the WebSearch backend formats results.
+	search := startHTTPServer(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"results":[{"title":"Answer","url":"https://example.com/a","snippet":"the answer"}]}`)
+	})
+	url := fakeOpenAICustomToolFlow(t, "WebSearch", `{"query":"meaning"}`, "searched fine")
+	opts := baseOpts(t, url)
+	opts.prompt = "search the web"
+	opts.searchAPI = search + "/search?q={q}"
+
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader(""), &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "searched fine") {
+		t.Fatalf("output = %q", out.String())
 	}
 }

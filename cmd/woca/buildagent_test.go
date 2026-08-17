@@ -1,16 +1,15 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-
-	"github.com/rs/zerolog"
-
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/mcp"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/rs/zerolog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
 )
 
 func testLogger() zerolog.Logger {
@@ -579,5 +578,440 @@ func TestNewMcpAuthRunner(t *testing.T) {
 	defer func() { os.Args = oldArgs }()
 	if err := runner(t.Context(), "srv"); err == nil {
 		t.Fatal("expected oauth failure")
+	}
+}
+
+func TestBuildAgentDefaultsWorkdir(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAI(t, "hi")
+	dir := t.TempDir()
+	t.Chdir(dir)
+	opts := baseOpts(t, url)
+	opts.workdir = "" // falls back to the process working directory
+	ap, err := buildAgent(t.Context(), opts, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+	if !strings.HasPrefix(ap.cfg.WorkDir, dir) {
+		t.Fatalf("workdir fallback = %q", ap.cfg.WorkDir)
+	}
+}
+
+func TestBuildAgentSettingsOpenFailure(t *testing.T) {
+	home := isolateEnv(t)
+	blocker := filepath.Join(home, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The database path sits under a regular file: settings.Open fails and
+	// buildAgent continues without persisted settings.
+	t.Setenv("WOCA_DB", filepath.Join(blocker, "woca.db"))
+	url := fakeOpenAI(t, "hi")
+	opts := baseOpts(t, url)
+	ap, err := buildAgent(t.Context(), opts, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+	if ap.settings != nil {
+		t.Fatal("settings should degrade to nil")
+	}
+}
+
+func TestBuildAgentManagedUnreadableAndSkills(t *testing.T) {
+	home := isolateEnv(t)
+	seedSettings(t,
+		[2]string{"memory-engine", "none"},
+		[2]string{"claude-skills", `["myutil"]`},
+	)
+	url := fakeOpenAI(t, "hi")
+
+	// Unreadable managed settings are warned about and ignored.
+	opts := baseOpts(t, url)
+	opts.managedSettings = filepath.Join(home, "missing-managed.json")
+	ap, err := buildAgent(t.Context(), opts, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ap.pluginMgr.Close()
+	ap.a.Close()
+
+	// A ~/.claude skill selected in settings is symlinked into ~/.woca/skills.
+	claudeSkill := filepath.Join(home, ".claude", "skills", "myutil")
+	if err := os.MkdirAll(claudeSkill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeSkill, "SKILL.md"), []byte("---\nname: myutil\ndescription: helper\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts2 := baseOpts(t, url)
+	ap2, err := buildAgent(t.Context(), opts2, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap2.pluginMgr.Close()
+	defer ap2.a.Close()
+	if _, err := os.Lstat(filepath.Join(home, ".woca", "skills", "myutil")); err != nil {
+		t.Fatalf("imported skill missing: %v", err)
+	}
+}
+
+func TestBuildAgentBrokenPluginAndClaudeMCP(t *testing.T) {
+	home := isolateEnv(t)
+	seedSettings(t,
+		[2]string{"memory-engine", "none"},
+		[2]string{"claude-mcp", `["alpha"]`},
+	)
+	url := fakeOpenAI(t, "hi")
+
+	// A plugin with an invalid manifest is reported and skipped.
+	pluginRoot := filepath.Join(home, "plugins", "broken")
+	if err := os.MkdirAll(pluginRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A selected claude MCP server gets materialized and connected (its
+	// stdio command fails the MCP handshake, which is warned and skipped).
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{
+		"mcpServers": {"alpha": {"command": "echo", "args": ["hi"]}}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := baseOpts(t, url)
+	ap, err := buildAgent(t.Context(), opts, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+}
+
+func TestBuildAgentPostgresBackends(t *testing.T) {
+	home := isolateEnv(t)
+	st, err := settings.Open(filepath.Join(home, "woca.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := st.Load()
+	for _, kv := range [][2]string{
+		{"memory-engine", "none"},
+		{"checkpoint", "postgres"},
+		{"memory", "postgres"},
+	} {
+		if err := settings.Apply(&cfg, kv[0], kv[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	// A postgres DSN pointing at a closed local port: opens fail fast and
+	// both backends degrade to nil.
+	if err := st.SetSecret(settings.SecretPostgresURL, "postgres://u:p@127.0.0.1:1/db"); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	ap, err := buildAgent(t.Context(), baseOpts(t, fakeOpenAI(t, "hi")), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+	if ap.memory != nil {
+		t.Fatal("postgres memory backend should degrade to nil")
+	}
+}
+
+func TestBuildAgentMemoryEngineBuildFailure(t *testing.T) {
+	home := isolateEnv(t)
+	blocker := filepath.Join(home, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Default engine (ladym) with an unusable DB path: the build fails and
+	// buildAgent continues without the memory engine.
+	seedSettings(t, [2]string{"ladym-db-path", filepath.Join(blocker, "ladym.db")})
+	ap, err := buildAgent(t.Context(), baseOpts(t, fakeOpenAI(t, "hi")), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+	if ap.memEngine != nil {
+		t.Fatal("broken engine path should degrade to nil")
+	}
+}
+
+func TestBuildMemoryEngineBadPath(t *testing.T) {
+	home := isolateEnv(t)
+	blocker := filepath.Join(home, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := settings.Open(filepath.Join(home, "woca.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := st.Load()
+	if err := settings.Apply(&cfg, settings.KeyLadyMDBPath, filepath.Join(blocker, "ladym.db")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buildMemoryEngine(&app{cfg: config.Config{WorkDir: t.TempDir()}, settings: st}, cfg, nil); err == nil {
+		t.Fatal("expected engine build error")
+	}
+}
+
+func TestBuildAgentGitRepoAndPlugin(t *testing.T) {
+	home := isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAI(t, "hi")
+
+	// A git repository workdir makes contextx.Collect produce output.
+	ws := filepath.Join(home, "repo")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", ws, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "README.md"), []byte("# demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A valid plugin contributing one skill and one agent.
+	pluginRoot := filepath.Join(home, "plugins", "toolkit")
+	skillDir := filepath.Join(pluginRoot, "skills", "deploy")
+	agentDir := filepath.Join(pluginRoot, "agents")
+	for _, d := range []string{skillDir, agentDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := `{"name":"toolkit","version":"1.0.0","description":"tools"}`
+	if err := os.WriteFile(filepath.Join(pluginRoot, "plugin.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: deploy\ndescription: deploy things\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "reviewer.md"), []byte("---\nname: reviewer\ndescription: reviews\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := baseOpts(t, url)
+	opts.workdir = ws
+	ap, err := buildAgent(t.Context(), opts, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+}
+
+func TestBuildAgentWorkspaceContextAndPlugins(t *testing.T) {
+	home := isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAI(t, "hi")
+
+	ws := t.TempDir()
+	if out, err := exec.Command("git", "-C", ws, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "README.md"), []byte("# demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A project-level skill shows up in the prompt builder's skill section.
+	skillDir := filepath.Join(ws, ".woca", "skills", "localutil")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: localutil\ndescription: local helper\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A plugin under ~/.woca/plugins contributes skills and agents.
+	plugin := filepath.Join(home, ".woca", "plugins", "toolkit")
+	if err := os.MkdirAll(filepath.Join(plugin, "skills", "deploy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plugin, "plugin.json"), []byte(`{"name":"toolkit","version":"1.0.0","description":"tools"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plugin, "skills", "deploy", "SKILL.md"), []byte("---\nname: deploy\ndescription: deploy things\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := baseOpts(t, url)
+	opts.workdir = ws
+	ap, err := buildAgent(t.Context(), opts, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+}
+
+func TestBuildAgentSyncSkillsError(t *testing.T) {
+	home := isolateEnv(t)
+	// A claude-skills selection while ~/.woca/skills exists as a regular
+	// file: the sync fails and is warned about.
+	seedSettings(t,
+		[2]string{"memory-engine", "none"},
+		[2]string{"claude-skills", `["myutil"]`},
+	)
+	if err := os.MkdirAll(filepath.Join(home, ".woca"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".woca", "skills"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ap, err := buildAgent(t.Context(), baseOpts(t, fakeOpenAI(t, "hi")), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+}
+
+func TestBuildAgentClaudeMCPImportError(t *testing.T) {
+	home := isolateEnv(t)
+	// A claude-mcp selection with an unreadable ~/.claude.json warns and
+	// continues.
+	seedSettings(t,
+		[2]string{"memory-engine", "none"},
+		[2]string{"claude-mcp", `["alpha"]`},
+	)
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ap, err := buildAgent(t.Context(), baseOpts(t, fakeOpenAI(t, "hi")), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+}
+
+func TestRebuildModelInvalidProvider(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAI(t, "hi")
+	ap, err := buildAgent(t.Context(), options{workdir: t.TempDir(), apiKey: "k", baseURL: url}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+	cfg := ap.settings.Load()
+	// The settings layer rejects an unknown provider before it can ever
+	// reach rebuildModel.
+	if err := settings.Apply(&cfg, settings.KeyProvider, "nope"); err == nil {
+		t.Fatal("expected provider validation error at Apply")
+	}
+}
+
+func TestAppApplyClaudeEnvBranches(t *testing.T) {
+	home := isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAI(t, "hi")
+
+	// A plugin with a skill so the live-reload merge loop has content.
+	plugin := filepath.Join(home, ".woca", "plugins", "toolkit")
+	if err := os.MkdirAll(filepath.Join(plugin, "skills", "deploy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plugin, "plugin.json"), []byte(`{"name":"toolkit","version":"1.0.0","description":"tools"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plugin, "skills", "deploy", "SKILL.md"), []byte("---\nname: deploy\ndescription: deploy\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ap, err := buildAgent(t.Context(), baseOpts(t, url), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+	// An invalid ~/.claude.json makes the mcp.json rewrite fail.
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ap.applyClaudeEnv(nil, []string{"demo"}); err == nil {
+		t.Fatal("expected failure with invalid ~/.claude.json")
+	}
+	// With a valid ~/.claude.json the apply succeeds and reloads skills.
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"demo":{"command":"echo","args":["x"]}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ap.applyClaudeEnv(nil, []string{"demo"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppRebuildModelPicksUpLimits(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t,
+		[2]string{"memory-engine", "none"},
+		[2]string{"max-tokens", "4321"},
+		[2]string{"temperature", "0.5"},
+	)
+	url := fakeOpenAI(t, "hi")
+	ap, err := buildAgent(t.Context(), options{workdir: t.TempDir(), apiKey: "k", baseURL: url}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+	if err := ap.rebuildModel(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppRebuildMemoryError(t *testing.T) {
+	home := isolateEnv(t)
+	blocker := filepath.Join(home, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedSettings(t, [2]string{"ladym-db-path", filepath.Join(blocker, "ladym.db")})
+	ap, err := buildAgent(t.Context(), baseOpts(t, fakeOpenAI(t, "hi")), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+	if err := ap.rebuildMemory(); err == nil {
+		t.Fatal("expected rebuild error")
+	}
+}
+
+func TestApplyClaudeEnvSyncFailure(t *testing.T) {
+	home := isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	ap, err := buildAgent(t.Context(), baseOpts(t, fakeOpenAI(t, "hi")), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
+	// Replace the skills directory with a regular file: the skill sync
+	// fails on the next apply.
+	if err := os.RemoveAll(filepath.Join(home, ".woca", "skills")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".woca", "skills"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ap.applyClaudeEnv([]string{"s"}, nil); err == nil {
+		t.Fatal("expected sync failure")
 	}
 }
