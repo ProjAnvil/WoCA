@@ -8,6 +8,7 @@ import (
 )
 
 func TestBuildLoadsMemory(t *testing.T) {
+	isolatedHome(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# Rules\nAlways test."), 0o644); err != nil {
 		t.Fatal(err)
@@ -25,6 +26,7 @@ func TestBuildLoadsMemory(t *testing.T) {
 }
 
 func TestBuildSkipsMissingMemory(t *testing.T) {
+	isolatedHome(t)
 	got := Build(t.TempDir(), "", "")
 	if strings.Contains(got, "Project instructions") {
 		t.Fatalf("should not include project instructions when no memory file exists:\n%s", got)

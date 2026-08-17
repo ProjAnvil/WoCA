@@ -3,7 +3,6 @@ package prompt
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -100,16 +99,17 @@ func resetSegmentCache() {
 	cacheMisses.Store(0)
 }
 
-// memoryFileSection renders one project memory file section, cached by
-// path/size/modtime so unchanged files are never re-read.
-func memoryFileSection(workDir, name string) (string, bool) {
-	path := filepath.Join(workDir, name)
-	st, err := os.Stat(path)
+// memorySection renders one instruction-file section, cached by
+// path/size/modtime/label so unchanged files are never re-read. Kind and
+// Label participate in the key: the same file can render under different
+// headers in the git-root-equals-$HOME edge case.
+func memorySection(mf memoryFile) (string, bool) {
+	st, err := os.Stat(mf.Path)
 	if err != nil || st.IsDir() {
 		return "", false
 	}
-	section := cachedSegment(fmt.Sprintf("%s|%d|%d", path, st.Size(), st.ModTime().UnixNano()), func() string {
-		data, err := os.ReadFile(path)
+	section := cachedSegment(fmt.Sprintf("%s|%d|%d|%s|%s", mf.Path, st.Size(), st.ModTime().UnixNano(), mf.Kind, mf.Label), func() string {
+		data, err := os.ReadFile(mf.Path)
 		if err != nil {
 			return ""
 		}
@@ -117,7 +117,7 @@ func memoryFileSection(workDir, name string) (string, bool) {
 		if content == "" {
 			return ""
 		}
-		return "\n\n# Project instructions (" + name + ")\n\n" + content
+		return "\n\n# " + mf.Kind + " instructions (" + mf.Label + ")\n\n" + content
 	})
 	return section, section != ""
 }

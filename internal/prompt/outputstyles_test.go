@@ -38,6 +38,7 @@ func TestBuildWithStyleAppendsSection(t *testing.T) {
 }
 
 func TestSegmentCacheStableAndHits(t *testing.T) {
+	isolatedHome(t)
 	resetSegmentCache()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("project rule: be terse"), 0o644); err != nil {

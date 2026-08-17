@@ -1802,7 +1802,6 @@ func mergeMCPSpecs(flag, workspace, user []string, log zerolog.Logger) []string 
 	return out
 }
 
-// connectMCP starts MCP servers and returns their tools.
 // connectMCP starts MCP servers and returns their tools plus the clients
 // (kept for between-turn tool refreshes).
 func connectMCP(ctx context.Context, log zerolog.Logger, servers []string, st *settings.Store) ([]coretools.Tool, []*mcp.Client) {

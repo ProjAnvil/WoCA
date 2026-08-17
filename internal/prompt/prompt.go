@@ -128,8 +128,8 @@ func BuildWithStyle(workDir, extra, model, style string) string {
 	b.WriteString("\n\n")
 	b.WriteString(sessionGuidance)
 
-	for _, name := range []string{"CLAUDE.md", "AGENTS.md"} {
-		if section, ok := memoryFileSection(workDir, name); ok {
+	for _, mf := range collectMemoryFiles(workDir) {
+		if section, ok := memorySection(mf); ok {
 			b.WriteString(section)
 		}
 	}
