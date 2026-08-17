@@ -2669,7 +2669,7 @@ git commit -m "fix(agent): recover tool goroutine panics into structured error r
 **Interfaces:**
 - Produces: 包级 `var parkedRunTTL = 2 * time.Hour`（测试可改小）；park 超时 → emit `timeout{kind, reason:"parked_ttl"}` + `cancelRun`（本地决策，spec §6.3）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```go
 package server
@@ -2718,12 +2718,12 @@ func TestParkTimesOut(t *testing.T) {
 
 （`park` 签名已核实 run.go:159：`func (r *Run) park(kind string, payload any) (any, error)`，成功路径返回 `(answer, nil)`，取消路径返回 `(nil, r.ctx.Err())`。）
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/server/ -run TestParkTimesOut -v`
 Expected: FAIL —— 2s 后 park 仍阻塞（无 TTL）。
 
-- [ ] **Step 3: 实现**（run.go:159-173）
+- [x] **Step 3: 实现**（run.go:159-173）
 
 ```go
 // parkedRunTTL bounds how long a run may sit parked on an unanswered
@@ -2748,12 +2748,12 @@ var parkedRunTTL = 2 * time.Hour
 	}
 ```
 
-- [ ] **Step 4: 运行测试**
+- [x] **Step 4: 运行测试**
 
 Run: `go test -race ./internal/server/ -v`
 Expected: 全 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/server/run.go internal/server/run_test.go

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"testing"
+	"time"
 )
 
 func TestEmitAssignsMonotonicSeq(t *testing.T) {
@@ -47,5 +49,40 @@ func TestEmitDropCounter(t *testing.T) {
 	r.emit(Event{Type: "delta", Data: map[string]any{}})
 	if n := r.droppedCount(); n != 1 {
 		t.Fatalf("dropped = %d, want 1", n)
+	}
+}
+
+func TestParkTimesOut(t *testing.T) {
+	old := parkedRunTTL
+	parkedRunTTL = 50 * time.Millisecond
+	defer func() { parkedRunTTL = old }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := &Run{id: "test", ctx: ctx, cancel: cancel, subs: map[*subscriber]struct{}{}}
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.park("permission", map[string]any{"tool_name": "Write"}) // 无 answer，直到超时
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("park returned nil error after TTL, want ctx error")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("park did not return after TTL")
+	}
+	if ctx.Err() == nil {
+		t.Fatal("park TTL should cancel the run ctx")
+	}
+	var sawTimeout bool
+	for _, ev := range r.history {
+		if ev.Type == "timeout" {
+			sawTimeout = true
+		}
+	}
+	if !sawTimeout {
+		t.Fatal("want timeout event in history")
 	}
 }

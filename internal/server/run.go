@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
@@ -167,8 +168,15 @@ func (r *Run) handleInterrupt(value any) (any, error) {
 	}
 }
 
+// parkedRunTTL bounds how long a run may sit parked on an unanswered
+// interrupt before it is cancelled (local decision — no industry
+// precedent; see spec §6.3).
+var parkedRunTTL = 2 * time.Hour
+
 // park records the pending interrupt, emits it to clients, and blocks until an
-// answer is posted or the run is cancelled.
+// answer is posted or the run is cancelled. Unanswered interrupts are also
+// bounded by parkedRunTTL: the run emits a timeout event and is cancelled so a
+// forgotten ask cannot pin a session forever.
 func (r *Run) park(kind string, payload any) (any, error) {
 	reply := make(chan any, 1)
 	r.mu.Lock()
@@ -177,11 +185,16 @@ func (r *Run) park(kind string, payload any) (any, error) {
 
 	r.emit(Event{Type: "interrupt", Data: map[string]any{"kind": kind, "payload": payload}})
 
+	timer := time.AfterFunc(parkedRunTTL, func() {
+		r.emit(Event{Type: "timeout", Data: map[string]any{"kind": kind, "reason": "parked_ttl"}})
+		r.cancelRun()
+	})
+	defer timer.Stop()
 	select {
 	case answer := <-reply:
 		return answer, nil
 	case <-r.ctx.Done():
-		return nil, r.ctx.Err()
+		return nil, r.ctx.Err() // 原取消路径语义不变
 	}
 }
 
