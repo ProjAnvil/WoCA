@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -161,5 +162,42 @@ func TestLSPPoolInitFailureFeedsBreaker(t *testing.T) {
 	}
 	if n := spawns.Load(); n != int32(lspMaxSpawnFailures) {
 		t.Fatalf("spawns = %d, want %d (circuit open)", n, lspMaxSpawnFailures)
+	}
+}
+
+// 同一 server 上的并发 call 必须串行：didOpen/diagnostic/didClose 序列交错
+// 时（同文件场景 A 的 didClose 可先于 B 的 diagnostic）语义就坏了。
+func TestLSPPoolPerEntrySerialization(t *testing.T) {
+	var cur, maxDepth atomic.Int32
+	record := func() {
+		n := cur.Add(1)
+		for {
+			m := maxDepth.Load()
+			if n <= m || maxDepth.CompareAndSwap(m, n) {
+				break
+			}
+		}
+	}
+	p := newLSPPool(func([]string) (lspTransport, error) {
+		return &fakeTransport{responses: map[string]any{}}, nil
+	}, nil)
+	defer p.Close()
+	ws, cmd := poolKeyForTest()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error {
+				record()
+				time.Sleep(10 * time.Millisecond) // 足够让并发裸奔时重叠
+				cur.Add(-1)
+				return nil
+			})
+		}()
+	}
+	wg.Wait()
+	if d := maxDepth.Load(); d != 1 {
+		t.Fatalf("max concurrent fn depth on one server = %d, want 1", d)
 	}
 }

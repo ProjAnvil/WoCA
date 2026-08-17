@@ -48,6 +48,13 @@ type lspEntry struct {
 	lastUsed    time.Time
 	failures    int
 	brokenUntil time.Time
+
+	// mu serializes fn execution on this entry's transport: concurrent
+	// callers must never interleave their didOpen/diagnostic/didClose
+	// sequences (same file: A's didClose could otherwise precede B's
+	// diagnostic). Lock order is strictly p.mu → entry.mu, never reversed;
+	// fn runs with neither lock held.
+	mu sync.Mutex
 }
 
 func newLSPPool(spawn func([]string) (lspTransport, error), init func(lspTransport, string) error) *lspPool {
@@ -69,24 +76,25 @@ func lspPoolKey(workspace string, command []string) string {
 
 // call runs fn with a ready, already-initialized transport. On fn error the
 // entry is evicted and fn retried once on a freshly spawned server; the
-// second error is returned.
+// second error is returned. Calls sharing one server are serialized by the
+// entry's mutex (see run).
 func (p *lspPool) call(ctx context.Context, workspace string, command []string, fn func(lspTransport) error) error {
 	key := lspPoolKey(workspace, command)
-	tr, err := p.acquire(key, workspace, command)
+	e, tr, err := p.acquire(key, workspace, command)
 	if err != nil {
 		return err
 	}
-	err = fn(tr)
+	err = p.run(e, tr, fn)
 	p.touch(key, tr)
 	if err == nil {
 		return nil
 	}
 	p.evict(key, tr)
-	tr, err = p.acquire(key, workspace, command)
+	e, tr, err = p.acquire(key, workspace, command)
 	if err != nil {
 		return err
 	}
-	err = fn(tr)
+	err = p.run(e, tr, fn)
 	p.touch(key, tr)
 	if err != nil {
 		p.evict(key, tr)
@@ -94,20 +102,30 @@ func (p *lspPool) call(ctx context.Context, workspace string, command []string, 
 	return err
 }
 
-func (p *lspPool) acquire(key, workspace string, command []string) (lspTransport, error) {
+// run executes fn under the entry's mutex. The transport is captured at
+// acquire time so a concurrent evict (which nils e.tr under p.mu) can never
+// make fn observe a nil transport; a concurrent Close is surfaced as the
+// fn error and retried on a fresh server.
+func (p *lspPool) run(e *lspEntry, tr lspTransport, fn func(lspTransport) error) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return fn(tr)
+}
+
+func (p *lspPool) acquire(key, workspace string, command []string) (*lspEntry, lspTransport, error) {
 	p.mu.Lock()
 	if p.stopped {
 		p.mu.Unlock()
-		return nil, fmt.Errorf("lsp pool closed")
+		return nil, nil, fmt.Errorf("lsp pool closed")
 	}
 	if e, ok := p.entries[key]; ok {
 		if time.Now().Before(e.brokenUntil) {
 			p.mu.Unlock()
-			return nil, fmt.Errorf("LSP server unavailable (cooling down after repeated spawn failures)")
+			return nil, nil, fmt.Errorf("LSP server unavailable (cooling down after repeated spawn failures)")
 		}
 		if e.tr != nil {
 			p.mu.Unlock()
-			return e.tr, nil
+			return e, e.tr, nil
 		}
 	}
 	p.mu.Unlock()
@@ -127,16 +145,16 @@ func (p *lspPool) acquire(key, workspace string, command []string) (lspTransport
 			e.brokenUntil = time.Now().Add(lspBrokenCooldown)
 			e.failures = 0
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	if e.tr != nil { // 并发 spawn 竞速：保留先入池者
 		_ = tr.Close()
-		return e.tr, nil
+		return e, e.tr, nil
 	}
 	e.tr = tr
 	e.failures = 0
 	e.lastUsed = time.Now()
-	return tr, nil
+	return e, tr, nil
 }
 
 // spawnAndInit spawns a server and runs the one-time LSP handshake. A
