@@ -393,3 +393,14 @@ export interface PluginStatus {
 export interface PluginsResponse {
   plugins: PluginStatus[]
 }
+
+// --- runtime stats (mirror /api/stats) ---
+export interface StatsResponse {
+  active_runs: number
+  queued_runs: number
+  session_queue_depths: Record<string, number>
+  teammates: number
+  background_tasks: number
+  sse_dropped: number
+  lsp: { active: number; broken: number }
+}

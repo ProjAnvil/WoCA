@@ -13,6 +13,7 @@ import type {
   QuotaResponse,
   RememberResponse,
   SessionSummary,
+  StatsResponse,
   TranscriptMessage,
   WorkspaceFile,
 } from '../types'
@@ -256,6 +257,10 @@ export function listMemory(opts: {
 export function memoryStats(workspace?: string): Promise<MemoryStatsResponse> {
   const params = workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''
   return request(`/api/memory/stats${params}`, undefined, '加载记忆统计失败')
+}
+
+export function stats(): Promise<StatsResponse> {
+  return request<StatsResponse>('/api/stats')
 }
 
 /** Returns the new memory id, or '' when the attention gate dropped it. */

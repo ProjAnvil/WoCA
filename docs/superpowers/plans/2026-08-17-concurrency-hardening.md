@@ -2936,7 +2936,7 @@ git commit -m "feat(server): /api/stats runtime concurrency counters"
 - Consumes: Task 14 的响应 JSON。
 - Produces: `api.stats(): Promise<StatsResponse>`；设置面板新增"运行状态" section。
 
-- [ ] **Step 1: 类型 + API**
+- [x] **Step 1: 类型 + API**
 
 `types.ts` 追加（遵循"mirror the Go server's JSON"惯例）：
 
@@ -2961,7 +2961,7 @@ export function stats(): Promise<StatsResponse> {
 }
 ```
 
-- [ ] **Step 2: StatsSection.vue**（展示模式参照 `MemoryPanel.vue:101-111` 的 chips）
+- [x] **Step 2: StatsSection.vue**（展示模式参照 `MemoryPanel.vue:101-111` 的 chips）
 
 ```vue
 <script setup lang="ts">
@@ -3015,16 +3015,16 @@ onUnmounted(() => {
 </style>
 ```
 
-- [ ] **Step 3: 挂进 SettingsPanel**
+- [x] **Step 3: 挂进 SettingsPanel**
 
 `sections` 数组（:27-36）加 `{ id: 'stats', label: '运行状态' }`；右栏（:90-97）加 `<StatsSection v-if="active === 'stats'" />` 并 import。（字段名以 sections 数组现有项的结构为准。）
 
-- [ ] **Step 4: 验证**
+- [x] **Step 4: 验证**
 
 Run: `cd web && npm run build`
 Expected: vue-tsc + vite build 通过。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/types.ts web/src/api/client.ts web/src/components/settings/StatsSection.vue web/src/components/SettingsPanel.vue

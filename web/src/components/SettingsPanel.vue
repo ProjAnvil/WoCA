@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue'
 import {
+  Activity,
   Brain,
   Cpu,
   Database,
@@ -20,6 +21,7 @@ import PluginsSection, { resetPluginState } from './settings/PluginsSection.vue'
 import StorageSection from './settings/StorageSection.vue'
 import MemorySection from './settings/MemorySection.vue'
 import ModelSection from './settings/ModelSection.vue'
+import StatsSection from './settings/StatsSection.vue'
 
 const settings = useSettingsStore()
 
@@ -33,6 +35,7 @@ const sections = [
   { id: 'storage', label: '存储', icon: Database },
   { id: 'memory', label: '记忆', icon: Brain },
   { id: 'model', label: '模型', icon: Cpu },
+  { id: 'stats', label: '运行状态', icon: Activity },
 ]
 
 const active = ref<string>('appearance')
@@ -95,6 +98,7 @@ onBeforeUnmount(() => {
           <StorageSection v-if="active === 'storage'" />
           <MemorySection v-if="active === 'memory'" />
           <ModelSection v-if="active === 'model'" />
+          <StatsSection v-if="active === 'stats'" />
 
           <!-- Shared datalist for the free-form model inputs -->
           <datalist id="woca-model-suggestions">
