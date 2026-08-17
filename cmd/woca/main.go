@@ -1,8 +1,7 @@
-// Command woca is a Go coding-agent harness modeled on the architecture of
-// Claude Code: an explicit langgraph-style graph (model -> tools loop), a
-// Claude-Code-style tool set, hooks, permissions with human-in-the-loop
-// approval, plan mode, subagents, skills, auto-compaction, and MCP — with a
-// cobra CLI and zerolog logging.
+// Command woca is a Go coding-agent harness: an explicit langgraph-style
+// graph (model -> tools loop), a coding-agent tool set, hooks, permissions
+// with human-in-the-loop approval, plan mode, subagents, skills,
+// auto-compaction, and MCP — with a cobra CLI and zerolog logging.
 package main
 
 import (
@@ -12,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -746,8 +747,31 @@ func serve(ctx context.Context, opts options, addr string, noBrowser bool) error
 	}
 	log := logging.NewConsole(os.Stderr, level)
 
+	// Bind and answer /api/health before the agent build: the build makes
+	// network calls (MCP connect, embedding probe) that can hang for many
+	// seconds under a VPN or a stalled endpoint, which used to leave the
+	// port unbound and the webd daemon timed out on its 5s readiness
+	// probe. Everything except health 503s until the real handler is
+	// swapped in below.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", addr, err)
+	}
+	// atomic.Pointer, not atomic.Value: the swapped-in concrete handler
+	// types differ (http.HandlerFunc vs *http.ServeMux) and atomic.Value
+	// panics on inconsistent types.
+	var handler atomic.Pointer[http.Handler]
+	starting := http.Handler(http.HandlerFunc(startingHandler))
+	handler.Store(&starting)
+	hs := &http.Server{Addr: addr, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		(*handler.Load()).ServeHTTP(w, r)
+	})}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- hs.Serve(ln) }()
+
 	ap, err := buildAgent(ctx, opts, log)
 	if err != nil {
+		_ = hs.Close()
 		return err
 	}
 	defer ap.pluginMgr.Close()
@@ -786,6 +810,8 @@ func serve(ctx context.Context, opts options, addr string, noBrowser bool) error
 			return ap.pluginMgr.Install(ctx, name)
 		},
 	})
+	real := http.Handler(srv.Handler())
+	handler.Store(&real)
 
 	url := "http://" + addr
 	if !noBrowser {
@@ -795,7 +821,27 @@ func serve(ctx context.Context, opts options, addr string, noBrowser bool) error
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return srv.Serve(ctx, addr)
+	return srv.ServeStarted(ctx, hs, serveErr)
+}
+
+// startingHandler serves the window between the port bind and the agent
+// becoming ready: health keeps the webd readiness probe (and load
+// balancers) happy, other API routes report 503, and the UI reloads itself
+// until boot completes.
+func startingHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/health" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"ok":true,"starting":true}`)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, `{"error":"starting"}`, http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, `<!doctype html><meta http-equiv="refresh" content="1"><title>woca starting…</title><p>woca is starting…</p>`)
 }
 
 // openBrowser opens url in the default browser (best-effort).
@@ -993,7 +1039,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 	sysPrompt := sysFor(cfg.WorkDir, cfg.Model)
 
 	hookRunner := hooks.NewRunner(loadHooksConfig(workdir), workdir, "woca", hooks.WithLogger(log))
-	// Claude Code environment import (settings claude-skills / claude-mcp):
+	// Claude environment import (settings claude-skills / claude-mcp):
 	// selected ~/.claude skills are symlinked into ~/.woca/skills (loadSkills
 	// picks them up from there) and the selected global MCP servers are
 	// materialized as ~/.woca/mcp.json specs connected below.
@@ -1016,7 +1062,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 	}
 	// MCP servers resolve as three layers: --mcp flags (highest), the
 	// workspace file workDir/.woca/mcp.json (no upward walk, D5), and the
-	// user ~/.woca/mcp.json kept in sync with the Claude Code import
+	// user ~/.woca/mcp.json kept in sync with the ~/.claude import
 	// selection. Same-name servers connect once, from the winning layer.
 	var userSpecs []string
 	if specs, err := claudeMCPStartupSpecs(wocaRoot(), dbSettings.ClaudeMCP); err != nil {
@@ -1132,10 +1178,10 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		memEngine = nil
 	}
 
-	// Max-output-tokens escalation for the recovery path (Claude Code's
-	// 8k→64k retry): wire the escalator only when the user did not set an
-	// explicit cap, mirroring Claude Code's default-cap condition. BuildModel
-	// keeps the thinking budget enabled and the cap above it when linked.
+	// Max-output-tokens escalation for the recovery path (an 8k→64k retry):
+	// wire the escalator only when the user did not set an explicit cap, i.e.
+	// only under the default-cap condition. BuildModel keeps the thinking
+	// budget enabled and the cap above it when linked.
 	var escalator func() (language.ChatModel, error)
 	if opts.maxTokens == 0 && dbSettings.MaxTokens == 0 {
 		escCfg := cfg
@@ -1187,7 +1233,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		MaxTokensEscalator: escalator,
 		// Tool-use summaries are a UI feature: emit them for interactive
 		// sessions (REPL/TUI/serve), not for one-shot --prompt runs —
-		// Claude Code's isNonInteractiveSession gate.
+		// the non-interactive-session gate.
 		EmitToolUseSummaries: opts.prompt == "",
 		// Between-turn tool refresh (stage 28): re-list MCP tools so
 		// hot-added ones are usable in the next round, plus re-evaluate the
@@ -1868,7 +1914,7 @@ func refreshMCPTools(ctx context.Context, log zerolog.Logger, clients []*mcp.Cli
 }
 
 // turnTokenBudgetFromEnv resolves WOCA_TURN_TOKEN_BUDGET: the per-turn
-// output-token budget for auto-continue (Claude Code's 500k feature).
+// output-token budget for auto-continue (e.g. a 500k budget).
 // Unset, empty, or non-positive disables it — normal turns end naturally.
 func turnTokenBudgetFromEnv() int {
 	v := strings.TrimSpace(os.Getenv("WOCA_TURN_TOKEN_BUDGET"))

@@ -270,13 +270,16 @@ func TestServeAPIDrivesClosures(t *testing.T) {
 	opts := baseOpts(t, url)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
-	var serveErr error
-	go func() { serveErr = serve(ctx, opts, addr, true) }()
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- serve(ctx, opts, addr, true) }()
 
 	base := "http://" + addr
+	// serve() answers /api/health from the moment the port is bound; the
+	// real handler (and the closures under test) only swaps in once the
+	// agent build finishes, so wait for an API route instead.
 	healthOK := false
 	for i := 0; i < 100; i++ {
-		resp, err := http.Get(base + "/api/health")
+		resp, err := http.Get(base + "/api/quota")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -353,9 +356,13 @@ func TestServeAPIDrivesClosures(t *testing.T) {
 	}
 
 	cancel()
-	time.Sleep(100 * time.Millisecond)
-	if serveErr != nil {
-		t.Fatalf("serve error = %v", serveErr)
+	select {
+	case err := <-serveDone:
+		if err != nil {
+			t.Fatalf("serve error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not stop after cancel")
 	}
 }
 

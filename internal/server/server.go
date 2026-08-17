@@ -225,9 +225,16 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 	go func() {
 		errCh <- srv.ListenAndServe()
 	}()
+	return s.ServeStarted(ctx, srv, errCh)
+}
 
+// ServeStarted drives an http.Server the caller already started (the caller
+// may have bound the listener and served a startup handler long before the
+// agent was built): it waits for serveErr or ctx cancellation, then stops
+// admission and shuts the server down gracefully.
+func (s *Server) ServeStarted(ctx context.Context, srv *http.Server, serveErr <-chan error) error {
 	select {
-	case err := <-errCh:
+	case err := <-serveErr:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -257,7 +264,7 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.mu.Unlock()
 	queued, depths := s.admission.stats()
-	active := notDone - queued // 排队中的 run 已注册未完成，从活跃里剔除
+	active := notDone - queued // queued runs are registered but not finished; exclude them from active
 	if active < 0 {
 		active = 0
 	}
@@ -691,7 +698,7 @@ var errQueueFull = errors.New("session run queue is full")
 // position (0 = running immediately). errQueueFull is returned when the
 // session already has maxQueuedPerSession runs waiting.
 func (s *Server) startRun(sessionID string, human messages.Message, workspace string) (*Run, string, int, error) {
-	run, sid, workspace, _ := s.newRegisteredRun(sessionID, workspace) // 预载的 history 弃用：获得门后重载，保证看到前一条 run 已落盘的回复
+	run, sid, workspace, _ := s.newRegisteredRun(sessionID, workspace) // preloaded history discarded: reloaded after acquiring the gate so the previous run's persisted reply is visible
 	s.log.Info().Str("run", run.id).Str("session", sid).Msg("run queued")
 	s.refreshDebugLog()
 	if obs := s.agent.Obs(); obs != nil {
@@ -710,7 +717,7 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 	}
 	go func() {
 		if w != nil && !s.admission.wait(run.ctx, sid, w) {
-			// 排队中被取消（cancelRun 取消了 run.ctx）或停机
+			// Cancelled while queued (cancelRun cancelled run.ctx) or shutdown.
 			run.finish("done", map[string]any{"cancelled": true})
 			return
 		}
@@ -721,8 +728,10 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 				_ = s.sessions.save(sid, stripSystem(final), workspace)
 				s.logObsRunEnd(sid, run.id, workspace, final)
 			}
-			// 正确性核心：onDone（含落盘）返回之后才释放 session 门，
-			// 下一条排队的 run 被提升时前一条的回复必然已持久化。
+			// Correctness core: the session gate is released only after
+			// onDone (including persistence) returns, so when the next
+			// queued run is promoted the previous reply is guaranteed to
+			// be persisted.
 			s.admission.release(sid)
 		})
 	}()

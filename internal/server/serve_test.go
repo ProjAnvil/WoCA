@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -754,5 +755,49 @@ func TestWorkspaceFileTooLargeEndpoint(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized preview status = %d, want 413", resp.StatusCode)
+	}
+}
+
+// ServeStarted drives an http.Server the caller already started: it waits
+// for serveErr or ctx cancellation, then stops admission and shuts the
+// server down gracefully — the shutdown half `Serve` uses internally.
+func TestServeStartedShutdown(t *testing.T) {
+	s := New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop(), WorkDir: t.TempDir()})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := &http.Server{Handler: s.Handler()}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- hs.Serve(ln) }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.ServeStarted(ctx, hs, serveErr) }()
+
+	// The server answers until the context is cancelled; cancellation
+	// returns a nil error after a graceful shutdown.
+	healthURL := "http://" + ln.Addr().String() + "/api/health"
+	resp, err := http.Get(healthURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health = %d, want 200", resp.StatusCode)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("ServeStarted returned %v, want nil", err)
+	}
+	select {
+	case err := <-serveErr:
+		if !errors.Is(err, http.ErrServerClosed) {
+			t.Fatalf("serve goroutine error = %v, want ErrServerClosed", err)
+		}
+	default:
+		t.Fatal("server still running after ServeStarted returned")
 	}
 }
