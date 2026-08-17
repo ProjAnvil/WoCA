@@ -512,6 +512,21 @@ interrupt a run, and `pgup`/`pgdown` to scroll the transcript.
   (tools/resources/prompts + concurrency), OAuth flow, message bus, context,
   logging, TUI helpers, console commands, web-GUI manager, and CLI helpers.
 
+### Breaking changes (2026-08-17, layered merge)
+
+1. Skills and subagent definitions with the same name now resolve to the
+   **workspace** copy (`.woca/skills`, `.claude/skills`, `.woca/agents` from
+   the working directory up to the git root); previously the user-level
+   `~/.woca` copy silently won. Conflicts are logged (`config merge conflict
+   resolved`).
+2. `CLAUDE.md` injection widened: the user-level `~/.woca/CLAUDE.md`
+   (fallback `~/.claude/CLAUDE.md`) is now injected first, plus every
+   `CLAUDE.md` / `AGENTS.md` / `.claude/CLAUDE.md` from the git root down to
+   the working directory. Prompts get longer when those files exist.
+3. New workspace MCP file `<workdir>/.woca/mcp.json` (same
+   `{"mcpServers": {...}}` shape as `~/.woca/mcp.json`). Same-name servers
+   connect once: `--mcp` flag > workspace file > user file.
+
 ## License
 
 MIT.
