@@ -2156,7 +2156,7 @@ git commit -m "feat(agent): hard caps for teammates (8) and background tasks (16
   - `(*Run).droppedCount() int64`（Task 14 用）。
   - SSE 每事件多一行 `id: <seq>`；缺口时先发合成事件 `resync{reason:"history_gap"}`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```go
 package server
@@ -2215,12 +2215,12 @@ func TestEmitDropCounter(t *testing.T) {
 
 （Task 9 测试 import 块只需 `testing`；`TestParkTimesOut` 在 Task 13 才用到 `context`/`time`。）
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/server/ -run 'TestEmit|TestSubscribeSince' -v`
 Expected: 编译失败（`Seq`/`subscribeSince`/`droppedCount` 未定义）。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `Event`（run.go:19-22）：
 
@@ -2318,12 +2318,12 @@ func (r *Run) subscribeSince(lastSeq int64) (*subscriber, bool) {
 
 （`strconv` import；参数接收者 `r *http.Request` 与 Run 变量 `run` 注意不要撞名，按现有代码实际命名调整。）
 
-- [ ] **Step 4: 运行测试**
+- [x] **Step 4: 运行测试**
 
 Run: `go test -race ./internal/server/ -v`
 Expected: 全 PASS（readSSEEvent helper 逐行扫 event:/data:，新增 id: 行不影响既有断言；若有严格按行解析的 helper 需跳过 `id:` 行）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/server/run.go internal/server/server.go internal/server/run_test.go

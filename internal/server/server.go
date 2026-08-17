@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -499,8 +500,21 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	sub := run.subscribe()
+	// Last-Event-ID carries the last seq the client saw; resuming replays
+	// only the missed tail (or signals a gap outside the retention window).
+	lastSeq, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
+	var sub *subscriber
+	var gap bool
+	if lastSeq > 0 {
+		sub, gap = run.subscribeSince(lastSeq)
+	} else {
+		sub = run.subscribe()
+	}
 	defer run.unsubscribe(sub)
+	if gap {
+		fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"history_gap"}`)
+		flusher.Flush()
+	}
 
 	ctx := r.Context()
 	for {
@@ -510,7 +524,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data); err != nil {
+			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Type, data); err != nil {
 				return
 			}
 			flusher.Flush()

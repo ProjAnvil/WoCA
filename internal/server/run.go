@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
@@ -14,11 +15,13 @@ import (
 	"github.com/projanvil/woca/internal/runner"
 )
 
-// Event is one SSE event emitted to web clients. Type is the SSE event name
-// and Data is serialized as the `data:` payload.
+// Event is one SSE frame. Seq is a per-run monotonic sequence (from 1)
+// assigned by emit; it is written as the SSE id: line for Last-Event-ID
+// resume and never serialized into Data.
 type Event struct {
 	Type string
 	Data any
+	Seq  int64 `json:"-"`
 }
 
 // subscriber receives live events for a single SSE connection.
@@ -45,6 +48,8 @@ type Run struct {
 	history []Event
 	pending *interruptState
 	done    bool // terminal event (done or error) emitted
+	seq     int64        // under mu; last assigned Seq
+	dropped atomic.Int64 // fanout drops on full subscriber channels
 	// onFinish, when set, fires exactly once when the terminal event is
 	// emitted — on error and cancellation too, before onDone runs.
 	onFinish func()
@@ -225,15 +230,20 @@ func (r *Run) answer(body []byte) error {
 // emit appends an event to history and fans it out to live subscribers.
 func (r *Run) emit(ev Event) {
 	r.mu.Lock()
+	r.seq++
+	ev.Seq = r.seq
 	r.history = append(r.history, ev)
 	for sub := range r.subs {
 		select {
 		case sub.ch <- ev:
 		default:
+			r.dropped.Add(1) // 慢消费者丢事件可观测（/api/stats）
 		}
 	}
 	r.mu.Unlock()
 }
+
+func (r *Run) droppedCount() int64 { return r.dropped.Load() }
 
 // finish emits the terminal event (done or error) and marks the run finished
 // so the server can prune it from its registry once it ages out.
@@ -266,6 +276,26 @@ func (r *Run) subscribe() *subscriber {
 	r.subs[sub] = struct{}{}
 	r.mu.Unlock()
 	return sub
+}
+
+// subscribeSince replays only events after lastSeq, then goes live. gap is
+// true when lastSeq points before the oldest retained event (the replay
+// window can't cover it — the client should refetch a full snapshot).
+func (r *Run) subscribeSince(lastSeq int64) (*subscriber, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sub := &subscriber{ch: make(chan Event, len(r.history)+64)}
+	gap := false
+	if lastSeq > 0 && len(r.history) > 0 && r.history[0].Seq > lastSeq+1 {
+		gap = true
+	}
+	for _, ev := range r.history {
+		if ev.Seq > lastSeq {
+			sub.ch <- ev
+		}
+	}
+	r.subs[sub] = struct{}{}
+	return sub, gap
 }
 
 // unsubscribe removes a closed SSE connection.
