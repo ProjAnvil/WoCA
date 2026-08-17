@@ -124,7 +124,10 @@ func NewRegistry(workdir string) *Registry {
 		dir:     NewDir(workdir),
 		bg:      NewBackgroundShells(),
 		history: NewFileHistory(),
-		lspPool: newLSPPool(func(cmd []string) (lspTransport, error) { return startLSP(cmd) }),
+		lspPool: newLSPPool(
+			func(cmd []string) (lspTransport, error) { return startLSP(cmd) },
+			lspInitialize, // one handshake per spawned server, owned by the pool
+		),
 	}
 	for _, t := range defaultTools(r.dir, r.todos, r.bg, r.history, r.lspPool) {
 		r.Register(t)

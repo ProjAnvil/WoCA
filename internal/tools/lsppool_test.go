@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,7 +17,7 @@ func TestLSPPoolReuse(t *testing.T) {
 	p := newLSPPool(func([]string) (lspTransport, error) {
 		spawns.Add(1)
 		return &fakeTransport{responses: map[string]any{}}, nil
-	})
+	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
 	for i := 0; i < 3; i++ {
@@ -33,7 +35,7 @@ func TestLSPPoolRestartOnCrash(t *testing.T) {
 	p := newLSPPool(func([]string) (lspTransport, error) {
 		spawns.Add(1)
 		return &fakeTransport{responses: map[string]any{}}, nil
-	})
+	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
 	calls := 0
@@ -57,7 +59,7 @@ func TestLSPPoolBrokenCircuitBreaker(t *testing.T) {
 	p := newLSPPool(func([]string) (lspTransport, error) {
 		spawns.Add(1)
 		return nil, errors.New("spawn failed")
-	})
+	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
 	for i := 0; i < lspMaxSpawnFailures; i++ {
@@ -81,7 +83,7 @@ func TestLSPPoolIdleReap(t *testing.T) {
 	p := newLSPPool(func([]string) (lspTransport, error) {
 		spawns.Add(1)
 		return &fakeTransport{responses: map[string]any{}}, nil
-	})
+	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
 	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
@@ -89,5 +91,75 @@ func TestLSPPoolIdleReap(t *testing.T) {
 	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
 	if n := spawns.Load(); n != 2 {
 		t.Fatalf("spawns = %d, want 2 (idle entry reaped)", n)
+	}
+}
+
+// countingInitTransport wraps a transport and counts initialize requests.
+type countingInitTransport struct {
+	lspTransport
+	inits atomic.Int32
+}
+
+func (c *countingInitTransport) Call(ctx context.Context, method string, params, result any) error {
+	if method == "initialize" {
+		c.inits.Add(1)
+	}
+	return c.lspTransport.Call(ctx, method, params, result)
+}
+
+// 池负责一次握手：同一 key 连续两次 call 复用同一 server 且 initialize
+// 恰好一次（旧的 per-call initialize 会让第二次复用必失败——真实 gopls
+// 对二次 initialize 报协议错误）。
+func TestLSPPoolInitializesOncePerServer(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.go")
+	if err := os.WriteFile(path, []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var spawned *countingInitTransport
+	p := newLSPPool(func([]string) (lspTransport, error) {
+		spawned = &countingInitTransport{lspTransport: &fakeTransport{responses: map[string]any{
+			"initialize":              map[string]any{},
+			"textDocument/diagnostic": map[string]any{"kind": "full", "items": []map[string]any{}},
+		}}}
+		return spawned, nil
+	}, lspInitialize)
+	defer p.Close()
+	ws, cmd := poolKeyForTest()
+	for i := 0; i < 2; i++ {
+		err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error {
+			_, err := lspDiagnostics(context.Background(), tr, path)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("pooled call %d: %v", i+1, err)
+		}
+	}
+	if n := spawned.inits.Load(); n != 1 {
+		t.Fatalf("initialize requests = %d, want 1 (pool owns the handshake)", n)
+	}
+}
+
+// 握手失败视为 spawn 失败：计入熔断（连续失败后进入冷却，不再 spawn）。
+func TestLSPPoolInitFailureFeedsBreaker(t *testing.T) {
+	var spawns atomic.Int32
+	p := newLSPPool(func([]string) (lspTransport, error) {
+		spawns.Add(1)
+		// initialize is unscripted on this transport, so the handshake fails.
+		return &fakeTransport{responses: map[string]any{}}, nil
+	}, lspInitialize)
+	defer p.Close()
+	ws, cmd := poolKeyForTest()
+	for i := 0; i < lspMaxSpawnFailures; i++ {
+		if err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil }); err == nil {
+			t.Fatal("want handshake failure surfaced")
+		}
+	}
+	// 熔断冷却中：直接报错且不再 spawn。
+	if err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil }); err == nil {
+		t.Fatal("want broken error during cooldown")
+	}
+	if n := spawns.Load(); n != int32(lspMaxSpawnFailures) {
+		t.Fatalf("spawns = %d, want %d (circuit open)", n, lspMaxSpawnFailures)
 	}
 }

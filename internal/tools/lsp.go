@@ -20,8 +20,9 @@ import (
 // LSP tool (a lightweight port of Claude Code's LSPTool): pulls diagnostics
 // for one file from a language server speaking LSP over stdio. The server
 // command comes from the WOCA_LSP_SERVER environment variable (e.g.
-// "gopls", "typescript-language-server --stdio"); the client speaks enough
-// JSON-RPC for initialize → didOpen → textDocument/diagnostic per call.
+// "gopls", "typescript-language-server --stdio"); the pool initializes a
+// server once at spawn and each call speaks enough JSON-RPC for didOpen →
+// textDocument/diagnostic → didClose.
 
 // lspTransport is the JSON-RPC transport the client runs over (stdio in
 // production; fakes in tests).
@@ -235,23 +236,34 @@ func (t *stdioTransport) Close() error {
 	return t.cmd.Wait()
 }
 
-// lspDiagnostics pulls diagnostics for one file over the transport.
-func lspDiagnostics(ctx context.Context, t lspTransport, root, path string) (string, error) {
-	uri := "file://" + path
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+// lspInitialize performs the one-time LSP handshake on a fresh transport:
+// the initialize request plus the initialized notification. The pool runs it
+// exactly once per spawned server; per-file diagnostics must never
+// re-initialize (a second initialize against a live server is a protocol
+// error — e.g. gopls answers "initialize called while server in initialized
+// state" — which used to make every pooled reuse fail and restart).
+func lspInitialize(t lspTransport, workspace string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
 	var initResult json.RawMessage
 	if err := t.Call(ctx, "initialize", map[string]any{
 		"processId":    os.Getpid(),
-		"rootUri":      "file://" + root,
+		"rootUri":      "file://" + workspace,
 		"capabilities": map[string]any{},
 	}, &initResult); err != nil {
-		return "", err
+		return err
 	}
-	if err := t.Notify(ctx, "initialized", map[string]any{}); err != nil {
-		return "", err
-	}
+	return t.Notify(ctx, "initialized", map[string]any{})
+}
+
+// lspDiagnostics pulls diagnostics for one file over an already-initialized
+// transport (see lspInitialize; the pool owns the handshake). Only the
+// per-file didOpen/diagnostic/didClose sequence runs here, so a pooled server
+// can serve many files.
+func lspDiagnostics(ctx context.Context, t lspTransport, path string) (string, error) {
+	uri := "file://" + path
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 
 	content, _ := os.ReadFile(path)
 	if err := t.Notify(ctx, "textDocument/didOpen", map[string]any{
@@ -348,7 +360,7 @@ func lspTool(d *Dir, pool *lspPool) coretools.Tool {
 			var out string
 			err := pool.call(ctx, dir, command, func(tr lspTransport) error {
 				var derr error
-				out, derr = lspDiagnostics(ctx, tr, dir, path)
+				out, derr = lspDiagnostics(ctx, tr, path)
 				return derr
 			})
 			if err != nil {

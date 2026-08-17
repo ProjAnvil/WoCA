@@ -19,9 +19,16 @@ var (
 // lspPool pools language-server processes by (workspace, command): a ready
 // transport is reused directly, crashed ones are restarted once, and a key
 // whose spawns keep failing is marked broken for a cooldown so a crashing
-// server can't spin (opencode broken-set lesson).
+// server can't spin (opencode broken-set lesson). The LSP handshake
+// (initialize/initialized) runs ONCE here, right after spawn — callers' fn
+// must not re-initialize, since a second initialize against a live server
+// is a protocol error that would make every pooled reuse fail.
 type lspPool struct {
 	spawn func([]string) (lspTransport, error)
+	// init runs the one-time LSP handshake on a freshly spawned transport
+	// for the workspace the key is pooled under. A handshake failure is
+	// treated as a spawn failure (it counts toward the breaker).
+	init func(tr lspTransport, workspace string) error
 
 	// Tuning snapshots taken at construction (on the caller's goroutine):
 	// the reaper goroutine must not read the package vars, which tests
@@ -43,9 +50,10 @@ type lspEntry struct {
 	brokenUntil time.Time
 }
 
-func newLSPPool(spawn func([]string) (lspTransport, error)) *lspPool {
+func newLSPPool(spawn func([]string) (lspTransport, error), init func(lspTransport, string) error) *lspPool {
 	p := &lspPool{
 		spawn:       spawn,
+		init:        init,
 		entries:     map[string]*lspEntry{},
 		stopCh:      make(chan struct{}),
 		idleTimeout: lspIdleTimeout,
@@ -59,11 +67,12 @@ func lspPoolKey(workspace string, command []string) string {
 	return workspace + "\x00" + strings.Join(command, " ")
 }
 
-// call runs fn with a ready transport. On fn error the entry is evicted and
-// fn retried once on a freshly spawned server; the second error is returned.
+// call runs fn with a ready, already-initialized transport. On fn error the
+// entry is evicted and fn retried once on a freshly spawned server; the
+// second error is returned.
 func (p *lspPool) call(ctx context.Context, workspace string, command []string, fn func(lspTransport) error) error {
 	key := lspPoolKey(workspace, command)
-	tr, err := p.acquire(key, command)
+	tr, err := p.acquire(key, workspace, command)
 	if err != nil {
 		return err
 	}
@@ -73,7 +82,7 @@ func (p *lspPool) call(ctx context.Context, workspace string, command []string, 
 		return nil
 	}
 	p.evict(key, tr)
-	tr, err = p.acquire(key, command)
+	tr, err = p.acquire(key, workspace, command)
 	if err != nil {
 		return err
 	}
@@ -85,7 +94,7 @@ func (p *lspPool) call(ctx context.Context, workspace string, command []string, 
 	return err
 }
 
-func (p *lspPool) acquire(key string, command []string) (lspTransport, error) {
+func (p *lspPool) acquire(key, workspace string, command []string) (lspTransport, error) {
 	p.mu.Lock()
 	if p.stopped {
 		p.mu.Unlock()
@@ -103,7 +112,7 @@ func (p *lspPool) acquire(key string, command []string) (lspTransport, error) {
 	}
 	p.mu.Unlock()
 
-	tr, err := p.spawn(command) // spawn outside the lock
+	tr, err := p.spawnAndInit(workspace, command) // spawn + handshake outside the lock
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -127,6 +136,24 @@ func (p *lspPool) acquire(key string, command []string) (lspTransport, error) {
 	e.tr = tr
 	e.failures = 0
 	e.lastUsed = time.Now()
+	return tr, nil
+}
+
+// spawnAndInit spawns a server and runs the one-time LSP handshake. A
+// handshake failure closes the transport and is reported as a spawn failure
+// so it feeds the breaker.
+func (p *lspPool) spawnAndInit(workspace string, command []string) (lspTransport, error) {
+	tr, err := p.spawn(command)
+	if err != nil {
+		return nil, err
+	}
+	if p.init == nil {
+		return tr, nil
+	}
+	if err := p.init(tr, workspace); err != nil {
+		_ = tr.Close()
+		return nil, err
+	}
 	return tr, nil
 }
 

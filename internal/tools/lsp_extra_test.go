@@ -14,8 +14,10 @@ import (
 // lspTestServerSrc is a mode-aware LSP server used to drive the stdio
 // transport's edge cases: "ok" (normal, plus an initial notification), "err"
 // (JSON-RPC error responses), "silent" (reads but never answers), "garbage"
-// (malformed frame before each valid response), and "short" (truncated frame,
-// then exit, after reading one request).
+// (malformed frame before each valid response), "short" (truncated frame,
+// then exit, after reading one request), and "countinit" (answers every
+// request idempotently but reports how many initialize requests it has seen
+// via the diagnostic message — used to assert the pool handshakes once).
 const lspTestServerSrc = `package main
 
 import (
@@ -45,6 +47,7 @@ func main() {
 	}
 	r := bufio.NewReader(os.Stdin)
 	var n int
+	inits := 0
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
@@ -64,6 +67,24 @@ func main() {
 			switch mode {
 			case "nullresult":
 				write(map[string]any{"jsonrpc": "2.0", "id": *m.ID})
+			case "countinit":
+				var result any
+				switch m.Method {
+				case "initialize":
+					inits++
+					result = map[string]any{"capabilities": map[string]any{}}
+				case "textDocument/diagnostic":
+					result = map[string]any{"kind": "full", "items": []map[string]any{{
+						"severity": 1,
+						"range": map[string]any{
+							"start": map[string]any{"line": 0, "character": 0},
+							"end":   map[string]any{"line": 0, "character": 1}},
+						"message": fmt.Sprintf("server saw %d initialize calls", inits), "source": "fake",
+					}}}
+				default:
+					result = map[string]any{}
+				}
+				write(map[string]any{"jsonrpc": "2.0", "id": *m.ID, "result": result})
 			case "err":
 				write(map[string]any{"jsonrpc": "2.0", "id": *m.ID, "error": map[string]any{"message": "boom"}})
 			case "silent":
@@ -167,6 +188,34 @@ func TestLSPToolConfiguredServer(t *testing.T) {
 	}
 }
 
+// 同一 registry 连续两次 LSP 调用必须复用同一 server 进程且都成功：池化后
+// initialize 只能发生一次（spawn 时由池完成）。旧实现对每次调用都发
+// initialize，真实 gopls 会对第二次 initialize 报错（"initialize called
+// while server in initialized state"），复用必然失败并触发重启——池化收益
+// 归零。countinit 模式的 server 用诊断消息回报它收到的 initialize 次数。
+func TestLSPToolPooledServerInitializedOnce(t *testing.T) {
+	bin := buildLSPTestServer(t)
+	t.Setenv("WOCA_LSP_SERVER", bin+" countinit")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "x.go"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry(dir)
+	defer reg.Close()
+	for i := 1; i <= 2; i++ {
+		res := reg.Execute(context.Background(), "LSP", map[string]any{"path": "x.go"})
+		if strings.Contains(res.Content, "Error:") {
+			t.Fatalf("pooled LSP call %d = %q", i, res.Content)
+		}
+		if !strings.Contains(res.Content, "server saw 1 initialize calls") {
+			t.Fatalf("LSP call %d = %q, want server initialized exactly once", i, res.Content)
+		}
+	}
+	if active, _ := reg.LSPStats(); active != 1 {
+		t.Fatalf("pooled servers = %d, want 1 (both calls share one process)", active)
+	}
+}
+
 func TestLSPToolStartFailure(t *testing.T) {
 	t.Setenv("WOCA_LSP_SERVER", "/nonexistent/lsp-server-binary")
 	reg := NewRegistry(t.TempDir())
@@ -255,20 +304,20 @@ func TestLSPDiagnosticsTransportErrors(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// Unscripted initialize: Call fails.
-	if _, err := lspDiagnostics(ctx, &fakeTransport{responses: map[string]any{}}, dir, path); err == nil {
+	// Handshake failures surface from lspInitialize (the pool's one-time
+	// initialize per spawned server).
+	if err := lspInitialize(&fakeTransport{responses: map[string]any{}}, dir); err == nil {
 		t.Fatal("unscripted initialize = nil error")
 	}
-	// Notify failures at each stage.
 	tr := &fakeTransport{responses: map[string]any{"initialize": map[string]any{}}}
-	if _, err := lspDiagnostics(ctx, &notifyFailingTransport{fake: tr, fail: "initialized"}, dir, path); err == nil {
+	if err := lspInitialize(&notifyFailingTransport{fake: tr, fail: "initialized"}, dir); err == nil {
 		t.Fatal("initialized notify failure not surfaced")
 	}
-	if _, err := lspDiagnostics(ctx, &notifyFailingTransport{fake: tr, fail: "textDocument/didOpen"}, dir, path); err == nil {
+	// Per-file sequence: didOpen notify failure, then unscripted diagnostic.
+	if _, err := lspDiagnostics(ctx, &notifyFailingTransport{fake: tr, fail: "textDocument/didOpen"}, path); err == nil {
 		t.Fatal("didOpen notify failure not surfaced")
 	}
-	// Unscripted diagnostic request: Call fails.
-	if _, err := lspDiagnostics(ctx, tr, dir, path); err == nil {
+	if _, err := lspDiagnostics(ctx, tr, path); err == nil {
 		t.Fatal("unscripted diagnostic = nil error")
 	}
 }
@@ -280,7 +329,6 @@ func TestLSPDiagnosticsSeverityFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr := &fakeTransport{responses: map[string]any{
-		"initialize": map[string]any{},
 		"textDocument/diagnostic": map[string]any{
 			"kind": "full",
 			"items": []map[string]any{
@@ -291,7 +339,7 @@ func TestLSPDiagnosticsSeverityFallback(t *testing.T) {
 			},
 		},
 	}}
-	out, err := lspDiagnostics(context.Background(), tr, dir, path)
+	out, err := lspDiagnostics(context.Background(), tr, path)
 	if err != nil {
 		t.Fatal(err)
 	}

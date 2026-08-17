@@ -46,7 +46,6 @@ func TestLSPDiagnosticsViaFakeTransport(t *testing.T) {
 	os.WriteFile(path, []byte("package main\nfunc main() {}\n"), 0o644)
 
 	tr := &fakeTransport{responses: map[string]any{
-		"initialize": map[string]any{"capabilities": map[string]any{}},
 		"textDocument/diagnostic": map[string]any{
 			"kind": "full",
 			"items": []map[string]any{
@@ -62,14 +61,16 @@ func TestLSPDiagnosticsViaFakeTransport(t *testing.T) {
 			},
 		},
 	}}
-	out, err := lspDiagnostics(context.Background(), tr, dir, path)
+	out, err := lspDiagnostics(context.Background(), tr, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "Error 3:6 — undefined: foo (gopls)") {
 		t.Fatalf("diagnostics = %q", out)
 	}
-	if len(tr.notified) < 2 || tr.notified[0] != "initialized" || tr.notified[1] != "textDocument/didOpen" {
+	// initialize/initialized are the pool's handshake (lspInitialize), not
+	// part of the per-file sequence.
+	if len(tr.notified) < 2 || tr.notified[0] != "textDocument/didOpen" || tr.notified[1] != "textDocument/didClose" {
 		t.Fatalf("notifications = %v", tr.notified)
 	}
 }
@@ -79,10 +80,9 @@ func TestLSPDiagnosticsEmpty(t *testing.T) {
 	path := filepath.Join(dir, "a.go")
 	os.WriteFile(path, []byte("package a\n"), 0o644)
 	tr := &fakeTransport{responses: map[string]any{
-		"initialize":              map[string]any{},
 		"textDocument/diagnostic": map[string]any{"kind": "full", "items": []map[string]any{}},
 	}}
-	out, err := lspDiagnostics(context.Background(), tr, dir, path)
+	out, err := lspDiagnostics(context.Background(), tr, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := lspDiagnostics(context.Background(), tr, dir, path)
+	out, err := lspDiagnostics(context.Background(), tr, path)
 	_ = tr.Close()
 	if err != nil {
 		t.Fatal(err)
