@@ -254,6 +254,94 @@ func TestSessionGateSerializesRuns(t *testing.T) {
 	}
 }
 
+// 冒烟断言入库（终审遗留）：同 session 3 连发时 queue_position 0/1/2，
+// 中途态 /api/stats 必须报 active_runs=1（持门的 run1）、queued_runs=2、
+// session_queue_depths 含该会话且深度 2；最终三条 run 全部终态、队列清空。
+func TestSessionGateThreeRunsStatsMidFlight(t *testing.T) {
+	a := newScriptedAgent(t, "reply-1", "reply-2", "reply-3")
+	s := New(Config{Agent: a, Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: t.TempDir(), WorkDir: t.TempDir()})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	// 偏差说明：done 事件先于 onDone 落盘发出；等齐三个 save 事件再结束，
+	// 避免 t.TempDir 清理与异步写盘竞态（"directory not empty"）。
+	saved := make(chan string, 6)
+	s.sessions.testAfterSave = func(id string) { saved <- id }
+
+	run1, sid1, pos1 := postRun(t, srv.URL, "", "first")
+	if pos1 != 0 {
+		t.Fatalf("first run position = %d, want 0", pos1)
+	}
+	run2, sid2, pos2 := postRun(t, srv.URL, sid1, "second")
+	if sid2 != sid1 || pos2 != 1 {
+		t.Fatalf("second run sid=%s position=%d, want sid=%s position=1", sid2, pos2, sid1)
+	}
+	run3, sid3, pos3 := postRun(t, srv.URL, sid1, "third")
+	if sid3 != sid1 || pos3 != 2 {
+		t.Fatalf("third run sid=%s position=%d, want sid=%s position=2", sid3, pos3, sid1)
+	}
+
+	type statsBody struct {
+		ActiveRuns         int            `json:"active_runs"`
+		QueuedRuns         int            `json:"queued_runs"`
+		SessionQueueDepths map[string]int `json:"session_queue_depths"`
+	}
+	getStats := func() statsBody {
+		t.Helper()
+		resp, err := http.Get(srv.URL + "/api/stats")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var body statsBody
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+
+	// 中途态：run1 持门（delayLimiter 的 200ms 窗口内可观察），run2/run3
+	// 排队。有界轮询到精确计数——错过窗口则 2 深度不会再出现，超时即败。
+	deadline := time.Now().Add(10 * time.Second)
+	var mid statsBody
+	for {
+		mid = getStats()
+		if mid.ActiveRuns == 1 && mid.QueuedRuns == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("mid-flight stats active=%d queued=%d never observed", mid.ActiveRuns, mid.QueuedRuns)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if d, ok := mid.SessionQueueDepths[sid1]; !ok || d != 2 {
+		t.Fatalf("mid-flight session_queue_depths = %v, want [%s]=2", mid.SessionQueueDepths, sid1)
+	}
+
+	// 收尾：三条 run 全部到达终态；等齐三个 save 事件后队列必须清空。
+	waitRunDone(t, srv.URL, run1)
+	waitRunDone(t, srv.URL, run2)
+	waitRunDone(t, srv.URL, run3)
+	for i := 0; i < 3; i++ {
+		select {
+		case <-saved:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("transcript save %d not completed", i+1)
+		}
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		end := getStats()
+		if end.ActiveRuns == 0 && end.QueuedRuns == 0 && len(end.SessionQueueDepths) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("final stats not drained: %+v", end)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // 释放时序断言（spec §8）：session 门必须在 transcript 落盘完成后才释放。
 func TestSessionGateReleasesAfterPersist(t *testing.T) {
 	a := newScriptedAgent(t, "reply-1", "reply-2")
