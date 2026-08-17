@@ -13,10 +13,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/bus"
@@ -270,10 +272,9 @@ type Agent struct {
 	subagent bool
 	// refreshTools re-collects extra tools between turns (optional).
 	refreshTools func(ctx context.Context) []coretools.Tool
-	// refreshMu serializes extra-tool refreshes: the tools node triggers
-	// them between turns, and HTTP handlers (plugin toggles) trigger them
-	// outside runs — the two must not interleave.
-	refreshMu sync.Mutex
+	refreshMu    sync.Mutex // serializes extra-tool swap commits only (no I/O under it)
+	refreshSF    singleflight.Group
+	refreshLast  atomic.Int64 // unix nano of last completed refresh
 	// baseTools/extraTools split the tool list so refreshes only rebuild the
 	// extra part (registry + built-ins stay fixed).
 	baseTools  []coretools.Tool
@@ -1181,9 +1182,10 @@ func (a *Agent) toolsNode() graph.NodeFunc {
 		// prefetch after the result batch.
 		results = append(results, a.takeMemoryAttachments(ctx)...)
 		// Between-turn tool refresh (stage 28): re-collect extra tools so
-		// hot-added ones are available in the next round. Runs inside the
-		// graph's sequential dispatch, so no node sees a half-updated set.
-		a.refreshExtraTools(ctx)
+		// hot-added ones are available in the next round. Non-blocking: a
+		// slow MCP re-list runs in the background (singleflight-deduped,
+		// TTL-throttled) and the swap commits when it lands.
+		a.maybeRefreshTools(ctx)
 		// MaxTurns (stage 28): this tool round completes a model round; at
 		// the cap, append the marker and short-circuit to END — the tools
 		// node otherwise has an unconditional edge back to the model.

@@ -900,7 +900,7 @@ git commit -m "fix(agent): scope memory prefetch per run to stop cross-run overw
   - `(*Agent).RefreshToolsNow(ctx context.Context)` — 签名不变；绕过 TTL、仍被 singleflight 去重。
   - `refreshTTL = 5 * time.Minute`（包级 `var`，测试可改）。
 
-- [ ] **Step 1: 写失败测试** `internal/agent/refreshtools_test.go`
+- [x] **Step 1: 写失败测试** `internal/agent/refreshtools_test.go`
 
 ```go
 package agent
@@ -956,12 +956,12 @@ func TestRefreshToolsNowBypassesTTL(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/agent/ -run TestMaybeRefreshTools -v`
 Expected: 编译失败 `undefined: a.maybeRefreshTools`。
 
-- [ ] **Step 3: 重构 refreshtools.go**
+- [x] **Step 3: 重构 refreshtools.go**
 
 ```go
 package agent
@@ -1072,12 +1072,12 @@ toolsNode 调用点（agent.go:1185）：`a.refreshExtraTools(ctx)` → `a.maybe
 
 注意：`sameToolSets` 原样保留（上面标注"略"处不许删）；新增 `sync/atomic`、`time`、`singleflight` import。
 
-- [ ] **Step 4: go mod tidy + 运行测试**
+- [x] **Step 4: go mod tidy + 运行测试**
 
 Run: `go mod tidy && go test -race ./internal/agent/ -run 'Refresh' -v && go test -race ./internal/agent/`
 Expected: x/sync 变为直接依赖；全部 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/agent/refreshtools.go internal/agent/refreshtools_test.go internal/agent/agent.go go.mod go.sum

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"time"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 )
@@ -10,22 +11,48 @@ import (
 // (options.refreshTools): after each tool round the agent re-collects its
 // extra tools (e.g. re-listing MCP servers, whose tool set can change at
 // runtime) and, when the set changed, rebinds the model so the next round
-// sees them. The refresh runs at the end of the tools node, inside the
-// graph's sequential node dispatch, so no node observes a half-updated set.
+// sees them.
+
+// refreshTTL throttles between-turn extra-tool refreshes: within the window
+// the tools node skips re-collection entirely.
+var refreshTTL = 5 * time.Minute
+
+// maybeRefreshTools triggers a background extra-tool refresh when the TTL
+// has expired. The current round keeps the existing bindings — a slow MCP
+// re-list must never block the tools node (previously refreshMu covered the
+// network I/O and stalled every run each round).
+func (a *Agent) maybeRefreshTools(ctx context.Context) {
+	if a.refreshTools == nil {
+		return
+	}
+	if time.Since(time.Unix(0, a.refreshLast.Load())) < refreshTTL {
+		return
+	}
+	// DoChan runs fn in its own goroutine; duplicate calls while one is in
+	// flight share the result (singleflight).
+	res := a.refreshSF.DoChan("extra-tools", func() (any, error) {
+		// Outlive the tool round's ctx so an end-of-run cancel doesn't abort
+		// a half-done re-list.
+		a.refreshExtraTools(context.WithoutCancel(ctx))
+		return nil, nil
+	})
+	go func() {
+		<-res
+		a.refreshLast.Store(time.Now().UnixNano())
+	}()
+}
 
 // refreshExtraTools re-collects the extra (non-registry) tools via the
-// configured hook and rebinds the model when the set changed. It reports
-// whether the tool list changed. The collection hook and the model rebind run
-// outside a.mu; the compare-and-commit of the tool fields is serialized by
-// a.mu so the run-side readers (execute, route, ToolNames) never observe a
-// half-updated set.
+// configured hook and rebinds the model when the set changed. Collection
+// and rebind run WITHOUT refreshMu (network I/O must not hold it); refreshMu
+// now only serializes the microsecond compare-and-commit against
+// RefreshToolsNow-driven swaps. Run-side readers take snapshots under a.mu.
 func (a *Agent) refreshExtraTools(ctx context.Context) bool {
-	a.refreshMu.Lock()
-	defer a.refreshMu.Unlock()
 	if a.refreshTools == nil {
 		return false
 	}
 	fresh := a.refreshTools(ctx)
+	a.refreshMu.Lock()
 	a.mu.Lock()
 	changed := !sameToolSets(a.extraTools, fresh)
 	if changed {
@@ -40,6 +67,7 @@ func (a *Agent) refreshExtraTools(ctx context.Context) bool {
 	list := a.toolList
 	model := a.model
 	a.mu.Unlock()
+	a.refreshMu.Unlock()
 	if !changed {
 		return false
 	}
@@ -80,11 +108,13 @@ func sameToolSets(a, b []coretools.Tool) bool {
 	return true
 }
 
-// RefreshToolsNow re-collects the extra tools outside a run (e.g. the
-// settings API toggled a plugin and the new tool set should be bound before
-// the next turn starts). Safe to call while a run is in flight: refreshes are
-// serialized with each other via refreshMu and the run-side readers take
-// their snapshots under a.mu.
+// RefreshToolsNow re-collects immediately, bypassing the TTL; concurrent
+// callers (and an in-flight background refresh) are deduplicated by the
+// same singleflight key.
 func (a *Agent) RefreshToolsNow(ctx context.Context) {
-	a.refreshExtraTools(ctx)
+	_, _, _ = a.refreshSF.Do("extra-tools", func() (any, error) {
+		a.refreshExtraTools(ctx)
+		a.refreshLast.Store(time.Now().UnixNano())
+		return nil, nil
+	})
 }
