@@ -146,6 +146,12 @@ func (m *memoryRuntime) Begin(ctx context.Context, msgs []messages.Message, ws s
 			if err != nil {
 				return
 			}
+			if scope := memoryScopeFrom(ctx); scope != nil {
+				scope.mu.Lock()
+				scope.engineHits = hits
+				scope.mu.Unlock()
+				return
+			}
 			m.mu.Lock()
 			m.prefetch.engineHits = hits
 			m.mu.Unlock()
@@ -177,24 +183,43 @@ func (m *memoryRuntime) Begin(ctx context.Context, msgs []messages.Message, ws s
 				break
 			}
 		}
+		if scope := memoryScopeFrom(ctx); scope != nil {
+			scope.mu.Lock()
+			scope.entries = hits
+			scope.mu.Unlock()
+			return
+		}
 		m.mu.Lock()
 		m.prefetch.entries = hits
 		m.mu.Unlock()
 	}()
 }
 
-// TakeAttachments returns attachment messages for settled, relevant,
-// not-yet-injected memory entries (non-blocking; nothing when the prefetch
-// has not settled). The whole selection runs under the mutex: the injected
-// map is shared state and concurrent runs must not mark it outside the lock
-// (Go fatals on concurrent map writes).
-func (m *memoryRuntime) TakeAttachments() []messages.Message {
+// TakeAttachments drains the run's prefetch results into <relevant-memory>
+// human messages. The per-run scope (ctx) wins; without one it falls back
+// to the agent-level slot.
+func (m *memoryRuntime) TakeAttachments(ctx context.Context) []messages.Message {
+	if scope := memoryScopeFrom(ctx); scope != nil {
+		scope.mu.Lock()
+		entries, hits := scope.entries, scope.engineHits
+		scope.entries, scope.engineHits = nil, nil
+		scope.mu.Unlock()
+		return m.buildAttachments(entries, hits)
+	}
+	m.mu.Lock()
+	entries, hits := m.prefetch.entries, m.prefetch.engineHits
+	m.prefetch.entries, m.prefetch.engineHits = nil, nil
+	m.mu.Unlock()
+	return m.buildAttachments(entries, hits)
+}
+
+// buildAttachments formats settled prefetch results into <relevant-memory>
+// human messages. The injected dedup table is agent-level shared state and
+// stays under m.mu: concurrent runs must not mark it outside the lock (Go
+// fatals on concurrent map writes).
+func (m *memoryRuntime) buildAttachments(entries []store.Entry, hits []memory.Hit) []messages.Message {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	entries := m.prefetch.entries
-	m.prefetch.entries = nil
-	hits := m.prefetch.engineHits
-	m.prefetch.engineHits = nil
 	if m.prefetch.injected == nil {
 		m.prefetch.injected = map[string]bool{}
 	}

@@ -40,6 +40,8 @@ func goalSummary(g *agent.Goal) string {
 // there are no stop-hook or token-budget auto-continuations at this layer,
 // because continuation IS the loop.
 func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) (final []messages.Message, err error) {
+	// One goal run = one memory-prefetch scope (see agent.WithMemoryScope).
+	ctx = agent.WithMemoryScope(ctx)
 	// Goal-mode auto-retain: goal runs bypass Run (they execute the goal
 	// graph directly), so this defer is their only hook into memory. It fires
 	// on every return path of an invocation that actually drove the loop — a

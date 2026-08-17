@@ -305,7 +305,7 @@ func TestMemoryBeginKVPathAndAttachments(t *testing.T) {
 		return len(a.mem.prefetch.entries) > 0
 	}, "KV prefetch settle")
 
-	first := a.mem.TakeAttachments()
+	first := a.mem.TakeAttachments(ctx)
 	found := false
 	for _, m := range first {
 		if strings.Contains(m.Content, "ns/authkey") && strings.Contains(m.Content, "auth token") {
@@ -316,7 +316,7 @@ func TestMemoryBeginKVPathAndAttachments(t *testing.T) {
 		t.Fatalf("attachments missing the auth entry: %+v", first)
 	}
 	// Second take is empty: the injected set deduplicates.
-	if again := a.mem.TakeAttachments(); len(again) != 0 {
+	if again := a.mem.TakeAttachments(ctx); len(again) != 0 {
 		t.Fatalf("duplicate attachments: %+v", again)
 	}
 
@@ -329,7 +329,7 @@ func TestMemoryBeginKVPathAndAttachments(t *testing.T) {
 		defer b.mem.mu.Unlock()
 		return len(b.mem.prefetch.entries) > 0
 	}, "second KV prefetch settle")
-	for _, m := range b.mem.TakeAttachments() {
+	for _, m := range b.mem.TakeAttachments(context.Background()) {
 		if strings.Contains(m.Content, "ns/empty\n\n") {
 			t.Fatalf("empty entry attached: %q", m.Content)
 		}
@@ -350,7 +350,7 @@ func TestTakeAttachmentsBoundsAndReset(t *testing.T) {
 	hits = append(hits, memory.Hit{ID: "blank", Layer: "L2", Type: "fact"})
 	m.prefetch.engineHits = hits
 	m.mu.Unlock()
-	got := m.TakeAttachments()
+	got := m.TakeAttachments(context.Background())
 	if len(got) != 5 {
 		t.Fatalf("attachments = %d, want the max of 5", len(got))
 	}
@@ -363,7 +363,7 @@ func TestTakeAttachmentsBoundsAndReset(t *testing.T) {
 	m.prefetch.injected = injected
 	m.prefetch.engineHits = []memory.Hit{{ID: "fresh", Layer: "L2", Type: "fact", Summary: "s"}}
 	m.mu.Unlock()
-	if out := m.TakeAttachments(); len(out) != 1 {
+	if out := m.TakeAttachments(context.Background()); len(out) != 1 {
 		t.Fatalf("post-reset attachments = %d", len(out))
 	}
 	m.mu.Lock()

@@ -730,7 +730,7 @@ git commit -m "feat(web): queued run status with queue position badge"
   - `(*memoryRuntime).TakeAttachments(ctx context.Context) []messages.Message`（签名加 ctx；`Begin` 已带 ctx 不变）
   - `(*Agent).takeMemoryAttachments(ctx context.Context) []messages.Message`
 
-- [ ] **Step 1: 写失败测试** `internal/agent/memoryscope_test.go`
+- [x] **Step 1: 写失败测试** `internal/agent/memoryscope_test.go`
 
 ```go
 package agent
@@ -780,12 +780,12 @@ func TestTakeAttachmentsFallbackWithoutScope(t *testing.T) {
 
 同时把 `concurrency_test.go:53-82` 的 `TestTakeMemoryAttachmentsConcurrentRuns` 改为：两 goroutine 各用 `WithMemoryScope` 的 ctx 调 `takeMemoryAttachments(ctx)`，断言各自只拿到自己的 hits（不再是"不 fatal 即可"）。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/agent/ -run 'TestMemoryScope|TestTakeAttachmentsFallback|TestTakeMemoryAttachmentsConcurrentRuns' -v`
 Expected: 编译失败 `undefined: WithMemoryScope`。
 
-- [ ] **Step 3: 实现** `internal/agent/memoryscope.go`
+- [x] **Step 3: 实现** `internal/agent/memoryscope.go`
 
 ```go
 package agent
@@ -825,7 +825,7 @@ func memoryScopeFrom(ctx context.Context) *memoryScope {
 }
 ```
 
-- [ ] **Step 4: 改 memorystore.go**
+- [x] **Step 4: 改 memorystore.go**
 
 `Begin` 的异步 goroutine 收尾处（engine 路径与 store 关键词路径各一处写 `m.prefetch.*`）改为：
 
@@ -865,18 +865,18 @@ func (m *memoryRuntime) TakeAttachments(ctx context.Context) []messages.Message 
 
 原函数体的去重/截断/拼装逻辑（:200-250）原样移入 `buildAttachments(entries []store.Entry, hits []memory.Hit) []messages.Message`，其中访问 `m.injected` 的段落保持 `m.mu` 保护。
 
-- [ ] **Step 5: 改 wrapper 与调用点、run 入口注入**
+- [x] **Step 5: 改 wrapper 与调用点、run 入口注入**
 
 - agent.go:556-558：`func (a *Agent) takeMemoryAttachments(ctx context.Context) []messages.Message { return a.mem.TakeAttachments(ctx) }`。
 - agent.go:1181：`results = append(results, a.takeMemoryAttachments(ctx)...)`。
 - runner.go `Run` 函数体开头加一行：`ctx = agent.WithMemoryScope(ctx)`；goalrunner.go `RunGoal` 同样。（`beginMemoryPrefetch` 已带 ctx 且透传给 `Begin`，无需改签名。）
 
-- [ ] **Step 6: 运行测试**
+- [x] **Step 6: 运行测试**
 
 Run: `go test -race ./internal/agent/ ./internal/runner/ -v`
 Expected: 全 PASS（含改造后的并发用例与 `memws_test.go`、`memoryengine_test.go` 既有用例）。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/agent/memoryscope.go internal/agent/memoryscope_test.go internal/agent/memorystore.go internal/agent/agent.go internal/agent/concurrency_test.go internal/runner/

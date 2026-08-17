@@ -860,7 +860,7 @@ func TestTakeAttachmentsInjectedAndLongEntries(t *testing.T) {
 		{Namespace: "ns", Key: "long", Value: []byte(long)},
 	}
 	m.mu.Unlock()
-	out := m.TakeAttachments()
+	out := m.TakeAttachments(context.Background())
 	if len(out) != 2 {
 		t.Fatalf("attachments = %d: %+v", len(out), out)
 	}
@@ -884,7 +884,7 @@ func TestTakeAttachmentsEngineHitClampAndDup(t *testing.T) {
 		{ID: "h1", Layer: "L2", Type: "fact", Summary: "dup"}, // injected: skipped
 	}
 	m.mu.Unlock()
-	out := m.TakeAttachments()
+	out := m.TakeAttachments(context.Background())
 	if len(out) != 1 {
 		t.Fatalf("attachments = %d", len(out))
 	}

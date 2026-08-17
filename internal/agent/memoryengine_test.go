@@ -132,7 +132,7 @@ func TestPrefetchUsesEngineRecall(t *testing.T) {
 	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("how does auth work?")})
 	var got []messages.Message
 	for i := 0; i < 50 && got == nil; i++ {
-		got = a.takeMemoryAttachments()
+		got = a.takeMemoryAttachments(context.Background())
 		if got == nil {
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -150,7 +150,7 @@ func TestPrefetchUsesEngineRecall(t *testing.T) {
 	if recalls := f.recordedRecalls(); len(recalls) != 1 || recalls[0] != "/ws/custom|how does auth work?" {
 		t.Fatalf("recalls = %v", f.recordedRecalls())
 	}
-	if more := a.takeMemoryAttachments(); len(more) != 0 {
+	if more := a.takeMemoryAttachments(context.Background()); len(more) != 0 {
 		t.Fatalf("dedup failed: %v", more)
 	}
 }
@@ -201,7 +201,7 @@ func TestEngineRecallErrorSkipsSilently(t *testing.T) {
 	if recalls := f.recordedRecalls(); len(recalls) != 1 {
 		t.Fatalf("error path should have executed exactly one Recall, got %v", recalls)
 	}
-	if got := a.takeMemoryAttachments(); len(got) != 0 {
+	if got := a.takeMemoryAttachments(context.Background()); len(got) != 0 {
 		t.Fatalf("error path should produce no attachments: %v", got)
 	}
 }
@@ -249,7 +249,7 @@ func TestMemoryRuntimeStandalone(t *testing.T) {
 	if recalls := f.recordedRecalls(); len(recalls) != 1 || recalls[0] != "/ws|how does auth work?" {
 		t.Fatalf("recalls = %v", recalls)
 	}
-	atts := m.TakeAttachments()
+	atts := m.TakeAttachments(context.Background())
 	if len(atts) != 1 || !strings.Contains(atts[0].Content, "auth uses oauth2") {
 		t.Fatalf("attachments = %v", atts)
 	}

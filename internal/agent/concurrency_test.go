@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -50,32 +51,37 @@ func TestRestoreGoalNotifiesWithoutDeadlock(t *testing.T) {
 	}
 }
 
-// TestTakeMemoryAttachmentsConcurrentRuns mimics two concurrent runs
-// consuming the same agent's prefetch state: the injected-key map is shared
-// agent state, so concurrent takes must not mutate it outside the mutex
-// (Go fatals on concurrent map writes; -race flags the mutation).
+// TestTakeMemoryAttachmentsConcurrentRuns mimics two concurrent runs on the
+// same agent, each consuming memory through its own run scope: a run's take
+// returns only its own prefetch hits (never the other run's), and the shared
+// agent-level injected-key map stays mutex-guarded (Go fatals on concurrent
+// map writes; -race flags the mutation).
 func TestTakeMemoryAttachmentsConcurrentRuns(t *testing.T) {
 	lead, _ := newTeamLead(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
+	lead.mem.mu.Lock()
+	lead.mem.prefetch.injected = map[string]bool{"seed": true}
+	lead.mem.mu.Unlock()
 	const rounds = 100
 	for i := 0; i < rounds; i++ {
-		hits := make([]memory.Hit, 6)
-		for j := range hits {
-			hits[j] = memory.Hit{ID: fmt.Sprintf("round-%d-hit-%d", i, j), Summary: "s", Content: "c"}
-		}
-		lead.mem.mu.Lock()
-		lead.mem.prefetch.engineHits = hits
-		if lead.mem.prefetch.injected == nil {
-			lead.mem.prefetch.injected = map[string]bool{"seed": true}
-		}
-		lead.mem.mu.Unlock()
-
 		var wg sync.WaitGroup
 		for g := 0; g < 2; g++ {
 			wg.Add(1)
-			go func() {
+			go func(g int) {
 				defer wg.Done()
-				lead.takeMemoryAttachments()
-			}()
+				ctx := WithMemoryScope(context.Background())
+				scope := memoryScopeFrom(ctx)
+				scope.mu.Lock()
+				scope.engineHits = []memory.Hit{{
+					ID:      fmt.Sprintf("round-%d-run-%d", i, g),
+					Summary: fmt.Sprintf("own-hit-run-%d", g),
+					Content: "c",
+				}}
+				scope.mu.Unlock()
+				got := lead.takeMemoryAttachments(ctx)
+				if len(got) != 1 || !strings.Contains(got[0].Content, fmt.Sprintf("own-hit-run-%d", g)) {
+					t.Errorf("round %d run %d got %+v, want its own hit only", i, g, got)
+				}
+			}(g)
 		}
 		wg.Wait()
 	}

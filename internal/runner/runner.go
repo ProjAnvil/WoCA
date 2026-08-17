@@ -50,6 +50,9 @@ func New(a *agent.Agent, handle InterruptHandler, render Renderer) *Runner {
 // resumed from the graph checkpoint after each answer. On natural completion,
 // Stop hooks run and may inject feedback to continue the turn.
 func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []messages.Message, err error) {
+	// One run = one memory-prefetch scope: concurrent runs on the shared
+	// agent each get their own slot (see agent.WithMemoryScope).
+	ctx = agent.WithMemoryScope(ctx)
 	// Auto-retain (single write choke point): every return path stores the
 	// run's Q/A + outcome into long-term memory. Detached ctx so graph
 	// teardown doesn't cancel the writes.

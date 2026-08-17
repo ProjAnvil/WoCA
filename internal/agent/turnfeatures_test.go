@@ -224,7 +224,7 @@ func TestMemoryPrefetchAttachments(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	var attached []messages.Message
 	for time.Now().Before(deadline) {
-		attached = a.takeMemoryAttachments()
+		attached = a.takeMemoryAttachments(ctx)
 		if len(attached) > 0 {
 			break
 		}
@@ -244,7 +244,7 @@ func TestMemoryPrefetchAttachments(t *testing.T) {
 		t.Fatalf("irrelevant memory attached:\n%s", joined)
 	}
 	// Already-injected entries are not attached again.
-	if again := a.takeMemoryAttachments(); len(again) != 0 {
+	if again := a.takeMemoryAttachments(ctx); len(again) != 0 {
 		t.Fatalf("duplicate attachments: %+v", again)
 	}
 }

@@ -556,9 +556,10 @@ func (a *Agent) beginMemoryPrefetch(ctx context.Context, msgs []messages.Message
 }
 
 // takeMemoryAttachments consumes the settled prefetch as attachment
-// messages (nil-safe when nothing settled).
-func (a *Agent) takeMemoryAttachments() []messages.Message {
-	return a.mem.TakeAttachments()
+// messages (nil-safe when nothing settled). The run-scoped ctx wins; a
+// scope-less ctx (CLI single-run paths) falls back to the agent-level slot.
+func (a *Agent) takeMemoryAttachments(ctx context.Context) []messages.Message {
+	return a.mem.TakeAttachments(ctx)
 }
 
 // SystemPrompt returns the agent's system prompt.
@@ -1178,7 +1179,7 @@ func (a *Agent) toolsNode() graph.NodeFunc {
 		a.maybeBeginTaskSummary(ctx, msgs)
 		// Relevant-memory attachments (stage 27): consume the turn's
 		// prefetch after the result batch.
-		results = append(results, a.takeMemoryAttachments()...)
+		results = append(results, a.takeMemoryAttachments(ctx)...)
 		// Between-turn tool refresh (stage 28): re-collect extra tools so
 		// hot-added ones are available in the next round. Runs inside the
 		// graph's sequential dispatch, so no node sees a half-updated set.
