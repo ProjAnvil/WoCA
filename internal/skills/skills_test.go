@@ -142,3 +142,21 @@ func TestLoaderHotReload(t *testing.T) {
 		t.Fatalf("second load = %+v", list)
 	}
 }
+
+func TestLoadSetsSource(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "my-skill")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list, err := Load(root)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("load: %v %+v", err, list)
+	}
+	if want := filepath.Join(dir, "SKILL.md"); list[0].Source != want {
+		t.Fatalf("Source = %q, want %q", list[0].Source, want)
+	}
+}

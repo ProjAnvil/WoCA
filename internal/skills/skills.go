@@ -17,6 +17,9 @@ type Skill struct {
 	Description string
 	Body        string
 	Args        []SkillArg
+	// Source is the absolute path of the SKILL.md file (layered-merge
+	// conflict logs; empty for hand-constructed values).
+	Source string
 }
 
 // SkillArg is one declared argument for a skill.
@@ -50,7 +53,9 @@ func Load(root string) ([]Skill, error) {
 				if err != nil {
 					continue
 				}
-				out = append(out, parseSkill(filepath.Base(dir), data))
+				sk := parseSkill(filepath.Base(dir), data)
+				sk.Source = path
+				out = append(out, sk)
 			}
 		}
 	}
