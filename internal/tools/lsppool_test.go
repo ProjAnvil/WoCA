@@ -201,3 +201,31 @@ func TestLSPPoolPerEntrySerialization(t *testing.T) {
 		t.Fatalf("max concurrent fn depth on one server = %d, want 1", d)
 	}
 }
+
+// acquire 复用必须刷新 lastUsed：entry 空闲到接近阈值后被复用、fn 执行中
+// 越过阈值，idle reaper 不得关掉在用的 transport（否则复用即失败）。
+func TestLSPPoolAcquireReuseRefreshesLastUsed(t *testing.T) {
+	oldIdle, oldTick := lspIdleTimeout, lspReapInterval
+	lspIdleTimeout, lspReapInterval = 500*time.Millisecond, 100*time.Millisecond
+	defer func() { lspIdleTimeout, lspReapInterval = oldIdle, oldTick }()
+	var spawns atomic.Int32
+	p := newLSPPool(func([]string) (lspTransport, error) {
+		spawns.Add(1)
+		return &fakeTransport{responses: map[string]any{}}, nil
+	}, nil)
+	defer p.Close()
+	ws, cmd := poolKeyForTest()
+	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
+	// 空闲 350ms（阈值 500ms 内），随后复用并在 fn 内越过阈值：reaper 在
+	// fn 期间的 tick（600ms 处，cutoff=100ms）若看旧 lastUsed 就会回收。
+	time.Sleep(350 * time.Millisecond)
+	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error {
+		time.Sleep(350 * time.Millisecond)
+		return nil
+	})
+	// 复用成功且未被回收 → 仍是同一进程。
+	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
+	if n := spawns.Load(); n != 1 {
+		t.Fatalf("spawns = %d, want 1 (in-use entry must not be reaped)", n)
+	}
+}

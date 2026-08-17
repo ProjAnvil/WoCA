@@ -124,6 +124,9 @@ func (p *lspPool) acquire(key, workspace string, command []string) (*lspEntry, l
 			return nil, nil, fmt.Errorf("LSP server unavailable (cooling down after repeated spawn failures)")
 		}
 		if e.tr != nil {
+			// Refresh under the lock: the entry is in use again, and the idle
+			// reaper must not claim it mid-call based on a stale lastUsed.
+			e.lastUsed = time.Now()
 			p.mu.Unlock()
 			return e, e.tr, nil
 		}
