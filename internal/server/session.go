@@ -59,6 +59,10 @@ func newSessionStore(dir string) *sessionStore {
 // reconcileOnStartup folds transcripts that have no index entry (legacy
 // files, or files written before the in-memory index existed) into the
 // index once, so list() never has to touch .jsonl files at request time.
+// It also prunes zombie entries — index records whose transcript file no
+// longer exists (a crash between the transcript delete and the index
+// flush leaves them behind; listing them would show sessions that load as
+// nil).
 func (s *sessionStore) reconcileOnStartup() {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -88,6 +92,13 @@ func (s *sessionStore) reconcileOnStartup() {
 			MessageCount: len(msgs),
 		}
 		changed = true
+	}
+	// 剪除僵尸条目：索引中不存在对应 .jsonl 的会话（写回索引前过滤）。
+	for id := range s.index {
+		if _, err := os.Stat(s.path(id)); err != nil {
+			delete(s.index, id)
+			changed = true
+		}
 	}
 	if changed {
 		s.flushIndex()

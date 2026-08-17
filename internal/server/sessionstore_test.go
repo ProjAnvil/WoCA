@@ -281,3 +281,39 @@ func TestSessionStoreStartupReconcile(t *testing.T) {
 		t.Fatalf("summary = %+v", list[0])
 	}
 }
+
+// 启动对账剪除僵尸条目：崩溃窗口可使 index.json 残留已删 transcript 的条目
+//（delete 的 flush 未及落盘），list 会显示一个 load 为 nil 的会话。
+func TestSessionStoreStartupReconcilePrunesZombies(t *testing.T) {
+	dir := t.TempDir()
+	s := newSessionStore(dir)
+	if err := s.save("keep", []messages.Message{{Role: messages.RoleHuman, Content: "alive"}}, "/ws"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.save("zombie", []messages.Message{{Role: messages.RoleHuman, Content: "dead"}}, "/ws"); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟崩溃窗口：index.json 已记录两个会话，但 zombie 的 transcript 丢失。
+	if err := os.Remove(filepath.Join(dir, "zombie.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	s2 := newSessionStore(dir)
+	list, err := s2.list()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != "keep" {
+		t.Fatalf("list = %+v, want only the session with a live transcript", list)
+	}
+	if s2.load("zombie") != nil {
+		t.Fatal("zombie session should not resolve")
+	}
+	// 索引被清理（写回磁盘）。
+	idx := s2.loadIndex()
+	if _, ok := idx["zombie"]; ok {
+		t.Fatal("zombie entry survived in index.json")
+	}
+	if _, ok := idx["keep"]; !ok {
+		t.Fatal("live entry dropped from index.json")
+	}
+}
