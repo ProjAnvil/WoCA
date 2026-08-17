@@ -176,7 +176,7 @@ func sleepToolNamed(name string, rec *recorder) coretools.Tool {
 func TestStreamingToolExecutionOverlaps(t *testing.T) {
 	rec := &recorder{}
 	reg := tools.NewRegistry(t.TempDir())
-	reg.Register(sleepTool(rec))
+	reg.Register(sleepToolNamed("Grep", rec))
 
 	state := &scriptState{
 		turns: [][]timedChunk{
@@ -190,7 +190,7 @@ func TestStreamingToolExecutionOverlaps(t *testing.T) {
 				// The complete tool call arrives here; execution should start
 				// immediately while the next chunk is still 400ms away.
 				{0, messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
-					{ID: "t1", Name: "Sleep", Args: map[string]any{"ms": 250}},
+					{ID: "t1", Name: "Grep", Args: map[string]any{"ms": 250}},
 				}}},
 				{400 * time.Millisecond, func() messages.Message {
 					m := messages.AI("")
@@ -327,6 +327,20 @@ func TestStreamingExecutionSkipsGatedCalls(t *testing.T) {
 // TestStreamingExecutionReadOnlyDefaultMode verifies a read-only tool call
 // is pre-started even in the default permission mode: a recording "Grep"
 // (CatRead, auto-allowed) must begin before the model's stream ends.
+func TestSpeculativeAllowedReadOnlyGate(t *testing.T) {
+	for _, mode := range []config.PermissionMode{config.ModeDefault, config.ModeAcceptEdits, config.ModeBypass, config.ModePlan, config.ModeReadOnly} {
+		a := &Agent{mode: mode, perms: nil}
+		write := messages.ToolCall{ID: "1", Name: "Write", Args: map[string]any{"path": "x.go", "content": "package x"}}
+		if a.speculativeAllowed(write) {
+			t.Fatalf("mode %v: write tool speculatively dispatched, want blocked", mode)
+		}
+		read := messages.ToolCall{ID: "2", Name: "Read", Args: map[string]any{"path": "x.go"}}
+		if !a.speculativeAllowed(read) {
+			t.Fatalf("mode %v: read tool blocked, want allowed", mode)
+		}
+	}
+}
+
 func TestStreamingExecutionReadOnlyDefaultMode(t *testing.T) {
 	rec := &recorder{}
 	reg := tools.NewRegistry(t.TempDir())

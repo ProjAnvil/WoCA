@@ -2440,7 +2440,7 @@ git commit -m "feat(web): SSE resume with Last-Event-ID and resync fallback"
 - Consumes: `tools.IsReadOnly`（registry.go:88-102）、`tools.CategoryOf`（registry.go:79-84）。
 - Produces: `speculativeAllowed` 全模式只放行只读/meta 工具。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```go
 package agent
@@ -2469,12 +2469,12 @@ func TestSpeculativeAllowedReadOnlyGate(t *testing.T) {
 
 （`mode`/`perms` 字段名与 ToolCall 类型路径按代码实际调整。）
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/agent/ -run TestSpeculativeAllowedReadOnlyGate -v`
 Expected: FAIL —— ModeBypass/ModeAcceptEdits 下 Write 被放行。
 
-- [ ] **Step 3: 修改**（streamingexec.go:124-150）
+- [x] **Step 3: 修改**（streamingexec.go:124-150）
 
 保留 AskUserQuestion/EnterPlanMode/ExitPlanMode 黑名单与 `perms.Action` 拒绝检查不动；其后的 mode switch 整体替换为：
 
@@ -2489,12 +2489,12 @@ Expected: FAIL —— ModeBypass/ModeAcceptEdits 下 Write 被放行。
 
 （原 `a.mu.Lock()` 读 mode 的段落随之删除；若 `mode` 变量不再使用一并清理。）
 
-- [ ] **Step 4: 运行测试**
+- [x] **Step 4: 运行测试**
 
 Run: `go test -race ./internal/agent/ -run 'Speculative' -v && go test -race ./internal/agent/`
 Expected: 全 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/agent/streamingexec.go internal/agent/streamingexec_test.go

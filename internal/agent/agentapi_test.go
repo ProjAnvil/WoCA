@@ -394,8 +394,8 @@ func TestSpeculativeAllowedMirrorsGate(t *testing.T) {
 		}
 	}
 	write := messages.ToolCall{Name: "Write", Args: map[string]any{"file_path": "x"}}
-	if newAgent(config.ModeBypass).speculativeAllowed(write) != true {
-		t.Fatal("bypass should pre-run writes")
+	if newAgent(config.ModeBypass).speculativeAllowed(write) {
+		t.Fatal("bypass must not pre-run writes (read-only speculative gate)")
 	}
 	if newAgent(config.ModeDefault).speculativeAllowed(write) {
 		t.Fatal("default must not pre-run writes")

@@ -104,11 +104,11 @@ func TestStreamFallbackCleanMessage(t *testing.T) {
 
 	rec := &recorder{}
 	reg := tools.NewRegistry(t.TempDir())
-	reg.Register(sleepToolNamed("Sleep", rec))
+	reg.Register(sleepToolNamed("Grep", rec))
 
 	failChunk := func(id string) messages.Message {
 		return messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
-			{ID: id, Name: "Sleep", Args: map[string]any{"ms": 900}},
+			{ID: id, Name: "Grep", Args: map[string]any{"ms": 900}},
 		}}
 	}
 	text := func(s string) messages.Message {
@@ -201,9 +201,10 @@ func TestStreamFallbackCleanMessage(t *testing.T) {
 	}
 }
 
-// failChunk2 builds a Sleep tool-call chunk with an explicit duration.
+// failChunk2 builds a speculative-friendly (read-only "Grep") tool-call
+// chunk with an explicit duration.
 func failChunk2(id string, ms int) messages.Message {
 	return messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
-		{ID: id, Name: "Sleep", Args: map[string]any{"ms": ms}},
+		{ID: id, Name: "Grep", Args: map[string]any{"ms": ms}},
 	}}
 }

@@ -7,7 +7,6 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
-	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/permissions"
 	"github.com/projanvil/woca/internal/tools"
 )
@@ -131,22 +130,12 @@ func (a *Agent) speculativeAllowed(call messages.ToolCall) bool {
 			return false // deny is pointless to pre-run; ask needs an interrupt
 		}
 	}
+	// Speculative dispatch only runs read-only (or meta) tools. Writes wait
+	// for the real toolsNode regardless of permission mode — a speculated
+	// write whose stream is later restarted would have executed twice.
 	readOnly := tools.IsReadOnly(call.Name, call.Args)
 	cat := tools.CategoryOf(call.Name)
-
-	a.mu.Lock()
-	mode := a.mode
-	a.mu.Unlock()
-	switch mode {
-	case config.ModeBypass:
-		return true
-	case config.ModePlan, config.ModeReadOnly:
-		return readOnly || cat == tools.CatMeta
-	case config.ModeAcceptEdits:
-		return cat == tools.CatWrite || readOnly || cat == tools.CatMeta
-	default: // ModeDefault
-		return readOnly || cat == tools.CatMeta
-	}
+	return readOnly || cat == tools.CatMeta
 }
 
 // dispatchSpeculative starts executing a stream-complete tool call in the
