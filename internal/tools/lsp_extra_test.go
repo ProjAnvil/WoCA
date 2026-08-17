@@ -171,7 +171,8 @@ func TestLSPToolStartFailure(t *testing.T) {
 	t.Setenv("WOCA_LSP_SERVER", "/nonexistent/lsp-server-binary")
 	reg := NewRegistry(t.TempDir())
 	res := reg.Execute(context.Background(), "LSP", map[string]any{"path": "x.go"})
-	if !strings.Contains(res.Content, "Error: start LSP server") {
+	// The pool surfaces the raw spawn error (no "start LSP server" prefix).
+	if !strings.Contains(res.Content, "Error:") || !strings.Contains(res.Content, "/nonexistent/lsp-server-binary") {
 		t.Fatalf("start failure = %q", res.Content)
 	}
 }

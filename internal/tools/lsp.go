@@ -276,6 +276,10 @@ func lspDiagnostics(ctx context.Context, t lspTransport, root, path string) (str
 	}, &report); err != nil {
 		return "", err
 	}
+	// didClose so the same pooled server can didOpen the same file again.
+	_ = t.Notify(ctx, "textDocument/didClose", map[string]any{
+		"textDocument": map[string]any{"uri": uri},
+	})
 	if len(report.Items) == 0 {
 		return "(no diagnostics)", nil
 	}
@@ -326,9 +330,10 @@ func lspLanguageID(path string) string {
 	}
 }
 
-// lspTool builds the LSP diagnostics tool. serverCommand resolves the
-// language server to spawn (WOCA_LSP_SERVER).
-func lspTool(d *Dir) coretools.Tool {
+// lspTool builds the LSP diagnostics tool. The pool reuses language-server
+// processes per (workspace, command) instead of spawning one per call
+// (WOCA_LSP_SERVER still resolves the command).
+func lspTool(d *Dir, pool *lspPool) coretools.Tool {
 	desc := `Get language-server diagnostics (errors, warnings) for one file via LSP. Configure the server with the WOCA_LSP_SERVER environment variable (e.g. "gopls" or "typescript-language-server --stdio"). Use before claiming code compiles or when hunting a compile error.`
 	t, err := coretools.FromFunc("LSP", desc,
 		func(ctx context.Context, a struct {
@@ -340,12 +345,12 @@ func lspTool(d *Dir) coretools.Tool {
 			}
 			dir := d.For(ctx)
 			path := resolvePath(dir, a.Path)
-			tr, err := startLSP(command)
-			if err != nil {
-				return coretools.Result{Content: "Error: start LSP server: " + err.Error()}, nil
-			}
-			out, err := lspDiagnostics(ctx, tr, dir, path)
-			_ = tr.Close()
+			var out string
+			err := pool.call(ctx, dir, command, func(tr lspTransport) error {
+				var derr error
+				out, derr = lspDiagnostics(ctx, tr, dir, path)
+				return derr
+			})
 			if err != nil {
 				return coretools.Result{Content: "Error: " + err.Error()}, nil
 			}

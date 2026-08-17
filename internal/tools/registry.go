@@ -109,6 +109,7 @@ type Registry struct {
 	dir     *Dir
 	bg      *BackgroundShells
 	history *FileHistory
+	lspPool *lspPool
 }
 
 // NewRegistry builds a registry populated with the default tool set, bound to
@@ -123,11 +124,27 @@ func NewRegistry(workdir string) *Registry {
 		dir:     NewDir(workdir),
 		bg:      NewBackgroundShells(),
 		history: NewFileHistory(),
+		lspPool: newLSPPool(func(cmd []string) (lspTransport, error) { return startLSP(cmd) }),
 	}
-	for _, t := range defaultTools(r.dir, r.todos, r.bg, r.history) {
+	for _, t := range defaultTools(r.dir, r.todos, r.bg, r.history, r.lspPool) {
 		r.Register(t)
 	}
 	return r
+}
+
+// Close shuts down pooled LSP servers. Safe to call multiple times.
+func (r *Registry) Close() {
+	if r.lspPool != nil {
+		r.lspPool.Close()
+	}
+}
+
+// LSPStats reports pooled/broken LSP server counts (for /api/stats).
+func (r *Registry) LSPStats() (active, broken int) {
+	if r.lspPool == nil {
+		return 0, 0
+	}
+	return r.lspPool.stats()
 }
 
 // FileHistory returns the file-level undo/redo log shared by the mutating

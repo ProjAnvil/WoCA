@@ -43,12 +43,15 @@ func (a *Agent) FileHistory() *tools.FileHistory {
 	return a.registry.FileHistory()
 }
 
-// Close releases the agent's session-scoped background resources: teammates
-// and the cron scheduler loop. Call once when the session ends (main's
-// defers); after Close the agent must not start new runs.
+// Close releases the agent's session-scoped background resources: teammates,
+// the cron scheduler loop, and pooled LSP servers. Call once when the session
+// ends (main's defers); after Close the agent must not start new runs.
 func (a *Agent) Close() {
 	a.CloseTeams()
 	a.stopCron()
+	if a.registry != nil {
+		a.registry.Close()
+	}
 }
 
 // CloseTeams stops all teammates spawned by this agent (session shutdown).

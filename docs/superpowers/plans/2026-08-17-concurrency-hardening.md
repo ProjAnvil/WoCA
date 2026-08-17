@@ -1431,7 +1431,7 @@ git commit -m "fix(server): in-memory session index; no file I/O under store loc
   - `(*Registry).Close()`、`(*Registry).LSPStats() (active, broken int)`
   - 包级 `var lspIdleTimeout = 5*time.Minute`、`lspBrokenCooldown = 10*time.Minute`、`lspMaxSpawnFailures = 2`（var 以便测试改小）。
 
-- [ ] **Step 1: 写失败测试** `internal/tools/lsppool_test.go`
+- [x] **Step 1: 写失败测试** `internal/tools/lsppool_test.go`
 
 ```go
 package tools
@@ -1529,12 +1529,12 @@ func TestLSPPoolIdleReap(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/tools/ -run TestLSPPool -v`
 Expected: 编译失败 `undefined: newLSPPool`。
 
-- [ ] **Step 3: 实现** `internal/tools/lsppool.go`
+- [x] **Step 3: 实现** `internal/tools/lsppool.go`
 
 ```go
 package tools
@@ -1746,7 +1746,7 @@ func (p *lspPool) stats() (active, broken int) {
 }
 ```
 
-- [ ] **Step 4: 接线 lsp.go / registry.go / default.go / Agent.Close**
+- [x] **Step 4: 接线 lsp.go / registry.go / default.go / Agent.Close**
 
 `lspDiagnostics`（lsp.go:239-296）：函数末尾（拿到 diagnostic 之后、返回之前）追加 didClose，保证同一 server 可重复 didOpen 同一文件：
 
@@ -1806,12 +1806,12 @@ func (r *Registry) LSPStats() (active, broken int) {
 
 注意：`newSubagent`（agent.go:1373）每次新建 Registry，其子代理池由 5min 空闲回收兜底，不在本 Task 接线（记录在案的有界折衷）。
 
-- [ ] **Step 5: 运行测试**
+- [x] **Step 5: 运行测试**
 
 Run: `go test -race ./internal/tools/ -v && go test -race ./internal/agent/ ./internal/server/`
 Expected: 全 PASS（含 lsp_extra_test.go 端到端用例——工具层走真子进程路径现在经过池）。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/tools/lsppool.go internal/tools/lsppool_test.go internal/tools/lsp.go internal/tools/registry.go internal/tools/default.go internal/agent/filehistory.go
