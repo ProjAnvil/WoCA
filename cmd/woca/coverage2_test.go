@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/rs/zerolog"
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
@@ -403,7 +404,7 @@ func TestHomeUnsetBranches(t *testing.T) {
 	if rules := loadPermissions(t.TempDir()); len(rules.Allow) != 0 {
 		t.Fatal("permissions should be empty without home")
 	}
-	if got := loadSkills(t.TempDir()); len(got) != 0 {
+	if got := loadSkills(t.TempDir(), zerolog.Nop()); len(got) != 0 {
 		t.Fatal("skills should be empty without home")
 	}
 	if got := loadAgents(t.TempDir()); len(got) != 0 {

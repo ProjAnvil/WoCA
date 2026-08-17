@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rs/zerolog"
+
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/tools"
@@ -82,6 +84,7 @@ func TestLoadHooksConfig(t *testing.T) {
 }
 
 func TestLoadSkills(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, ".woca", "skills", "commit")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
@@ -90,7 +93,7 @@ func TestLoadSkills(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: commit\ndescription: commit\n---\nbody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	list := loadSkills(dir)
+	list := loadSkills(dir, zerolog.Nop())
 	if len(list) != 1 || list[0].Name != "commit" {
 		t.Fatalf("skills = %+v", list)
 	}

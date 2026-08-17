@@ -44,6 +44,7 @@ import (
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/mcp"
 	"github.com/projanvil/woca/internal/memory"
+	"github.com/projanvil/woca/internal/merge"
 	"github.com/projanvil/woca/internal/oauth"
 	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/permissions"
@@ -832,6 +833,9 @@ type app struct {
 	// workdir is the resolved (absolute) working directory the agent runs
 	// in; skill reloads after a claude-env selection change re-read from it.
 	workdir string
+	// log is the process logger, used by post-build reloads
+	// (applyClaudeEnv) for merge-conflict lines.
+	log zerolog.Logger
 	// cfgMu guards the cfg copy against runtime mutations (thinking-level
 	// switches) racing snapshot readers (CfgLive, rebuildModel).
 	cfgMu sync.RWMutex
@@ -981,7 +985,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		if c := contextx.Collect(ws); c != "" {
 			sys += "\n\n" + c
 		}
-		if list := loadSkills(ws); len(list) > 0 {
+		if list := loadSkills(ws, log); len(list) > 0 {
 			sys += "\n\n# Available skills\n\nInvoke with the Skill tool; the list is scoped to this workspace.\n" + skillManifest(list)
 		}
 		return sys
@@ -998,7 +1002,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 	} else if len(linked) > 0 {
 		log.Info().Strs("skills", linked).Msg("imported claude skills via ~/.woca/skills")
 	}
-	skillList := loadSkills(workdir)
+	skillList := loadSkills(workdir, log)
 	agentDefs := loadAgents(workdir)
 	// Plugins (marketplace-level units under ~/.woca/plugins) contribute
 	// namespaced skills and subagent definitions.
@@ -1162,7 +1166,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 			return hooks.NewRunner(loadHooksConfig(ws), ws, "woca", hooks.WithLogger(log))
 		},
 		Skills:             skillList,
-		SkillsFor:          loadSkills,
+		SkillsFor:          func(ws string) []skills.Skill { return loadSkills(ws, log) },
 		ExtraTools:         extraTools,
 		CompactThreshold:   opts.compactLimit,
 		Summarizer:         model,
@@ -1197,7 +1201,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		return nil, err
 	}
 	a.SetMemoryWorkspace(cfg.WorkDir)
-	return &app{a: a, cfg: cfg, opts: opts, settings: st, memory: memory, memEngine: memEngine, workdir: workdir, pluginMgr: pluginMgr}, nil
+	return &app{a: a, cfg: cfg, opts: opts, settings: st, memory: memory, memEngine: memEngine, workdir: workdir, pluginMgr: pluginMgr, log: log}, nil
 }
 
 // buildMemoryEngine constructs the memory engine from current settings.
@@ -1372,7 +1376,7 @@ func (ap *app) applyClaudeEnv(skills, mcp []string) error {
 		return err
 	}
 	// Live skill reload (mirrors buildAgent's load + plugin merge).
-	list := loadSkills(ap.workdir)
+	list := loadSkills(ap.workdir, ap.log)
 	for _, pl := range pluginListOrEmpty() {
 		list = append(list, pl.Skills...)
 	}
@@ -1661,23 +1665,55 @@ func loadPermissions(workdir string) *permissions.Rules {
 	return &merged
 }
 
-// loadSkills loads skills from project and user skill directories.
-func loadSkills(workdir string) []skills.Skill {
-	var roots []string
-	if home, err := os.UserHomeDir(); err == nil {
-		roots = append(roots, filepath.Join(home, ".woca", "skills"))
-	}
-	roots = append(roots,
-		filepath.Join(workdir, ".woca", "skills"),
-		filepath.Join(workdir, ".claude", "skills"),
-	)
-	var out []skills.Skill
-	for _, root := range roots {
-		if list, err := skills.Load(root); err == nil {
-			out = append(out, list...)
+// loadSkills loads skills from layered directories: workspace roots (workDir
+// up to the git root, .woca/skills before .claude/skills in each directory)
+// win over the user root ~/.woca/skills. Same-name skills resolve to the
+// higher layer — workspace beats user, which reverses the old first-hit
+// semantics where the user root (loaded first) silently won.
+func loadSkills(workdir string, log zerolog.Logger) []skills.Skill {
+	var es []merge.Entry[skills.Skill]
+	for i, dir := range merge.WorkspaceDirs(workdir) {
+		for j, sub := range []string{".woca", ".claude"} {
+			root := filepath.Join(dir, sub, "skills")
+			list, err := skills.Load(root)
+			if err != nil || len(list) == 0 {
+				continue
+			}
+			for _, s := range list {
+				es = append(es, merge.Entry[skills.Skill]{
+					Name: s.Name, Value: s, Level: merge.LevelWorkspace,
+					Order: i*2 + j, Source: s.Source,
+				})
+			}
 		}
 	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if list, err := skills.Load(filepath.Join(home, ".woca", "skills")); err == nil {
+			for _, s := range list {
+				es = append(es, merge.Entry[skills.Skill]{
+					Name: s.Name, Value: s, Level: merge.LevelUser,
+					Order: 0, Source: s.Source,
+				})
+			}
+		}
+	}
+	merged, conflicts := merge.Entries(es)
+	logMergeConflicts(log, "skill", conflicts)
+	out := make([]skills.Skill, 0, len(merged))
+	for _, e := range merged {
+		out = append(out, e.Value)
+	}
 	return out
+}
+
+// logMergeConflicts emits one structured log line per layered-merge
+// conflict (D6: observability without a UI panel).
+func logMergeConflicts(log zerolog.Logger, kind string, conflicts []merge.Conflict) {
+	for _, c := range conflicts {
+		log.Info().Str("kind", kind).Str("name", c.Name).
+			Str("winner", c.Winner).Str("loser", c.Loser).
+			Msg("config merge conflict resolved")
+	}
 }
 
 // skillManifest renders the skill list injected into the system prompt (the
