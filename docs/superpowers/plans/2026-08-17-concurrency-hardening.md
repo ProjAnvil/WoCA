@@ -20,7 +20,7 @@
 
 ## 前置检查（所有 Task 之前）
 
-- [ ] 运行 `go build ./... && go test -race ./internal/server/ ./internal/agent/ ./internal/tools/ ./internal/store/`，确认基线全绿。若不绿，先停下修基线再开始 Task 1。
+- [x] 运行 `go build ./... && go test -race ./internal/server/ ./internal/agent/ ./internal/tools/ ./internal/store/`，确认基线全绿。若不绿，先停下修基线再开始 Task 1。
 
 ---
 
