@@ -467,6 +467,17 @@ export const useSessionStore = defineStore('sessions', () => {
           delete queuePosition.value[sid]
           runId.value[sid] = rid
         },
+        onResync() {
+          // 缺口超出服务端重放窗口（或 seq 跳变）：回源拉全量会话消息兜底。
+          // loadSession 对已加载会话会跳过拉取，先重置 loaded 强制回源；
+          // 重建后旧的流式气泡槽位失效，清空让后续 delta 重新开泡。
+          const s = sessions.value.find((x) => x.id === sid)
+          if (s) s.loaded = false
+          void loadSession(sid).then(() => {
+            streamingId.value[sid] = null
+            reasoningId.value[sid] = null
+          })
+        },
         onDone: () => {
           closeStreaming(sid)
           closeReasoning(sid)

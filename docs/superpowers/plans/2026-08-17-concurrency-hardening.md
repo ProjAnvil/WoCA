@@ -2342,7 +2342,7 @@ git commit -m "feat(server): SSE event seq, drop counter, Last-Event-ID replay"
 - Consumes: Task 9 的 `id:` 行与 `resync` 事件。
 - Produces: `StreamHandlers.onResync?: (reason: string) => void`；`streamRun(runId, handlers)` 内部自动带 `Last-Event-ID` 重连（最多 5 次、1s 间隔）。
 
-- [ ] **Step 1: 重写 `streamRun`**（client.ts:279-330）
+- [x] **Step 1: 重写 `streamRun`**（client.ts:279-330）
 
 ```ts
 export function streamRun(runId: string, handlers: StreamHandlers): Promise<void> {
@@ -2407,7 +2407,7 @@ export function streamRun(runId: string, handlers: StreamHandlers): Promise<void
 
 注意要点：原 `:268-278` 的"不重连"注释块删除并替换为上面的新注释；`onerror` 返回 number 是 `@microsoft/fetch-event-source` 内置的重试协议，重试时会重新走 `headers` 闭包带上最新 `lastSeq`；`onResync` 加入 `StreamHandlers`。
 
-- [ ] **Step 2: store 接 resync**（sessions.ts `attachStream`）
+- [x] **Step 2: store 接 resync**（sessions.ts `attachStream`）
 
 ```ts
 onResync() {
@@ -2416,12 +2416,12 @@ onResync() {
 },
 ```
 
-- [ ] **Step 3: 验证**
+- [x] **Step 3: 验证**
 
 Run: `cd web && npm run build`
 Expected: vue-tsc + vite build 通过。手工冒烟（可选）：`npm run dev` 起 run 后 `kill` 掉 dev server 代理目标再恢复，观察事件不重复不丢失、断流后 1s 重连续上。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/src/api/client.ts web/src/stores/sessions.ts

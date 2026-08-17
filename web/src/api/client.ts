@@ -28,6 +28,8 @@ export interface StreamHandlers {
   onRunQueued?: (position: number) => void
   onQueuePosition?: (position: number) => void
   onRunStarted?: () => void
+  /** Replay gap (server retention window or client-detected seq jump). */
+  onResync?: (reason: string) => void
   onDone: (cancelled: boolean) => void
   onError: (message: string) => void
 }
@@ -270,78 +272,102 @@ export function forgetMemory(id: string): Promise<void> {
 }
 
 /*
- * run-events protocol (SSE): the server emits eleven event types —
- * delta (answer text), reasoning (thinking text), tool_call, tool_result,
- * interrupt (permission/ask/plan prompts), goal (goal-chip snapshot),
- * run_queued / queue_position / run_started (per-session admission gate:
- * a run queued behind another reports its 1-based position, then its
- * start once promoted), done (terminal; carries cancelled), error
- * (terminal, carries message). After done/error the server closes the
- * stream, so onclose needs no handling of its own. onerror rethrows
- * instead of letting fetch-event-source retry: a failed stream means the
- * run is gone or the terminal event was already consumed, and
- * reconnecting would just replay a dead run — the session store already
- * renders a terminal state from the thrown error.
+ * run-events protocol (SSE): the server emits delta (answer text), reasoning
+ * (thinking text), tool_call, tool_result, interrupt (permission/ask/plan
+ * prompts), goal (goal-chip snapshot), run_queued / queue_position /
+ * run_started (per-session admission gate), resync (the replay window can't
+ * cover the gap — refetch a full snapshot) and the terminal done (carries
+ * cancelled) / error (carries message) pair. Every event carries an id: line
+ * with its per-run seq for Last-Event-ID resume.
  */
 export function streamRun(runId: string, handlers: StreamHandlers): Promise<void> {
-  return fetchEventSource(`/api/runs/${runId}/events`, {
-    openWhenHidden: true,
-    async onopen(resp) {
-      const ct = resp.headers.get('content-type') ?? ''
-      if (!resp.ok || !ct.includes('text/event-stream')) {
-        throw new Error(`流连接失败：${resp.status}`)
-      }
-    },
-    onmessage(ev) {
-      if (!ev.data) return
-      let data: unknown
-      try {
-        data = JSON.parse(ev.data)
-      } catch {
-        return
-      }
-      switch (ev.event) {
-        case 'delta':
-          handlers.onDelta((data as { text?: string }).text ?? '')
-          break
-        case 'reasoning':
-          handlers.onReasoning?.((data as { text?: string }).text ?? '')
-          break
-        case 'tool_call':
-          handlers.onToolCall(data as { id: string; name: string; args: Record<string, unknown> })
-          break
-        case 'tool_result':
-          handlers.onToolResult(data as { tool_call_id: string; content: string })
-          break
-        case 'interrupt':
-          handlers.onInterrupt(data as { kind: string; payload: unknown })
-          break
-        case 'goal':
-          handlers.onGoal?.(data as { goal: Goal | null; running: boolean })
-          break
-        case 'run_queued':
-        case 'queue_position': {
-          const pos = (data as { position?: number }).position ?? 0
-          if (ev.event === 'run_queued') handlers.onRunQueued?.(pos)
-          else handlers.onQueuePosition?.(pos)
-          break
+  let lastSeq: number | null = null
+  let attempts = 0
+  const maxRetries = 5
+  let terminal = false
+
+  // Reconnect with Last-Event-ID: the server replays only the events we
+  // missed (or sends `resync` when the gap exceeds its retention window),
+  // so reconnecting a live run is now safe — the old "never reconnect"
+  // assumption (see git history for the removed comment) no longer holds.
+  const connect = (): Promise<void> =>
+    fetchEventSource(`/api/runs/${runId}/events`, {
+      openWhenHidden: true,
+      headers: lastSeq != null ? { 'Last-Event-ID': String(lastSeq) } : {},
+      async onopen(resp) {
+        const ct = resp.headers.get('content-type') ?? ''
+        if (!resp.ok || !ct.includes('text/event-stream')) {
+          throw new Error(`流连接失败：${resp.status}`)
         }
-        case 'run_started':
-          handlers.onRunStarted?.()
-          break
-        case 'done':
-          handlers.onDone((data as { cancelled?: boolean }).cancelled ?? false)
-          break
-        case 'error':
-          handlers.onError((data as { message?: string }).message ?? '未知错误')
-          break
-      }
-    },
-    onclose() {
-      // The server closes the stream after a terminal `done`/`error` event.
-    },
-    onerror(err) {
-      throw err
-    },
-  })
+      },
+      onmessage(ev) {
+        attempts = 0 // 收到消息即重置退避
+        if (ev.id) {
+          const seq = Number(ev.id)
+          if (lastSeq != null && seq > lastSeq + 1) {
+            // seq 跳变：服务端未检测到缺口时客户端兜底触发重放
+            handlers.onResync?.('seq_gap')
+          }
+          lastSeq = seq
+        }
+        if (!ev.data) return
+        let data: unknown
+        try {
+          data = JSON.parse(ev.data)
+        } catch {
+          return
+        }
+        switch (ev.event) {
+          case 'delta':
+            handlers.onDelta((data as { text?: string }).text ?? '')
+            break
+          case 'reasoning':
+            handlers.onReasoning?.((data as { text?: string }).text ?? '')
+            break
+          case 'tool_call':
+            handlers.onToolCall(data as { id: string; name: string; args: Record<string, unknown> })
+            break
+          case 'tool_result':
+            handlers.onToolResult(data as { tool_call_id: string; content: string })
+            break
+          case 'interrupt':
+            handlers.onInterrupt(data as { kind: string; payload: unknown })
+            break
+          case 'goal':
+            handlers.onGoal?.(data as { goal: Goal | null; running: boolean })
+            break
+          case 'run_queued':
+          case 'queue_position': {
+            const pos = (data as { position?: number }).position ?? 0
+            if (ev.event === 'run_queued') handlers.onRunQueued?.(pos)
+            else handlers.onQueuePosition?.(pos)
+            break
+          }
+          case 'run_started':
+            handlers.onRunStarted?.()
+            break
+          case 'resync':
+            handlers.onResync?.((data as { reason?: string }).reason ?? 'unknown')
+            break
+          case 'done':
+            terminal = true
+            handlers.onDone((data as { cancelled?: boolean }).cancelled ?? false)
+            break
+          case 'error':
+            terminal = true
+            handlers.onError((data as { message?: string }).message ?? '未知错误')
+            break
+        }
+      },
+      onclose() {
+        if (!terminal) throw new Error('stream closed before terminal event')
+      },
+      onerror(err) {
+        if (terminal || ++attempts > maxRetries) throw err
+        // 返回 number → fetch-event-source 按该毫秒数后重试（复用其内置重连）
+        return 1000
+      },
+    })
+
+  return connect()
 }
