@@ -28,10 +28,14 @@ type sessionStore struct {
 
 	mu  sync.Mutex
 	mem map[string][]messages.Message
+	// tombstones remembers deleted session ids so a run that was still in
+	// flight when its session was deleted cannot resurrect the transcript
+	// with its completion save.
+	tombstones map[string]bool
 }
 
 func newSessionStore(dir string) *sessionStore {
-	return &sessionStore{dir: dir, mem: map[string][]messages.Message{}}
+	return &sessionStore{dir: dir, mem: map[string][]messages.Message{}, tombstones: map[string]bool{}}
 }
 
 func (s *sessionStore) path(id string) string {
@@ -62,8 +66,13 @@ func (s *sessionStore) load(id string) []messages.Message {
 
 // save persists a session transcript to memory and (if enabled) disk. When
 // workspace is non-empty it is recorded in the metadata index for grouping.
+// Saves for deleted sessions are dropped (see tombstones).
 func (s *sessionStore) save(id string, msgs []messages.Message, workspace string) error {
 	s.mu.Lock()
+	if s.tombstones[id] {
+		s.mu.Unlock()
+		return nil
+	}
 	s.mem[id] = msgs
 	s.mu.Unlock()
 	if s.dir == "" {
@@ -124,7 +133,31 @@ func (s *sessionStore) recordMeta(meta sessionMeta) {
 		}
 	}
 	index[meta.ID] = meta
+	s.writeIndex(index)
+}
 
+// delete removes a session: the in-memory transcript, the .jsonl file, the
+// goal sidecar and the index entry. The tombstone keeps a run still in flight
+// from resurrecting the transcript via its completion save.
+func (s *sessionStore) delete(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.mem, id)
+	s.tombstones[id] = true
+	if s.dir == "" {
+		return
+	}
+	_ = os.Remove(s.path(id))
+	_ = os.Remove(s.goalPath(id))
+	index := s.loadIndex()
+	if _, ok := index[id]; ok {
+		delete(index, id)
+		s.writeIndex(index)
+	}
+}
+
+// writeIndex rewrites index.json atomically. Callers must hold s.mu.
+func (s *sessionStore) writeIndex(index map[string]sessionMeta) {
 	list := make([]sessionMeta, 0, len(index))
 	for _, m := range index {
 		list = append(list, m)

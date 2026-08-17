@@ -25,7 +25,7 @@ type readArgs struct {
 func readTool(d *Dir) coretools.Tool {
 	t, err := coretools.FromFunc("Read", readDescription,
 		func(ctx context.Context, a readArgs) (coretools.Result, error) {
-			path := resolvePath(d.Current(), a.FilePath)
+			path := resolvePath(d.For(ctx), a.FilePath)
 			if IsImagePath(a.FilePath) {
 				p, err := ProcessImage(path)
 				if err != nil {
@@ -79,16 +79,18 @@ type writeArgs struct {
 	Content  string `json:"content"`
 }
 
-func writeTool(d *Dir) coretools.Tool {
+func writeTool(d *Dir, fh *FileHistory) coretools.Tool {
 	t, err := coretools.FromFunc("Write", writeDescription,
 		func(ctx context.Context, a writeArgs) (coretools.Result, error) {
-			path := resolvePath(d.Current(), a.FilePath)
+			path := resolvePath(d.For(ctx), a.FilePath)
+			before, _ := os.ReadFile(path) // nil when absent: creation
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				return coretools.Result{}, fmt.Errorf("write %s: %w", a.FilePath, err)
 			}
 			if err := os.WriteFile(path, []byte(a.Content), 0o644); err != nil {
 				return coretools.Result{}, fmt.Errorf("write %s: %w", a.FilePath, err)
 			}
+			fh.Record(ctx, path, before, []byte(a.Content))
 			return coretools.Result{Content: fmt.Sprintf("Wrote %d bytes to %s", len(a.Content), a.FilePath)}, nil
 		})
 	if err != nil {
@@ -106,10 +108,10 @@ type editArgs struct {
 	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
-func editTool(d *Dir) coretools.Tool {
+func editTool(d *Dir, fh *FileHistory) coretools.Tool {
 	t, err := coretools.FromFunc("Edit", editDescription,
 		func(ctx context.Context, a editArgs) (coretools.Result, error) {
-			path := resolvePath(d.Current(), a.FilePath)
+			path := resolvePath(d.For(ctx), a.FilePath)
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("edit %s: %w", a.FilePath, err)
@@ -126,6 +128,7 @@ func editTool(d *Dir) coretools.Tool {
 			if err := os.WriteFile(path, []byte(replaced), 0o644); err != nil {
 				return coretools.Result{}, fmt.Errorf("edit %s: %w", a.FilePath, err)
 			}
+			fh.Record(ctx, path, data, []byte(replaced))
 			note := "1 occurrence"
 			if a.ReplaceAll && count > 1 {
 				note = fmt.Sprintf("%d occurrences", count)

@@ -65,6 +65,41 @@ func (t *backgroundTask) setFinal(status TaskStatus, final string) {
 	t.final = final
 }
 
+// setFinalIfRunning records a terminal state only while the task is still
+// running: a completion arriving after TaskStop must not flip the stopped
+// status back to completed.
+func (t *backgroundTask) setFinalIfRunning(status TaskStatus, final string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.status != TaskRunning {
+		return
+	}
+	t.status = status
+	t.final = final
+}
+
+// setCancel stores the cancellation handle under the mutex; taskStop reads it
+// from another goroutine.
+func (t *backgroundTask) setCancel(cancel context.CancelFunc) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.cancel = cancel
+}
+
+// stop cancels the task and marks it stopped in one critical section, so a
+// concurrent completion cannot interleave.
+func (t *backgroundTask) stop() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cancel != nil {
+		t.cancel()
+	}
+	if t.status != TaskRunning {
+		return
+	}
+	t.status = TaskStopped
+}
+
 // TaskManager holds all background tasks for a session.
 type TaskManager struct {
 	mu    sync.Mutex
@@ -159,7 +194,7 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 
 	var def *agents.Definition
 	if args.SubagentType != "" {
-		d, ok := agents.Find(a.agentDefs, args.SubagentType)
+		d, ok := agents.Find(a.agentsFor(ctx), args.SubagentType)
 		if !ok {
 			return coretools.Result{}, fmt.Errorf("unknown subagent_type %q", args.SubagentType)
 		}
@@ -180,13 +215,13 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 	if args.RunInBackground {
 		t := a.tasks.start(args.Description, prompt)
 		runCtx, cancel := context.WithCancel(ctx)
-		t.cancel = cancel
+		t.setCancel(cancel)
 		go func() {
 			report, err := a.runSubagent(runCtx, history, func(text string) { t.appendOutput(text) }, def)
 			if err != nil {
 				report = "Error: " + err.Error()
 			}
-			t.setFinal(TaskCompleted, report)
+			t.setFinalIfRunning(TaskCompleted, report)
 			// L1 episode for the completed subagent task. runCtx may already
 			// be cancelled by TaskStop, but its values (run workspace) are
 			// still readable; the write itself is detached.
@@ -244,10 +279,7 @@ func (a *Agent) taskStop(ctx context.Context, args taskStopArgs) (coretools.Resu
 	if !ok {
 		return coretools.Result{}, fmt.Errorf("no task with id %q", args.TaskID)
 	}
-	if t.cancel != nil {
-		t.cancel()
-	}
-	t.setFinal(TaskStopped, "")
+	t.stop()
 	return coretools.Result{Content: fmt.Sprintf("Stopped task %s.", t.ID)}, nil
 }
 
@@ -255,7 +287,10 @@ func (a *Agent) taskStop(ctx context.Context, args taskStopArgs) (coretools.Resu
 // is non-nil it streams model text into the callback (used for background
 // task output). Returns the subagent's final assistant text.
 func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onText func(string), def *agents.Definition) (string, error) {
-	sub := a.newSubagent(def)
+	sub, err := a.newSubagent(ctx, def)
+	if err != nil {
+		return "", err
+	}
 	if onText == nil {
 		msgs, err := sub.Invoke(ctx, history)
 		if err != nil {
@@ -264,7 +299,7 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 		return lastAIText(msgs), nil
 	}
 
-	stream, err := sub.Graph().Stream(ctx, sub.NewState(history))
+	stream, err := sub.Graph().Stream(ctx, sub.NewState(ctx, history))
 	if err != nil {
 		return "", err
 	}
@@ -312,15 +347,17 @@ func lastAIText(msgs []messages.Message) string {
 	return ""
 }
 
-// skillTool exposes loaded skills via the Skill tool.
+// skillTool exposes loaded skills via the Skill tool. The available-skill
+// list is workspace-scoped (see skillsFor), so it lives in the system prompt
+// (rebuilt per run) instead of this static description.
 func (a *Agent) skillTool() []coretools.Tool {
-	if len(a.skills) == 0 {
+	if len(a.skills) == 0 && a.skillsForFn == nil {
 		return nil
 	}
-	desc := "Execute a skill by name, expanding it into instructions to follow. Available skills:\n" + skillList(a.skills)
+	desc := "Execute a skill by name, expanding it into instructions to follow. The system prompt lists the skills available in the current workspace."
 	t, err := coretools.FromFunc("Skill", desc,
 		func(ctx context.Context, args skillArgs) (coretools.Result, error) {
-			s, ok := skills.Find(a.skills, args.Skill)
+			s, ok := skills.Find(a.skillsFor(ctx), args.Skill)
 			if !ok {
 				return coretools.Result{}, fmt.Errorf("unknown skill %q", args.Skill)
 			}
@@ -367,13 +404,23 @@ func (a *Agent) taskListTools() []coretools.Tool {
 }
 
 type taskCreateArgs struct {
-	Subject     string `json:"subject"`
-	Description string `json:"description"`
-	ActiveForm  string `json:"active_form,omitempty"`
+	Subject     string   `json:"subject"`
+	Description string   `json:"description"`
+	ActiveForm  string   `json:"active_form,omitempty"`
+	DependsOn   []string `json:"depends_on,omitempty"`
 }
 
 func (a *Agent) taskCreate(ctx context.Context, args taskCreateArgs) (coretools.Result, error) {
-	rec := a.taskList.Create(args.Subject, args.Description, args.ActiveForm)
+	list := a.currentTaskList()
+	rec := list.CreateDeps(args.Subject, args.Description, args.ActiveForm, args.DependsOn)
+	// New work must wake idle teammates: the spawn prompt promises "you
+	// will be woken when there is work", and without the poke an all-idle
+	// team would sleep until the idle timeout while the task sits pending.
+	if team := a.currentTeam(); team != nil {
+		for _, name := range team.memberNames() {
+			team.poke(name)
+		}
+	}
 	return coretools.Result{Content: fmt.Sprintf("Created task %s: %s", rec.ID, rec.Subject)}, nil
 }
 
@@ -382,7 +429,7 @@ type taskGetArgs struct {
 }
 
 func (a *Agent) taskGet(ctx context.Context, args taskGetArgs) (coretools.Result, error) {
-	rec, ok := a.taskList.Get(args.TaskID)
+	rec, ok := a.currentTaskList().Get(args.TaskID)
 	if !ok {
 		return coretools.Result{}, fmt.Errorf("no task with id %q", args.TaskID)
 	}
@@ -397,7 +444,23 @@ type taskUpdateArgs struct {
 }
 
 func (a *Agent) taskUpdate(ctx context.Context, args taskUpdateArgs) (coretools.Result, error) {
-	rec, ok := a.taskList.Update(args.TaskID, TaskRecordStatus(args.Status), args.Subject, args.Description)
+	list := a.currentTaskList()
+	if existing, ok := list.Get(args.TaskID); ok && a.currentTeam() != nil {
+		// Team scope: ownership is enforced. Claiming happens by moving an
+		// unowned pending task to in_progress; a task owned by someone else
+		// is only editable by the lead.
+		if existing.Owner != "" && existing.Owner != a.agentName && a.agentName != LeadName {
+			return coretools.Result{}, fmt.Errorf("task %s is owned by %s", args.TaskID, existing.Owner)
+		}
+		if TaskRecordStatus(args.Status) == TaskRecordInProgress && existing.Owner == "" && existing.Status == TaskRecordPending {
+			claimed, ok := list.Claim(args.TaskID, a.agentName)
+			if !ok {
+				return coretools.Result{}, fmt.Errorf("task %s cannot be claimed (dependencies incomplete or already taken)", args.TaskID)
+			}
+			return coretools.Result{Content: formatTaskRecord(claimed)}, nil
+		}
+	}
+	rec, ok := list.Update(args.TaskID, TaskRecordStatus(args.Status), args.Subject, args.Description)
 	if !ok {
 		return coretools.Result{}, fmt.Errorf("no task with id %q", args.TaskID)
 	}
@@ -407,7 +470,7 @@ func (a *Agent) taskUpdate(ctx context.Context, args taskUpdateArgs) (coretools.
 type taskListArgs struct{}
 
 func (a *Agent) runTaskList(ctx context.Context, args taskListArgs) (coretools.Result, error) {
-	recs := a.taskList.List()
+	recs := a.currentTaskList().List()
 	if len(recs) == 0 {
 		return coretools.Result{Content: "(no tasks)"}, nil
 	}
@@ -420,6 +483,9 @@ func (a *Agent) runTaskList(ctx context.Context, args taskListArgs) (coretools.R
 }
 
 func formatTaskRecord(t TaskRecord) string {
+	if t.Owner != "" {
+		return fmt.Sprintf("[%s] %s (%s): %s", t.ID, t.Status, t.Owner, t.Subject)
+	}
 	return fmt.Sprintf("[%s] %s: %s", t.ID, t.Status, t.Subject)
 }
 
@@ -429,7 +495,7 @@ func (a *Agent) sendMessageTool() []coretools.Tool {
 	if a.bus == nil {
 		return nil
 	}
-	t, err := coretools.FromFunc("SendMessage", "Send a message to another agent/recipient on the shared message bus.", a.sendMessage)
+	t, err := coretools.FromFunc("SendMessage", "Send a message to another agent/recipient. In a team, recipients are teammate names or \"lead\"; messages are pushed (an idle teammate wakes to process them).", a.sendMessage)
 	if err != nil {
 		panic(err)
 	}
@@ -444,6 +510,10 @@ type sendMessageArgs struct {
 func (a *Agent) sendMessage(ctx context.Context, args sendMessageArgs) (coretools.Result, error) {
 	if args.Recipient == "" {
 		return coretools.Result{}, fmt.Errorf("recipient is required")
+	}
+	if team := a.currentTeam(); team != nil {
+		team.Send(a.agentName, args.Recipient, args.Content)
+		return coretools.Result{Content: fmt.Sprintf("Sent message to %s.", args.Recipient)}, nil
 	}
 	a.bus.Send("main", args.Recipient, args.Content)
 	return coretools.Result{Content: fmt.Sprintf("Sent message to %s.", args.Recipient)}, nil

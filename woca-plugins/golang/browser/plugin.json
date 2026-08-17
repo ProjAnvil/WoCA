@@ -1,0 +1,8 @@
+{
+  "name": "browser",
+  "kind": "golang",
+  "version": "0.1.0",
+  "description": "浏览器插件：woca 下载并托管 pinchtab（CDP 控制 Chrome），让 agent 导航网页、读取正文、快照交互元素并执行点击/填写/按键",
+  "tools": ["BrowserNavigate", "BrowserSnapshot", "BrowserText", "BrowserAction"],
+  "runtime": "pinchtab"
+}

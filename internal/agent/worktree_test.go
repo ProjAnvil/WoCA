@@ -91,7 +91,7 @@ func TestWorktreeEnterSwitchAndExit(t *testing.T) {
 	if _, err := exit.Invoke(context.Background(), map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.registry.Dir().Current(); got != base {
+	if got := a.registry.Dir().For(context.Background()); got != base {
 		t.Fatalf("current = %s, want base %s", got, base)
 	}
 	_, err = write.Invoke(context.Background(), map[string]any{"file_path": "base-note.txt", "content": "back"})

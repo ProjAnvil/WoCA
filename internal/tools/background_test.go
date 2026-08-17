@@ -72,7 +72,7 @@ func TestBackgroundShellCompletionNotification(t *testing.T) {
 	notifications := make(chan string, 4)
 	bg.SetNotify(func(text string) { notifications <- text })
 
-	id, err := bg.Start("echo hello-bg", "", reg.dir.Current())
+	id, err := bg.Start("echo hello-bg", "", reg.dir.Base())
 	if err != nil {
 		t.Fatal(err)
 	}

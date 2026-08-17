@@ -6,18 +6,20 @@ import type { MemoryItem } from '../types'
 
 const memory = useMemoryStore()
 
+// Layer labels carry the L1~L6 number (e.g. "L2 事实") so the chip, the badge
+// and the layer ordering all read consistently.
 const layerLabels: Record<string, string> = {
-  L1_episodic: '经历',
-  L2_semantic: '事实',
-  L3_procedural: '剧本',
-  L4_associative: '关联',
-  L5_mental: '洞察',
-  L6_predictive: '预判',
+  L1_episodic: 'L1 经历',
+  L2_semantic: 'L2 事实',
+  L3_procedural: 'L3 剧本',
+  L4_associative: 'L4 关联',
+  L5_mental: 'L5 洞察',
+  L6_predictive: 'L6 预判',
 }
 const layerOrder = ['L5_mental', 'L6_predictive', 'L2_semantic', 'L3_procedural', 'L1_episodic']
 
 function label(m: MemoryItem): string {
-  if (m.layer === 'L2_semantic' && (m.type === 'code_symbol' || m.type === 'code_file')) return '代码'
+  if (m.layer === 'L2_semantic' && (m.type === 'code_symbol' || m.type === 'code_file')) return 'L2 代码'
   return layerLabels[m.layer] ?? m.layer
 }
 

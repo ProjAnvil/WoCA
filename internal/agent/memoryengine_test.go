@@ -127,7 +127,7 @@ func TestPrefetchUsesEngineRecall(t *testing.T) {
 		Summary: "auth uses JWT", Content: "auth uses JWT with 24h expiry",
 		Score: 0.83, UpdatedAt: 1,
 	}}}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.SetMemoryWorkspace("/ws/custom")
 	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("how does auth work?")})
 	var got []messages.Message
@@ -158,13 +158,15 @@ func TestPrefetchUsesEngineRecall(t *testing.T) {
 func TestPrefetchEngineTopKFromSettings(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{
-		memEngine: f,
-		workdir:   "/ws",
-		loadSettings: func() settings.Settings {
-			s := settings.Default()
-			s.LadyMTopK = 12
-			return s
+		mem: memoryRuntime{
+			engine: f,
+			loadSettings: func() settings.Settings {
+				s := settings.Default()
+				s.LadyMTopK = 12
+				return s
+			},
 		},
+		workdir: "/ws",
 	}
 	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("q")})
 	deadline := time.Now().Add(2 * time.Second)
@@ -193,7 +195,7 @@ func TestMemoryWorkspaceDefaultsToWorkdir(t *testing.T) {
 
 func TestEngineRecallErrorSkipsSilently(t *testing.T) {
 	f := &fakeEngine{err: true}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("q")})
 	time.Sleep(150 * time.Millisecond)
 	if recalls := f.recordedRecalls(); len(recalls) != 1 {
@@ -230,5 +232,31 @@ func TestClampUTF8(t *testing.T) {
 		if n := len(c.want); n > max(c.n, 0) {
 			t.Errorf("clampUTF8(%q, %d) exceeded n", c.in, c.n)
 		}
+	}
+}
+
+// TestMemoryRuntimeStandalone pins the component contract: prefetch and
+// retention work on the runtime alone, with the workspace handed in and no
+// Agent involved.
+func TestMemoryRuntimeStandalone(t *testing.T) {
+	f := &fakeEngine{hits: []memory.Hit{{ID: "h1", Layer: "L2", Type: "fact", Summary: "auth uses oauth2", Score: 0.9}}}
+	m := memoryRuntime{engine: f}
+	m.Begin(context.Background(), []messages.Message{messages.Human("how does auth work?")}, "/ws")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(f.recordedRecalls()) == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if recalls := f.recordedRecalls(); len(recalls) != 1 || recalls[0] != "/ws|how does auth work?" {
+		t.Fatalf("recalls = %v", recalls)
+	}
+	atts := m.TakeAttachments()
+	if len(atts) != 1 || !strings.Contains(atts[0].Content, "auth uses oauth2") {
+		t.Fatalf("attachments = %v", atts)
+	}
+	// Retention: engine swap is visible through the same snapshot path.
+	m.RetainRun(context.Background(), "/ws",
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+	if len(f.remembered) != 1 {
+		t.Fatalf("remembered = %v", f.remembered)
 	}
 }

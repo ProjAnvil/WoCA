@@ -88,8 +88,11 @@ func LoadPlugin(dir string) (Plugin, error) {
 	return p, nil
 }
 
-// Load walks a plugin root and loads every plugin directory. An unreadable
-// plugin is skipped (its error is collected for diagnostics).
+// Load walks a plugin root and loads every plugin directory. A directory
+// without plugin.json is not a plugin and is skipped silently — the root
+// also hosts non-plugin state such as the built-in capability plugins'
+// runtimes/ dir and their per-plugin environments. A plugin with a broken
+// manifest is skipped (its error is collected for diagnostics).
 func Load(root string) ([]Plugin, []error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -101,10 +104,14 @@ func Load(root string) ([]Plugin, []error) {
 	var out []Plugin
 	var errs []error
 	for _, e := range entries {
-		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "runtimes" {
 			continue
 		}
-		p, err := LoadPlugin(filepath.Join(root, e.Name()))
+		dir := filepath.Join(root, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, "plugin.json")); err != nil {
+			continue // no manifest: built-in plugin environment or unrelated state
+		}
+		p, err := LoadPlugin(dir)
 		if err != nil {
 			errs = append(errs, err)
 			continue

@@ -35,7 +35,22 @@ export type ChatItem =
       /** Backend run that produced this bubble (debug copy button). */
       srcRun?: string
     }
-  | { id: string; kind: 'tool_call'; toolCallId: string; name: string; args: Record<string, unknown> }
+  | {
+      id: string
+      kind: 'reasoning'
+      content: string
+      /** True while the model is still streaming this thinking segment. */
+      streaming: boolean
+    }
+  | {
+      id: string
+      kind: 'tool_call'
+      toolCallId: string
+      name: string
+      args: Record<string, unknown>
+      /** Tool output merged onto the call's card once it arrives. */
+      result?: string
+    }
   | { id: string; kind: 'tool_result'; toolCallId: string; content: string }
 
 /** An image attached to a prompt (paste or file picker). */
@@ -134,6 +149,8 @@ export interface TranscriptMessage {
     mime_type?: string
     base64?: string
     text?: string
+    /** ReasoningBlock text (thinking / reasoning_content). */
+    reasoning?: string
   }>
 }
 
@@ -164,14 +181,18 @@ export type CheckpointBackend = 'none' | 'file' | 'sqlite' | 'postgres'
 export type MemoryBackend = 'none' | 'memory' | 'sqlite' | 'postgres'
 
 export interface AppSettings {
-  provider: 'anthropic' | 'openai'
+  provider: 'anthropic' | 'openai' | 'glm' | 'deepseek'
   model: string
   max_tokens: number
   temperature: number
   anthropic_base_url: string
   openai_base_url: string
+  glm_base_url: string
+  deepseek_base_url: string
   anthropic_api_key_set: boolean
   openai_api_key_set: boolean
+  glm_api_key_set: boolean
+  deepseek_api_key_set: boolean
   checkpoint_backend: CheckpointBackend | string
   memory_backend: MemoryBackend | string
   checkpoint_dir: string
@@ -202,8 +223,12 @@ export interface AppSettingsUpdate {
   temperature?: number
   anthropic_base_url?: string
   openai_base_url?: string
+  glm_base_url?: string
+  deepseek_base_url?: string
   anthropic_api_key?: string
   openai_api_key?: string
+  glm_api_key?: string
+  deepseek_api_key?: string
   checkpoint_backend?: string
   memory_backend?: string
   checkpoint_dir?: string
@@ -256,4 +281,107 @@ export interface MemoryStatsResponse {
 export interface RememberResponse {
   id: string
   dropped?: boolean
+}
+
+// --- runtime agent controls (mirror /api/agent and /api/quota) ---
+
+export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'readOnly' | 'plan'
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high'
+
+/** Live agent state shown next to the chat input. */
+export interface AgentState {
+  provider: string
+  model: string
+  permission_mode: PermissionMode | string
+  plan_mode: boolean
+  thinking: {
+    level: ThinkingLevel | string
+    budget: number
+    /** False when the current model has no thinking mode (chip disabled). */
+    supported: boolean
+    /** Levels the provider template allows, e.g. ['low','medium','high']. */
+    levels: ThinkingLevel[] | string[]
+    /** How the provider maps levels onto its knob (hint shown in the drawer). */
+    note?: string
+  }
+}
+
+/** One quota window from the provider's monitor API. */
+export interface QuotaWindow {
+  kind: '5h' | 'weekly' | 'mcp' | string
+  /** Share of the window already spent (0-100). */
+  used_percent: number
+  /** Epoch-ms reset time (0 when unknown). */
+  next_reset_ms: number
+}
+
+export interface QuotaInfo {
+  available: boolean
+  reason?: string
+  source?: string
+  /** "plan" (windows) or "balance" (prepaid amount). */
+  type?: 'plan' | 'balance' | string
+  level?: string
+  windows?: QuotaWindow[]
+  /** Formatted prepaid amount for balance-type providers (e.g. "CNY 110.35"). */
+  balance?: string
+}
+
+/** GET /api/quota: provider quota plus this process's session usage. */
+export interface QuotaResponse {
+  quota: QuotaInfo
+  session: {
+    requests?: number
+    input_tokens?: number
+    output_tokens?: number
+    cache_read_tokens?: number
+    cache_write_tokens?: number
+    cost_usd?: number
+    cost_known?: boolean
+    model?: string
+  }
+}
+
+// --- claude environment (mirror /api/claudeenv) ---
+
+/** One skill detected under ~/.claude/skills. */
+export interface ClaudeSkillEntry {
+  name: string
+  description: string
+  source: string
+}
+
+/** One MCP server detected in ~/.claude.json's global mcpServers. */
+export interface ClaudeMCPServer {
+  name: string
+  type: 'http' | 'sse' | 'stdio' | string
+  url?: string
+  command?: string
+  has_env?: boolean
+}
+
+export interface ClaudeEnvState {
+  skills: ClaudeSkillEntry[]
+  mcp: ClaudeMCPServer[]
+  selected: { skills: string[]; mcp: string[] }
+}
+
+// --- plugins (mirror /api/plugins) ---
+
+/** One built-in capability plugin (browser / pdf …) with runtime state. */
+export interface PluginStatus {
+  name: string
+  kind: 'golang' | 'python' | string
+  version?: string
+  description?: string
+  tools: string[]
+  runtime?: string
+  enabled: boolean
+  state: 'not_installed' | 'installing' | 'ready' | 'error' | string
+  detail?: string
+  log?: string[]
+}
+
+export interface PluginsResponse {
+  plugins: PluginStatus[]
 }

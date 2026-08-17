@@ -8,7 +8,7 @@ import (
 
 func TestRecordTaskEvent(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.SetMemoryWorkspace("/ws/task")
 	a.recordTaskEvent(context.Background(), "explorer", "map the auth flow", "done: 3 entry points found", nil)
 	if len(f.events) != 1 {
@@ -26,7 +26,7 @@ func TestRecordTaskEvent(t *testing.T) {
 
 func TestRecordTaskEventSubagentNoop(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws", subagent: true}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws", subagent: true}
 	a.recordTaskEvent(context.Background(), "x", "y", "z", nil)
 	if len(f.events) != 0 {
 		t.Fatal("subagent must not record task events")

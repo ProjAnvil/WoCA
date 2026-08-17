@@ -178,8 +178,8 @@ func (a *Agent) dispatchSpeculative(ctx context.Context, call messages.ToolCall)
 // proceeds without the hook's decision.
 func (a *Agent) runToolCall(ctx context.Context, call messages.ToolCall) messages.Message {
 	preFeedback := ""
-	if a.hooks != nil {
-		if d, err := a.hooks.PreToolUse(ctx, call.Name, call.Args); err == nil {
+	if h := a.hooksFor(ctx); h != nil {
+		if d, err := h.PreToolUse(ctx, call.Name, call.Args); err == nil {
 			if !d.Allowed {
 				content := "Error: tool use denied by hook"
 				if d.Feedback != "" {
@@ -195,8 +195,8 @@ func (a *Agent) runToolCall(ctx context.Context, call messages.ToolCall) message
 	if preFeedback != "" {
 		content = preFeedback + "\n" + content
 	}
-	if a.hooks != nil {
-		if p, err := a.hooks.PostToolUse(ctx, call.Name, call.Args, content); err == nil && p.Feedback != "" {
+	if h := a.hooksFor(ctx); h != nil {
+		if p, err := h.PostToolUse(ctx, call.Name, call.Args, content); err == nil && p.Feedback != "" {
 			content += "\n" + p.Feedback
 		}
 	}

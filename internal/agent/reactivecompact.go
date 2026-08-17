@@ -54,8 +54,8 @@ func (a *Agent) ReactiveCompactHistory(ctx context.Context, history []messages.M
 	if a.summarizer == nil || len(history) == 0 {
 		return history
 	}
-	if a.hooks != nil {
-		if _, blocked, err := a.hooks.PreCompact(ctx); err == nil && blocked {
+	if h := a.hooksFor(ctx); h != nil {
+		if _, blocked, err := h.PreCompact(ctx); err == nil && blocked {
 			return history
 		}
 	}

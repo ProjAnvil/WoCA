@@ -1,28 +1,23 @@
 package agent
 
-import "context"
+import (
+	"context"
 
-// memoryWorkspaceKey scopes the run's memory workspace through the context
-// (values survive context.WithoutCancel and cancellation itself).
-type memoryWorkspaceKey struct{}
+	"github.com/projanvil/woca/internal/runws"
+)
 
-// WithMemoryWorkspace returns a context carrying the run's memory workspace.
-// The web server wraps each run's context with the session workspace;
-// TUI/REPL runs don't need it (agent field/workdir fallback applies).
-func WithMemoryWorkspace(ctx context.Context, ws string) context.Context {
-	if ws == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, memoryWorkspaceKey{}, ws)
+// WithRunWorkspace returns a context carrying the run's workspace. The web
+// server wraps each run's context with the session workspace, which scopes
+// the run's memory calls, system prompt environment and file/shell tools at
+// once (see internal/runws); TUI/REPL runs don't need it (the agent
+// field/workdir fallbacks apply).
+func WithRunWorkspace(ctx context.Context, ws string) context.Context {
+	return runws.With(ctx, ws)
 }
 
-// memoryWorkspaceFromContext reports the run-scoped workspace, if any.
-func memoryWorkspaceFromContext(ctx context.Context) (string, bool) {
-	if ctx == nil {
-		return "", false
-	}
-	ws, ok := ctx.Value(memoryWorkspaceKey{}).(string)
-	return ws, ok
+// RunWorkspaceFromContext reports the run-scoped workspace, if any.
+func RunWorkspaceFromContext(ctx context.Context) (string, bool) {
+	return runws.From(ctx)
 }
 
 // memoryWorkspaceCtx resolves the memory workspace for one run: the context
@@ -30,7 +25,7 @@ func memoryWorkspaceFromContext(ctx context.Context) (string, bool) {
 // runs), then the agent field (TUI/REPL startup pin, subagent fork
 // inheritance), then the workdir.
 func (a *Agent) memoryWorkspaceCtx(ctx context.Context) string {
-	if ws, ok := memoryWorkspaceFromContext(ctx); ok {
+	if ws, ok := runws.From(ctx); ok {
 		return ws
 	}
 	return a.memoryWorkspace()

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -247,5 +249,241 @@ func TestGoalAPIRestartRestoresFromSidecar(t *testing.T) {
 	g, _, _ := getGoal(t, ts2.URL, sid)
 	if g == nil || g.Status != agent.GoalComplete || g.Objective != "verify restarts" {
 		t.Fatalf("restored goal = %+v", g)
+	}
+}
+
+// newGoalLifecycleServer builds a server whose goal run parks at an
+// AskUserQuestion interrupt inside the first execute cycle, with
+// observability wired (the goal-run start logs through it).
+func newGoalLifecycleServer(t *testing.T) (*Server, *httptest.Server, string) {
+	t.Helper()
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.AI("criteria checklist"),
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+				{ID: "1", Name: "AskUserQuestion", Args: map[string]any{
+					"questions": []any{map[string]any{"question": "pick one"}},
+				}},
+			}},
+		),
+	)
+	a, err := agent.New(agent.Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeDefault,
+		Obs:            obslog.New(t.TempDir(), false),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	s := New(Config{Agent: a, Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: dir, WorkDir: dir})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	return s, ts, dir
+}
+
+// cancelParkedGoalRun cancels a goal run parked at an interrupt and reads the
+// SAME stream to its terminal event, asserting a cancelled (not failed) done.
+func cancelParkedGoalRun(t *testing.T, base, runID string, sc *bufio.Scanner) {
+	t.Helper()
+	if err := postJSON(t, base+"/api/runs/"+runID+"/cancel", ""); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		ev, ok := readSSEEvent(sc)
+		if !ok {
+			t.Fatal("stream ended before done")
+		}
+		if ev.Type == "error" {
+			t.Fatalf("cancelled goal run errored: %s", ev.Data)
+		}
+		if ev.Type == "done" {
+			if !strings.Contains(ev.Data, `"cancelled":true`) {
+				t.Fatalf("done payload = %s, want cancelled:true", ev.Data)
+			}
+			return
+		}
+	}
+}
+
+func TestGoalCommandLifecycleWhileRunning(t *testing.T) {
+	s, ts, _ := newGoalLifecycleServer(t)
+	sid := "sess-goal-life"
+
+	// Malformed command bodies are 400s.
+	badResp, err := http.Post(ts.URL+"/api/sessions/"+sid+"/goal", "application/json", strings.NewReader(`{bad`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	badResp.Body.Close()
+	if badResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad JSON status = %d, want 400", badResp.StatusCode)
+	}
+
+	// help is a pure documentation reply.
+	if _, _, output := postGoal(t, ts.URL, sid, "help"); !strings.Contains(output, "goal mode") {
+		t.Fatalf("help output = %q", output)
+	}
+
+	goal, runID, _ := postGoal(t, ts.URL, sid, "keep working")
+	if goal == nil || goal.SessionID != sid {
+		t.Fatalf("goal = %+v", goal)
+	}
+
+	// Wait until the loop parks at its interrupt.
+	resp, sc := waitForRunInterrupt(t, ts.URL, runID)
+	defer resp.Body.Close()
+
+	// The internal starter refuses a second concurrent loop.
+	if _, err := s.startGoalRun(sid, ""); err == nil || !strings.Contains(err.Error(), "already running") {
+		t.Fatalf("startGoalRun while running = %v, want already-running error", err)
+	}
+
+	// While the loop is running: pause is honored…
+	if _, _, output := postGoal(t, ts.URL, sid, "pause"); !strings.Contains(output, "goal paused") {
+		t.Fatalf("pause output = %q", output)
+	}
+	// …set conflicts…
+	if code, msg := postGoalErr(t, ts.URL, sid, "set another objective"); code != http.StatusConflict {
+		t.Fatalf("set while running: status %d (%s), want 409", code, msg)
+	}
+	// …resume is a no-op note…
+	if _, _, output := postGoal(t, ts.URL, sid, "resume"); !strings.Contains(output, "already running") {
+		t.Fatalf("resume while running output = %q", output)
+	}
+	// …and budget adjustments still work.
+	if _, _, output := postGoal(t, ts.URL, sid, "budget cycles 7"); !strings.Contains(output, "cycle") {
+		t.Fatalf("budget cycles output = %q", output)
+	}
+
+	// Cancel the parked loop: it must end as cancelled, not failed.
+	cancelParkedGoalRun(t, ts.URL, runID, sc)
+
+	// A paused goal resumes into a fresh loop.
+	_, runID2, output := postGoal(t, ts.URL, sid, "resume")
+	if runID2 == "" || !strings.Contains(output, "resumed") {
+		t.Fatalf("resume output = %q runID = %q", output, runID2)
+	}
+	resp2, sc2 := waitForRunInterrupt(t, ts.URL, runID2)
+	defer resp2.Body.Close()
+	cancelParkedGoalRun(t, ts.URL, runID2, sc2)
+
+	// Setting a new objective replaces the old one (clear + set + new loop).
+	goal3, runID3, _ := postGoal(t, ts.URL, sid, "set a brand new objective")
+	if goal3 == nil || goal3.Objective != "a brand new objective" || runID3 == "" {
+		t.Fatalf("re-set goal = %+v runID %q", goal3, runID3)
+	}
+	resp3, sc3 := waitForRunInterrupt(t, ts.URL, runID3)
+	defer resp3.Body.Close()
+	cancelParkedGoalRun(t, ts.URL, runID3, sc3)
+}
+
+func TestGoalResumeAfterRestart(t *testing.T) {
+	_, ts1, dir := newGoalTestServer(t)
+	sid := "sess-goal-restart"
+	_, runID, _ := postGoal(t, ts1.URL, sid, "finish the migration")
+	streamUntilDone(t, ts1.URL, runID)
+
+	// A fresh agent over the same session dir: the goal lives only in the
+	// sidecar, so resume restores it (complete → "already complete").
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(messages.AI("ok")),
+	)
+	a2, err := agent.New(agent.Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2 := New(Config{Agent: a2, Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: dir, WorkDir: dir})
+	ts2 := httptest.NewServer(s2.Handler())
+	defer ts2.Close()
+
+	if _, runID, output := postGoal(t, ts2.URL, sid, "resume"); runID != "" || !strings.Contains(output, "already complete") {
+		t.Fatalf("resume after restart = runID %q output %q", runID, output)
+	}
+	// A complete goal cannot pause (409)…
+	if code, _ := postGoalErr(t, ts2.URL, sid, "pause"); code != http.StatusConflict {
+		t.Fatalf("pause complete goal: status %d, want 409", code)
+	}
+	// …but its budget is adjustable…
+	if _, _, output := postGoal(t, ts2.URL, sid, "budget cycles 3"); !strings.Contains(output, "cycle") {
+		t.Fatalf("budget on restored goal = %q", output)
+	}
+	// …and the loop starter refuses non-active goals.
+	if _, err := s2.startGoalRun(sid, ""); err == nil || !strings.Contains(err.Error(), "not active") {
+		t.Fatalf("startGoalRun on complete goal = %v, want not-active error", err)
+	}
+
+	// Clear (live goal), clear again (nothing left), and the lonely verbs.
+	if _, _, output := postGoal(t, ts2.URL, sid, "clear"); !strings.Contains(output, "goal cleared") {
+		t.Fatalf("clear output = %q", output)
+	}
+	if _, _, output := postGoal(t, ts2.URL, sid, "clear"); !strings.Contains(output, "no goal set") {
+		t.Fatalf("second clear output = %q", output)
+	}
+	if _, runID, output := postGoal(t, ts2.URL, sid, "resume"); runID != "" || !strings.Contains(output, "no goal set") {
+		t.Fatalf("resume without goal = runID %q output %q", runID, output)
+	}
+	if code, _ := postGoalErr(t, ts2.URL, sid, "budget cycles 3"); code != http.StatusNotFound {
+		t.Fatalf("budget without goal: status %d, want 404", code)
+	}
+}
+
+func TestGoalRunModelError(t *testing.T) {
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithRateLimiter(errorLimiter{err: errors.New("model offline")}),
+	)
+	a, err := agent.New(agent.Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeDefault,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{Agent: a, Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: t.TempDir()})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	_, runID, _ := postGoal(t, ts.URL, "sess-goal-err", "set do the thing")
+	if runID == "" {
+		t.Fatal("set should start a run")
+	}
+	typ, data := streamTerminalEvent(t, ts.URL, runID)
+	if typ != "error" {
+		t.Fatalf("goal run terminal = %s %s, want error", typ, data)
+	}
+}
+
+// TestGoalSubscriberWithoutOwner: goal notifications for a goal with no
+// session owner (the TUI path) are dropped by the mirroring subscriber
+// instead of writing a sidecar for an empty id.
+func TestGoalSubscriberWithoutOwner(t *testing.T) {
+	dir := t.TempDir()
+	s := New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: dir})
+
+	if _, err := s.agent.SetGoal("tui objective", "", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if g := s.agent.Goal(); g == nil || g.Objective != "tui objective" {
+		t.Fatalf("goal = %+v", g)
+	}
+	// No sidecar appears for the empty owner…
+	if _, err := os.Stat(filepath.Join(dir, ".goal.json")); !os.IsNotExist(err) {
+		t.Fatalf("unowned goal wrote a sidecar: %v", err)
+	}
+	// …and clearing it stays a no-op.
+	if !s.agent.ClearGoal() {
+		t.Fatal("clear should report the removed goal")
 	}
 }

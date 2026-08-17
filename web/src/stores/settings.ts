@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
-import { useDark, useToggle } from '@vueuse/core'
+import { useDark, useLocalStorage, useToggle } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { getSettings, updateSettings } from '../api/client'
 import type { AppSettings, AppSettingsUpdate } from '../types'
+import { useAgentStore } from './agent'
 
 // Settings + appearance state. Theme is a useDark singleton (persists to
 // localStorage under "woca-theme" and toggles the `.dark` class on <html>).
@@ -14,11 +15,16 @@ export const useSettingsStore = defineStore('settings', () => {
 
   const panelOpen = ref(false)
 
-  // Demo preferences (cards in the settings panel).
-  const autoCollapseTools = ref(false)
-  const markdownPreview = ref(true)
-  const model = ref('claude-sonnet-4-5')
-  const permissionMode = ref<'default' | 'acceptEdits' | 'bypassPermissions' | 'readOnly' | 'plan'>('default')
+  // Client-side preferences (cards in the settings panel). Persisted under
+  // localStorage keys woca.pref.* so they survive reloads without a server
+  // round-trip; the refs stay assignable through the store as before.
+  const autoCollapseTools = useLocalStorage('woca.pref.autoCollapseTools', true)
+  const markdownPreview = useLocalStorage('woca.pref.markdownPreview', true)
+  const model = useLocalStorage('woca.pref.model', 'claude-sonnet-4-5')
+  const permissionMode = useLocalStorage<'default' | 'acceptEdits' | 'bypassPermissions' | 'readOnly' | 'plan'>(
+    'woca.pref.permissionMode',
+    'default',
+  )
 
   // --- server-backed settings ---
   const server = ref<AppSettings | null>(null)
@@ -29,12 +35,37 @@ export const useSettingsStore = defineStore('settings', () => {
 
   // Local editable copies for the form (password inputs stay empty unless
   // the user types a new value).
-  const provider = ref<'anthropic' | 'openai'>('anthropic')
+  type ProviderName = 'anthropic' | 'openai' | 'glm' | 'deepseek'
+  const provider = ref<ProviderName>('anthropic')
   const serverModel = ref('')
-  const anthropicBaseURL = ref('')
-  const openaiBaseURL = ref('')
-  const anthropicAPIKey = ref('')
-  const openaiAPIKey = ref('')
+  const baseURLs = ref<Record<ProviderName, string>>({
+    anthropic: '',
+    openai: '',
+    glm: '',
+    deepseek: '',
+  })
+  const apiKeys = ref<Record<ProviderName, string>>({
+    anthropic: '',
+    openai: '',
+    glm: '',
+    deepseek: '',
+  })
+  const anthropicBaseURL = computed({
+    get: () => baseURLs.value.anthropic,
+    set: (v) => (baseURLs.value.anthropic = v),
+  })
+  const openaiBaseURL = computed({
+    get: () => baseURLs.value.openai,
+    set: (v) => (baseURLs.value.openai = v),
+  })
+  const anthropicAPIKey = computed({
+    get: () => apiKeys.value.anthropic,
+    set: (v) => (apiKeys.value.anthropic = v),
+  })
+  const openaiAPIKey = computed({
+    get: () => apiKeys.value.openai,
+    set: (v) => (apiKeys.value.openai = v),
+  })
   const checkpointBackend = ref('sqlite')
   const memoryBackend = ref('sqlite')
   const postgresURL = ref('')
@@ -57,25 +88,33 @@ export const useSettingsStore = defineStore('settings', () => {
   // the selected provider's stored fields (the user picks a provider, not a
   // per-provider form). Drafts are kept per provider so switching back and
   // forth does not lose typed values.
+  //
+  // Implicit security contract: an EMPTY key field means "unchanged", never
+  // "clear". The password inputs always render empty (even when a key is
+  // set — see apiKeySet), so saveServer only forwards non-empty secrets and
+  // loadServer resets the drafts to ''. Turning an empty string into an
+  // explicit clear would let a casual "save" destroy an encrypted key the
+  // form never even displayed.
   const baseURL = computed({
-    get: () => (provider.value === 'anthropic' ? anthropicBaseURL.value : openaiBaseURL.value),
-    set: (v: string) => {
-      if (provider.value === 'anthropic') anthropicBaseURL.value = v
-      else openaiBaseURL.value = v
-    },
+    get: () => baseURLs.value[provider.value],
+    set: (v: string) => (baseURLs.value[provider.value] = v),
   })
   const apiKey = computed({
-    get: () => (provider.value === 'anthropic' ? anthropicAPIKey.value : openaiAPIKey.value),
-    set: (v: string) => {
-      if (provider.value === 'anthropic') anthropicAPIKey.value = v
-      else openaiAPIKey.value = v
-    },
+    get: () => apiKeys.value[provider.value],
+    set: (v: string) => (apiKeys.value[provider.value] = v),
   })
-  const apiKeySet = computed(() =>
-    provider.value === 'anthropic'
-      ? Boolean(server.value?.anthropic_api_key_set)
-      : Boolean(server.value?.openai_api_key_set),
-  )
+  const apiKeySet = computed(() => {
+    switch (provider.value) {
+      case 'openai':
+        return Boolean(server.value?.openai_api_key_set)
+      case 'glm':
+        return Boolean(server.value?.glm_api_key_set)
+      case 'deepseek':
+        return Boolean(server.value?.deepseek_api_key_set)
+      default:
+        return Boolean(server.value?.anthropic_api_key_set)
+    }
+  })
   const ladymEmbeddingKeySet = computed(() => Boolean(server.value?.ladym_embedding_api_key_set))
 
   async function loadServer() {
@@ -83,10 +122,14 @@ export const useSettingsStore = defineStore('settings', () => {
     try {
       const s = await getSettings()
       server.value = s
-      provider.value = s.provider
+      provider.value = (s.provider as ProviderName) ?? 'anthropic'
       serverModel.value = s.model
-      anthropicBaseURL.value = s.anthropic_base_url
-      openaiBaseURL.value = s.openai_base_url
+      baseURLs.value = {
+        anthropic: s.anthropic_base_url,
+        openai: s.openai_base_url,
+        glm: s.glm_base_url,
+        deepseek: s.deepseek_base_url,
+      }
       checkpointBackend.value = s.checkpoint_backend || 'sqlite'
       memoryBackend.value = s.memory_backend || 'sqlite'
       debugLog.value = Boolean(s.debug_log)
@@ -101,8 +144,7 @@ export const useSettingsStore = defineStore('settings', () => {
       ladymSystem2.value = Boolean(s.ladym_system2)
       ladymSystem2Interval.value = s.ladym_system2_interval || 300
       ladymEmbeddingAPIKey.value = ''
-      anthropicAPIKey.value = ''
-      openaiAPIKey.value = ''
+      apiKeys.value = { anthropic: '', openai: '', glm: '', deepseek: '' }
       postgresURL.value = ''
     } catch (e) {
       serverError.value = e instanceof Error ? e.message : String(e)
@@ -116,8 +158,10 @@ export const useSettingsStore = defineStore('settings', () => {
     const patch: AppSettingsUpdate = {
       provider: provider.value,
       model: serverModel.value,
-      anthropic_base_url: anthropicBaseURL.value,
-      openai_base_url: openaiBaseURL.value,
+      anthropic_base_url: baseURLs.value.anthropic,
+      openai_base_url: baseURLs.value.openai,
+      glm_base_url: baseURLs.value.glm,
+      deepseek_base_url: baseURLs.value.deepseek,
       checkpoint_backend: checkpointBackend.value,
       memory_backend: memoryBackend.value,
       memory_engine: memoryEngine.value,
@@ -135,9 +179,13 @@ export const useSettingsStore = defineStore('settings', () => {
       ladym_db_path: ladymDBPath.value,
       ladym_system2: ladymSystem2.value,
     }
-    // Secrets: only send when the user typed something (empty = unchanged).
-    if (anthropicAPIKey.value) patch.anthropic_api_key = anthropicAPIKey.value
-    if (openaiAPIKey.value) patch.openai_api_key = openaiAPIKey.value
+    // Secrets: only send what the user actually typed. An empty draft means
+    // "keep the stored key" — the server treats absent fields as unchanged,
+    // and forwarding '' would wipe an encrypted key the form never showed.
+    if (apiKeys.value.anthropic) patch.anthropic_api_key = apiKeys.value.anthropic
+    if (apiKeys.value.openai) patch.openai_api_key = apiKeys.value.openai
+    if (apiKeys.value.glm) patch.glm_api_key = apiKeys.value.glm
+    if (apiKeys.value.deepseek) patch.deepseek_api_key = apiKeys.value.deepseek
     if (postgresURL.value) patch.postgres_url = postgresURL.value
     if (ladymEmbeddingAPIKey.value) patch.ladym_embedding_api_key = ladymEmbeddingAPIKey.value
     try {
@@ -150,6 +198,9 @@ export const useSettingsStore = defineStore('settings', () => {
           : '已保存'
       if (serverModel.value) model.value = serverModel.value
       await loadServer()
+      // Provider/model changes may flip the thinking drawer's support state.
+      const agentStore = useAgentStore()
+      void agentStore.load()
     } catch (e) {
       serverError.value = e instanceof Error ? e.message : String(e)
     } finally {

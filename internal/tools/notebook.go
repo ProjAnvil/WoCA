@@ -19,10 +19,10 @@ type notebookEditArgs struct {
 	NewSource    string `json:"new_source"`
 }
 
-func notebookEditTool(d *Dir) coretools.Tool {
+func notebookEditTool(d *Dir, fh *FileHistory) coretools.Tool {
 	t, err := coretools.FromFunc("NotebookEdit", notebookEditDescription,
 		func(ctx context.Context, a notebookEditArgs) (coretools.Result, error) {
-			path := resolvePath(d.Current(), a.NotebookPath)
+			path := resolvePath(d.For(ctx), a.NotebookPath)
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("notebook %s: %w", a.NotebookPath, err)
@@ -64,6 +64,7 @@ func notebookEditTool(d *Dir) coretools.Tool {
 			if err := os.WriteFile(path, out, 0o644); err != nil {
 				return coretools.Result{}, fmt.Errorf("write notebook %s: %w", a.NotebookPath, err)
 			}
+			fh.Record(ctx, path, data, out)
 			return coretools.Result{Content: fmt.Sprintf("Edited cell %d in %s", idx, a.NotebookPath)}, nil
 		})
 	if err != nil {

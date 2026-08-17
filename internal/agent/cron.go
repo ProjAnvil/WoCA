@@ -29,23 +29,35 @@ type cronEntry struct {
 	lastFired time.Time // minute granularity, prevents double fire
 }
 
-// cronState is the agent's scheduler state plus its ticker loop.
-type cronState struct {
+// notificationSink is the single capability the scheduler needs from its
+// host: delivering a due prompt into the session's input queue.
+type notificationSink func(tag, text string)
+
+// cronScheduler is the session-scoped scheduled-prompt loop, extracted from
+// the Agent so the scheduling logic (parse / match / fire / ticker) is
+// testable without an agent. The host injects the delivery sink at
+// construction; everything else is self-contained.
+type cronScheduler struct {
+	notify  notificationSink
 	mu      sync.Mutex
 	next    int
 	entries []*cronEntry
 	cancel  context.CancelFunc
 }
 
-// startCron starts the scheduler loop (idempotent).
-func (a *Agent) startCron() {
-	a.cron.mu.Lock()
-	defer a.cron.mu.Unlock()
-	if a.cron.cancel != nil {
+func newCronScheduler(notify notificationSink) *cronScheduler {
+	return &cronScheduler{notify: notify}
+}
+
+// Start starts the ticker loop (idempotent).
+func (s *cronScheduler) Start() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancel != nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a.cron.cancel = cancel
+	s.cancel = cancel
 	go func() {
 		ticker := time.NewTicker(20 * time.Second)
 		defer ticker.Stop()
@@ -54,81 +66,97 @@ func (a *Agent) startCron() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				a.fireDueCron(time.Now())
+				s.fireDue(time.Now())
 			}
 		}
 	}()
 }
 
-// stopCron halts the scheduler (tests / teardown).
-func (a *Agent) stopCron() {
-	a.cron.mu.Lock()
-	defer a.cron.mu.Unlock()
-	if a.cron.cancel != nil {
-		a.cron.cancel()
-		a.cron.cancel = nil
+// Stop halts the scheduler (tests / teardown).
+func (s *cronScheduler) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
 	}
 }
 
-// addCron registers a scheduled prompt and returns its ID.
-func (a *Agent) addCron(name, prompt, spec string) (string, error) {
+// Add registers a scheduled prompt and returns its ID.
+func (s *cronScheduler) Add(name, prompt, spec string) (string, error) {
 	m, err := parseCron(spec)
 	if err != nil {
 		return "", err
 	}
-	a.cron.mu.Lock()
-	defer a.cron.mu.Unlock()
-	a.cron.next++
-	id := fmt.Sprintf("cron-%d", a.cron.next)
-	a.cron.entries = append(a.cron.entries, &cronEntry{
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.next++
+	id := fmt.Sprintf("cron-%d", s.next)
+	s.entries = append(s.entries, &cronEntry{
 		ID: id, Name: name, Prompt: prompt, Spec: spec, matcher: m,
 	})
 	return id, nil
 }
 
-// deleteCron removes an entry by ID.
-func (a *Agent) deleteCron(id string) bool {
-	a.cron.mu.Lock()
-	defer a.cron.mu.Unlock()
-	for i, e := range a.cron.entries {
+// Delete removes an entry by ID.
+func (s *cronScheduler) Delete(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, e := range s.entries {
 		if e.ID == id {
-			a.cron.entries = append(a.cron.entries[:i], a.cron.entries[i+1:]...)
+			s.entries = append(s.entries[:i], s.entries[i+1:]...)
 			return true
 		}
 	}
 	return false
 }
 
-// listCron snapshots the entries.
-func (a *Agent) listCron() []cronEntry {
-	a.cron.mu.Lock()
-	defer a.cron.mu.Unlock()
-	out := make([]cronEntry, 0, len(a.cron.entries))
-	for _, e := range a.cron.entries {
+// List snapshots the entries.
+func (s *cronScheduler) List() []cronEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]cronEntry, 0, len(s.entries))
+	for _, e := range s.entries {
 		out = append(out, cronEntry{ID: e.ID, Name: e.Name, Prompt: e.Prompt, Spec: e.Spec})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
-// fireDueCron fires every entry whose schedule matches now's minute. Split
-// out from the ticker loop so tests can drive it deterministically.
-func (a *Agent) fireDueCron(now time.Time) {
-	a.cron.mu.Lock()
-	due := make([]*cronEntry, 0, len(a.cron.entries))
-	for _, e := range a.cron.entries {
+// fireDue fires every entry whose schedule matches now's minute. Split out
+// from the ticker loop so tests can drive it deterministically.
+func (s *cronScheduler) fireDue(now time.Time) {
+	s.mu.Lock()
+	due := make([]*cronEntry, 0, len(s.entries))
+	for _, e := range s.entries {
 		minute := now.Truncate(time.Minute)
 		if e.matcher.matches(now) && !e.lastFired.Equal(minute) {
 			e.lastFired = minute
 			due = append(due, e)
 		}
 	}
-	a.cron.mu.Unlock()
+	s.mu.Unlock()
 	for _, e := range due {
-		a.QueueNotification("scheduled-task",
+		s.notify("scheduled-task",
 			fmt.Sprintf("Scheduled task %s (%s) is due now:\n%s", e.displayName(), e.Spec, e.Prompt))
 	}
 }
+
+// Agent delegates: the tool wiring, Close() teardown and the tests keep
+// their entry points; the mechanics live on the scheduler.
+func (a *Agent) addCron(name, prompt, spec string) (string, error) {
+	return a.cron.Add(name, prompt, spec)
+}
+
+func (a *Agent) deleteCron(id string) bool { return a.cron.Delete(id) }
+
+func (a *Agent) listCron() []cronEntry { return a.cron.List() }
+
+func (a *Agent) startCron() { a.cron.Start() }
+
+func (a *Agent) stopCron() { a.cron.Stop() }
+
+func (a *Agent) fireDueCron(now time.Time) { a.cron.fireDue(now) }
 
 func (e *cronEntry) displayName() string {
 	if e.Name != "" {
@@ -139,7 +167,13 @@ func (e *cronEntry) displayName() string {
 
 // cronMatcher matches a 5-field cron expression against a time (minute
 // granularity, local time).
-type cronMatcher [5]map[int]bool
+type cronMatcher struct {
+	fields [5]map[int]bool
+	// bothDayFields tracks the Vixie rule: when day-of-month and day-of-week
+	// are both restricted (neither is "*"), a time matches when EITHER field
+	// matches instead of both (see matches).
+	bothDayFields bool
+}
 
 func parseCron(spec string) (cronMatcher, error) {
 	fields := strings.Fields(spec)
@@ -153,8 +187,9 @@ func parseCron(spec string) (cronMatcher, error) {
 		if err != nil {
 			return cronMatcher{}, err
 		}
-		m[i] = set
+		m.fields[i] = set
 	}
+	m.bothDayFields = fields[2] != "*" && fields[4] != "*"
 	return m, nil
 }
 
@@ -174,8 +209,10 @@ func parseCronField(field string, min, max int) (map[int]bool, error) {
 		switch {
 		case part == "*" || part == "":
 		case strings.Contains(part, "-"):
-			var a, b int
-			if _, err := fmt.Sscanf(part, "%d-%d", &a, &b); err != nil {
+			loS, hiS, _ := strings.Cut(part, "-")
+			a, errA := strconv.Atoi(loS)
+			b, errB := strconv.Atoi(hiS)
+			if errA != nil || errB != nil {
 				return nil, fmt.Errorf("cron: invalid range %q", part)
 			}
 			lo, hi = a, b
@@ -200,7 +237,15 @@ func parseCronField(field string, min, max int) (map[int]bool, error) {
 }
 
 func (m cronMatcher) matches(t time.Time) bool {
-	return m[0][t.Minute()] && m[1][t.Hour()] && m[2][t.Day()] && m[3][int(t.Month())] && m[4][int(t.Weekday())]
+	if !m.fields[0][t.Minute()] || !m.fields[1][t.Hour()] || !m.fields[3][int(t.Month())] {
+		return false
+	}
+	// Vixie cron: with both day fields restricted, either one matching is
+	// enough; otherwise both must match.
+	if m.bothDayFields {
+		return m.fields[2][t.Day()] || m.fields[4][int(t.Weekday())]
+	}
+	return m.fields[2][t.Day()] && m.fields[4][int(t.Weekday())]
 }
 
 const scheduleCronDescription = `Schedule a recurring or one-shot scheduled prompt using a cron expression (5 fields: minute hour day-of-month month day-of-week, local time). When an entry is due, its prompt is delivered to you as a <scheduled-task> notification — act on it like new user input. Entries live for the current session only.

@@ -24,6 +24,19 @@ func TextDelta(chunk messages.Message) string {
 	return b.String()
 }
 
+// ReasoningDeltaText extracts the incremental chain-of-thought text from a
+// streaming chunk (Anthropic thinking deltas, DeepSeek/GLM
+// reasoning_content), leaving the answer text to TextDelta.
+func ReasoningDeltaText(chunk messages.Message) string {
+	var b strings.Builder
+	for _, block := range chunk.ContentBlocks {
+		if rb, ok := block.(messages.ReasoningBlock); ok {
+			b.WriteString(rb.Reasoning)
+		}
+	}
+	return b.String()
+}
+
 // MergeStreamChunks accumulates a streaming chunk into full. The first chunk
 // seeds role/ID/metadata; later chunks append text and merge tool calls by ID.
 func MergeStreamChunks(full *messages.Message, chunk messages.Message) {

@@ -17,8 +17,12 @@ type appSettings struct {
 	Temperature        float64 `json:"temperature"`
 	AnthropicBaseURL   string  `json:"anthropic_base_url"`
 	OpenAIBaseURL      string  `json:"openai_base_url"`
+	GLMBaseURL         string  `json:"glm_base_url"`
+	DeepSeekBaseURL    string  `json:"deepseek_base_url"`
 	AnthropicAPIKeySet bool    `json:"anthropic_api_key_set"`
 	OpenAIAPIKeySet    bool    `json:"openai_api_key_set"`
+	GLMAPIKeySet       bool    `json:"glm_api_key_set"`
+	DeepSeekAPIKeySet  bool    `json:"deepseek_api_key_set"`
 	CheckpointBackend  string  `json:"checkpoint_backend"`
 	MemoryBackend      string  `json:"memory_backend"`
 	CheckpointDir      string  `json:"checkpoint_dir"`
@@ -49,8 +53,12 @@ type appSettingsUpdate struct {
 	Temperature       *float64 `json:"temperature"`
 	AnthropicBaseURL  *string  `json:"anthropic_base_url"`
 	OpenAIBaseURL     *string  `json:"openai_base_url"`
+	GLMBaseURL        *string  `json:"glm_base_url"`
+	DeepSeekBaseURL   *string  `json:"deepseek_base_url"`
 	AnthropicAPIKey   *string  `json:"anthropic_api_key"`
 	OpenAIAPIKey      *string  `json:"openai_api_key"`
+	GLMAPIKey         *string  `json:"glm_api_key"`
+	DeepSeekAPIKey    *string  `json:"deepseek_api_key"`
 	CheckpointBackend *string  `json:"checkpoint_backend"`
 	MemoryBackend     *string  `json:"memory_backend"`
 	CheckpointDir     *string  `json:"checkpoint_dir"`
@@ -88,8 +96,12 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		Temperature:        cfg.Temperature,
 		AnthropicBaseURL:   cfg.AnthropicBaseURL,
 		OpenAIBaseURL:      cfg.OpenAIBaseURL,
+		GLMBaseURL:         cfg.GLMBaseURL,
+		DeepSeekBaseURL:    cfg.DeepSeekBaseURL,
 		AnthropicAPIKeySet: st.HasSecret(settings.SecretAnthropicAPIKey),
 		OpenAIAPIKeySet:    st.HasSecret(settings.SecretOpenAIAPIKey),
+		GLMAPIKeySet:       st.HasSecret(settings.SecretGLMAPIKey),
+		DeepSeekAPIKeySet:  st.HasSecret(settings.SecretDeepSeekAPIKey),
 		CheckpointBackend:  cfg.CheckpointBackend,
 		MemoryBackend:      cfg.MemoryBackend,
 		CheckpointDir:      cfg.CheckpointDir,
@@ -112,6 +124,53 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// Settings-update side effects, combined as bit flags per field.
+const (
+	effModel    uint8 = 1 << iota // rebuild the chat model
+	effMemory                     // rebuild the memory engine
+	effRestart                    // takes effect after a server restart
+	effDebugLog                   // flip the observability store live
+)
+
+// fieldPatch is one updatable settings field: the settings key, whether the
+// request touched it, the encoded value for settings.Apply, and the side
+// effects applying it triggers. The table replaces one handwritten
+// if-Apply-flag block per field.
+type fieldPatch struct {
+	key     string
+	set     bool
+	value   string
+	effects uint8
+}
+
+func strPatch(key string, p *string, effects uint8) fieldPatch {
+	if p == nil {
+		return fieldPatch{key: key, effects: effects}
+	}
+	return fieldPatch{key: key, set: true, value: *p, effects: effects}
+}
+
+func intPatch(key string, p *int, effects uint8) fieldPatch {
+	if p == nil {
+		return fieldPatch{key: key, effects: effects}
+	}
+	return fieldPatch{key: key, set: true, value: strconv.Itoa(*p), effects: effects}
+}
+
+func floatPatch(key string, p *float64, effects uint8) fieldPatch {
+	if p == nil {
+		return fieldPatch{key: key, effects: effects}
+	}
+	return fieldPatch{key: key, set: true, value: ftoa(*p), effects: effects}
+}
+
+func boolPatch(key string, p *bool, effects uint8) fieldPatch {
+	if p == nil {
+		return fieldPatch{key: key, effects: effects}
+	}
+	return fieldPatch{key: key, set: true, value: strconv.FormatBool(*p), effects: effects}
+}
+
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	st := s.settings
 	if st == nil {
@@ -124,150 +183,47 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := st.Load()
-	restartRequired := false
-	modelChanged := false
-	memoryChanged := false
+	patches := []fieldPatch{
+		// Model keys rebuild the live chat model.
+		strPatch(settings.KeyProvider, req.Provider, effModel),
+		strPatch(settings.KeyModel, req.Model, effModel),
+		intPatch(settings.KeyMaxTokens, req.MaxTokens, effModel),
+		floatPatch(settings.KeyTemperature, req.Temperature, effModel),
+		strPatch(settings.KeyAnthropicBaseURL, req.AnthropicBaseURL, effModel),
+		strPatch(settings.KeyOpenAIBaseURL, req.OpenAIBaseURL, effModel),
+		strPatch(settings.KeyGLMBaseURL, req.GLMBaseURL, effModel),
+		strPatch(settings.KeyDeepSeekBaseURL, req.DeepSeekBaseURL, effModel),
+		// Storage backends only take effect after a restart.
+		strPatch(settings.KeyCheckpoint, req.CheckpointBackend, effRestart),
+		strPatch(settings.KeyMemory, req.MemoryBackend, effRestart),
+		strPatch(settings.KeyCheckpointDir, req.CheckpointDir, effRestart),
+		// Memory-engine keys participate in engine construction: they
+		// trigger a live rebuild (no restart required).
+		strPatch(settings.KeyMemoryEngine, req.MemoryEngine, effMemory),
+		strPatch(settings.KeyLadyMDBPath, req.LadyMDBPath, effMemory),
+		strPatch(settings.KeyLadyMEmbedding, req.LadyMEmbedding, effMemory),
+		strPatch(settings.KeyLadyMEmbeddingModel, req.LadyMEmbeddingModel, effMemory),
+		strPatch(settings.KeyLadyMEmbeddingBaseURL, req.LadyMEmbeddingBaseURL, effMemory),
+		strPatch(settings.KeyLadyMLLM, req.LadyMLLM, effMemory),
+		// Per-run keys are re-read on each turn: no rebuild, no restart.
+		boolPatch(settings.KeyLadyMAutoRetain, req.LadyMAutoRetain, 0),
+		intPatch(settings.KeyLadyMTopK, req.LadyMTopK, 0),
+		boolPatch(settings.KeyLadyMSystem2, req.LadyMSystem2, 0),
+		intPatch(settings.KeyLadyMSystem2Interval, req.LadyMSystem2Interval, 0),
+		boolPatch(settings.KeyDebugLog, req.DebugLog, effDebugLog),
+	}
 
-	if req.Provider != nil {
-		if err := settings.Apply(&cfg, settings.KeyProvider, *req.Provider); err != nil {
+	cfg := st.Load()
+	var applied uint8
+	for _, p := range patches {
+		if !p.set {
+			continue
+		}
+		if err := settings.Apply(&cfg, p.key, p.value); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		modelChanged = true
-	}
-	if req.Model != nil {
-		if err := settings.Apply(&cfg, settings.KeyModel, *req.Model); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		modelChanged = true
-	}
-	if req.MaxTokens != nil {
-		if err := settings.Apply(&cfg, settings.KeyMaxTokens, itoa(*req.MaxTokens)); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		modelChanged = true
-	}
-	if req.Temperature != nil {
-		if err := settings.Apply(&cfg, settings.KeyTemperature, ftoa(*req.Temperature)); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		modelChanged = true
-	}
-	if req.AnthropicBaseURL != nil {
-		if err := settings.Apply(&cfg, settings.KeyAnthropicBaseURL, *req.AnthropicBaseURL); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		modelChanged = true
-	}
-	if req.OpenAIBaseURL != nil {
-		if err := settings.Apply(&cfg, settings.KeyOpenAIBaseURL, *req.OpenAIBaseURL); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		modelChanged = true
-	}
-	if req.CheckpointBackend != nil {
-		if err := settings.Apply(&cfg, settings.KeyCheckpoint, *req.CheckpointBackend); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		restartRequired = true
-	}
-	if req.MemoryBackend != nil {
-		if err := settings.Apply(&cfg, settings.KeyMemory, *req.MemoryBackend); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		restartRequired = true
-	}
-	if req.CheckpointDir != nil {
-		if err := settings.Apply(&cfg, settings.KeyCheckpointDir, *req.CheckpointDir); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		restartRequired = true
-	}
-	// Memory-engine keys that participate in engine construction trigger a
-	// live rebuild (no restart required).
-	if req.MemoryEngine != nil {
-		if err := settings.Apply(&cfg, settings.KeyMemoryEngine, *req.MemoryEngine); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		memoryChanged = true
-	}
-	if req.LadyMDBPath != nil {
-		if err := settings.Apply(&cfg, settings.KeyLadyMDBPath, *req.LadyMDBPath); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		memoryChanged = true
-	}
-	if req.LadyMEmbedding != nil {
-		if err := settings.Apply(&cfg, settings.KeyLadyMEmbedding, *req.LadyMEmbedding); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		memoryChanged = true
-	}
-	if req.LadyMEmbeddingModel != nil {
-		if err := settings.Apply(&cfg, settings.KeyLadyMEmbeddingModel, *req.LadyMEmbeddingModel); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		memoryChanged = true
-	}
-	if req.LadyMEmbeddingBaseURL != nil {
-		if err := settings.Apply(&cfg, settings.KeyLadyMEmbeddingBaseURL, *req.LadyMEmbeddingBaseURL); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		memoryChanged = true
-	}
-	if req.LadyMLLM != nil {
-		if err := settings.Apply(&cfg, settings.KeyLadyMLLM, *req.LadyMLLM); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		memoryChanged = true
-	}
-	// Per-run keys are re-read on each turn: apply without a rebuild.
-	if req.LadyMAutoRetain != nil {
-		if err := settings.Apply(&cfg, settings.KeyLadyMAutoRetain, strconv.FormatBool(*req.LadyMAutoRetain)); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	if req.LadyMTopK != nil {
-		if err := settings.Apply(&cfg, settings.KeyLadyMTopK, itoa(*req.LadyMTopK)); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	if req.LadyMSystem2 != nil {
-		if err := settings.Apply(&cfg, settings.KeyLadyMSystem2, strconv.FormatBool(*req.LadyMSystem2)); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	if req.LadyMSystem2Interval != nil {
-		if err := settings.Apply(&cfg, settings.KeyLadyMSystem2Interval, itoa(*req.LadyMSystem2Interval)); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	debugLogChanged := false
-	if req.DebugLog != nil {
-		if err := settings.Apply(&cfg, settings.KeyDebugLog, strconv.FormatBool(*req.DebugLog)); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		debugLogChanged = true
+		applied |= p.effects
 	}
 	if err := st.Save(cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -275,42 +231,32 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Secrets: non-empty value stores (encrypted); present-but-empty clears.
-	if req.AnthropicAPIKey != nil {
-		if err := st.SetSecret(settings.SecretAnthropicAPIKey, *req.AnthropicAPIKey); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		modelChanged = true
+	secrets := []fieldPatch{
+		strPatch(settings.SecretAnthropicAPIKey, req.AnthropicAPIKey, effModel),
+		strPatch(settings.SecretOpenAIAPIKey, req.OpenAIAPIKey, effModel),
+		strPatch(settings.SecretGLMAPIKey, req.GLMAPIKey, effModel),
+		strPatch(settings.SecretDeepSeekAPIKey, req.DeepSeekAPIKey, effModel),
+		strPatch(settings.SecretPostgresURL, req.PostgresURL, effRestart),
+		strPatch(settings.SecretLadyMEmbeddingAPIKey, req.LadyMEmbeddingAPIKey, effMemory),
 	}
-	if req.OpenAIAPIKey != nil {
-		if err := st.SetSecret(settings.SecretOpenAIAPIKey, *req.OpenAIAPIKey); err != nil {
+	for _, sec := range secrets {
+		if !sec.set {
+			continue
+		}
+		if err := st.SetSecret(sec.key, sec.value); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		modelChanged = true
-	}
-	if req.PostgresURL != nil {
-		if err := st.SetSecret(settings.SecretPostgresURL, *req.PostgresURL); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		restartRequired = true
-	}
-	if req.LadyMEmbeddingAPIKey != nil {
-		if err := st.SetSecret(settings.SecretLadyMEmbeddingAPIKey, *req.LadyMEmbeddingAPIKey); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		memoryChanged = true
+		applied |= sec.effects
 	}
 
 	applyErr := ""
-	if modelChanged && s.rebuildModel != nil {
+	if applied&effModel != 0 && s.rebuildModel != nil {
 		if err := s.rebuildModel(); err != nil {
 			applyErr = err.Error()
 		}
 	}
-	if memoryChanged && s.rebuildMemory != nil {
+	if applied&effMemory != 0 && s.rebuildMemory != nil {
 		if err := s.rebuildMemory(); err != nil {
 			if applyErr != "" {
 				applyErr += "; "
@@ -320,16 +266,15 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	// The observability log toggles live (no restart): flip the store right
 	// after the settings row is saved.
-	if debugLogChanged && s.agent != nil && s.agent.Obs() != nil {
+	if applied&effDebugLog != 0 && s.agent != nil && s.agent.Obs() != nil {
 		s.agent.Obs().SetEnabled(cfg.DebugLog)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
-		"restart_required": restartRequired,
+		"restart_required": applied&effRestart != 0,
 		"apply_error":      applyErr,
 	})
 }
 
-func itoa(n int) string     { return strconv.Itoa(n) }
 func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }

@@ -18,6 +18,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/memory"
+	"github.com/projanvil/woca/internal/quota"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
@@ -102,6 +103,16 @@ type Deps struct {
 	// SetVimModeToggle flips the TUI vim input mode and reports the new
 	// state (/vim); nil disables the command.
 	SetVimModeToggle func() bool
+	// CfgLive returns the agent's live configuration snapshot (/thinking,
+	// /status). Nil falls back to the construction-time Cfg copy.
+	CfgLive func() config.Config
+	// SetThinkingBudget persists a new extended-thinking budget and rebuilds
+	// the chat model (/thinking <level>); nil disables switching (viewing
+	// still works).
+	SetThinkingBudget func(budget int) error
+	// Quota fetches the provider plan quota (/quota). Nil disables the
+	// command with a helpful message.
+	Quota func(ctx context.Context) (quota.Info, error)
 }
 
 // Console executes slash commands against a Deps set.
@@ -142,6 +153,10 @@ func (c *Console) Execute(ctx context.Context, name string, args []string, sessi
 		return Result{Output: c.status()}, nil
 	case "permissions":
 		return c.permissions(args)
+	case "thinking":
+		return c.thinkingCmd(args)
+	case "quota":
+		return c.quotaCmd(ctx)
 	case "model":
 		return c.model(args)
 	case "clear":
@@ -151,6 +166,10 @@ func (c *Console) Execute(ctx context.Context, name string, args []string, sessi
 		return c.compact(ctx, session)
 	case "context":
 		return Result{Output: c.context(session)}, nil
+	case "undo":
+		return c.undoRedoCmd(ctx, false)
+	case "redo":
+		return c.undoRedoCmd(ctx, true)
 	case "cost":
 		return Result{Output: c.cost()}, nil
 	case "init":
@@ -183,6 +202,8 @@ func (c *Console) Execute(ctx context.Context, name string, args []string, sessi
 		return c.goalCmd(args)
 	case "tasks":
 		return Result{Output: c.tasks()}, nil
+	case "team":
+		return Result{Output: c.teamStatus()}, nil
 	case "skills":
 		return Result{Output: c.skills()}, nil
 	case "mcp":
@@ -217,6 +238,7 @@ func (c *Console) status() string {
 	fmt.Fprintf(&b, "woca %s\n", d.Version)
 	fmt.Fprintf(&b, "provider=%s model=%s\n", d.Cfg.Provider, d.Cfg.Model)
 	fmt.Fprintf(&b, "permission mode=%s plan mode=%v\n", d.Agent.Mode(), d.Agent.PlanMode())
+	fmt.Fprintf(&b, "thinking=%s (%d tokens)\n", config.ThinkingLevel(c.liveCfg().ThinkingBudget), c.liveCfg().ThinkingBudget)
 	if s := d.Agent.TaskSummary(); s != "" {
 		fmt.Fprintf(&b, "working on: %s\n", s)
 	}
@@ -307,6 +329,31 @@ func (c *Console) context(session *Session) string {
 			u.Requests, u.InputTokens, u.OutputTokens)
 	}
 	return b.String()
+}
+
+// undoRedoCmd backs /undo and /redo: file-level reverts of Write/Edit/
+// NotebookEdit mutations (Bash-caused changes are not tracked).
+func (c *Console) undoRedoCmd(ctx context.Context, redo bool) (Result, error) {
+	var output string
+	var err error
+	if redo {
+		output, err = c.deps.Agent.RedoFiles(ctx)
+	} else {
+		output, err = c.deps.Agent.UndoFiles(ctx)
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	undoN, redoN := c.deps.Agent.FileHistoryCounts(ctx)
+	return Result{Output: fmt.Sprintf("%s (%d undoable, %d redoable steps left)\n", output, undoN, redoN)}, nil
+}
+
+// teamStatus shows the agent team (teammates, shared tasks, lead inbox).
+func (c *Console) teamStatus() string {
+	if st, err := c.deps.Agent.TeamStatusText(); err == nil {
+		return st
+	}
+	return "no team spawned (the agent creates one with the TeamSpawn tool)\n"
 }
 
 func (c *Console) todos() string {

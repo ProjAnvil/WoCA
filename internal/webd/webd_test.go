@@ -26,6 +26,7 @@ func newTestManager(t *testing.T) (*Manager, func()) {
 	// which stays true for zombies until the test reaps them; SIGKILL keeps
 	// the suite fast.
 	m.Kill = func(pid int) error { return syscall.Kill(pid, syscall.SIGKILL) }
+	m.WaitReady = nil // the fake sleep daemon serves nothing; skip the guard
 	m.Spawn = func(argv []string, logFile string) (int, error) {
 		// Sanity: the harness always asks to run the serve subcommand with a
 		// loopback addr and the no-browser flag.

@@ -109,3 +109,88 @@ func TestStructuredValues(t *testing.T) {
 		t.Fatalf("structured value = %s", v)
 	}
 }
+
+func TestStoreAccessorsAndBackendNames(t *testing.T) {
+	var nilStore *Store
+	if got := nilStore.Backend(); got != "none" {
+		t.Errorf("nil Backend = %q", got)
+	}
+	if got := nilStore.Path(); got != "disabled" {
+		t.Errorf("nil Path = %q", got)
+	}
+
+	mem := NewMemory()
+	if got := mem.Backend(); got != "memory" {
+		t.Errorf("memory Backend = %q", got)
+	}
+	if got := mem.Path(); got != "memory" {
+		t.Errorf("memory Path = %q", got)
+	}
+
+	db, err := wocadb.Open(filepath.Join(t.TempDir(), "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	sql := NewSQL(db.DB, string(db.Dialect), db.Path)
+	if got := sql.Backend(); got != string(db.Dialect) {
+		t.Errorf("sql Backend = %q", got)
+	}
+	if got := sql.Path(); got != db.Path {
+		t.Errorf("sql Path = %q", got)
+	}
+
+	// Closed-database degradation: writes fail, reads fall back.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sql.Put(context.Background(), "ns", "k", map[string]any{"a": 1}); err == nil {
+		t.Error("closed Put should fail")
+	}
+	if _, ok, err := sql.Get(context.Background(), "ns", "k"); ok || err == nil {
+		t.Error("closed Get should miss with an error")
+	}
+	if got, _ := sql.List(context.Background(), "ns", ""); len(got) != 0 {
+		t.Errorf("closed List = %v", got)
+	}
+	if err := sql.Delete(context.Background(), "ns", "k"); err == nil {
+		t.Error("closed Delete should fail")
+	}
+}
+
+func TestSortEntriesOrdering(t *testing.T) {
+	entries := []Entry{
+		{Namespace: "b", Key: "x"},
+		{Namespace: "a", Key: "z"},
+		{Namespace: "a", Key: "m"},
+	}
+	sortEntries(entries)
+	if entries[0].Namespace != "a" || entries[0].Key != "m" || entries[2].Namespace != "b" {
+		t.Fatalf("sorted = %+v", entries)
+	}
+}
+
+
+func TestPostgresPlaceholderRewrite(t *testing.T) {
+	// The postgres dialect rewrites ? placeholders; sqlite passes through.
+	sqlite := &Store{dialect: "sqlite"}
+	if got := sqlite.q("SELECT * FROM t WHERE a = ? AND b = ?"); got != "SELECT * FROM t WHERE a = ? AND b = ?" {
+		t.Fatalf("sqlite q = %q", got)
+	}
+	db, err := wocadb.Open(filepath.Join(t.TempDir(), "pg.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	pg := &Store{db: db.DB, dialect: "postgres"}
+	if got := pg.q("SELECT * FROM t WHERE a = ? AND b = ?"); got != "SELECT * FROM t WHERE a = $1 AND b = $2" {
+		t.Fatalf("pg q = %q", got)
+	}
+	// val() serializes to string for postgres, bytes otherwise.
+	if got := pg.val([]byte("{}")); got != "{}" {
+		t.Fatalf("pg val = %v", got)
+	}
+	if got := (&Store{}).val([]byte("{}")); string(got.([]byte)) != "{}" {
+		t.Fatalf("sqlite val = %v", got)
+	}
+}

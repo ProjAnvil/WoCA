@@ -19,6 +19,9 @@ export const useMemoryStore = defineStore('memory', () => {
   const notice = ref('') // e.g. gate-drop feedback after 手动记住
   let offset = 0
   const pageSize = 20
+  // Size of the most recently fetched batch; hasMore() keys off it because a
+  // total that is an exact multiple of pageSize leaves no other end signal.
+  let lastBatchSize = 0
   let searchTimer: ReturnType<typeof setTimeout> | null = null
 
   function open(ws: string, name?: string) {
@@ -33,6 +36,12 @@ export const useMemoryStore = defineStore('memory', () => {
 
   function close() {
     panelOpen.value = false
+    // Cancel a queued debounced search so no request fires after the panel
+    // has been closed.
+    if (searchTimer) {
+      clearTimeout(searchTimer)
+      searchTimer = null
+    }
   }
 
   async function reload() {
@@ -53,6 +62,7 @@ export const useMemoryStore = defineStore('memory', () => {
       engine.value = list.engine
       items.value = list.items
       offset = list.items.length
+      lastBatchSize = list.items.length
       stats.value = st.stats
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
@@ -79,6 +89,7 @@ export const useMemoryStore = defineStore('memory', () => {
       })
       items.value = [...items.value, ...list.items]
       offset += list.items.length
+      lastBatchSize = list.items.length
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
     } finally {
@@ -86,10 +97,14 @@ export const useMemoryStore = defineStore('memory', () => {
     }
   }
 
+  // In search mode the backend's Recall ignores offset — paging would just
+  // re-append page one — so "load more" stays browse-mode only. Exhaustion is
+  // detected from the previous batch size: anything shorter than pageSize
+  // means the listing ended (this also recovers from an exact-multiple total,
+  // where one extra empty fetch clears the button).
   function hasMore(): boolean {
-    // 搜索模式下后端 Recall 忽略 offset，加载更多会重复追加第一页，因此只在浏览模式分页。
     if (query.value.trim()) return false
-    return items.value.length >= pageSize && items.value.length % pageSize === 0
+    return lastBatchSize >= pageSize
   }
 
   async function add(content: string, tags: string[] = []): Promise<string> {
@@ -101,7 +116,8 @@ export const useMemoryStore = defineStore('memory', () => {
       return ''
     }
     await reload()
-    // 注意：必须在 reload() 之后写入 —— reload() 开头会清空 notice，先写会被覆盖。
+    // Write the notice AFTER reload(): reload() clears notice at its start,
+    // so writing before the refresh would be silently wiped.
     if (res.dropped || !res.id) {
       notice.value = '被注意力门丢弃（重复或噪音），未保存'
     } else {

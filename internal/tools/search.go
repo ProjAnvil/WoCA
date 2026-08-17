@@ -24,7 +24,7 @@ type listDirArgs struct {
 func listDirTool(d *Dir) coretools.Tool {
 	t, err := coretools.FromFunc("ListDir", listDirDescription,
 		func(ctx context.Context, a listDirArgs) (coretools.Result, error) {
-			dir := resolvePath(d.Current(), a.Path)
+			dir := resolvePath(d.For(ctx), a.Path)
 			entries, err := os.ReadDir(dir)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("list %s: %w", a.Path, err)
@@ -56,7 +56,7 @@ type globArgs struct {
 func globTool(d *Dir) coretools.Tool {
 	t, err := coretools.FromFunc("Glob", globDescription,
 		func(ctx context.Context, a globArgs) (coretools.Result, error) {
-			base := resolvePath(d.Current(), a.Path)
+			base := resolvePath(d.For(ctx), a.Path)
 			matches, err := walkMatches(base, a.Pattern, nil)
 			if err != nil {
 				return coretools.Result{}, err
@@ -84,7 +84,7 @@ func grepTool(d *Dir) coretools.Tool {
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("invalid regexp %q: %w", a.Pattern, err)
 			}
-			base := resolvePath(d.Current(), a.Path)
+			base := resolvePath(d.For(ctx), a.Path)
 
 			var include *regexp.Regexp
 			if a.Include != "" {

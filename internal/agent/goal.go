@@ -101,6 +101,9 @@ type goalManager struct {
 	pendingTurns  int
 	pendingPrefix int
 	subs          []func(*Goal)
+	// runID identifies the goal run in flight; stale AbandonGoalRun calls
+	// (a newer run already started) are ignored by comparing against it.
+	runID uint64
 }
 
 // SetGoal installs a new objective, replacing any previous goal. The loop is
@@ -147,11 +150,12 @@ func (a *Agent) RestoreGoal(g *Goal) error {
 		return fmt.Errorf("agent: goal to restore is empty")
 	}
 	a.goal.mu.Lock()
-	defer a.goal.mu.Unlock()
 	if a.goal.running {
+		a.goal.mu.Unlock()
 		return fmt.Errorf("agent: goal loop is running")
 	}
 	if a.goal.goal != nil {
+		a.goal.mu.Unlock()
 		return fmt.Errorf("agent: a goal is already set")
 	}
 	if g.Status == GoalActive {
@@ -165,7 +169,11 @@ func (a *Agent) RestoreGoal(g *Goal) error {
 	g.usageBase = int64(a.usage.snapshot().TotalTokens) - g.TokensUsed
 	g.stalls = 0
 	a.goal.goal = g.clone()
-	a.notifyGoal(a.goal.goal.clone())
+	snapshot := a.goal.goal.clone()
+	a.goal.mu.Unlock()
+	// Notify outside the mutex: subscribers commonly re-enter the goal API
+	// (notifyGoal takes goal.mu itself), so notifying under it deadlocks.
+	a.notifyGoal(snapshot)
 	return nil
 }
 
@@ -381,6 +389,7 @@ type GoalCommand struct {
 // ParseGoalCommand parses /goal arguments:
 //
 //	goal set [--cycles N] [--tokens N] <objective...>
+//	goal <objective...>                                (shorthand for set)
 //	goal status | pause | resume | clear
 //	goal budget cycles N | goal budget tokens N
 func ParseGoalCommand(args []string) (GoalCommand, error) {
@@ -414,42 +423,50 @@ func ParseGoalCommand(args []string) (GoalCommand, error) {
 		}
 		return GoalCommand{}, fmt.Errorf("unknown budget %q (use cycles or tokens)", args[1])
 	case "set", "start":
-		rest := args[1:]
-		cmd := GoalCommand{Verb: "set"}
-		var words []string
-		for i := 0; i < len(rest); i++ {
-			switch rest[i] {
-			case "--cycles":
-				if i+1 >= len(rest) {
-					return GoalCommand{}, fmt.Errorf("--cycles requires a value")
-				}
-				n, err := strconv.Atoi(rest[i+1])
-				if err != nil || n <= 0 {
-					return GoalCommand{}, fmt.Errorf("--cycles must be a positive number")
-				}
-				cmd.MaxCycles = n
-				i++
-			case "--tokens":
-				if i+1 >= len(rest) {
-					return GoalCommand{}, fmt.Errorf("--tokens requires a value")
-				}
-				n, err := strconv.ParseInt(rest[i+1], 10, 64)
-				if err != nil || n <= 0 {
-					return GoalCommand{}, fmt.Errorf("--tokens must be a positive number")
-				}
-				cmd.MaxTokens = n
-				i++
-			default:
-				words = append(words, rest[i])
-			}
-		}
-		cmd.Objective = strings.Join(words, " ")
-		if strings.TrimSpace(cmd.Objective) == "" {
-			return GoalCommand{}, fmt.Errorf("usage: /goal set [--cycles N] [--tokens N] <objective>")
-		}
-		return cmd, nil
+		return parseGoalSetArgs(args[1:])
+	default:
+		// Free text (no recognized verb) is shorthand for "set" —
+		// "/goal <objective>" does what users intuitively expect.
+		return parseGoalSetArgs(args)
 	}
-	return GoalCommand{}, fmt.Errorf("unknown /goal subcommand %q (try /goal help)", args[0])
+}
+
+// parseGoalSetArgs parses the objective words and --cycles/--tokens flags of
+// a "set" command.
+func parseGoalSetArgs(rest []string) (GoalCommand, error) {
+	cmd := GoalCommand{Verb: "set"}
+	var words []string
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case "--cycles":
+			if i+1 >= len(rest) {
+				return GoalCommand{}, fmt.Errorf("--cycles requires a value")
+			}
+			n, err := strconv.Atoi(rest[i+1])
+			if err != nil || n <= 0 {
+				return GoalCommand{}, fmt.Errorf("--cycles must be a positive number")
+			}
+			cmd.MaxCycles = n
+			i++
+		case "--tokens":
+			if i+1 >= len(rest) {
+				return GoalCommand{}, fmt.Errorf("--tokens requires a value")
+			}
+			n, err := strconv.ParseInt(rest[i+1], 10, 64)
+			if err != nil || n <= 0 {
+				return GoalCommand{}, fmt.Errorf("--tokens must be a positive number")
+			}
+			cmd.MaxTokens = n
+			i++
+		default:
+			words = append(words, rest[i])
+		}
+	}
+	cmd.Objective = strings.Join(words, " ")
+	if strings.TrimSpace(cmd.Objective) == "" {
+		return GoalCommand{}, fmt.Errorf("usage: /goal set [--cycles N] [--tokens N] <objective>")
+	}
+	return cmd, nil
 }
 
 // GoalHelpText is the /goal usage reference.
@@ -459,6 +476,7 @@ of budget. Completion claims are verified by a skeptical evaluator.
 
 usage:
   /goal set [--cycles N] [--tokens N] <objective>   set a goal and start the loop
+  /goal <objective>                                  shorthand for set
   /goal                                             show goal status
   /goal pause                                       stop at the next cycle boundary
   /goal resume                                      continue a paused/exhausted goal

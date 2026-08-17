@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,5 +141,76 @@ func TestScheduleCronToolLifecycle(t *testing.T) {
 	res, _ = tool.Invoke(context.Background(), map[string]any{"prompt": "x", "cron": "bogus"})
 	if !strings.Contains(res.Content, "Error") {
 		t.Fatalf("bad spec = %q", res.Content)
+	}
+}
+
+// TestCronVixieDayFieldRule pins the Vixie cron semantics: when day-of-month
+// and day-of-week are both restricted, a time matches when EITHER field
+// matches (OR); with only one restricted, both must match (AND).
+func TestCronVixieDayFieldRule(t *testing.T) {
+	// 2026-08-13 is a Thursday, 2026-08-14 a Friday, 2026-08-15 a Saturday.
+	m, err := parseCron("0 0 13 * 5") // 13th OR Friday
+	if err != nil {
+		t.Fatal(err)
+	}
+	friday14th := time.Date(2026, 8, 14, 0, 0, 0, 0, time.Local)
+	if !m.matches(friday14th) {
+		t.Error("Friday the 14th must match via day-of-week despite dom=13")
+	}
+	thursday13th := time.Date(2026, 8, 13, 0, 0, 0, 0, time.Local)
+	if !m.matches(thursday13th) {
+		t.Error("the 13th must match via day-of-month despite dow=Friday")
+	}
+	saturday15th := time.Date(2026, 8, 15, 0, 0, 0, 0, time.Local)
+	if m.matches(saturday15th) {
+		t.Error("neither the 13th nor a Friday: must not match")
+	}
+
+	// Single restricted day field keeps AND semantics.
+	m, err = parseCron("0 0 13 * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.matches(friday14th) {
+		t.Error("dom-only spec must require day 13")
+	}
+}
+
+// TestCronRangeRejectsTrailingGarbage ensures "1-5x" style ranges fail
+// instead of silently parsing as 1-5.
+func TestCronRangeRejectsTrailingGarbage(t *testing.T) {
+	for _, spec := range []string{"0 9 * * 1-5x", "0 9 1-3x * *", "0 9 1x-3 * *"} {
+		if _, err := parseCron(spec); err == nil {
+			t.Errorf("parseCron(%q) should fail", spec)
+		}
+	}
+}
+
+// TestCronSchedulerStandalone pins the component contract: the scheduler
+// works without an Agent, delivering through the injected sink only.
+func TestCronSchedulerStandalone(t *testing.T) {
+	var mu sync.Mutex
+	fired := []string{}
+	s := newCronScheduler(func(tag, text string) {
+		mu.Lock()
+		fired = append(fired, tag+"|"+text)
+		mu.Unlock()
+	})
+	id, err := s.Add("check", "run the checks", "* * * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 16, 12, 0, 0, 0, time.Local)
+	s.fireDue(now)
+	s.fireDue(now.Add(30 * time.Second)) // same minute: suppressed
+	s.fireDue(now.Add(time.Minute))      // next minute: fires again
+	if !s.Delete(id) || s.Delete(id) {
+		t.Fatal("delete should succeed exactly once")
+	}
+	s.fireDue(now.Add(2 * time.Minute))
+	mu.Lock()
+	defer mu.Unlock()
+	if len(fired) != 2 {
+		t.Fatalf("fired %d notifications, want 2 (minute de-dup + post-delete silence): %v", len(fired), fired)
 	}
 }

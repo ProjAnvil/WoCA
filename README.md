@@ -118,7 +118,8 @@ troubleshooting.
 
 ### Goal mode (persistent objectives)
 
-`/goal set <objective>` switches the agent from ask-answer to an autonomous
+`/goal <objective>` (or the explicit `/goal set <objective>`) switches the
+agent from ask-answer to an autonomous
 loop that keeps working until the objective is **verified** complete, blocked,
 paused, or out of budget — expressed as its own graph on top of the agent
 graph:

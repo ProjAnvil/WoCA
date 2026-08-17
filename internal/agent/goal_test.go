@@ -388,7 +388,13 @@ func TestParseGoalCommand(t *testing.T) {
 		{[]string{"clear"}, "clear", "", false},
 		{[]string{"budget", "cycles", "7"}, "budget", "", false},
 		{[]string{"budget", "tokens", "x"}, "", "", true},
-		{[]string{"wibble"}, "", "", true},
+		// Free text without a verb is shorthand for "set" — the natural
+		// input users type first (whole sentences, flags, or single words).
+		{[]string{"测试，你能使用这个技能吗？"}, "set", "测试，你能使用这个技能吗？", false},
+		{[]string{"make", "it", "work"}, "set", "make it work", false},
+		{[]string{"wibble"}, "set", "wibble", false},
+		{[]string{"--cycles", "3", "do", "things"}, "set", "do things", false},
+		{[]string{"--cycles"}, "", "", true},
 	}
 	for _, tc := range cases {
 		cmd, err := ParseGoalCommand(tc.args)

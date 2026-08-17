@@ -10,17 +10,22 @@ export const useCompletionsStore = defineStore('completions', () => {
   const skills = ref<CompletionEntry[]>([])
   const agents = ref<CompletionEntry[]>([])
   const loaded = ref(false)
+  // The workspace the lists were fetched for ('' = the server's startup
+  // directory); switching to a session in another workspace refetches so
+  // the popup matches what the model can invoke there.
+  const root = ref('')
 
-  async function load() {
-    if (loaded.value) return
+  async function load(workspace?: string) {
+    const ws = workspace ?? root.value
+    if (loaded.value && ws === root.value) return
     try {
-      const res = await getCompletions()
+      const res = await getCompletions(ws || undefined)
       skills.value = res.skills ?? []
       agents.value = res.agents ?? []
+      root.value = ws
+      loaded.value = true
     } catch {
       // Autocomplete is optional; an empty list just hides the popup.
-    } finally {
-      loaded.value = true
     }
   }
 
@@ -30,5 +35,5 @@ export const useCompletionsStore = defineStore('completions', () => {
     loaded.value = true
   }
 
-  return { skills, agents, loaded, load, seed }
+  return { skills, agents, loaded, root, load, seed }
 })

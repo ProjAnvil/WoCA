@@ -19,7 +19,7 @@ func toolsByName(list []coretools.Tool) map[string]coretools.Tool {
 }
 
 func TestMemoryToolsMainIncludesWrite(t *testing.T) {
-	a := &Agent{memEngine: &fakeEngine{}, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: &fakeEngine{}}, workdir: "/ws"}
 	got := toolsByName(a.memoryTools())
 	for _, name := range []string{"recall_memory", "search_code", "remember_fact", "index_code"} {
 		if got[name] == nil {
@@ -29,7 +29,7 @@ func TestMemoryToolsMainIncludesWrite(t *testing.T) {
 }
 
 func TestMemoryToolsSubagentReadOnly(t *testing.T) {
-	a := &Agent{memEngine: &fakeEngine{}, workdir: "/ws", subagent: true}
+	a := &Agent{mem: memoryRuntime{engine: &fakeEngine{}}, workdir: "/ws", subagent: true}
 	got := toolsByName(a.memoryTools())
 	if got["recall_memory"] == nil || got["search_code"] == nil {
 		t.Fatal("subagent should keep read tools")
@@ -48,7 +48,7 @@ func TestMemoryToolsNilEngine(t *testing.T) {
 
 func TestRecallMemoryToolInvokesEngine(t *testing.T) {
 	f := &fakeEngine{hits: []memory.Hit{{ID: "h1", Layer: "L2_semantic", Type: "fact", Summary: "JWT", Score: 0.9}}}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	tool := toolsByName(a.memoryTools())["recall_memory"]
 	res, err := tool.Invoke(context.Background(), map[string]any{"query": "auth"})
 	if err != nil {
@@ -64,7 +64,7 @@ func TestRecallMemoryToolInvokesEngine(t *testing.T) {
 
 func TestRememberFactToolUsesWorkspaceAndSource(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.SetMemoryWorkspace("/ws/tool")
 	tool := toolsByName(a.memoryTools())["remember_fact"]
 	res, err := tool.Invoke(context.Background(), map[string]any{"content": "prefers tabs", "tags": []any{"pref"}})
@@ -94,7 +94,7 @@ func TestRememberFactToolUsesWorkspaceAndSource(t *testing.T) {
 
 func TestRememberFactDroppedByGate(t *testing.T) {
 	f := &fakeEngine{drop: true}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	tool := toolsByName(a.memoryTools())["remember_fact"]
 	res, err := tool.Invoke(context.Background(), map[string]any{"content": "duplicate"})
 	if err != nil {

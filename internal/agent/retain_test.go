@@ -18,7 +18,7 @@ import (
 func TestRetainRunStoresFactAndEvent(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{
-		memEngine: f,
+		mem: memoryRuntime{engine: f},
 		workdir:   "/ws",
 		loadSettings: func() settings.Settings {
 			s := settings.Default()
@@ -49,9 +49,8 @@ func TestRetainRunDisabled(t *testing.T) {
 	off := settings.Default()
 	off.LadyMAutoRetain = false
 	a := &Agent{
-		memEngine:    f,
+		mem:          memoryRuntime{engine: f, loadSettings: func() settings.Settings { return off }},
 		workdir:      "/ws",
-		loadSettings: func() settings.Settings { return off },
 	}
 	a.RetainRun(context.Background(),
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
@@ -62,7 +61,7 @@ func TestRetainRunDisabled(t *testing.T) {
 
 func TestRetainRunEmptyAnswerSkipsFactRecordsEvent(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"} // loadSettings nil -> defaults (autoretain true)
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"} // loadSettings nil -> defaults (autoretain true)
 	a.RetainRun(context.Background(), []messages.Message{messages.Human("q")}, nil, nil)
 	if len(f.remembered) != 0 {
 		t.Fatal("empty answer should not Remember")
@@ -74,7 +73,7 @@ func TestRetainRunEmptyAnswerSkipsFactRecordsEvent(t *testing.T) {
 
 func TestRetainRunErrorOutcome(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.RetainRun(context.Background(),
 		[]messages.Message{messages.Human("q")}, nil, errors.New("boom"))
 	if len(f.events) != 1 || !strings.Contains(f.events[0], "error") {
@@ -84,7 +83,7 @@ func TestRetainRunErrorOutcome(t *testing.T) {
 
 func TestRetainRunCancelledOutcome(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.RetainRun(context.Background(),
 		[]messages.Message{messages.Human("q")}, nil, context.Canceled)
 	if len(f.events) != 1 || !strings.Contains(f.events[0], "cancelled") {
@@ -97,7 +96,7 @@ func TestRetainRunCancelledOutcome(t *testing.T) {
 
 func TestRetainRunUsesLastQuestion(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	history := []messages.Message{
 		messages.Human("first question"),
 		messages.AI("first answer"),
@@ -121,7 +120,9 @@ func TestRetainRunUsesLastQuestion(t *testing.T) {
 func TestRetainRunLogsWriteErrors(t *testing.T) {
 	f := &fakeEngine{rememberErr: errors.New("db locked"), eventErr: errors.New("disk full")}
 	root := t.TempDir()
-	a := &Agent{memEngine: f, workdir: "/ws", obs: obslog.New(root, true)}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws", obs: obslog.New(root, true)}
+	// Wire the runtime's obs sink the way New() does for real agents.
+	a.mem.log = a.obsLogSink()
 	a.RetainRun(context.Background(),
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
 	data, err := os.ReadFile(filepath.Join(root, "woca.log"))
@@ -137,7 +138,7 @@ func TestRetainRunLogsWriteErrors(t *testing.T) {
 
 func TestRetainRunSubagentNoop(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws", subagent: true}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws", subagent: true}
 	a.RetainRun(context.Background(),
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
 	if len(f.remembered) != 0 || len(f.events) != 0 {
@@ -153,7 +154,7 @@ func TestRetainRunNilEngineNoop(t *testing.T) {
 
 func TestRetainGoalStoresFactAndEvent(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"} // loadSettings nil -> defaults (autoretain true)
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"} // loadSettings nil -> defaults (autoretain true)
 	a.SetMemoryWorkspace("/ws/goal")
 	a.RetainGoal(context.Background(), "ship the auth refactor", "complete", "tests pass: 3/3", nil)
 
@@ -173,7 +174,7 @@ func TestRetainGoalStoresFactAndEvent(t *testing.T) {
 
 func TestRetainGoalBlockedOutcome(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.RetainGoal(context.Background(), "migrate the db", "blocked", "needs credentials", nil)
 	if len(f.events) != 1 || f.events[0] != "woca/goal:blocked/blocked" {
 		t.Fatalf("events = %v", f.events)
@@ -188,9 +189,8 @@ func TestRetainGoalDisabled(t *testing.T) {
 	off := settings.Default()
 	off.LadyMAutoRetain = false
 	a := &Agent{
-		memEngine:    f,
+		mem:          memoryRuntime{engine: f, loadSettings: func() settings.Settings { return off }},
 		workdir:      "/ws",
-		loadSettings: func() settings.Settings { return off },
 	}
 	a.RetainGoal(context.Background(), "objective", "complete", "summary", nil)
 	if len(f.remembered) != 0 || len(f.events) != 0 {
@@ -205,7 +205,7 @@ func TestRetainGoalNilEngineNoop(t *testing.T) {
 
 func TestRetainGoalErrorOutcome(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.RetainGoal(context.Background(), "objective", "complete", "summary", errors.New("boom"))
 	if len(f.events) != 1 || f.events[0] != "woca/goal:complete/error" {
 		t.Fatalf("events = %v", f.events)
@@ -214,7 +214,7 @@ func TestRetainGoalErrorOutcome(t *testing.T) {
 
 func TestRetainGoalEmptySummarySkipsFactRecordsEvent(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"}
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.RetainGoal(context.Background(), "objective", "budget_limited", "", nil)
 	if len(f.remembered) != 0 {
 		t.Fatal("empty summary should not Remember")
@@ -229,9 +229,8 @@ func TestSystem2ThrottledPerWorkspace(t *testing.T) {
 	on := settings.Default()
 	on.LadyMSystem2 = true
 	a := &Agent{
-		memEngine:    f,
+		mem:          memoryRuntime{engine: f, loadSettings: func() settings.Settings { return on }},
 		workdir:      "/ws",
-		loadSettings: func() settings.Settings { return on },
 	}
 	hist := []messages.Message{messages.Human("q")}
 	fin := []messages.Message{messages.AI("a")}
@@ -264,7 +263,7 @@ func TestSystem2ThrottledPerWorkspace(t *testing.T) {
 
 func TestSystem2DisabledNoConsolidate(t *testing.T) {
 	f := &fakeEngine{}
-	a := &Agent{memEngine: f, workdir: "/ws"} // loadSettings nil → defaults (system2 off)
+	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"} // loadSettings nil → defaults (system2 off)
 	a.RetainRun(context.Background(),
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
 	time.Sleep(250 * time.Millisecond)
@@ -278,7 +277,7 @@ func TestSystem2RespectsIntervalSetting(t *testing.T) {
 	on := settings.Default()
 	on.LadyMSystem2 = true
 	on.LadyMSystem2Interval = 60 // minimum allowed
-	a := &Agent{memEngine: f, workdir: "/ws", loadSettings: func() settings.Settings { return on }}
+	a := &Agent{mem: memoryRuntime{engine: f, loadSettings: func() settings.Settings { return on }}, workdir: "/ws"}
 	a.RetainRun(context.Background(),
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
 	deadline := time.Now().Add(2 * time.Second)

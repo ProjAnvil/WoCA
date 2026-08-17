@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -22,7 +23,10 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/memory"
+	"github.com/projanvil/woca/internal/pluginrt"
+	"github.com/projanvil/woca/internal/quota"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
@@ -59,6 +63,29 @@ type Config struct {
 	// RebuildModel rebuilds the agent's chat model after credential changes
 	// submitted through /api/settings (optional).
 	RebuildModel func() error
+	// CfgLive returns the agent's live effective configuration snapshot for
+	// GET /api/agent (provider, model, thinking budget). Nil yields zero
+	// values.
+	CfgLive func() config.Config
+	// SetThinkingBudget persists a new extended-thinking budget and rebuilds
+	// the chat model (POST /api/agent/thinking). Nil disables the endpoint.
+	SetThinkingBudget func(budget int) error
+	// Quota fetches the provider quota summary (GET /api/quota). Nil reports
+	// quota unavailable.
+	Quota func(ctx context.Context) (quota.Info, error)
+	// ApplyClaudeEnv persists a claude-skills / claude-mcp checkbox
+	// selection, syncs the ~/.woca symlinks + mcp.json, and live-applies the
+	// skill set (POST /api/claudeenv). Nil disables the write side of the
+	// endpoint.
+	ApplyClaudeEnv func(skills, mcp []string) error
+	// Plugins snapshots the built-in plugin catalog with runtime install
+	// state for GET /api/plugins (nil degrades to catalog-only output).
+	Plugins func(enabled []string) []pluginrt.Status
+	// InstallPlugin starts an async runtime install for one plugin
+	// (POST /api/plugins/{name}/install; reinstall=true via the /reinstall
+	// variant deletes the environment first — the upgrade path). Nil
+	// disables the endpoints.
+	InstallPlugin func(ctx context.Context, name string, reinstall bool) error
 }
 
 // Server serves the woca web UI and its HTTP API.
@@ -67,15 +94,22 @@ type Server struct {
 	static fs.FS
 	log    zerolog.Logger
 
-	mu            sync.Mutex
-	runs          map[string]*Run
-	sessions      *sessionStore
-	workdir       string
-	settings      *settings.Store
-	memory        *store.Store
-	memEngine     memory.Engine
-	rebuildMemory func() error
-	rebuildModel  func() error
+	mu             sync.Mutex
+	runs           map[string]*Run
+	runOrder       []string // registration order, backs finished-run pruning
+	sessions       *sessionStore
+	workdir        string
+	settings       *settings.Store
+	memory         *store.Store
+	memEngine      memory.Engine
+	rebuildMemory  func() error
+	rebuildModel   func() error
+	cfgLive        func() config.Config
+	setThinking    func(budget int) error
+	quotaFetch     func(ctx context.Context) (quota.Info, error)
+	applyClaudeEnv func(skills, mcp []string) error
+	plugins        func(enabled []string) []pluginrt.Status
+	installPlugin  func(ctx context.Context, name string, reinstall bool) error
 
 	// goalMu guards goalOwner: the session whose sidecar mirrors the live
 	// goal (so a clear can delete the right file).
@@ -101,17 +135,23 @@ func New(cfg Config) *Server {
 	store := newSessionStore(cfg.SessionDir)
 	store.defaultWorkspace = defaultWorkspace
 	s := &Server{
-		agent:         cfg.Agent,
-		static:        cfg.Static,
-		log:           cfg.Logger,
-		runs:          map[string]*Run{},
-		sessions:      store,
-		workdir:       cfg.WorkDir,
-		settings:      cfg.Settings,
-		memory:        cfg.Memory,
-		memEngine:     cfg.MemoryEngine,
-		rebuildMemory: cfg.RebuildMemory,
-		rebuildModel:  cfg.RebuildModel,
+		agent:          cfg.Agent,
+		static:         cfg.Static,
+		log:            cfg.Logger,
+		runs:           map[string]*Run{},
+		sessions:       store,
+		workdir:        cfg.WorkDir,
+		settings:       cfg.Settings,
+		memory:         cfg.Memory,
+		memEngine:      cfg.MemoryEngine,
+		rebuildMemory:  cfg.RebuildMemory,
+		rebuildModel:   cfg.RebuildModel,
+		cfgLive:        cfg.CfgLive,
+		setThinking:    cfg.SetThinkingBudget,
+		quotaFetch:     cfg.Quota,
+		applyClaudeEnv: cfg.ApplyClaudeEnv,
+		plugins:        cfg.Plugins,
+		installPlugin:  cfg.InstallPlugin,
 	}
 	if cfg.Agent != nil {
 		// Goal persistence: every live goal change mirrors to the owning
@@ -147,11 +187,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
+	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{id}/goal", s.handleGetGoal)
 	mux.HandleFunc("POST /api/sessions/{id}/goal", s.handleGoalCommand)
 	mux.HandleFunc("GET /api/workspace", s.handleWorkspace)
 	mux.HandleFunc("GET /api/workspace/file", s.handleWorkspaceFile)
 	mux.HandleFunc("GET /api/completions", s.handleCompletions)
+	mux.HandleFunc("GET /api/agent", s.handleGetAgent)
+	mux.HandleFunc("POST /api/agent/permissions", s.handleSetPermissionMode)
+	mux.HandleFunc("POST /api/agent/thinking", s.handleSetThinking)
+	mux.HandleFunc("GET /api/quota", s.handleQuota)
+	mux.HandleFunc("GET /api/claudeenv", s.handleGetClaudeEnv)
+	mux.HandleFunc("PUT /api/claudeenv", s.handlePutClaudeEnv)
+	mux.HandleFunc("GET /api/plugins", s.handleGetPlugins)
+	mux.HandleFunc("PUT /api/plugins", s.handlePutPlugins)
+	mux.HandleFunc("POST /api/plugins/{name}/install", s.handleInstallPlugin)
+	mux.HandleFunc("POST /api/plugins/{name}/reinstall", s.handleInstallPlugin)
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handleUpdateSettings)
 	mux.HandleFunc("GET /api/memory", s.handleListMemory)
@@ -227,6 +278,36 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// File-level undo/redo commands execute against the harness directly
+	// (no model turn), exactly like the TUI's /undo and /redo. The command
+	// resolves the session's workspace so undo touches only that session's
+	// edits (see tools.FileHistory).
+	if len(req.Attachments) == 0 {
+		switch strings.TrimSpace(req.Prompt) {
+		case "/undo", "/redo":
+			ws := req.Workspace
+			if ws == "" {
+				ws = s.workdir
+			}
+			ctx := agent.WithRunWorkspace(r.Context(), ws)
+			var output string
+			var err error
+			if req.Prompt == "/redo" {
+				output, err = s.agent.RedoFiles(ctx)
+			} else {
+				output, err = s.agent.UndoFiles(ctx)
+			}
+			if err != nil {
+				output = "Error: " + err.Error()
+			}
+			undoN, redoN := s.agent.FileHistoryCounts(ctx)
+			run, sessionID := s.startCommandRun(req.SessionID, human, req.Workspace,
+				fmt.Sprintf("%s (%d undoable, %d redoable steps left)", output, undoN, redoN))
+			writeJSON(w, http.StatusOK, map[string]any{"run_id": run.ID(), "session_id": sessionID})
+			return
+		}
+	}
+
 	run, sessionID := s.startRun(req.SessionID, human, req.Workspace)
 	writeJSON(w, http.StatusOK, map[string]any{"run_id": run.ID(), "session_id": sessionID})
 }
@@ -266,10 +347,22 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req) // body optional; empty workspace is fine
 	resp := map[string]any{"session_id": newSessionID()}
 	if req.Workspace != "" {
-		resp["workspace"] = req.Workspace
-		resp["workspace_name"] = workspaceDisplayName(req.Workspace)
+		ws := expandHomePath(req.Workspace)
+		resp["workspace"] = ws
+		resp["workspace_name"] = workspaceDisplayName(ws)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// expandHomePath resolves a leading ~ or ~/ so workspaces typed as shorthand
+// in the UI persist (and group) by their absolute path.
+func expandHomePath(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+	}
+	return p
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
@@ -293,14 +386,35 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "messages": msgs})
 }
 
-func (s *Server) handleWorkspace(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, buildWorkspaceTree(s.workdir))
+// handleDeleteSession removes a session (transcript, goal sidecar, index
+// entry). Deleting an unknown id still succeeds — the client's goal is for
+// the session to be gone.
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.sessions.delete(id)
+	s.log.Info().Str("session", id).Msg("session deleted")
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
+// workspaceForRequest resolves the directory a workspace-scoped request
+// targets: the session workspace the client passes as ?workspace=, else the
+// server's startup directory. This is what keeps the file sidebar in sync
+// with the selected session's project in multi-workspace serve mode.
+func (s *Server) workspaceForRequest(r *http.Request) string {
+	if ws := r.URL.Query().Get("workspace"); ws != "" {
+		return ws
+	}
+	return s.workdir
+}
+
+func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, buildWorkspaceTree(s.workspaceForRequest(r)))
 }
 
 // handleWorkspaceFile returns a single workspace file's content for the
 // right-sidebar preview (bounded, text files only).
 func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request) {
-	node, err := readWorkspaceFile(s.workdir, r.URL.Query().Get("path"))
+	node, err := readWorkspaceFile(s.workspaceForRequest(r), r.URL.Query().Get("path"))
 	if err != nil {
 		var status int
 		switch err {
@@ -319,7 +433,7 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 
 // handleCompletions lists slash commands (builtin + skills, for the chat
 // input's "/" popup) and subagents (for the "@" popup).
-func (s *Server) handleCompletions(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 	type entry struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
@@ -333,17 +447,21 @@ func (s *Server) handleCompletions(w http.ResponseWriter, _ *http.Request) {
 		resp.Skills = append(resp.Skills, entry{Name: c.Name, Description: c.Description})
 	}
 	if s.agent != nil {
+		// Skills and subagent definitions are workspace-scoped: the client
+		// passes the session workspace so the autocomplete matches what the
+		// model can actually invoke in that session.
+		ctx := agent.WithRunWorkspace(r.Context(), r.URL.Query().Get("workspace"))
 		builtin := make(map[string]bool, len(resp.Skills))
 		for _, e := range resp.Skills {
 			builtin[e.Name] = true
 		}
-		for _, sk := range s.agent.Skills() {
+		for _, sk := range s.agent.SkillsIn(ctx) {
 			if builtin[sk.Name] {
 				continue
 			}
 			resp.Skills = append(resp.Skills, entry{Name: sk.Name, Description: sk.Description})
 		}
-		for _, d := range s.agent.AgentDefinitions() {
+		for _, d := range s.agent.AgentDefinitionsIn(ctx) {
 			resp.Agents = append(resp.Agents, entry{Name: d.Name, Description: d.Description})
 		}
 	}
@@ -458,46 +576,92 @@ func (s *Server) refreshDebugLog() {
 // to (empty falls back to the server's workdir) so the UI can group sessions.
 // human is the fully-built prompt message (possibly with image content
 // blocks).
-func (s *Server) startRun(sessionID string, human messages.Message, workspace string) (*Run, string) {
+// maxRetainedRuns caps how many finished runs stay in the registry: each Run
+// keeps its full event history, so long-lived serve processes would otherwise
+// grow without bound. Live subscribers hold the *Run directly, so pruning
+// never cuts an active SSE stream.
+const maxRetainedRuns = 64
+
+// registerRun records a run for event subscription and prunes finished old
+// runs beyond the retention cap. Runs that have not reached a terminal event
+// are never dropped.
+func (s *Server) registerRun(id string, run *Run) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runs[id] = run
+	s.runOrder = append(s.runOrder, id)
+	for len(s.runOrder) > maxRetainedRuns {
+		oldest := s.runs[s.runOrder[0]]
+		if oldest == nil || !oldest.isDone() {
+			break
+		}
+		delete(s.runs, s.runOrder[0])
+		s.runOrder = s.runOrder[1:]
+	}
+}
+
+// newRegisteredRun creates a Run, registers it on the server, and resolves
+// the session id, workspace default and loaded history shared by the normal
+// and command-run paths. The run context carries the run-scoped workspace
+// (a values-only ctx decoration, so the system prompt environment, the
+// file/shell tools, memory prefetch/tools and auto-retain all resolve the
+// session workspace while concurrent runs share the agent safely; see
+// agent.WithRunWorkspace and internal/runws).
+func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, string, []messages.Message) {
 	id := fmt.Sprintf("run-%d", atomic.AddInt64(&runSeq, 1))
 	if workspace == "" {
 		workspace = s.workdir
 	}
-	// Run-scoped memory workspace: a values-only ctx decoration, so prefetch,
-	// memory tools, and auto-retain all resolve the session workspace while
-	// concurrent runs share the agent safely (ctx value > agent field >
-	// workdir; see agent.WithMemoryWorkspace).
-	ctx, cancel := context.WithCancel(agent.WithMemoryWorkspace(context.Background(), workspace))
+	ctx, cancel := context.WithCancel(agent.WithRunWorkspace(context.Background(), workspace))
 	run := newRun(id, s.agent, ctx, cancel)
-
-	s.mu.Lock()
-	s.runs[id] = run
-	s.mu.Unlock()
-
+	s.registerRun(id, run)
 	sid := sessionID
 	if sid == "" {
 		sid = newSessionID()
 	}
 	history := s.sessions.load(sid)
+	return run, sid, workspace, history
+}
 
-	s.log.Info().Str("run", id).Str("session", sid).Msg("run started")
+func (s *Server) startRun(sessionID string, human messages.Message, workspace string) (*Run, string) {
+	run, sid, workspace, history := s.newRegisteredRun(sessionID, workspace)
+	s.log.Info().Str("run", run.id).Str("session", sid).Msg("run started")
 	s.refreshDebugLog()
 	if obs := s.agent.Obs(); obs != nil {
-		s.agent.SetObsRun(workspace, sid, id)
+		s.agent.SetObsRun(workspace, sid, run.id)
 		obs.Log("info", "run_start", map[string]any{
 			"prompt": previewForLog(human.Content),
 		})
 	}
 	run.start(append(history, human), func(final []messages.Message) {
 		_ = s.sessions.save(sid, stripSystem(final), workspace)
-		s.logObsRunEnd(sid, id, final)
+		s.logObsRunEnd(sid, run.id, workspace, final)
 	})
 	return run, sid
 }
 
+// startCommandRun creates a run that completes immediately with a fixed
+// output (harness-side commands like /undo and /redo): the reply streams as a
+// normal delta and the transcript persists to the session like any turn.
+func (s *Server) startCommandRun(sessionID string, human messages.Message, workspace, output string) (*Run, string) {
+	run, sid, workspace, history := s.newRegisteredRun(sessionID, workspace)
+	s.log.Info().Str("run", run.id).Str("session", sid).Str("command", human.Content).Msg("command run")
+	go func() {
+		defer run.cancel()
+		run.emit(Event{Type: "delta", Data: map[string]any{"text": output + "\n"}})
+		run.finish("done", map[string]any{"cancelled": false})
+		final := append(append([]messages.Message(nil), history...), human, messages.AI(output))
+		_ = s.sessions.save(sid, stripSystem(final), workspace)
+	}()
+	return run, sid
+}
+
 // logObsRunEnd records the run's completion and persists the message-level
-// dump (full transcript + state summary) for observability.
-func (s *Server) logObsRunEnd(sid, runID string, final []messages.Message) {
+// dump (full transcript + state summary) for observability. The dump's
+// workspace is the run's session workspace — not the server's startup
+// directory — so debugging a multi-workspace run reads the directory the
+// run actually operated in.
+func (s *Server) logObsRunEnd(sid, runID, workspace string, final []messages.Message) {
 	obs := s.agent.Obs()
 	if obs == nil {
 		return
@@ -505,7 +669,7 @@ func (s *Server) logObsRunEnd(sid, runID string, final []messages.Message) {
 	obs.Log("info", "run_end", map[string]any{"messages": len(final)})
 	obs.DumpMessages(final, map[string]any{
 		"sessions_dir": s.sessions.dir,
-		"workdir":      s.workdir,
+		"workdir":      workspace,
 	})
 }
 
@@ -576,7 +740,9 @@ func (s *Server) fileExists(path string) bool {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	// charset=utf-8 is explicit so any client (not just fetch) decodes the
+	// Chinese descriptions/detail strings correctly.
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }

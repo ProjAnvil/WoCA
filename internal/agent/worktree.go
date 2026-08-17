@@ -40,12 +40,12 @@ func (a *Agent) worktreeTools() []coretools.Tool {
 				return coretools.Result{Content: "Error: a worktree name is required"}, nil
 			}
 			d := a.registry.Dir()
-			base := d.Base()
+			base := d.BaseFor(ctx)
 			if !isGitRepo(base) {
 				return coretools.Result{Content: "Error: not a git repository (" + base + ")"}, nil
 			}
-			if d.Current() != base {
-				return coretools.Result{Content: "Error: already in a worktree (" + d.Current() + "); ExitWorktree first"}, nil
+			if cur := d.For(ctx); cur != base {
+				return coretools.Result{Content: "Error: already in a worktree (" + cur + "); ExitWorktree first"}, nil
 			}
 			wtDir := filepath.Join(base, ".woca-worktrees", name)
 			var gitArgs []string
@@ -60,7 +60,7 @@ func (a *Agent) worktreeTools() []coretools.Tool {
 			if err != nil {
 				return coretools.Result{Content: fmt.Sprintf("Error: git worktree add: %v\n%s", err, strings.TrimSpace(string(out)))}, nil
 			}
-			d.Set(wtDir)
+			d.Enter(ctx, wtDir)
 			return coretools.Result{Content: fmt.Sprintf("Entered worktree %s (%s). All tools now operate there.", name, wtDir)}, nil
 		})
 	if err != nil {
@@ -69,12 +69,11 @@ func (a *Agent) worktreeTools() []coretools.Tool {
 	exit, err := coretools.FromFunc("ExitWorktree", exitWorktreeDescription,
 		func(ctx context.Context, args exitWorktreeArgs) (coretools.Result, error) {
 			d := a.registry.Dir()
-			base := d.Base()
-			cur := d.Current()
-			if cur == base {
+			base := d.BaseFor(ctx)
+			cur, inWorktree := d.Exit(ctx)
+			if !inWorktree {
 				return coretools.Result{Content: "Not currently in a worktree."}, nil
 			}
-			d.Set(base)
 			if !args.Remove {
 				return coretools.Result{Content: "Left the worktree; tools operate on " + base + " again."}, nil
 			}

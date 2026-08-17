@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { Pause, Play, Target, Trash2, X } from 'lucide-vue-next'
 import { useSessionStore } from '../stores/sessions'
+import { fmtTokens } from '../lib/format'
 import type { GoalStatus } from '../types'
 
 const store = useSessionStore()
@@ -18,12 +19,6 @@ const statusLabels: Record<GoalStatus, string> = {
   blocked: '受阻',
   complete: '已完成',
   budget_limited: '预算耗尽',
-}
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`
-  if (n >= 1_000) return `${Math.round(n / 1_000)}k`
-  return String(n)
 }
 
 function pct(used: number, max: number): number {
@@ -71,7 +66,7 @@ async function setGoal() {
           <p class="goal-hint">
             设定一个持久目标，woca 会以「评估 → 执行 → 验证」循环自主推进，
             直到目标被独立评估器验证完成、受阻或预算耗尽。对话里也可以直接输入
-            <code>/goal set &lt;目标&gt;</code>。
+            <code>/goal &lt;目标&gt;</code>。
           </p>
           <textarea
             v-model="objective"

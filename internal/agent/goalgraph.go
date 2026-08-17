@@ -60,25 +60,29 @@ func (a *Agent) GoalStream(ctx context.Context, history []messages.Message) (gra
 		return nil, fmt.Errorf("agent: goal loop is already running")
 	}
 	g := a.buildGoalGraph(a.goal.goal.MaxCycles)
+	a.goal.runID++
+	run := a.goal.runID
 	a.goal.graph = g
 	a.goal.running = true
 	a.goal.pending = nil
 	a.goal.mu.Unlock()
 
-	inner, err := g.Stream(ctx, a.NewState(history))
+	inner, err := g.Stream(ctx, a.NewState(ctx, history))
 	if err != nil {
 		a.endGoalRun()
 		return nil, err
 	}
-	return &goalStream{a: a, inner: inner}, nil
+	return &goalStream{a: a, inner: inner, run: run}, nil
 }
 
 // GoalResume continues a goal loop paused at an interrupt, feeding answer
-// back into the interrupted execute cycle.
+// back into the interrupted execute cycle. The resumed stream keeps the same
+// run id (it is the same run).
 func (a *Agent) GoalResume(ctx context.Context, ie *graph.InterruptError, answer any) (graph.Stream[graph.Step], error) {
 	a.goal.mu.Lock()
 	g := a.goal.graph
 	running := a.goal.running
+	run := a.goal.runID
 	a.goal.mu.Unlock()
 	if g == nil || !running {
 		return nil, fmt.Errorf("agent: no goal run in flight")
@@ -88,7 +92,38 @@ func (a *Agent) GoalResume(ctx context.Context, ie *graph.InterruptError, answer
 		a.endGoalRun()
 		return nil, err
 	}
-	return &goalStream{a: a, inner: inner}, nil
+	return &goalStream{a: a, inner: inner, run: run}, nil
+}
+
+// GoalRunID returns the id of the goal run in flight (0 when none). The
+// runner captures it right after GoalStream and passes it to
+// AbandonGoalRun when it exits.
+func (a *Agent) GoalRunID() uint64 {
+	a.goal.mu.Lock()
+	defer a.goal.mu.Unlock()
+	if !a.goal.running {
+		return 0
+	}
+	return a.goal.runID
+}
+
+// AbandonGoalRun releases the goal-run bookkeeping if run is still the
+// current goal run. The runner calls it on every exit path so an abandoned
+// loop (error, cancellation, an interrupt nobody answers) cannot leave the
+// agent reporting "already running" forever. Stale calls (a newer goal run
+// already took over) are ignored.
+func (a *Agent) AbandonGoalRun(run uint64) {
+	if run == 0 {
+		return
+	}
+	a.goal.mu.Lock()
+	defer a.goal.mu.Unlock()
+	if a.goal.runID != run {
+		return
+	}
+	a.goal.running = false
+	a.goal.pending = nil
+	a.goal.graph = nil
 }
 
 // goalStream wraps the compiled goal graph stream, clearing the goal-run
@@ -97,6 +132,7 @@ func (a *Agent) GoalResume(ctx context.Context, ie *graph.InterruptError, answer
 type goalStream struct {
 	a     *Agent
 	inner graph.Stream[graph.Step]
+	run   uint64
 	done  bool
 }
 
@@ -219,6 +255,11 @@ func (a *Agent) goalAssessNode() graph.StreamingNodeFunc {
 		a.goal.mu.Lock()
 		goal := a.goal.goal.clone()
 		a.goal.mu.Unlock()
+		// The goal may have been cleared between goalBeginCycle and this
+		// read; clone() of nil is nil, so guard like the other nodes.
+		if goal == nil {
+			return graph.Command{Goto: graph.END}, nil
+		}
 
 		var b strings.Builder
 		b.WriteString("You are the planning stage of a goal-driven agent loop.\n\n")
@@ -237,7 +278,11 @@ func (a *Agent) goalAssessNode() graph.StreamingNodeFunc {
 			}
 			if len(goal.Notes) > 0 {
 				b.WriteString("Executor notes:\n")
-				for _, n := range goal.Notes[len(goal.Notes)-3:] {
+				notes := goal.Notes
+				if len(notes) > 3 {
+					notes = notes[len(notes)-3:]
+				}
+				for _, n := range notes {
 					fmt.Fprintf(&b, "  - %s\n", goalTruncate(n, 200))
 				}
 			}
@@ -327,7 +372,7 @@ func (a *Agent) goalExecuteNode() graph.StreamingNodeFunc {
 			hist = a.CompactHistory(ctx, hist)
 			cycleMsg := goalCycleMsg(goal.Cycles, goal.MaxCycles, goal.Objective, assessment, goal.TokensUsed, goal.MaxTokens)
 			prefix = len(hist)
-			s, err := a.graph.Stream(ctx, a.NewState(append(hist, cycleMsg)))
+			s, err := a.graph.Stream(ctx, a.NewState(ctx, append(hist, cycleMsg)))
 			if err != nil {
 				return nil, err
 			}
@@ -369,6 +414,10 @@ func (a *Agent) goalExecuteNode() graph.StreamingNodeFunc {
 				}
 				if s, ok := step.Delta.(string); ok && s != "" {
 					emit(s)
+					continue
+				}
+				if rd, ok := step.Delta.(ReasoningDelta); ok && rd.Text != "" {
+					emit(rd)
 					continue
 				}
 				for _, m := range MessagesFrom(step.Update) {
@@ -448,16 +497,20 @@ Rules: "complete" ONLY if the evidence concretely shows every done-criterion met
 		a.goal.mu.Unlock()
 
 		// A mid-cycle blocked (UpdateGoal action=blocked) or a user pause
-		// wins over the verdict.
+		// wins over the verdict. A cleared goal reads as "" here, which
+		// falls into the same already-terminal arm.
 		a.goal.mu.Lock()
-		status := a.goal.goal.Status
+		var status GoalStatus
+		if a.goal.goal != nil {
+			status = a.goal.goal.Status
+		}
 		a.goal.mu.Unlock()
 		switch {
 		case status != GoalActive:
 			// already paused/blocked/cleared: report and stop
-		case v.Verdict == "complete":
+		case v.Verdict == verdictComplete:
 			a.goalSetStatus(GoalComplete, "", orString(v.Evidence, "verified by evaluator"))
-		case v.Verdict == "blocked":
+		case v.Verdict == verdictBlocked:
 			a.goalSetStatus(GoalBlocked, orString(v.Gaps, v.Evidence), "")
 		default:
 			// continue: claim not verified, or ordinary progress.
@@ -481,8 +534,15 @@ Rules: "complete" ONLY if the evidence concretely shows every done-criterion met
 
 		// Terminal cycles close with a visible report in the transcript.
 		a.goal.mu.Lock()
-		finalStatus := a.goal.goal.Status
+		var finalStatus GoalStatus
+		if a.goal.goal != nil {
+			finalStatus = a.goal.goal.Status
+		}
 		a.goal.mu.Unlock()
+		if finalStatus == "" {
+			// Cleared while evaluating: nothing to report against.
+			return graph.State{"verdict": v.Verdict}, nil
+		}
 		if finalStatus != GoalActive {
 			report := goalReport(finalStatus, v, goal.Cycles)
 			return graph.State{"messages": []messages.Message{messages.AI(report)}, "verdict": v.Verdict}, nil
@@ -545,6 +605,15 @@ func (m *goalManager) setPending(ie *graph.InterruptError, turns, prefix int) {
 }
 
 // goalVerdict is the evaluator's structured output.
+// Goal-verdict tokens shared by the evaluate prompt, the state machine and
+// the response parser. They appear verbatim in the model prompt, so changing
+// a value means changing the prompt text too.
+const (
+	verdictComplete = "complete"
+	verdictContinue = "continue"
+	verdictBlocked  = "blocked"
+)
+
 type goalVerdict struct {
 	Verdict    string  `json:"verdict"`
 	Confidence float64 `json:"confidence"`
@@ -557,7 +626,7 @@ type goalVerdict struct {
 // occasionally wrap it in prose or code fences). Unparsable output defaults
 // to "continue" — the verification gate fails closed.
 func parseGoalVerdict(s string) goalVerdict {
-	v := goalVerdict{Verdict: "continue"}
+	v := goalVerdict{Verdict: verdictContinue}
 	start := strings.IndexByte(s, '{')
 	end := strings.LastIndexByte(s, '}')
 	if start < 0 || end <= start {
@@ -565,13 +634,13 @@ func parseGoalVerdict(s string) goalVerdict {
 		return v
 	}
 	if err := json.Unmarshal([]byte(s[start:end+1]), &v); err != nil {
-		v = goalVerdict{Verdict: "continue", Evidence: goalTruncate(s, 300)}
+		v = goalVerdict{Verdict: verdictContinue, Evidence: goalTruncate(s, 300)}
 		return v
 	}
 	switch v.Verdict {
-	case "complete", "continue", "blocked":
+	case verdictComplete, verdictContinue, verdictBlocked:
 	default:
-		v.Verdict = "continue"
+		v.Verdict = verdictContinue
 	}
 	return v
 }

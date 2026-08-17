@@ -65,7 +65,13 @@ func TestGoalCommandLifecycle(t *testing.T) {
 	if _, err := c.Execute(context.Background(), "goal", []string{"set"}, sess); err == nil {
 		t.Fatal("set without objective should fail")
 	}
-	if _, err := c.Execute(context.Background(), "goal", []string{"wibble"}, sess); err == nil {
-		t.Fatal("unknown subcommand should fail")
+
+	// Free text without a verb is shorthand for set.
+	res, err = c.Execute(context.Background(), "goal", []string{"just", "wibble", "it"}, sess)
+	if err != nil || !strings.Contains(res.Output, "goal set") {
+		t.Fatalf("free-text set = %q err=%v", res.Output, err)
+	}
+	if g := c.deps.Agent.Goal(); g == nil || g.Objective != "just wibble it" {
+		t.Fatalf("free-text objective = %+v", c.deps.Agent.Goal())
 	}
 }

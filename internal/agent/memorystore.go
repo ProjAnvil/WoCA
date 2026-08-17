@@ -17,19 +17,24 @@ import (
 
 // Relevant-memory prefetch and attachments, a port of Claude Code's
 // startRelevantMemoryPrefetch + stage 27 consumption: at the start of each
-// model turn the memoryStore is searched asynchronously for entries relevant
+// model turn the memory store is searched asynchronously for entries relevant
 // to the latest user message; after each tool round the settled, not-yet-
 // injected entries are attached as <relevant-memory> messages after the
 // result batch, so the model sees long-term context it would otherwise miss.
 // Relevance is deliberately naive (keyword containment) — the woca
 // equivalent of Claude Code's memory search.
+//
+// The subsystem lives in memoryRuntime, a value component of Agent: it owns
+// the engine, the KV-store fallback, the per-turn prefetch state and the
+// System 2 throttle, and takes everything else (settings loader, workspace,
+// the obs log sink) as injected inputs. mu guards all fields; engine calls
+// (IO) always happen outside the lock, on a snapshot.
 
 // maxMemoryAttachments bounds attachments per tool round.
 const maxMemoryAttachments = 5
 
 // memoryPrefetch is the turn-scoped prefetch state.
 type memoryPrefetch struct {
-	mu         sync.Mutex
 	entries    []store.Entry
 	engineHits []memory.Hit
 	injected   map[string]bool // keys already attached (per agent lifetime)
@@ -38,45 +43,124 @@ type memoryPrefetch struct {
 // injectedMemoryLimit bounds the injected-key set.
 const injectedMemoryLimit = 256
 
-// beginMemoryPrefetch asynchronously searches long-term memory for entries
-// relevant to the last user message. With a memory engine wired it runs
-// semantic Recall workspace-scoped (natural-language query, settings topK);
-// otherwise it falls back to the KV keyword match. The result is consumed
-// non-blockingly after tool rounds.
-func (a *Agent) beginMemoryPrefetch(ctx context.Context, msgs []messages.Message) {
-	if eng := a.MemoryEngine(); eng != nil {
+// memoryRuntime is the long-term-memory subsystem (see the block comment
+// above). A nil engine disables it; the workspace fallback (agent workdir)
+// is resolved by the host, not here — Begin and the retain methods take the
+// already-resolved workspace as a parameter.
+type memoryRuntime struct {
+	mu           sync.Mutex
+	engine       memory.Engine
+	store        *store.Store // keyword-match fallback when engine is nil
+	workspace    string       // explicit override ("" = none)
+	prefetch     memoryPrefetch
+	lastSystem2  map[string]int64 // per-workspace throttle (unix seconds)
+	loadSettings func() settings.Settings
+	log          func(level, event string, fields map[string]any) // obs sink, nil-safe
+}
+
+// init wires the runtime at Agent construction (idempotent, lock-guarded).
+func (m *memoryRuntime) init(store *store.Store, engine memory.Engine, loadSettings func() settings.Settings, log func(string, string, map[string]any)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.store = store
+	m.engine = engine
+	m.loadSettings = loadSettings
+	m.log = log
+}
+
+// Engine snapshots the current engine (nil = disabled).
+func (m *memoryRuntime) Engine() memory.Engine {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.engine
+}
+
+// SetEngine swaps the engine whole-pointer (settings rebuild). In-flight
+// calls keep the old engine; the caller delays Close.
+func (m *memoryRuntime) SetEngine(e memory.Engine) {
+	m.mu.Lock()
+	m.engine = e
+	m.mu.Unlock()
+}
+
+// SetWorkspace records an explicit workspace override (empty ignored).
+func (m *memoryRuntime) SetWorkspace(ws string) {
+	if ws == "" {
+		return
+	}
+	m.mu.Lock()
+	m.workspace = ws
+	m.mu.Unlock()
+}
+
+// Workspace reports the explicit override, if any.
+func (m *memoryRuntime) Workspace() (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.workspace, m.workspace != ""
+}
+
+// settings returns the persisted settings (zero value when no loader).
+func (m *memoryRuntime) settings() settings.Settings {
+	m.mu.Lock()
+	loader := m.loadSettings
+	m.mu.Unlock()
+	if loader == nil {
+		return settings.Settings{}
+	}
+	return loader()
+}
+
+// warn logs a best-effort observability event; the memory subsystem must
+// never fail a run, so failures are dropped after being logged.
+func (m *memoryRuntime) warn(event string, fields map[string]any) {
+	m.mu.Lock()
+	log := m.log
+	m.mu.Unlock()
+	if log != nil {
+		log("warn", event, fields)
+	}
+}
+
+// Begin asynchronously searches long-term memory for entries relevant to the
+// last user message. With an engine wired it runs semantic Recall
+// workspace-scoped (natural-language query, settings topK); otherwise it
+// falls back to the KV keyword match. The result is consumed non-blockingly
+// after tool rounds (TakeAttachments).
+func (m *memoryRuntime) Begin(ctx context.Context, msgs []messages.Message, ws string) {
+	topK := settings.DefaultLadyMTopK
+	if k := m.settings().LadyMTopK; k > 0 {
+		topK = k
+	}
+	m.mu.Lock()
+	eng := m.engine
+	kv := m.store
+	m.mu.Unlock()
+	if eng != nil {
 		query := lastHumanQuery(msgs)
 		if query == "" {
 			return
 		}
-		topK := settings.DefaultLadyMTopK
-		if a.loadSettings != nil {
-			if k := a.loadSettings().LadyMTopK; k > 0 {
-				topK = k
-			}
-		}
-		ws := a.memoryWorkspaceCtx(ctx)
 		go func() {
 			hits, err := eng.Recall(context.WithoutCancel(ctx), query, ws, topK)
 			if err != nil {
 				return
 			}
-			a.memPrefetch.mu.Lock()
-			a.memPrefetch.engineHits = hits
-			a.memPrefetch.mu.Unlock()
+			m.mu.Lock()
+			m.prefetch.engineHits = hits
+			m.mu.Unlock()
 		}()
 		return
 	}
-	if a.memory == nil {
+	if kv == nil {
 		return
 	}
 	terms := memoryTerms(msgs)
 	if len(terms) == 0 {
 		return
 	}
-	mem := a.memory
 	go func() {
-		entries, err := mem.List(context.WithoutCancel(ctx), "", "")
+		entries, err := kv.List(context.WithoutCancel(ctx), "", "")
 		if err != nil {
 			return
 		}
@@ -93,26 +177,28 @@ func (a *Agent) beginMemoryPrefetch(ctx context.Context, msgs []messages.Message
 				break
 			}
 		}
-		a.memPrefetch.mu.Lock()
-		a.memPrefetch.entries = hits
-		a.memPrefetch.mu.Unlock()
+		m.mu.Lock()
+		m.prefetch.entries = hits
+		m.mu.Unlock()
 	}()
 }
 
-// takeMemoryAttachments returns attachment messages for settled, relevant,
+// TakeAttachments returns attachment messages for settled, relevant,
 // not-yet-injected memory entries (non-blocking; nothing when the prefetch
-// has not settled).
-func (a *Agent) takeMemoryAttachments() []messages.Message {
-	a.memPrefetch.mu.Lock()
-	entries := a.memPrefetch.entries
-	a.memPrefetch.entries = nil
-	hits := a.memPrefetch.engineHits
-	a.memPrefetch.engineHits = nil
-	injected := a.memPrefetch.injected
-	a.memPrefetch.mu.Unlock()
-	if injected == nil {
-		injected = map[string]bool{}
+// has not settled). The whole selection runs under the mutex: the injected
+// map is shared state and concurrent runs must not mark it outside the lock
+// (Go fatals on concurrent map writes).
+func (m *memoryRuntime) TakeAttachments() []messages.Message {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entries := m.prefetch.entries
+	m.prefetch.entries = nil
+	hits := m.prefetch.engineHits
+	m.prefetch.engineHits = nil
+	if m.prefetch.injected == nil {
+		m.prefetch.injected = map[string]bool{}
 	}
+	injected := m.prefetch.injected
 
 	var out []messages.Message
 	for _, h := range hits {
@@ -157,13 +243,8 @@ func (a *Agent) takeMemoryAttachments() []messages.Message {
 		out = append(out, messages.Human(
 			"<relevant-memory>\n"+id+"\n"+value+"\n</relevant-memory>"))
 	}
-	if len(out) > 0 {
-		a.memPrefetch.mu.Lock()
-		a.memPrefetch.injected = injected
-		if len(a.memPrefetch.injected) > injectedMemoryLimit {
-			a.memPrefetch.injected = map[string]bool{} // reset rather than grow unbounded
-		}
-		a.memPrefetch.mu.Unlock()
+	if len(injected) > injectedMemoryLimit {
+		m.prefetch.injected = map[string]bool{} // reset rather than grow unbounded
 	}
 	return out
 }
@@ -210,8 +291,8 @@ func trimJSONString(raw []byte) string {
 	return s
 }
 
-// memoryTerms extracts lowercase keywords (>3 chars, letters/digits) from
-// the last human message.
+// memoryTerms extracts lowercase keywords (>3 chars, letters/digits) from the
+// last human message.
 func memoryTerms(msgs []messages.Message) []string {
 	last := ""
 	for i := len(msgs) - 1; i >= 0; i-- {

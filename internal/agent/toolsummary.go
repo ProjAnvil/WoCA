@@ -112,7 +112,7 @@ func (a *Agent) beginToolUseSummary(ctx context.Context, calls []messages.ToolCa
 	}
 	var b strings.Builder
 	if lastAssistantText != "" {
-		fmt.Fprintf(&b, "User's intent (from assistant's last message): %s\n\n", truncateString(lastAssistantText, 200))
+		fmt.Fprintf(&b, "User's intent (from assistant's last message): %s\n\n", truncate(lastAssistantText, 200))
 	}
 	b.WriteString("Tools completed:\n\n")
 	for i, c := range calls {
@@ -121,7 +121,7 @@ func (a *Agent) beginToolUseSummary(ctx context.Context, calls []messages.ToolCa
 		if i < len(results) {
 			out = results[i].Content
 		}
-		fmt.Fprintf(&b, "Tool: %s\nInput: %s\nOutput: %s", c.Name, truncateString(string(in), 300), truncateString(out, 300))
+		fmt.Fprintf(&b, "Tool: %s\nInput: %s\nOutput: %s", c.Name, truncate(string(in), 300), truncate(out, 300))
 		if i < len(calls)-1 {
 			b.WriteString("\n\n")
 		}
@@ -167,11 +167,4 @@ func (a *Agent) PendingToolUseSummaryCount() int {
 	a.toolSummaries.mu.Lock()
 	defer a.toolSummaries.mu.Unlock()
 	return len(a.toolSummaries.list)
-}
-
-func truncateString(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "…"
 }

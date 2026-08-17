@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { ChevronRight, Folder, MessageSquare, Plus } from 'lucide-vue-next'
+import { ChevronRight, Folder, MessageSquare, Plus, Trash2 } from 'lucide-vue-next'
 import { useSessionStore } from '../stores/sessions'
+import type { Session } from '../types'
 
 const store = useSessionStore()
 
@@ -37,6 +38,18 @@ function shortTime(iso: string): string {
   if (hr < 24) return `${hr} 小时前`
   return `${Math.floor(hr / 24)} 天前`
 }
+
+// Deleting a session removes its transcript server-side; a live run refuses
+// (removeSession throws — surfaced via alert).
+async function removeSession(s: Session) {
+  const title = s.title || '新会话'
+  if (!window.confirm(`删除会话「${title}」？聊天记录将被移除，不可恢复。`)) return
+  try {
+    await store.removeSession(s.id)
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e))
+  }
+}
 </script>
 
 <template>
@@ -59,17 +72,21 @@ function shortTime(iso: string): string {
       </div>
 
       <div v-if="isOpen(g.key)" class="ws-sessions">
-        <button
+        <div
           v-for="s in g.sessions"
           :key="s.id"
-          class="session-item"
+          class="session-row"
           :class="{ active: s.id === store.activeId }"
-          @click="store.setActive(s.id)"
         >
-          <MessageSquare :size="15" class="session-icon" />
-          <span class="session-title">{{ s.title }}</span>
-          <span class="session-time">{{ shortTime(s.updatedAt) }}</span>
-        </button>
+          <button class="session-item" :class="{ active: s.id === store.activeId }" @click="store.setActive(s.id)">
+            <MessageSquare :size="15" class="session-icon" />
+            <span class="session-title">{{ s.title }}</span>
+            <span class="session-time">{{ shortTime(s.updatedAt) }}</span>
+          </button>
+          <button class="session-del" title="删除会话" @click="removeSession(s)">
+            <Trash2 :size="12" />
+          </button>
+        </div>
       </div>
     </div>
   </div>

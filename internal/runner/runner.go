@@ -59,7 +59,7 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 	hist := history
 	// One Run = one turn for the agent's MaxTurns accounting.
 	r.agent.ResetTurnCounter()
-	stream, err := r.agent.Graph().Stream(ctx, r.agent.NewState(hist))
+	stream, err := r.agent.Graph().Stream(ctx, r.agent.NewState(ctx, hist))
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 					if restore, ok := r.agent.BeginOutputEscalation(); ok {
 						outputRestore = restore
 						stream.Close()
-						stream, err = r.agent.Graph().Stream(ctx, r.agent.NewState(hist))
+						stream, err = r.agent.Graph().Stream(ctx, r.agent.NewState(ctx, hist))
 						if err != nil {
 							return nil, err
 						}
@@ -118,7 +118,7 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 					hist = historyFrom(msgs)
 					hist = append(hist, messages.Human(agent.OutputLimitRecoveryPrompt))
 					stream.Close()
-					stream, err = r.agent.Graph().Stream(ctx, r.agent.NewState(hist))
+					stream, err = r.agent.Graph().Stream(ctx, r.agent.NewState(ctx, hist))
 					if err != nil {
 						return nil, err
 					}
@@ -137,7 +137,7 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 				hist = historyFrom(full)
 				hist = append(hist, messages.Human("<stop-hook>\n"+feedback+"\n</stop-hook>"))
 				stream.Close()
-				stream, err = r.agent.Graph().Stream(ctx, r.agent.NewState(hist))
+				stream, err = r.agent.Graph().Stream(ctx, r.agent.NewState(ctx, hist))
 				if err != nil {
 					return nil, err
 				}
@@ -156,7 +156,7 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 					hist = append(hist, messages.Human(decision.Nudge))
 					seenHist = len(hist)
 					stream.Close()
-					stream, err = r.agent.Graph().Stream(ctx, r.agent.NewState(hist))
+					stream, err = r.agent.Graph().Stream(ctx, r.agent.NewState(ctx, hist))
 					if err != nil {
 						return nil, err
 					}
@@ -176,7 +176,7 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 					if agent.CompactionShrank(hist, compacted) {
 						hist = compacted
 						stream.Close()
-						stream, err = r.agent.Graph().Stream(ctx, r.agent.NewState(hist))
+						stream, err = r.agent.Graph().Stream(ctx, r.agent.NewState(ctx, hist))
 						if err != nil {
 							return nil, err
 						}

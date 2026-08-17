@@ -35,6 +35,7 @@ import (
 	"github.com/projanvil/woca"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/agents"
+	"github.com/projanvil/woca/internal/claudeenv"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/console"
 	contextx "github.com/projanvil/woca/internal/context"
@@ -46,8 +47,10 @@ import (
 	"github.com/projanvil/woca/internal/oauth"
 	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/permissions"
+	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/plugins"
 	"github.com/projanvil/woca/internal/prompt"
+	"github.com/projanvil/woca/internal/quota"
 	"github.com/projanvil/woca/internal/repl"
 	"github.com/projanvil/woca/internal/runner"
 	"github.com/projanvil/woca/internal/sdkout"
@@ -175,6 +178,8 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer ap.pluginMgr.Close()
+			defer ap.a.Close()
 			cons := newConsole(ap, log)
 			runErr := tui.Run(ap.a, nil, ap.cfg, version, tui.WithConsole(cons), tui.WithSettingsStore(ap.settings))
 			_ = ap.a.RunSessionEnd(cmd.Context(), "exit")
@@ -202,9 +207,9 @@ func newRootCmd() *cobra.Command {
 	serveCmd.Flags().Bool("no-browser", false, "do not open the browser on startup")
 	root.AddCommand(serveCmd)
 
-	root.AddCommand(newConfigCmd(*opts))
+	root.AddCommand(newConfigCmd())
 	root.AddCommand(newPluginCmd())
-	root.AddCommand(newMcpAuthCmd(*opts))
+	root.AddCommand(newMcpAuthCmd())
 	root.AddCommand(newWebCmd())
 	return root
 }
@@ -295,7 +300,7 @@ func newWebCmd() *cobra.Command {
 
 // newMcpAuthCmd builds `woca mcp auth <name> <https-endpoint>`: run the MCP
 // OAuth flow for an HTTP-transport server and store the token encrypted.
-func newMcpAuthCmd(opts options) *cobra.Command {
+func newMcpAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "MCP server utilities",
@@ -305,7 +310,7 @@ func newMcpAuthCmd(opts options) *cobra.Command {
 		Short: "Authorize an MCP server via OAuth (stores the token encrypted)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			dbTarget := opts.db
+			dbTarget, _ := cmd.Flags().GetString("db")
 			if dbTarget == "" {
 				dbTarget = os.Getenv("WOCA_DB")
 			}
@@ -401,17 +406,19 @@ func newPluginCmd() *cobra.Command {
 
 // newConfigCmd builds `woca config list|get|set` for managing persisted
 // settings outside the interactive UIs.
-func newConfigCmd(opts options) *cobra.Command {
+func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "config",
 		Short: "View or update persisted settings (stored in the woca database)",
 	}
-	open := func() (*settings.Store, error) {
-		target := opts.db
-		if target == "" {
-			target = os.Getenv("WOCA_DB")
+	// The --db flag is parsed at Execute time (after this constructor ran),
+	// so read it off the command instead of capturing an options copy.
+	open := func(cmd *cobra.Command) (*settings.Store, error) {
+		dbTarget, _ := cmd.Flags().GetString("db")
+		if dbTarget == "" {
+			dbTarget = os.Getenv("WOCA_DB")
 		}
-		st, err := settings.Open(target)
+		st, err := settings.Open(dbTarget)
 		if err != nil {
 			return nil, err
 		}
@@ -424,7 +431,7 @@ func newConfigCmd(opts options) *cobra.Command {
 		Use:   "list",
 		Short: "Show all settings (secrets masked)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := open()
+			st, err := open(cmd)
 			if err != nil {
 				return err
 			}
@@ -438,7 +445,7 @@ func newConfigCmd(opts options) *cobra.Command {
 		Short: "Show one setting",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := open()
+			st, err := open(cmd)
 			if err != nil {
 				return err
 			}
@@ -462,7 +469,7 @@ func newConfigCmd(opts options) *cobra.Command {
 		Short: "Update a setting (API keys are encrypted at rest)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := open()
+			st, err := open(cmd)
 			if err != nil {
 				return err
 			}
@@ -537,6 +544,8 @@ func run(ctx context.Context, opts options, stdin io.Reader, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
 	a, cfg := ap.a, ap.cfg
 	if opts.resumeCheckpoint != "" {
 		result, err := a.ResumeCheckpoint(ctx, opts.resumeCheckpoint, opts.resumeValue)
@@ -664,6 +673,19 @@ func newConsole(ap *app, log zerolog.Logger) *console.Console {
 		RebuildModel: func() error {
 			return ap.rebuildModel()
 		},
+		CfgLive:           func() config.Config { return ap.currentCfg() },
+		SetThinkingBudget: ap.setThinkingBudget,
+		Quota:             ap.fetchQuota,
+		ApplyClaudeEnv:    ap.applyClaudeEnv,
+		Plugins: func(enabled []string) []pluginrt.Status {
+			return ap.pluginMgr.Statuses(enabled)
+		},
+		InstallPlugin: func(ctx context.Context, name string, reinstall bool) error {
+			if reinstall {
+				return ap.pluginMgr.Reinstall(ctx, name)
+			}
+			return ap.pluginMgr.Install(ctx, name)
+		},
 	})
 	factory := func(name string) (language.ChatModel, error) {
 		c := cfg
@@ -704,7 +726,10 @@ func newConsole(ap *app, log zerolog.Logger) *console.Console {
 		RebuildModel: func() error {
 			return ap.rebuildModel()
 		},
-		ApplyTheme: tui.SetTheme,
+		CfgLive:           func() config.Config { return ap.currentCfg() },
+		SetThinkingBudget: ap.setThinkingBudget,
+		Quota:             ap.fetchQuota,
+		ApplyTheme:        tui.SetTheme,
 		SetVimModeToggle: func() bool {
 			tui.SetVimMode(!tui.VimMode())
 			return tui.VimMode()
@@ -724,6 +749,8 @@ func serve(ctx context.Context, opts options, addr string, noBrowser bool) error
 	if err != nil {
 		return err
 	}
+	defer ap.pluginMgr.Close()
+	defer ap.a.Close()
 
 	sessionDir := ""
 	if d := session.DefaultDir(); d != "" {
@@ -743,6 +770,19 @@ func serve(ctx context.Context, opts options, addr string, noBrowser bool) error
 		},
 		RebuildModel: func() error {
 			return ap.rebuildModel()
+		},
+		CfgLive:           func() config.Config { return ap.currentCfg() },
+		SetThinkingBudget: ap.setThinkingBudget,
+		Quota:             ap.fetchQuota,
+		ApplyClaudeEnv:    ap.applyClaudeEnv,
+		Plugins: func(enabled []string) []pluginrt.Status {
+			return ap.pluginMgr.Statuses(enabled)
+		},
+		InstallPlugin: func(ctx context.Context, name string, reinstall bool) error {
+			if reinstall {
+				return ap.pluginMgr.Reinstall(ctx, name)
+			}
+			return ap.pluginMgr.Install(ctx, name)
 		},
 	})
 
@@ -786,6 +826,52 @@ type app struct {
 	memory    *store.Store
 	memMu     sync.Mutex
 	memEngine memory.Engine
+	// pluginMgr owns the built-in capability-plugin runtimes (downloads,
+	// pinchtab server process); Close stops spawned processes.
+	pluginMgr *pluginrt.Manager
+	// workdir is the resolved (absolute) working directory the agent runs
+	// in; skill reloads after a claude-env selection change re-read from it.
+	workdir string
+	// cfgMu guards the cfg copy against runtime mutations (thinking-level
+	// switches) racing snapshot readers (CfgLive, rebuildModel).
+	cfgMu sync.RWMutex
+}
+
+// currentCfg returns a copy of the effective configuration under the lock.
+func (ap *app) currentCfg() config.Config {
+	ap.cfgMu.RLock()
+	defer ap.cfgMu.RUnlock()
+	return ap.cfg
+}
+
+// effectiveProvider resolves the provider the same way rebuildModel does:
+// startup flag first, then the settings database.
+func (ap *app) effectiveProvider() string {
+	if ap.opts.provider != "" {
+		return ap.opts.provider
+	}
+	return ap.settings.Load().Provider
+}
+
+// setThinkingBudget persists the extended-thinking budget to the settings
+// database, updates the effective config, and rebuilds the chat model so the
+// change applies from the next model call. A --thinking-budget flag pins the
+// value; runtime switches are rejected in that case.
+func (ap *app) setThinkingBudget(budget int) error {
+	if ap.opts.thinkingBudget != 0 {
+		return fmt.Errorf("thinking budget is pinned by the --thinking-budget flag (restart without it to switch at runtime)")
+	}
+	cfg := ap.settings.Load()
+	if err := settings.Apply(&cfg, settings.KeyThinkingBudget, strconv.Itoa(budget)); err != nil {
+		return err
+	}
+	if err := ap.settings.Save(cfg); err != nil {
+		return err
+	}
+	ap.cfgMu.Lock()
+	ap.cfg.ThinkingBudget = budget
+	ap.cfgMu.Unlock()
+	return ap.rebuildModel()
 }
 
 // buildAgent constructs the configured agent (model, prompt, hooks, skills,
@@ -842,6 +928,12 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 	if temperature == 0 {
 		temperature = dbSettings.Temperature
 	}
+	// Runtime-switchable thinking budget (chat UI /thinking): the startup
+	// flag wins when pinned, otherwise the persisted setting applies.
+	thinkingBudget := opts.thinkingBudget
+	if thinkingBudget == 0 {
+		thinkingBudget = dbSettings.ThinkingBudget
+	}
 
 	cfg := config.Config{
 		Provider:          config.Provider(provider),
@@ -853,7 +945,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		PermissionMode:    mode,
 		WorkDir:           workdir,
 		ExtraSystemPrompt: opts.extraPrompt,
-		ThinkingBudget:    opts.thinkingBudget,
+		ThinkingBudget:    thinkingBudget,
 	}
 	cfg, err = cfg.Normalize()
 	if err != nil {
@@ -877,13 +969,35 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		fallbackModel = fbModel
 	}
 
-	// Assemble the system prompt with collected context.
-	sysPrompt := prompt.BuildWithStyle(cfg.WorkDir, cfg.ExtraSystemPrompt, cfg.Model, dbSettings.OutputStyle)
-	if c := contextx.Collect(cfg.WorkDir); c != "" {
-		sysPrompt += "\n\n" + c
+	// Assemble the system prompt with collected context. The same builder
+	// runs for every run workspace and the active model name (the agent
+	// caches per workspace+model), so serve-mode sessions in other projects
+	// get the environment section, git status and project memory files of
+	// the directory they operate in, and swapping the model refreshes the
+	// name in the prompt. Live settings are re-read per build so cache
+	// invalidation (style change) picks them up.
+	sysFor := func(ws, model string) string {
+		sys := prompt.BuildWithStyle(ws, cfg.ExtraSystemPrompt, model, st.Load().OutputStyle)
+		if c := contextx.Collect(ws); c != "" {
+			sys += "\n\n" + c
+		}
+		if list := loadSkills(ws); len(list) > 0 {
+			sys += "\n\n# Available skills\n\nInvoke with the Skill tool; the list is scoped to this workspace.\n" + skillManifest(list)
+		}
+		return sys
 	}
+	sysPrompt := sysFor(cfg.WorkDir, cfg.Model)
 
 	hookRunner := hooks.NewRunner(loadHooksConfig(workdir), workdir, "woca", hooks.WithLogger(log))
+	// Claude Code environment import (settings claude-skills / claude-mcp):
+	// selected ~/.claude skills are symlinked into ~/.woca/skills (loadSkills
+	// picks them up from there) and the selected global MCP servers are
+	// materialized as ~/.woca/mcp.json specs connected below.
+	if linked, err := claudeenv.SyncSkills(wocaRoot(), dbSettings.ClaudeSkills); err != nil {
+		log.Warn().Err(err).Msg("claude skill import failed")
+	} else if len(linked) > 0 {
+		log.Info().Strs("skills", linked).Msg("imported claude skills via ~/.woca/skills")
+	}
 	skillList := loadSkills(workdir)
 	agentDefs := loadAgents(workdir)
 	// Plugins (marketplace-level units under ~/.woca/plugins) contribute
@@ -896,7 +1010,27 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		skillList = append(skillList, pl.Skills...)
 		agentDefs = append(agentDefs, pl.Agents...)
 	}
-	extraTools, mcpClients := connectMCP(ctx, log, opts.mcpServers, st)
+	mcpSpecs := append([]string{}, opts.mcpServers...)
+	if specs, err := claudeMCPStartupSpecs(wocaRoot(), dbSettings.ClaudeMCP); err != nil {
+		log.Warn().Err(err).Msg("claude mcp import failed")
+	} else if len(specs) > 0 {
+		log.Info().Strs("servers", specs).Msg("imported claude mcp servers via ~/.woca/mcp.json")
+		mcpSpecs = append(mcpSpecs, specs...)
+	}
+	extraTools, mcpClients := connectMCP(ctx, log, mcpSpecs, st)
+
+	// Built-in capability plugins (browser via pinchtab, python/pdf via uv):
+	// tools register when enabled in settings; runtimes install on demand
+	// from the web settings UI. They share the plugin root (~/.woca/plugins)
+	// with marketplace skills/agents plugins: shared runtimes live under
+	// runtimes/, per-plugin python envs under <name>/ (WOCA_PLUGIN_ROOT
+	// overrides for testing).
+	pluginHome := plugins.DefaultRoot()
+	if env := os.Getenv("WOCA_PLUGIN_ROOT"); env != "" {
+		pluginHome = env
+	}
+	pluginMgr := pluginrt.NewManager(pluginHome, cfg.WorkDir, log)
+	extraTools = append(extraTools, pluginMgr.Tools(dbSettings.BuiltinPlugins)...)
 
 	reg := tools.NewRegistry(cfg.WorkDir)
 	if opts.searchAPI != "" {
@@ -1014,21 +1148,27 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 	}
 
 	a, err := agent.New(agent.Config{
-		Model:              model,
-		FallbackModel:      fallbackModel,
-		ModelMaxRetries:    2,
-		Registry:           reg,
-		SystemPrompt:       sysPrompt,
-		PermissionMode:     cfg.PermissionMode,
-		RecursionLimit:     cfg.RecursionLimit,
-		WorkDir:            cfg.WorkDir,
-		Hooks:              hookRunner,
+		Model:           model,
+		FallbackModel:   fallbackModel,
+		ModelMaxRetries: 2,
+		Registry:        reg,
+		SystemPrompt:    sysPrompt,
+		SystemPromptFor: sysFor,
+		PermissionMode:  cfg.PermissionMode,
+		RecursionLimit:  cfg.RecursionLimit,
+		WorkDir:         cfg.WorkDir,
+		Hooks:           hookRunner,
+		HooksFor: func(ws string) *hooks.Runner {
+			return hooks.NewRunner(loadHooksConfig(ws), ws, "woca", hooks.WithLogger(log))
+		},
 		Skills:             skillList,
+		SkillsFor:          loadSkills,
 		ExtraTools:         extraTools,
 		CompactThreshold:   opts.compactLimit,
 		Summarizer:         model,
 		Permissions:        loadPermissions(workdir),
 		Agents:             agentDefs,
+		AgentsFor:          loadAgents,
 		CheckpointDir:      opts.checkpointDir,
 		Checkpointer:       checkpointer,
 		BashPolicy:         tools.NewCommandPolicy(opts.allowCommands, opts.denyCommands),
@@ -1038,9 +1178,11 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		// Claude Code's isNonInteractiveSession gate.
 		EmitToolUseSummaries: opts.prompt == "",
 		// Between-turn tool refresh (stage 28): re-list MCP tools so
-		// hot-added ones are usable in the next round.
+		// hot-added ones are usable in the next round, plus re-evaluate the
+		// enabled built-in plugins (settings toggles apply live).
 		RefreshTools: func(ctx context.Context) []coretools.Tool {
-			return refreshMCPTools(ctx, log, mcpClients)
+			fresh := refreshMCPTools(ctx, log, mcpClients)
+			return append(fresh, pluginMgr.Tools(st.Load().BuiltinPlugins)...)
 		},
 		// Long-term memory attachments: prefetch relevant entries per turn.
 		Memory:       memory,
@@ -1055,7 +1197,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		return nil, err
 	}
 	a.SetMemoryWorkspace(cfg.WorkDir)
-	return &app{a: a, cfg: cfg, opts: opts, settings: st, memory: memory, memEngine: memEngine}, nil
+	return &app{a: a, cfg: cfg, opts: opts, settings: st, memory: memory, memEngine: memEngine, workdir: workdir, pluginMgr: pluginMgr}, nil
 }
 
 // buildMemoryEngine constructs the memory engine from current settings.
@@ -1091,19 +1233,21 @@ func buildMemoryEngine(ap *app, dbSettings settings.Settings, chatModel language
 
 // rebuildModel reconstructs the chat model from the current effective
 // configuration (startup flags + live settings from the database) and swaps
-// it into the agent. Used by the settings UIs after provider, base URL, or
-// API key changes. The model name itself is not re-resolved here; callers
-// that change it switch via SetModel directly.
+// it into the agent. Used by the settings UIs after provider, model, base
+// URL, or API key changes. The model id is re-resolved from settings (a
+// startup --model flag still wins), so the settings UI's model switch takes
+// effect live — and, through the name-keyed prompt cache, refreshes the
+// model named in the system prompt.
 func (ap *app) rebuildModel() error {
 	dbSettings := ap.settings.Load()
-	provider := ap.opts.provider
-	if provider == "" {
-		provider = dbSettings.Provider
-	}
-	cfg := ap.cfg
+	provider := ap.effectiveProvider()
+	cfg := ap.currentCfg()
 	cfg.Provider = config.Provider(provider)
 	cfg.APIKey = resolveKey(ap.opts.apiKey, provider, ap.settings)
 	cfg.BaseURL = resolveBaseURL(ap.opts.baseURL, provider, dbSettings)
+	if v := dbSettings.Model; v != "" && ap.opts.model == "" {
+		cfg.Model = v
+	}
 	if v := dbSettings.MaxTokens; v != 0 && ap.opts.maxTokens == 0 {
 		cfg.MaxTokens = v
 	}
@@ -1144,6 +1288,103 @@ func (ap *app) rebuildMemory() error {
 		}()
 	}
 	return nil
+}
+
+// fetchQuota queries the provider's account usage (the provider-template
+// dispatch: GLM Coding Plan monitor, DeepSeek balance, official OAuth
+// subscriptions) with the credentials the chat model uses.
+func (ap *app) fetchQuota(ctx context.Context) (quota.Info, error) {
+	dbSettings := ap.settings.Load()
+	provider := ap.effectiveProvider()
+	return quota.Fetch(ctx, provider,
+		resolveBaseURL(ap.opts.baseURL, provider, dbSettings),
+		resolveKey(ap.opts.apiKey, provider, ap.settings),
+		nil)
+}
+
+// wocaRoot returns ~/.woca (best-effort; ".woca" relative when the home
+// directory can't be resolved).
+func wocaRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".woca"
+	}
+	return filepath.Join(home, ".woca")
+}
+
+// claudeMCPStartupSpecs returns the MCP specs to connect at agent start: a
+// non-empty selection re-materializes ~/.woca/mcp.json from ~/.claude.json;
+// an empty selection keeps the previously materialized file (if any), so
+// agent start is always driven by the local copy under ~/.woca.
+func claudeMCPStartupSpecs(root string, selected []string) ([]string, error) {
+	if len(selected) > 0 {
+		return syncMCPConfig(root, selected)
+	}
+	return claudeenv.LoadMCPConfig(root)
+}
+
+// syncMCPConfig filters ~/.claude.json's global servers down to the selection
+// and always rewrites ~/.woca/mcp.json — unchecking everything clears it.
+func syncMCPConfig(root string, selected []string) ([]string, error) {
+	all, err := claudeenv.Servers()
+	if err != nil {
+		return nil, err
+	}
+	keep := make([]claudeenv.MCPServer, 0, len(selected))
+	for _, s := range all {
+		for _, name := range selected {
+			if s.Name == name {
+				keep = append(keep, s)
+				break
+			}
+		}
+	}
+	if err := claudeenv.WriteMCPConfig(root, keep); err != nil {
+		return nil, err
+	}
+	return claudeenv.LoadMCPConfig(root)
+}
+
+// applyClaudeEnv persists a claude-skills / claude-mcp checkbox selection,
+// syncs the ~/.woca skill symlinks and mcp.json, and live-applies the skill
+// set. MCP servers (re)connect at the next agent start.
+func (ap *app) applyClaudeEnv(skills, mcp []string) error {
+	if ap.settings == nil {
+		return fmt.Errorf("settings store unavailable")
+	}
+	cfg := ap.settings.Load()
+	if err := settings.Apply(&cfg, settings.KeyClaudeSkills, settings.FormatNameList(skills)); err != nil {
+		return err
+	}
+	if err := settings.Apply(&cfg, settings.KeyClaudeMCP, settings.FormatNameList(mcp)); err != nil {
+		return err
+	}
+	if err := ap.settings.Save(cfg); err != nil {
+		return err
+	}
+	root := wocaRoot()
+	if _, err := claudeenv.SyncSkills(root, skills); err != nil {
+		return err
+	}
+	// Always rewrite mcp.json so unchecking everything disconnects the servers
+	// at the next start.
+	if _, err := syncMCPConfig(root, mcp); err != nil {
+		return err
+	}
+	// Live skill reload (mirrors buildAgent's load + plugin merge).
+	list := loadSkills(ap.workdir)
+	for _, pl := range pluginListOrEmpty() {
+		list = append(list, pl.Skills...)
+	}
+	ap.a.SetSkills(list)
+	return nil
+}
+
+// pluginListOrEmpty loads marketplace plugins, swallowing errors (a broken
+// plugin tree must not break a skill reload).
+func pluginListOrEmpty() []plugins.Plugin {
+	list, _ := plugins.Load(plugins.DefaultRoot())
+	return list
 }
 
 // submitHooks runs UserPromptSubmit hooks and prepends their feedback.
@@ -1283,6 +1524,20 @@ func resolveKey(flagKey, provider string, st *settings.Store) string {
 		if v := st.GetSecret(settings.SecretOpenAIAPIKey); v != "" {
 			return v
 		}
+	case "glm":
+		if v := os.Getenv("GLM_API_KEY"); v != "" {
+			return v
+		}
+		if v := st.GetSecret(settings.SecretGLMAPIKey); v != "" {
+			return v
+		}
+	case "deepseek":
+		if v := os.Getenv("DEEPSEEK_API_KEY"); v != "" {
+			return v
+		}
+		if v := st.GetSecret(settings.SecretDeepSeekAPIKey); v != "" {
+			return v
+		}
 	default:
 		if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 			return v
@@ -1326,6 +1581,22 @@ func resolveBaseURL(flagBaseURL, provider string, dbSettings settings.Settings) 
 			return v
 		}
 		return dbSettings.OpenAIBaseURL
+	case "glm":
+		if v := os.Getenv("GLM_BASE_URL"); v != "" {
+			return v
+		}
+		if v := dbSettings.GLMBaseURL; v != "" {
+			return v
+		}
+		return config.ProviderDefaultBaseURL(config.ProviderGLM)
+	case "deepseek":
+		if v := os.Getenv("DEEPSEEK_BASE_URL"); v != "" {
+			return v
+		}
+		if v := dbSettings.DeepSeekBaseURL; v != "" {
+			return v
+		}
+		return config.ProviderDefaultBaseURL(config.ProviderDeepSeek)
 	default:
 		if v := os.Getenv("ANTHROPIC_BASE_URL"); v != "" {
 			return v
@@ -1356,6 +1627,14 @@ func loadHooksConfig(workdir string) hooks.Config {
 		merged.PostToolUse = append(merged.PostToolUse, cfg.PostToolUse...)
 		merged.UserPromptSubmit = append(merged.UserPromptSubmit, cfg.UserPromptSubmit...)
 		merged.Stop = append(merged.Stop, cfg.Stop...)
+		merged.SessionStart = append(merged.SessionStart, cfg.SessionStart...)
+		merged.SessionEnd = append(merged.SessionEnd, cfg.SessionEnd...)
+		merged.SubagentStop = append(merged.SubagentStop, cfg.SubagentStop...)
+		merged.Notification = append(merged.Notification, cfg.Notification...)
+		merged.PreCompact = append(merged.PreCompact, cfg.PreCompact...)
+		merged.PostCompact = append(merged.PostCompact, cfg.PostCompact...)
+		merged.PermissionRequest = append(merged.PermissionRequest, cfg.PermissionRequest...)
+		merged.PostSampling = append(merged.PostSampling, cfg.PostSampling...)
 	}
 	return merged
 }
@@ -1399,6 +1678,17 @@ func loadSkills(workdir string) []skills.Skill {
 		}
 	}
 	return out
+}
+
+// skillManifest renders the skill list injected into the system prompt (the
+// Skill tool's static description no longer carries it — the list is
+// workspace-scoped).
+func skillManifest(list []skills.Skill) string {
+	var b strings.Builder
+	for _, s := range list {
+		fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
+	}
+	return b.String()
 }
 
 // loadAgents loads custom subagent definitions from project and user dirs.

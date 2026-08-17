@@ -47,10 +47,16 @@ func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) (final
 	// ran and retains nothing. Detached ctx so graph teardown doesn't cancel
 	// the writes.
 	started := false
+	var runID uint64
 	defer func() {
 		if !started {
 			return
 		}
+		// Release the run bookkeeping on every exit path: an abandoned loop
+		// (error, cancellation, an interrupt nobody answers) must not leave
+		// the agent reporting "already running" forever. No-op when the loop
+		// ended cleanly or a newer run already took over.
+		r.agent.AbandonGoalRun(runID)
 		g := r.agent.Goal()
 		if g == nil {
 			return // cleared before the loop ended: nothing to retain
@@ -62,6 +68,7 @@ func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) (final
 		return nil, err
 	}
 	started = true
+	runID = r.agent.GoalRunID()
 	defer stream.Close()
 	for {
 		step, ok, err := stream.Next(ctx)

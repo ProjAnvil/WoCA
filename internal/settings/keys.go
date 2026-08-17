@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,10 +14,18 @@ const (
 	KeyModel                 = "model"
 	KeyMaxTokens             = "max-tokens"
 	KeyTemperature           = "temperature"
+	KeyThinkingBudget        = "thinking-budget"
 	KeyAnthropicBaseURL      = "anthropic-base-url"
 	KeyOpenAIBaseURL         = "openai-base-url"
+	KeyGLMBaseURL            = "glm-base-url"
+	KeyDeepSeekBaseURL       = "deepseek-base-url"
 	KeyAnthropicAPIKey       = "anthropic-api-key"
 	KeyOpenAIAPIKey          = "openai-api-key"
+	KeyGLMAPIKey             = "glm-api-key"
+	KeyDeepSeekAPIKey        = "deepseek-api-key"
+	KeyClaudeSkills          = "claude-skills"
+	KeyClaudeMCP             = "claude-mcp"
+	KeyBuiltinPlugins        = "builtin-plugins"
 	KeyCheckpoint            = "checkpoint"
 	KeyMemory                = "memory"
 	KeyCheckpointDir         = "checkpoint-dir"
@@ -38,8 +47,10 @@ const (
 // KeyNames lists all settable keys in display order.
 func KeyNames() []string {
 	return []string{
-		KeyProvider, KeyModel, KeyMaxTokens, KeyTemperature,
-		KeyAnthropicBaseURL, KeyOpenAIBaseURL, KeyAnthropicAPIKey, KeyOpenAIAPIKey,
+		KeyProvider, KeyModel, KeyMaxTokens, KeyTemperature, KeyThinkingBudget,
+		KeyAnthropicBaseURL, KeyOpenAIBaseURL, KeyGLMBaseURL, KeyDeepSeekBaseURL,
+		KeyAnthropicAPIKey, KeyOpenAIAPIKey, KeyGLMAPIKey, KeyDeepSeekAPIKey,
+		KeyClaudeSkills, KeyClaudeMCP, KeyBuiltinPlugins,
 		KeyCheckpoint, KeyMemory, KeyCheckpointDir, KeyPostgresURL,
 		KeyMemoryEngine, KeyLadyMDBPath, KeyLadyMEmbedding, KeyLadyMEmbeddingModel,
 		KeyLadyMEmbeddingBaseURL, KeyLadyMEmbeddingAPIKey, KeyLadyMLLM, KeyLadyMAutoRetain,
@@ -56,6 +67,10 @@ func SecretFor(key string) (string, bool) {
 		return SecretAnthropicAPIKey, true
 	case KeyOpenAIAPIKey:
 		return SecretOpenAIAPIKey, true
+	case KeyGLMAPIKey:
+		return SecretGLMAPIKey, true
+	case KeyDeepSeekAPIKey:
+		return SecretDeepSeekAPIKey, true
 	case KeyPostgresURL:
 		return SecretPostgresURL, true
 	case KeyLadyMEmbeddingAPIKey:
@@ -68,21 +83,37 @@ func SecretFor(key string) (string, bool) {
 func KeyHelp(key string) string {
 	switch key {
 	case KeyProvider:
-		return "provider: anthropic | openai"
+		return "provider: anthropic | openai | glm | deepseek"
 	case KeyModel:
-		return "default model name (e.g. claude-sonnet-4-5, gpt-4o)"
+		return "default model name (e.g. claude-sonnet-4-5, gpt-4o, glm-4.6, deepseek-chat)"
 	case KeyMaxTokens:
 		return "max output tokens (> 0)"
 	case KeyTemperature:
 		return "sampling temperature (0-2)"
+	case KeyThinkingBudget:
+		return "extended-thinking budget in tokens (0-31999; 0 = off; provider-mapped)"
 	case KeyAnthropicBaseURL:
 		return "anthropic API base URL"
 	case KeyOpenAIBaseURL:
 		return "openai API base URL"
+	case KeyGLMBaseURL:
+		return "glm API base URL (default https://open.bigmodel.cn/api/anthropic)"
+	case KeyDeepSeekBaseURL:
+		return "deepseek API base URL (default https://api.deepseek.com/anthropic)"
 	case KeyAnthropicAPIKey:
 		return "anthropic API key (stored encrypted)"
 	case KeyOpenAIAPIKey:
 		return "openai API key (stored encrypted)"
+	case KeyGLMAPIKey:
+		return "glm API key (stored encrypted)"
+	case KeyDeepSeekAPIKey:
+		return "deepseek API key (stored encrypted)"
+	case KeyClaudeSkills:
+		return "enabled ~/.claude skill names as a JSON array"
+	case KeyClaudeMCP:
+		return "enabled ~/.claude.json MCP server names as a JSON array (connected at startup)"
+	case KeyBuiltinPlugins:
+		return "enabled built-in tool plugins as a JSON array (browser, pdf; runtime installed from Settings → 插件)"
 	case KeyCheckpoint:
 		return "checkpoint backend: none | file | sqlite | postgres (default sqlite)"
 	case KeyMemory:
@@ -125,9 +156,9 @@ func Apply(cfg *Settings, key, value string) error {
 	switch key {
 	case KeyProvider:
 		switch value {
-		case "anthropic", "openai":
+		case "anthropic", "openai", "glm", "deepseek":
 		default:
-			return fmt.Errorf("provider must be anthropic or openai, got %q", value)
+			return fmt.Errorf("provider must be anthropic, openai, glm, or deepseek, got %q", value)
 		}
 		cfg.Provider = value
 	case KeyModel:
@@ -144,12 +175,40 @@ func Apply(cfg *Settings, key, value string) error {
 			return fmt.Errorf("temperature must be a number in [0,2], got %q", value)
 		}
 		cfg.Temperature = f
+	case KeyThinkingBudget:
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 || n > MaxThinkingBudget {
+			return fmt.Errorf("thinking-budget must be an integer in [0,%d], got %q", MaxThinkingBudget, value)
+		}
+		cfg.ThinkingBudget = n
 	case KeyAnthropicBaseURL:
 		cfg.AnthropicBaseURL = value
 	case KeyOpenAIBaseURL:
 		cfg.OpenAIBaseURL = value
-	case KeyAnthropicAPIKey, KeyOpenAIAPIKey, KeyPostgresURL, KeyLadyMEmbeddingAPIKey:
+	case KeyGLMBaseURL:
+		cfg.GLMBaseURL = value
+	case KeyDeepSeekBaseURL:
+		cfg.DeepSeekBaseURL = value
+	case KeyAnthropicAPIKey, KeyOpenAIAPIKey, KeyGLMAPIKey, KeyDeepSeekAPIKey, KeyPostgresURL, KeyLadyMEmbeddingAPIKey:
 		return fmt.Errorf("%s is a secret; use SetSecret", key)
+	case KeyClaudeSkills:
+		list, err := ParseNameList(value)
+		if err != nil {
+			return err
+		}
+		cfg.ClaudeSkills = list
+	case KeyClaudeMCP:
+		list, err := ParseNameList(value)
+		if err != nil {
+			return err
+		}
+		cfg.ClaudeMCP = list
+	case KeyBuiltinPlugins:
+		list, err := ParseNameList(value)
+		if err != nil {
+			return err
+		}
+		cfg.BuiltinPlugins = list
 	case KeyCheckpoint:
 		switch value {
 		case CheckpointNone, CheckpointFile, CheckpointSQLite, CheckpointPostgres:
@@ -244,10 +303,18 @@ func Describe(cfg Settings, secretSet func(string) bool, dbPath string) string {
 	fmt.Fprintf(&b, "model: %s\n", orDefault(cfg.Model, "(provider default)"))
 	fmt.Fprintf(&b, "max-tokens: %s\n", orDefault(strconv.Itoa(cfg.MaxTokens), "(default)"))
 	fmt.Fprintf(&b, "temperature: %s\n", orDefault(strconv.FormatFloat(cfg.Temperature, 'f', -1, 64), "(default)"))
+	fmt.Fprintf(&b, "thinking-budget: %s\n", orDefault(strconv.Itoa(cfg.ThinkingBudget), "0 (off)"))
 	fmt.Fprintf(&b, "anthropic-base-url: %s\n", orDefault(cfg.AnthropicBaseURL, "(default)"))
 	fmt.Fprintf(&b, "openai-base-url: %s\n", orDefault(cfg.OpenAIBaseURL, "(default)"))
+	fmt.Fprintf(&b, "glm-base-url: %s\n", orDefault(cfg.GLMBaseURL, "(default https://open.bigmodel.cn/api/anthropic)"))
+	fmt.Fprintf(&b, "deepseek-base-url: %s\n", orDefault(cfg.DeepSeekBaseURL, "(default https://api.deepseek.com/anthropic)"))
 	fmt.Fprintf(&b, "anthropic-api-key: %s\n", mask(SecretAnthropicAPIKey))
 	fmt.Fprintf(&b, "openai-api-key: %s\n", mask(SecretOpenAIAPIKey))
+	fmt.Fprintf(&b, "glm-api-key: %s\n", mask(SecretGLMAPIKey))
+	fmt.Fprintf(&b, "deepseek-api-key: %s\n", mask(SecretDeepSeekAPIKey))
+	fmt.Fprintf(&b, "claude-skills: %s\n", orDefault(FormatNameList(cfg.ClaudeSkills), "(none)"))
+	fmt.Fprintf(&b, "claude-mcp: %s\n", orDefault(FormatNameList(cfg.ClaudeMCP), "(none)"))
+	fmt.Fprintf(&b, "builtin-plugins: %s\n", orDefault(FormatNameList(cfg.BuiltinPlugins), "(none)"))
 	fmt.Fprintf(&b, "checkpoint: %s\n", orDefault(cfg.CheckpointBackend, CheckpointSQLite))
 	fmt.Fprintf(&b, "memory: %s\n", orDefault(cfg.MemoryBackend, MemorySQLite))
 	fmt.Fprintf(&b, "checkpoint-dir: %s\n", orDefault(cfg.CheckpointDir, "(default)"))
@@ -279,10 +346,22 @@ func KeyValue(cfg Settings, key string) string {
 		return strconv.Itoa(cfg.MaxTokens)
 	case KeyTemperature:
 		return strconv.FormatFloat(cfg.Temperature, 'f', -1, 64)
+	case KeyThinkingBudget:
+		return strconv.Itoa(cfg.ThinkingBudget)
 	case KeyAnthropicBaseURL:
 		return cfg.AnthropicBaseURL
 	case KeyOpenAIBaseURL:
 		return cfg.OpenAIBaseURL
+	case KeyGLMBaseURL:
+		return cfg.GLMBaseURL
+	case KeyDeepSeekBaseURL:
+		return cfg.DeepSeekBaseURL
+	case KeyClaudeSkills:
+		return FormatNameList(cfg.ClaudeSkills)
+	case KeyClaudeMCP:
+		return FormatNameList(cfg.ClaudeMCP)
+	case KeyBuiltinPlugins:
+		return FormatNameList(cfg.BuiltinPlugins)
 	case KeyCheckpoint:
 		return cfg.CheckpointBackend
 	case KeyMemory:
@@ -313,6 +392,16 @@ func KeyValue(cfg Settings, key string) string {
 		return strconv.FormatBool(cfg.DebugLog)
 	}
 	return ""
+}
+
+// ParseNameList decodes a JSON string-array setting value (used by
+// claude-skills / claude-mcp).
+func ParseNameList(v string) ([]string, error) {
+	var out []string
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil, fmt.Errorf("expected a JSON array of names, got %q", v)
+	}
+	return out, nil
 }
 
 // ParseBool accepts the spellings users actually type for boolean settings.

@@ -338,12 +338,13 @@ func lspTool(d *Dir) coretools.Tool {
 			if len(command) == 0 {
 				return coretools.Result{Content: "Error: no LSP server configured (set WOCA_LSP_SERVER, e.g. WOCA_LSP_SERVER=gopls)"}, nil
 			}
-			path := resolvePath(d.Current(), a.Path)
+			dir := d.For(ctx)
+			path := resolvePath(dir, a.Path)
 			tr, err := startLSP(command)
 			if err != nil {
 				return coretools.Result{Content: "Error: start LSP server: " + err.Error()}, nil
 			}
-			out, err := lspDiagnostics(ctx, tr, d.Current(), path)
+			out, err := lspDiagnostics(ctx, tr, dir, path)
 			_ = tr.Close()
 			if err != nil {
 				return coretools.Result{Content: "Error: " + err.Error()}, nil

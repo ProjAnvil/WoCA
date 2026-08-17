@@ -4,7 +4,9 @@
 package settings
 
 import (
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -56,10 +58,16 @@ const (
 	MinLadyMSystem2Interval     = 60
 )
 
+// MaxThinkingBudget mirrors config.MaxThinkingBudget (the Anthropic extended
+// thinking ceiling, Claude Code's MAX_THINKING_TOKENS semantics).
+const MaxThinkingBudget = 31999
+
 // Secret names stored encrypted in the secrets table.
 const (
 	SecretAnthropicAPIKey      = "anthropic_api_key"
 	SecretOpenAIAPIKey         = "openai_api_key"
+	SecretGLMAPIKey            = "glm_api_key"
+	SecretDeepSeekAPIKey       = "deepseek_api_key"
 	SecretPostgresURL          = "postgres_url"
 	SecretLadyMEmbeddingAPIKey = "ladym_embedding_api_key"
 )
@@ -68,27 +76,42 @@ const (
 // DSN) are deliberately not part of this struct; they live in the secrets
 // table and are accessed via Store secrets methods.
 type Settings struct {
-	Provider              string  `json:"provider"`
-	Model                 string  `json:"model"`
-	MaxTokens             int     `json:"max_tokens"`
-	Temperature           float64 `json:"temperature"`
-	AnthropicBaseURL      string  `json:"anthropic_base_url"`
-	OpenAIBaseURL         string  `json:"openai_base_url"`
-	CheckpointBackend     string  `json:"checkpoint_backend"`
-	MemoryBackend         string  `json:"memory_backend"`
-	CheckpointDir         string  `json:"checkpoint_dir"`
-	OutputStyle           string  `json:"output_style"`
-	MemoryEngine          string  `json:"memory_engine"`
-	LadyMDBPath           string  `json:"ladym_db_path"`
-	LadyMEmbedding        string  `json:"ladym_embedding"`
-	LadyMEmbeddingModel   string  `json:"ladym_embedding_model"`
-	LadyMEmbeddingBaseURL string  `json:"ladym_embedding_base_url"`
-	LadyMLLM              string  `json:"ladym_llm"`
-	LadyMAutoRetain       bool    `json:"ladym_autoretain"`
-	LadyMTopK             int     `json:"ladym_topk"`
-	LadyMSystem2          bool    `json:"ladym_system2"`
-	LadyMSystem2Interval  int     `json:"ladym_system2_interval"`
-	DebugLog              bool    `json:"debug_log"`
+	Provider    string  `json:"provider"`
+	Model       string  `json:"model"`
+	MaxTokens   int     `json:"max_tokens"`
+	Temperature float64 `json:"temperature"`
+	// ThinkingBudget is the extended-thinking budget in tokens (0 = off).
+	// Switchable at runtime from the chat UI; the provider template maps it
+	// to budget_tokens / reasoning_effort / a plain thinking switch.
+	ThinkingBudget        int    `json:"thinking_budget"`
+	AnthropicBaseURL      string `json:"anthropic_base_url"`
+	OpenAIBaseURL         string `json:"openai_base_url"`
+	GLMBaseURL            string `json:"glm_base_url"`
+	DeepSeekBaseURL       string `json:"deepseek_base_url"`
+	CheckpointBackend     string `json:"checkpoint_backend"`
+	MemoryBackend         string `json:"memory_backend"`
+	CheckpointDir         string `json:"checkpoint_dir"`
+	OutputStyle           string `json:"output_style"`
+	MemoryEngine          string `json:"memory_engine"`
+	LadyMDBPath           string `json:"ladym_db_path"`
+	LadyMEmbedding        string `json:"ladym_embedding"`
+	LadyMEmbeddingModel   string `json:"ladym_embedding_model"`
+	LadyMEmbeddingBaseURL string `json:"ladym_embedding_base_url"`
+	LadyMLLM              string `json:"ladym_llm"`
+	LadyMAutoRetain       bool   `json:"ladym_autoretain"`
+	LadyMTopK             int    `json:"ladym_topk"`
+	LadyMSystem2          bool   `json:"ladym_system2"`
+	LadyMSystem2Interval  int    `json:"ladym_system2_interval"`
+	DebugLog              bool   `json:"debug_log"`
+	// ClaudeSkills lists the ~/.claude skill names enabled for the agent
+	// (checkbox selection in settings; JSON array in the DB).
+	ClaudeSkills []string `json:"claude_skills"`
+	// ClaudeMCP lists the ~/.claude.json global MCP server names enabled at
+	// agent startup.
+	ClaudeMCP []string `json:"claude_mcp"`
+	// BuiltinPlugins lists the built-in capability plugins (woca-plugins/
+	// tree: browser, pdf) whose agent tools are enabled.
+	BuiltinPlugins []string `json:"builtin_plugins"`
 }
 
 // Default returns the default settings: sqlite storage under ~/.woca.
@@ -109,7 +132,7 @@ func (s Settings) Normalize() (Settings, error) {
 		out.Provider = "anthropic"
 	}
 	switch out.Provider {
-	case "anthropic", "openai":
+	case "anthropic", "openai", "glm", "deepseek":
 	default:
 		return out, fmt.Errorf("settings: unknown provider %q", out.Provider)
 	}
@@ -172,7 +195,7 @@ func (s *Store) SetManaged(m Settings) {
 	}
 	s.managed.mu.Lock()
 	defer s.managed.mu.Unlock()
-	if m == (Settings{}) {
+	if reflect.DeepEqual(m, Settings{}) {
 		s.managed.overlay = nil
 		return
 	}
@@ -264,11 +287,31 @@ func applyPairs(out *Settings, pairs map[string]string) {
 			out.Temperature = f
 		}
 	}
+	if v, ok := pairs["thinking_budget"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			out.ThinkingBudget = n
+		}
+	}
 	if v, ok := pairs["anthropic_base_url"]; ok {
 		out.AnthropicBaseURL = v
 	}
 	if v, ok := pairs["openai_base_url"]; ok {
 		out.OpenAIBaseURL = v
+	}
+	if v, ok := pairs["glm_base_url"]; ok {
+		out.GLMBaseURL = v
+	}
+	if v, ok := pairs["deepseek_base_url"]; ok {
+		out.DeepSeekBaseURL = v
+	}
+	if v, ok := pairs["claude_skills"]; ok {
+		out.ClaudeSkills = parseNameList(v)
+	}
+	if v, ok := pairs["claude_mcp"]; ok {
+		out.ClaudeMCP = parseNameList(v)
+	}
+	if v, ok := pairs["builtin_plugins"]; ok {
+		out.BuiltinPlugins = parseNameList(v)
 	}
 	if v, ok := pairs["checkpoint_backend"]; ok {
 		out.CheckpointBackend = v
@@ -336,6 +379,8 @@ func (s *Store) Save(cfg Settings) error {
 		{"model", cfg.Model},
 		{"anthropic_base_url", cfg.AnthropicBaseURL},
 		{"openai_base_url", cfg.OpenAIBaseURL},
+		{"glm_base_url", cfg.GLMBaseURL},
+		{"deepseek_base_url", cfg.DeepSeekBaseURL},
 		{"checkpoint_backend", cfg.CheckpointBackend},
 		{"memory_backend", cfg.MemoryBackend},
 		{"checkpoint_dir", cfg.CheckpointDir},
@@ -347,12 +392,20 @@ func (s *Store) Save(cfg Settings) error {
 		{"ladym_embedding_base_url", cfg.LadyMEmbeddingBaseURL},
 		{"ladym_llm", cfg.LadyMLLM},
 	}
+	// Claude selections are always written explicitly (an empty selection
+	// persists as "[]") so unchecking everything sticks.
+	fields = append(fields, field{"claude_skills", FormatNameList(cfg.ClaudeSkills)})
+	fields = append(fields, field{"claude_mcp", FormatNameList(cfg.ClaudeMCP)})
+	fields = append(fields, field{"builtin_plugins", FormatNameList(cfg.BuiltinPlugins)})
 	if cfg.MaxTokens != 0 {
 		fields = append(fields, field{"max_tokens", strconv.Itoa(cfg.MaxTokens)})
 	}
 	if cfg.Temperature != 0 {
 		fields = append(fields, field{"temperature", strconv.FormatFloat(cfg.Temperature, 'f', -1, 64)})
 	}
+	// thinking_budget is always written explicitly (0 = off included) so
+	// turning thinking off persists, unlike empty-means-skip fields.
+	fields = append(fields, field{"thinking_budget", strconv.Itoa(cfg.ThinkingBudget)})
 	// debug_log is always written explicitly (false included) so turning the
 	// observability log off persists, unlike empty-means-skip fields.
 	fields = append(fields, field{"debug_log", strconv.FormatBool(cfg.DebugLog)})
@@ -476,6 +529,32 @@ func (s *Store) SecretNames() []string {
 		}
 	}
 	return out
+}
+
+// parseNameList decodes a persisted JSON string array; a malformed value
+// yields nil rather than an error (settings load is best-effort).
+func parseNameList(v string) []string {
+	if v == "" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(v), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+// formatNameList encodes a name list for the settings table ("[]" for empty
+// so an empty selection round-trips).
+func FormatNameList(list []string) string {
+	if list == nil {
+		list = []string{}
+	}
+	b, err := json.Marshal(list)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }
 
 // q rewrites the single placeholder style used by woca queries: statements

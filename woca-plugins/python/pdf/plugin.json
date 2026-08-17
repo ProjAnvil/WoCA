@@ -1,0 +1,10 @@
+{
+  "name": "pdf",
+  "kind": "python",
+  "version": "0.1.0",
+  "description": "PDF 处理插件：在 uv 管理的独立 Python 环境中运行随 woca 二进制内嵌的 pdf.py（pypdf），支持文本提取、元数据读取、合并、拆分、旋转与加解密",
+  "tools": ["PdfRead", "PdfWrite"],
+  "runtime": "python",
+  "scripts": ["scripts/pdf.py"],
+  "requirements": "requirements.lock"
+}

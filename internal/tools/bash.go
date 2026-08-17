@@ -25,7 +25,7 @@ type bashArgs struct {
 func bashTool(d *Dir, bg *BackgroundShells) coretools.Tool {
 	t, err := coretools.FromFunc("Bash", bashDescription,
 		func(ctx context.Context, a bashArgs) (coretools.Result, error) {
-			baseWorkdir := d.Current()
+			baseWorkdir := d.For(ctx)
 			wd := a.Workdir
 			if wd == "" {
 				wd = baseWorkdir
@@ -35,7 +35,7 @@ func bashTool(d *Dir, bg *BackgroundShells) coretools.Tool {
 			}
 
 			if a.RunInBackground {
-				id, err := bg.Start(a.Command, a.Workdir, d.Current())
+				id, err := bg.Start(a.Command, a.Workdir, baseWorkdir)
 				if err != nil {
 					return coretools.Result{Content: fmt.Sprintf("Error: start background command: %v", err)}, nil
 				}

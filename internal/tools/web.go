@@ -32,8 +32,17 @@ func validateWebURL(rawurl string) error {
 	return nil
 }
 
+// Test seams: the default SSRF policy hard-blocks loopback/private hosts and
+// the search endpoint is a fixed remote URL, so hermetic tests cannot reach
+// the fetch paths at all. Tests may swap these two vars (restoring them
+// afterwards); production behavior is identical to the defaults below.
+var (
+	webURLValidate    = validateWebURL
+	webSearchEndpoint = "https://html.duckduckgo.com/html/"
+)
+
 func fetchHTTP(ctx context.Context, rawurl string) (string, error) {
-	if err := validateWebURL(rawurl); err != nil {
+	if err := webURLValidate(rawurl); err != nil {
 		return "", err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawurl, nil)
@@ -102,7 +111,7 @@ func webSearchTool() coretools.Tool {
 		func(ctx context.Context, a webSearchArgs) (coretools.Result, error) {
 			q := url.Values{}
 			q.Set("q", a.Query)
-			html, err := fetchHTTP(ctx, "https://html.duckduckgo.com/html/?"+q.Encode())
+			html, err := fetchHTTP(ctx, webSearchEndpoint+"?"+q.Encode())
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("search %q: %w", a.Query, err)
 			}

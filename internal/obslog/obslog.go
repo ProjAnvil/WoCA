@@ -76,7 +76,12 @@ func New(root string, enabled bool) *Store {
 }
 
 // Root returns the log root directory.
-func (s *Store) Root() string { return s.root }
+func (s *Store) Root() string {
+	if s == nil {
+		return ""
+	}
+	return s.root
+}
 
 // Enabled reports whether full logging is on.
 func (s *Store) Enabled() bool { return s != nil && s.enabled.Load() }

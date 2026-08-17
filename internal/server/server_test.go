@@ -2,6 +2,7 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -178,6 +179,129 @@ func TestSessionStoreRoundTrip(t *testing.T) {
 	}
 	if got[1].Role != messages.RoleTool || got[1].ToolCallID != "1" || got[1].Content != "tool result" {
 		t.Fatalf("tool message not preserved: %+v", got[1])
+	}
+}
+
+// Deleting a session must remove the transcript, the goal sidecar and the
+// index entry — and a late save from a run that was still in flight when the
+// session was deleted must not resurrect any of it.
+func TestSessionDelete(t *testing.T) {
+	dir := t.TempDir()
+	s := New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: dir})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	runID, sessionID := createRun(t, ts.URL, "")
+	driveToDone(t, ts.URL, runID)
+	st := s.sessions
+	st.saveGoal(sessionID, &agent.Goal{Objective: "x"})
+
+	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/sessions/"+sessionID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE status = %d", resp.StatusCode)
+	}
+
+	for _, name := range []string{sessionID + ".jsonl", sessionID + ".goal.json"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists after delete (err=%v)", name, err)
+		}
+	}
+	if idx := st.loadIndex(); len(idx) != 0 {
+		t.Fatalf("index should be empty after delete, got %+v", idx)
+	}
+	if list, err := st.list(); err != nil || len(list) != 0 {
+		t.Fatalf("list after delete = %v (err %v), want empty", list, err)
+	}
+
+	// A run completing after its session was deleted must not resurrect it.
+	if err := st.save(sessionID, []messages.Message{messages.Human("again")}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, sessionID+".jsonl")); !os.IsNotExist(err) {
+		t.Fatal("late save resurrected a deleted session transcript")
+	}
+
+	// Deleting an unknown id still succeeds (idempotent).
+	req2, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/sessions/does-not-exist", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2, err := http.DefaultClient.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE unknown id status = %d, want 200", resp2.StatusCode)
+	}
+}
+
+func TestGoalCommandFreeTextSetsObjective(t *testing.T) {
+	// A plain-prose model keeps the background goal loop benign (no
+	// AskUserQuestion interrupt that nothing would resolve).
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(messages.AI("cycle done")),
+	)
+	a, err := agent.New(agent.Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeDefault,
+		RecursionLimit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{Agent: a, Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: t.TempDir()})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	post := func(command string) (int, map[string]any) {
+		body, _ := json.Marshal(map[string]string{"command": command})
+		resp, err := http.Post(ts.URL+"/api/sessions/s1/goal", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+
+	// Free text (no "set" verb) is the objective — this exact input used to
+	// 400 with `unknown /goal subcommand`.
+	code, out := post("测试，你能使用这个技能吗？")
+	if code != http.StatusOK {
+		t.Fatalf("free-text /goal status = %d, want 200 (out=%v)", code, out)
+	}
+	g, _ := out["goal"].(map[string]any)
+	if g == nil || g["objective"] != "测试，你能使用这个技能吗？" {
+		t.Fatalf("free-text objective = %v", out["goal"])
+	}
+	if id, _ := out["run_id"].(string); id == "" {
+		t.Fatalf("goal run not started: %v", out["run_id"])
+	}
+
+	// Explicit verbs keep priority over the free-text fallback.
+	if code, out := post("status"); code != http.StatusOK || !strings.Contains(out["output"].(string), "goal [") {
+		t.Fatalf("/goal status = %d %v, want goal summary", code, out["output"])
+	}
+	if code, _ := post("clear"); code != http.StatusOK {
+		t.Fatalf("/goal clear status = %d", code)
+	}
+
+	// Flags without an objective are still a usage error.
+	if code, out := post("--cycles 3"); code != http.StatusBadRequest {
+		t.Fatalf("flags-only /goal status = %d, want 400 (out=%v)", code, out)
 	}
 }
 
@@ -396,6 +520,59 @@ func TestSessionListGroupsByWorkspace(t *testing.T) {
 	}
 	if byID["tagged"].Workspace != "/tmp/other-project" || byID["tagged"].WorkspaceName != "other-project" {
 		t.Fatalf("tagged workspace = %+v", byID["tagged"])
+	}
+}
+
+func TestExpandHomePath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	cases := map[string]string{
+		"~":                home,
+		"~/project":        home + "/project",
+		"/abs/project":     "/abs/project",
+		"relative/project": "relative/project",
+		"~user/project":    "~user/project", // only ~ / ~/ are expanded
+	}
+	for in, want := range cases {
+		if got := expandHomePath(in); got != want {
+			t.Errorf("expandHomePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCreateSessionExpandsTildeWorkspace(t *testing.T) {
+	s := New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop()})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	resp, err := http.Post(ts.URL+"/api/sessions", "application/json",
+		strings.NewReader(`{"workspace":"~/my-project"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		SessionID     string `json:"session_id"`
+		Workspace     string `json:"workspace"`
+		WorkspaceName string `json:"workspace_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.SessionID == "" {
+		t.Fatal("missing session_id")
+	}
+	if body.Workspace != home+"/my-project" {
+		t.Fatalf("workspace = %q, want %q", body.Workspace, home+"/my-project")
+	}
+	if body.WorkspaceName != "my-project" {
+		t.Fatalf("workspace_name = %q", body.WorkspaceName)
 	}
 }
 
@@ -772,3 +949,34 @@ func TestQueueInputEndpoint(t *testing.T) {
 }
 
 func bytesReader(b []byte) io.Reader { return strings.NewReader(string(b)) }
+
+func TestRegisterRunPrunesFinishedRuns(t *testing.T) {
+	s := &Server{runs: map[string]*Run{}}
+	for i := 0; i < maxRetainedRuns+10; i++ {
+		run := newRun(fmt.Sprintf("run-%d", i), nil, context.Background(), func() {})
+		s.registerRun(run.id, run)
+		run.finish("done", nil)
+	}
+	s.mu.Lock()
+	n := len(s.runs)
+	s.mu.Unlock()
+	if n != maxRetainedRuns {
+		t.Fatalf("retained %d runs, want %d", n, maxRetainedRuns)
+	}
+
+	// An unfinished run blocks pruning so a live stream is never dropped.
+	s2 := &Server{runs: map[string]*Run{}}
+	live := newRun("live", nil, context.Background(), func() {})
+	s2.registerRun(live.id, live)
+	for i := 0; i < maxRetainedRuns+5; i++ {
+		run := newRun(fmt.Sprintf("r-%d", i), nil, context.Background(), func() {})
+		s2.registerRun(run.id, run)
+		run.finish("done", nil)
+	}
+	s2.mu.Lock()
+	if _, ok := s2.runs["live"]; !ok {
+		s2.mu.Unlock()
+		t.Fatal("unfinished run was pruned")
+	}
+	s2.mu.Unlock()
+}

@@ -29,6 +29,7 @@ import (
 	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/permissions"
 	"github.com/projanvil/woca/internal/prompt"
+	"github.com/projanvil/woca/internal/runws"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/skills"
 	"github.com/projanvil/woca/internal/store"
@@ -109,6 +110,24 @@ type Config struct {
 	PermissionMode config.PermissionMode
 	RecursionLimit int
 	WorkDir        string
+	// SystemPromptFor, when set, builds the system prompt for every run from
+	// its workspace and the active model name (serve-mode sessions in other
+	// projects need the environment section, git status and project memory
+	// files to name the session's directory; the model name appears in the
+	// prompt and must track SetModel). Results are cached per
+	// workspace+model. Nil keeps SystemPrompt for every run.
+	SystemPromptFor func(workDir, model string) string
+	// SkillsFor, when set, resolves the skill set for a run's workspace
+	// (project-level .woca/skills and .claude/skills must follow the session
+	// workspace). Nil keeps Skills.
+	SkillsFor func(workdir string) []skills.Skill
+	// AgentsFor, when set, resolves custom subagent definitions for a run's
+	// workspace. Nil keeps Agents.
+	AgentsFor func(workdir string) []agents.Definition
+	// HooksFor, when set, builds the hook runner for a run's workspace
+	// (project-level hooks config and the hooks' cwd follow the session
+	// workspace). Nil keeps Hooks.
+	HooksFor func(workdir string) *hooks.Runner
 	// Subagent marks this agent as a Task-spawned subagent: it excludes the
 	// Task/AskUserQuestion/plan-mode tools.
 	Subagent bool
@@ -209,12 +228,31 @@ type Agent struct {
 	compactLimit   int
 	summarizer     language.ChatModel
 	bus            *bus.Bus
-	perms          *permissions.Rules
-	agentDefs      []agents.Definition
-	bashPolicy     tools.CommandPolicy
+	// agentName is this session's identity in a team (lead for the
+	// interactive session, the teammate name for spawned members).
+	agentName string
+	// team is the lazily-created agent team (nil until TeamSpawn).
+	team       *TeamManager
+	perms      *permissions.Rules
+	agentDefs  []agents.Definition
+	bashPolicy tools.CommandPolicy
 
 	mu       sync.Mutex
 	planMode bool
+	// promptFor rebuilds the system prompt per run workspace and model
+	// (nil = SystemPrompt for every run); wsPrompts caches the results keyed
+	// by workspace+model and is invalidated by SetSystemPrompt.
+	promptFor func(workDir, model string) string
+	wsPrompts sync.Map
+	// skillsForFn/agentsForFn/hooksForFn resolve the per-workspace skill
+	// set, subagent definitions and hook runner (nil = the startup values);
+	// the ws* maps cache their per-workspace results.
+	skillsForFn func(workdir string) []skills.Skill
+	wsSkills    sync.Map
+	agentsForFn func(workdir string) []agents.Definition
+	wsAgents    sync.Map
+	hooksForFn  func(workdir string) *hooks.Runner
+	wsHooks     sync.Map
 	// spec tracks speculatively executed tool calls started while the model
 	// was still streaming (streaming tool execution).
 	spec speculativeRegistry
@@ -232,19 +270,24 @@ type Agent struct {
 	subagent bool
 	// refreshTools re-collects extra tools between turns (optional).
 	refreshTools func(ctx context.Context) []coretools.Tool
+	// refreshMu serializes extra-tool refreshes: the tools node triggers
+	// them between turns, and HTTP handlers (plugin toggles) trigger them
+	// outside runs — the two must not interleave.
+	refreshMu sync.Mutex
 	// baseTools/extraTools split the tool list so refreshes only rebuild the
 	// extra part (registry + built-ins stay fixed).
 	baseTools  []coretools.Tool
 	extraTools []coretools.Tool
-	// memory is the optional long-term memoryStore for prefetch attachments.
-	memory *store.Store
+	// memory is the optional long-term KV memoryStore for prefetch
+	// attachments; wired into mem below.
 	// maxTurns caps rounds per turn (0 = unlimited); turns counts rounds.
 	maxTurns int
 	turns    turnCounter
 	// taskState tracks the periodic task summary (claude ps).
 	taskState taskSummaryState
-	// cron schedules session-scoped scheduled prompts (ScheduleCron).
-	cron cronState
+	// cron schedules session-scoped scheduled prompts (ScheduleCron); the
+	// host dependency is injected as a notification sink at construction.
+	cron *cronScheduler
 	// goal holds the persistent-objective state and the running goal loop
 	// (goal mode; see goal.go and goalgraph.go).
 	goal goalManager
@@ -254,18 +297,11 @@ type Agent struct {
 	obs *obslog.Store
 	// usage accumulates provider-reported token counts across model calls.
 	usage usageTracker
-	// memPrefetch holds the turn's relevant-memory prefetch.
-	memPrefetch memoryPrefetch
-	// memEngine is the factual-memory engine (nil = disabled); swapped
-	// whole-pointer on settings rebuild (SetMemoryEngine).
-	memEngine memory.Engine
-	// memWorkspace is the current run's memory workspace (defaults to
-	// workdir); set per run by the harnesses alongside SetObsRun.
-	memWorkspace string
-	// lastSystem2 remembers when each workspace last triggered a System 2
-	// cycle (opportunistic post-run throttling).
-	lastSystem2 map[string]int64 // unix seconds
-	// loadSettings re-reads settings for per-run knobs (nil = defaults).
+	// mem is the long-term-memory subsystem (engine, KV fallback, prefetch,
+	// workspace override, System 2 throttle); see memorystore.go.
+	mem memoryRuntime
+	// loadSettings re-reads settings for per-run knobs (nil = defaults);
+	// shared with the memory runtime and subagent construction.
 	loadSettings func() settings.Settings
 	// transcriptMu guards lastTranscript: the most recent model-round input
 	// state, used by Task fork=true to copy the live conversation.
@@ -332,6 +368,7 @@ func New(cfg Config) (*Agent, error) {
 		compactLimit:   cfg.CompactThreshold,
 		summarizer:     cfg.Summarizer,
 		bus:            cfg.Bus,
+		agentName:      LeadName,
 		perms:          cfg.Permissions,
 		agentDefs:      cfg.Agents,
 		bashPolicy:     cfg.BashPolicy,
@@ -340,12 +377,21 @@ func New(cfg Config) (*Agent, error) {
 		emitSummaries:  cfg.EmitToolUseSummaries,
 		subagent:       cfg.Subagent,
 		refreshTools:   cfg.RefreshTools,
-		memory:         cfg.Memory,
 		maxTurns:       cfg.MaxTurns,
 		obs:            cfg.Obs,
-		memEngine:      cfg.MemoryEngine,
 		loadSettings:   cfg.LoadSettings,
+		promptFor:      cfg.SystemPromptFor,
+		skillsForFn:    cfg.SkillsFor,
+		agentsForFn:    cfg.AgentsFor,
+		hooksForFn:     cfg.HooksFor,
 	}
+	// The cron scheduler's only host dependency is the notification queue;
+	// the method value is safe to capture before the rest of the wiring
+	// because it is only invoked by the scheduler loop, never here.
+	a.cron = newCronScheduler(a.QueueNotification)
+	// The memory runtime takes its dependencies as inputs: the KV store,
+	// the engine, the settings loader and a nil-safe obs log sink.
+	a.mem.init(cfg.Memory, cfg.MemoryEngine, cfg.LoadSettings, a.obsLogSink())
 	if cfg.ToolResultBudgetChars == 0 {
 		a.toolBudget = DefaultToolResultBudgetChars
 	} else {
@@ -378,6 +424,7 @@ func New(cfg Config) (*Agent, error) {
 		a.toolList = append(a.toolList, a.skillTool()...)
 		a.toolList = append(a.toolList, a.taskListTools()...)
 		a.toolList = append(a.toolList, a.sendMessageTool()...)
+		a.toolList = append(a.toolList, a.teamTools()...)
 		a.toolList = append(a.toolList, a.scheduleCronTool()...)
 		a.toolList = append(a.toolList, a.worktreeTools()...)
 		a.toolList = append(a.toolList, a.mcpAuthTool()...)
@@ -464,19 +511,15 @@ func (a *Agent) SetObsRun(workspace, session, run string) {
 // instead each serve-mode run wraps its ctx with WithMemoryWorkspace, which
 // resolution prefers (ctx value → this field → workdir; see memws.go).
 func (a *Agent) SetMemoryWorkspace(ws string) {
-	if ws == "" {
-		return
-	}
-	a.mu.Lock()
-	a.memWorkspace = ws
-	a.mu.Unlock()
+	a.mem.SetWorkspace(ws)
 }
 
+// memoryWorkspace resolves the run workspace fallback chain tail: the
+// runtime's explicit override, else the agent workdir. The ctx-value head
+// of the chain is applied by memoryWorkspaceCtx.
 func (a *Agent) memoryWorkspace() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.memWorkspace != "" {
-		return a.memWorkspace
+	if ws, ok := a.mem.Workspace(); ok {
+		return ws
 	}
 	return a.workdir
 }
@@ -487,28 +530,54 @@ func (a *Agent) MemoryWorkspace() string { return a.memoryWorkspace() }
 
 // MemoryEngine returns the current memory engine (nil = disabled).
 func (a *Agent) MemoryEngine() memory.Engine {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.memEngine
+	return a.mem.Engine()
 }
 
 // SetMemoryEngine swaps the memory engine whole-pointer (settings rebuild).
 // In-flight calls keep the old engine; the caller delays Close.
 func (a *Agent) SetMemoryEngine(m memory.Engine) {
-	a.mu.Lock()
-	a.memEngine = m
-	a.mu.Unlock()
+	a.mem.SetEngine(m)
+}
+
+// obsLogSink adapts the observability store into the nil-safe log function
+// the memory runtime expects.
+func (a *Agent) obsLogSink() func(level, event string, fields map[string]any) {
+	return func(level, event string, fields map[string]any) {
+		if a.obs != nil {
+			a.obs.Log(level, event, fields)
+		}
+	}
+}
+
+// beginMemoryPrefetch starts the turn's relevant-memory recall; the host
+// resolves the workspace (ctx value → override → workdir) and hands it over.
+func (a *Agent) beginMemoryPrefetch(ctx context.Context, msgs []messages.Message) {
+	a.mem.Begin(ctx, msgs, a.memoryWorkspaceCtx(ctx))
+}
+
+// takeMemoryAttachments consumes the settled prefetch as attachment
+// messages (nil-safe when nothing settled).
+func (a *Agent) takeMemoryAttachments() []messages.Message {
+	return a.mem.TakeAttachments()
 }
 
 // SystemPrompt returns the agent's system prompt.
 func (a *Agent) SystemPrompt() string { return a.systemPrompt }
 
 // Mode returns the current permission mode.
-func (a *Agent) Mode() config.PermissionMode { return a.mode }
+func (a *Agent) Mode() config.PermissionMode {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.mode
+}
 
-// SetMode sets the permission mode. Call when idle (e.g. from the TUI
-// /permissions command), not while a run is in flight.
-func (a *Agent) SetMode(m config.PermissionMode) { a.mode = m }
+// SetMode sets the permission mode. Safe to call while a run is in flight
+// (the web API does); checkPermission reads the mode under the same mutex.
+func (a *Agent) SetMode(m config.PermissionMode) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.mode = m
+}
 
 // PlanMode reports whether the agent is currently in plan mode.
 func (a *Agent) PlanMode() bool {
@@ -530,13 +599,13 @@ func (a *Agent) SetPlanMode(v bool) { a.setPlanMode(v) }
 func (a *Agent) SetTodos(todos []tools.Todo) { a.registry.TodoStore().Set(todos) }
 
 // SetTasks restores the task list from a persisted snapshot.
-func (a *Agent) SetTasks(tasks []TaskRecord) { a.taskList.Restore(tasks) }
+func (a *Agent) SetTasks(tasks []TaskRecord) { a.currentTaskList().Restore(tasks) }
 
 // Todos returns the current todo list.
 func (a *Agent) Todos() []tools.Todo { return a.registry.TodoStore().Get() }
 
 // Tasks returns the current task list.
-func (a *Agent) Tasks() []TaskRecord { return a.taskList.List() }
+func (a *Agent) Tasks() []TaskRecord { return a.currentTaskList().List() }
 
 // Skills returns the loaded skills.
 func (a *Agent) Skills() []skills.Skill { return a.skills }
@@ -565,12 +634,22 @@ func (a *Agent) PermissionRuleCounts() (allow, deny, ask int) {
 // AgentDefinitions returns the loaded custom subagent definitions (/agents).
 func (a *Agent) AgentDefinitions() []agents.Definition { return a.agentDefs }
 
+// SkillsIn resolves the skill set visible to a run with the given context
+// (workspace-scoped; exported for the web completions endpoint).
+func (a *Agent) SkillsIn(ctx context.Context) []skills.Skill { return a.skillsFor(ctx) }
+
+// AgentDefinitionsIn resolves the custom subagent definitions visible to a
+// run with the given context (workspace-scoped).
+func (a *Agent) AgentDefinitionsIn(ctx context.Context) []agents.Definition { return a.agentsFor(ctx) }
+
 // SetAgentDefinitions replaces the custom subagent definitions at runtime
 // (used by the /agents manager to refresh after edits; call when idle).
 func (a *Agent) SetAgentDefinitions(defs []agents.Definition) { a.agentDefs = defs }
 
 // SetSystemPrompt swaps the system prompt at runtime (the /output-style
-// command). Call when idle, not while a run is in flight.
+// command). When a SystemPromptFor builder is wired the builder owns the
+// prompt: the swap degrades to a cache invalidation so the next run rebuilds
+// with live settings. Call when idle, not while a run is in flight.
 func (a *Agent) SetSystemPrompt(s string) {
 	if s == "" {
 		return
@@ -578,6 +657,104 @@ func (a *Agent) SetSystemPrompt(s string) {
 	a.mu.Lock()
 	a.systemPrompt = s
 	a.mu.Unlock()
+	a.InvalidateWorkspacePrompts()
+}
+
+// InvalidateWorkspacePrompts drops the cached per-workspace system prompts so
+// the next run in each workspace rebuilds them (style or model changes).
+func (a *Agent) InvalidateWorkspacePrompts() {
+	a.wsPrompts = sync.Map{}
+}
+
+// systemPromptFor resolves the system prompt for one run. With a builder
+// wired, every run (base workspace included) gets a prompt built for its
+// workspace and the active model, cached per workspace+model — swapping the
+// model (SetModel) therefore refreshes the model name without any explicit
+// invalidation. Without a builder the startup prompt applies as-is.
+func (a *Agent) systemPromptFor(ctx context.Context) string {
+	if a.promptFor == nil {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.systemPrompt
+	}
+	ws := a.workdir
+	if v, ok := runws.From(ctx); ok && v != "" {
+		ws = v
+	}
+	model := a.CurrentModelName()
+	key := ws + "\x00" + model
+	if v, ok := a.wsPrompts.Load(key); ok {
+		return v.(string)
+	}
+	p := a.promptFor(ws, model)
+	a.wsPrompts.Store(key, p)
+	return p
+}
+
+// skillsFor resolves the skill set for the calling run's workspace (the
+// startup set when no loader is wired or the run carries no workspace).
+func (a *Agent) skillsFor(ctx context.Context) []skills.Skill {
+	if a.skillsForFn == nil {
+		return a.skills
+	}
+	ws, ok := runws.From(ctx)
+	if !ok || ws == "" {
+		return a.skills
+	}
+	if v, ok := a.wsSkills.Load(ws); ok {
+		return v.([]skills.Skill)
+	}
+	list := a.skillsForFn(ws)
+	a.wsSkills.Store(ws, list)
+	return list
+}
+
+// agentsFor resolves custom subagent definitions for the calling run's
+// workspace (the startup set when no loader is wired).
+func (a *Agent) agentsFor(ctx context.Context) []agents.Definition {
+	if a.agentsForFn == nil {
+		return a.agentDefs
+	}
+	ws, ok := runws.From(ctx)
+	if !ok || ws == "" {
+		return a.agentDefs
+	}
+	if v, ok := a.wsAgents.Load(ws); ok {
+		return v.([]agents.Definition)
+	}
+	list := a.agentsForFn(ws)
+	a.wsAgents.Store(ws, list)
+	return list
+}
+
+// hooksFor resolves the hook runner for the calling run's workspace (the
+// startup runner when no loader is wired). May return nil; every call site
+// nil-checks before use.
+func (a *Agent) hooksFor(ctx context.Context) *hooks.Runner {
+	if a.hooksForFn == nil {
+		return a.hooks
+	}
+	ws, ok := runws.From(ctx)
+	if !ok || ws == "" {
+		return a.hooks
+	}
+	if v, ok := a.wsHooks.Load(ws); ok {
+		return v.(*hooks.Runner)
+	}
+	h := a.hooksForFn(ws)
+	a.wsHooks.Store(ws, h)
+	return h
+}
+
+// NewState builds the initial graph state: the run's system prompt followed
+// by the provided conversation history. The context carries the run
+// workspace (see WithRunWorkspace), which selects the environment the model
+// is told about.
+func (a *Agent) NewState(ctx context.Context, history []messages.Message) graph.State {
+	msgs := make([]messages.Message, 0, len(history)+1)
+	msgs = append(msgs, messages.System(a.systemPromptFor(ctx)))
+	msgs = append(msgs, history...)
+	return graph.State{"messages": msgs}
 }
 
 // CompactThreshold returns the configured auto-compaction token threshold
@@ -587,8 +764,11 @@ func (a *Agent) CompactThreshold() int { return a.compactLimit }
 // ToolNames returns the sorted names of every tool the agent can call
 // (built-ins plus MCP extras).
 func (a *Agent) ToolNames() []string {
-	names := make([]string, 0, len(a.toolList))
-	for _, t := range a.toolList {
+	a.mu.Lock()
+	list := a.toolList
+	a.mu.Unlock()
+	names := make([]string, 0, len(list))
+	for _, t := range list {
 		names = append(names, t.Name())
 	}
 	sort.Strings(names)
@@ -596,15 +776,19 @@ func (a *Agent) ToolNames() []string {
 }
 
 // SetModel swaps the chat model used by the model node at runtime, rebinding
-// the tool set. Call when idle (e.g. from the console /model command), not
-// while a run is in flight.
+// the tool set. Safe to call while a run is in flight (the settings API and
+// thinking-level endpoint do): the model snapshot is taken under a.mu and the
+// swap is committed under it.
 func (a *Agent) SetModel(m language.ChatModel) error {
 	if m == nil {
 		return fmt.Errorf("agent: model is required")
 	}
+	a.mu.Lock()
+	tools := a.toolList
+	a.mu.Unlock()
 	bound := m
-	if len(a.toolList) > 0 && bound.Capabilities().ToolCalling {
-		b, err := bound.BindTools(a.toolList)
+	if len(tools) > 0 && bound.Capabilities().ToolCalling {
+		b, err := bound.BindTools(tools)
 		if err != nil {
 			return fmt.Errorf("agent: bind tools: %w", err)
 		}
@@ -615,15 +799,6 @@ func (a *Agent) SetModel(m language.ChatModel) error {
 	a.boundModel = bound
 	a.mu.Unlock()
 	return nil
-}
-
-// NewState builds the initial graph state: the system prompt followed by the
-// provided conversation history.
-func (a *Agent) NewState(history []messages.Message) graph.State {
-	msgs := make([]messages.Message, 0, len(history)+1)
-	msgs = append(msgs, messages.System(a.systemPrompt))
-	msgs = append(msgs, history...)
-	return graph.State{"messages": msgs}
 }
 
 // Invoke runs the agent to completion and returns the full message transcript
@@ -656,7 +831,7 @@ func (a *Agent) Invoke(ctx context.Context, history []messages.Message) ([]messa
 // runTurn compacts history and runs one full graph turn.
 func (a *Agent) runTurn(ctx context.Context, history []messages.Message) ([]messages.Message, error) {
 	history = a.CompactHistory(ctx, history)
-	state, err := a.graph.Invoke(ctx, a.NewState(history))
+	state, err := a.graph.Invoke(ctx, a.NewState(ctx, history))
 	if err != nil {
 		return nil, err
 	}
@@ -682,7 +857,7 @@ func (a *Agent) CurrentModelName() string {
 // Stream runs the agent and streams graph progress steps.
 func (a *Agent) Stream(ctx context.Context, history []messages.Message) (graph.Stream[graph.Step], error) {
 	history = a.CompactHistory(ctx, history)
-	return a.graph.Stream(ctx, a.NewState(history))
+	return a.graph.Stream(ctx, a.NewState(ctx, history))
 }
 
 // ResumeCheckpoint resumes a run from a persisted checkpoint key (requires
@@ -721,8 +896,8 @@ func (a *Agent) ForceCompact(ctx context.Context, history []messages.Message) []
 
 // compact runs the compaction pipeline. force bypasses a tripped breaker.
 func (a *Agent) compact(ctx context.Context, history []messages.Message, force bool) []messages.Message {
-	if a.hooks != nil {
-		if _, blocked, err := a.hooks.PreCompact(ctx); err == nil && blocked {
+	if h := a.hooksFor(ctx); h != nil {
+		if _, blocked, err := h.PreCompact(ctx); err == nil && blocked {
 			return history // PreCompact hook blocked compaction
 		}
 	}
@@ -739,8 +914,8 @@ func (a *Agent) compact(ctx context.Context, history []messages.Message, force b
 		return history
 	}
 	a.compactFails = 0
-	if a.hooks != nil {
-		_, _ = a.hooks.PostCompact(ctx)
+	if h := a.hooksFor(ctx); h != nil {
+		_, _ = h.PostCompact(ctx)
 	}
 	return out
 }
@@ -760,36 +935,40 @@ func SummarizeWithModel(model language.ChatModel) compact.SummaryWriter {
 // RunStopHooks runs Stop hooks, returning feedback and whether continuation
 // was blocked (a hook exited 2).
 func (a *Agent) RunStopHooks(ctx context.Context, reason string) (string, bool, error) {
-	if a.hooks == nil {
+	h := a.hooksFor(ctx)
+	if h == nil {
 		return "", false, nil
 	}
-	return a.hooks.Stop(ctx, reason)
+	return h.Stop(ctx, reason)
 }
 
 // RunUserPromptSubmit runs UserPromptSubmit hooks, returning injected context.
 func (a *Agent) RunUserPromptSubmit(ctx context.Context, prompt string) (string, error) {
-	if a.hooks == nil {
+	h := a.hooksFor(ctx)
+	if h == nil {
 		return "", nil
 	}
-	return a.hooks.UserPromptSubmit(ctx, prompt)
+	return h.UserPromptSubmit(ctx, prompt)
 }
 
 // RunSessionStart runs SessionStart hooks, returning feedback.
 func (a *Agent) RunSessionStart(ctx context.Context) (string, error) {
-	if a.hooks == nil {
+	h := a.hooksFor(ctx)
+	if h == nil {
 		return "", nil
 	}
-	return a.hooks.SessionStart(ctx)
+	return h.SessionStart(ctx)
 }
 
 // RunSessionEnd runs SessionEnd hooks (session teardown: exit, EOF, or
 // one-shot completion). Best-effort; the returned error is usually only
 // logged by the caller.
 func (a *Agent) RunSessionEnd(ctx context.Context, reason string) error {
-	if a.hooks == nil {
+	h := a.hooksFor(ctx)
+	if h == nil {
 		return nil
 	}
-	_, err := a.hooks.SessionEnd(ctx, reason)
+	_, err := h.SessionEnd(ctx, reason)
 	return err
 }
 
@@ -815,7 +994,12 @@ func (a *Agent) modelNode() graph.StreamingNodeFunc {
 		// stage 8): oversized rounds are preview-replaced so the prompt fits.
 		// The transcript/state keeps the originals.
 		msgs = ApplyToolResultBudget(msgs, a.toolBudget)
-		stream, err := a.boundModel.Stream(ctx, msgs)
+		// Snapshot the bound model under a.mu: SetModel and tool refreshes
+		// swap it concurrently (settings API, plugin toggles).
+		a.mu.Lock()
+		bound := a.boundModel
+		a.mu.Unlock()
+		stream, err := bound.Stream(ctx, msgs)
 		if err != nil {
 			return nil, err
 		}
@@ -847,6 +1031,9 @@ func (a *Agent) modelNode() graph.StreamingNodeFunc {
 			if text := TextDelta(chunk); text != "" && emit != nil {
 				emit(text)
 			}
+			if r := ReasoningDeltaText(chunk); r != "" && emit != nil {
+				emit(ReasoningDelta{Text: r})
+			}
 			MergeStreamChunks(&full, chunk)
 			// Providers emit each tool call as one finished chunk when its
 			// content block closes; dispatch it while the stream continues.
@@ -868,10 +1055,9 @@ func (a *Agent) modelNode() graph.StreamingNodeFunc {
 		// PostSampling hooks analyze the response asynchronously (Claude
 		// Code's post-sampling evaluators); detached from the stream ctx so
 		// graph teardown does not kill an in-flight analysis.
-		if a.hooks != nil && (full.Content != "" || len(full.ToolCalls) > 0) {
+		if h := a.hooksFor(ctx); h != nil && (full.Content != "" || len(full.ToolCalls) > 0) {
 			resp := full.Content
-			hooks := a.hooks
-			go func() { _ = hooks.PostSampling(context.WithoutCancel(ctx), resp) }()
+			go func() { _ = h.PostSampling(context.WithoutCancel(ctx), resp) }()
 		}
 		return graph.State{"messages": []messages.Message{full}}, nil
 	}
@@ -917,8 +1103,8 @@ func (a *Agent) toolsNode() graph.NodeFunc {
 				run[i] = false
 				continue
 			}
-			if a.hooks != nil {
-				d, err := a.hooks.PreToolUse(ctx, call.Name, call.Args)
+			if h := a.hooksFor(ctx); h != nil {
+				d, err := h.PreToolUse(ctx, call.Name, call.Args)
 				if err != nil {
 					return nil, err
 				}
@@ -958,8 +1144,8 @@ func (a *Agent) toolsNode() graph.NodeFunc {
 				if preFeedback[i] != "" {
 					content = preFeedback[i] + "\n" + content
 				}
-				if a.hooks != nil {
-					if p, err := a.hooks.PostToolUse(ctx, call.Name, call.Args, content); err == nil && p.Feedback != "" {
+				if h := a.hooksFor(ctx); h != nil {
+					if p, err := h.PostToolUse(ctx, call.Name, call.Args, content); err == nil && p.Feedback != "" {
 						content += "\n" + p.Feedback
 					}
 				}
@@ -1082,7 +1268,9 @@ func (a *Agent) execute(ctx context.Context, name string, args map[string]any) c
 			}
 		}
 	}
+	a.mu.Lock()
 	t, ok := a.toolByName[name]
+	a.mu.Unlock()
 	if !ok {
 		return coretools.Result{Content: fmt.Sprintf("Error: unknown tool %q", name)}
 	}
@@ -1100,7 +1288,10 @@ func (a *Agent) route(ctx context.Context, state graph.State) (string, error) {
 		return graph.END, nil
 	}
 	last := msgs[len(msgs)-1]
-	if last.Role == messages.RoleAI && len(last.ToolCalls) > 0 && len(a.toolList) > 0 {
+	a.mu.Lock()
+	hasTools := len(a.toolList) > 0
+	a.mu.Unlock()
+	if last.Role == messages.RoleAI && len(last.ToolCalls) > 0 && hasTools {
 		return nodeTools, nil
 	}
 	return graph.END, nil
@@ -1127,7 +1318,10 @@ func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bo
 	readOnly := tools.IsReadOnly(call.Name, call.Args)
 	cat := tools.CategoryOf(call.Name)
 
-	switch a.mode {
+	a.mu.Lock()
+	mode := a.mode
+	a.mu.Unlock()
+	switch mode {
 	case config.ModeBypass:
 		return true, nil
 	case config.ModePlan, config.ModeReadOnly:
@@ -1151,8 +1345,8 @@ func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bo
 func (a *Agent) askPermission(ctx context.Context, call messages.ToolCall) (bool, error) {
 	// PermissionRequest hooks run before the interrupt: a hook may
 	// pre-approve or pre-deny without bothering the user.
-	if a.hooks != nil {
-		d, err := a.hooks.PermissionRequest(ctx, call.Name, call.Args)
+	if h := a.hooksFor(ctx); h != nil {
+		d, err := h.PermissionRequest(ctx, call.Name, call.Args)
 		if err == nil && d.Decision != "" {
 			return d.Decision == "allow", nil
 		}
@@ -1171,27 +1365,34 @@ func (a *Agent) askPermission(ctx context.Context, call messages.ToolCall) (bool
 }
 
 // newSubagent builds a Task-spawned subagent reusing the same model and
-// permission mode, with the subagent prompt and a reduced tool set.
-func (a *Agent) newSubagent(def *agents.Definition) *Agent {
-	reg := tools.NewRegistry(a.workdir)
-	sysPrompt := prompt.SubagentPrompt(a.workdir)
+// permission mode, with the subagent prompt and a reduced tool set. It
+// returns an error instead of panicking: the callers run inside tool
+// goroutines, where a panic would take down the whole process. The context
+// carries the parent run's workspace, which the subagent inherits (its
+// prompt, tools and memory calls stay scoped to the same session).
+func (a *Agent) newSubagent(ctx context.Context, def *agents.Definition) (*Agent, error) {
+	ws := a.memoryWorkspaceCtx(ctx)
+	reg := tools.NewRegistry(ws)
+	sysPrompt := prompt.SubagentPrompt(ws)
 	if def != nil && def.Prompt != "" {
 		sysPrompt = def.Prompt
 	}
+	a.mu.Lock()
+	mode := a.mode
+	a.mu.Unlock()
 	sub, err := New(Config{
 		Model:          a.subagentModel,
 		Registry:       reg,
 		SystemPrompt:   sysPrompt,
-		PermissionMode: a.mode,
+		PermissionMode: mode,
 		RecursionLimit: a.recursionLimit,
-		WorkDir:        a.workdir,
+		WorkDir:        ws,
 		Subagent:       true,
 		MemoryEngine:   a.MemoryEngine(), // read-only memory tools stay available
 		LoadSettings:   a.loadSettings,
 	})
 	if err != nil {
-		// Config is valid by construction; a failure here is a programmer bug.
-		panic(fmt.Sprintf("agent: build subagent: %v", err))
+		return nil, fmt.Errorf("agent: build subagent: %w", err)
 	}
 	if def != nil && len(def.Tools) > 0 {
 		sub.toolList = allowTools(sub.toolList, def.Tools)
@@ -1207,8 +1408,8 @@ func (a *Agent) newSubagent(def *agents.Definition) *Agent {
 	}
 	// Subagents share the parent's memory workspace so reads stay scoped to
 	// the same run (writes are already cropped out of their tool set).
-	sub.SetMemoryWorkspace(a.memoryWorkspace())
-	return sub
+	sub.SetMemoryWorkspace(ws)
+	return sub, nil
 }
 
 // allowTools keeps only the tools whose names are in the allowed set.

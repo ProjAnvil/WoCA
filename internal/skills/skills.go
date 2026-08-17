@@ -4,7 +4,6 @@ package skills
 
 import (
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,30 +26,35 @@ type SkillArg struct {
 }
 
 // Load walks root and loads every SKILL.md, using the containing directory
-// name as the default skill name.
+// name as the default skill name. Directory symlinks are followed (skills
+// imported from Claude Code / cc-switch are linked into ~/.woca/skills).
 func Load(root string) ([]Skill, error) {
 	var out []Skill
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	var walk func(dir string)
+	walk = func(dir string) {
+		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return nil // skip unreadable entries
+			return // skip unreadable entries
 		}
-		if d.IsDir() {
-			return nil
+		for _, e := range entries {
+			path := filepath.Join(dir, e.Name())
+			info, err := os.Stat(path) // follows symlinks
+			if err != nil {
+				continue
+			}
+			switch {
+			case info.IsDir():
+				walk(path)
+			case e.Name() == "SKILL.md":
+				data, err := os.ReadFile(path)
+				if err != nil {
+					continue
+				}
+				out = append(out, parseSkill(filepath.Base(dir), data))
+			}
 		}
-		if d.Name() != "SKILL.md" {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		dirName := filepath.Base(filepath.Dir(path))
-		out = append(out, parseSkill(dirName, data))
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
+	walk(root)
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }

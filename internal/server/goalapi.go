@@ -179,12 +179,9 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 	id := fmt.Sprintf("run-%d", atomic.AddInt64(&runSeq, 1))
 	// Same run-scoped memory workspace as startRun: the ctx value feeds
 	// RetainGoal (WithoutCancel preserves it) and the goal graph's prefetch.
-	ctx, cancel := context.WithCancel(agent.WithMemoryWorkspace(context.Background(), workspace))
+	ctx, cancel := context.WithCancel(agent.WithRunWorkspace(context.Background(), workspace))
 	run := newRun(id, a, ctx, cancel)
-
-	s.mu.Lock()
-	s.runs[id] = run
-	s.mu.Unlock()
+	s.registerRun(id, run)
 
 	s.log.Info().Str("run", id).Str("session", sessionID).Msg("goal run started")
 	s.refreshDebugLog()
@@ -197,16 +194,19 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 	}
 	unsub := a.SubscribeGoal(emitGoal)
 	emitGoal(a.Goal())
+	// The subscription is tied to the run's terminal event, which fires on
+	// success, error and cancellation alike — an error-exiting goal run must
+	// not leave its subscriber (and this Run closure) on the agent forever.
+	run.onFinish = unsub
 
 	history := s.sessions.load(sessionID)
 	run.startGoal(history, func(final []messages.Message) {
-		unsub()
 		_ = s.sessions.save(sessionID, stripSystem(final), workspace)
 		if g := a.Goal(); g != nil {
 			s.log.Info().Str("run", id).Str("session", sessionID).
 				Str("status", string(g.Status)).Msg("goal run ended")
 		}
-		s.logObsRunEnd(sessionID, id, final)
+		s.logObsRunEnd(sessionID, id, workspace, final)
 	})
 	return run, nil
 }

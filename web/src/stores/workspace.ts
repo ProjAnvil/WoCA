@@ -4,9 +4,13 @@ import type { WorkspaceFile } from '../types'
 import { getWorkspace, getWorkspaceFile } from '../api/client'
 
 export const useWorkspaceStore = defineStore('workspace', () => {
-  // Populated from GET /api/workspace (the agent's workdir); the standalone
-  // demo app sets it directly with mock data instead.
+  // Populated from GET /api/workspace; the standalone demo app sets it
+  // directly with mock data instead.
   const tree = ref<WorkspaceFile | null>(null)
+  // The workspace path the tree was loaded for ('' = the server's startup
+  // directory). Session switches reload the tree for the new workspace and
+  // file previews resolve against the same root.
+  const root = ref('')
 
   /** Whether the right-hand file browser sidebar is open. */
   const panelOpen = ref(false)
@@ -22,9 +26,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     demo.value = v
   }
 
-  async function load() {
+  async function load(workspace?: string) {
+    if (workspace !== undefined) root.value = workspace
     try {
-      tree.value = await getWorkspace()
+      tree.value = await getWorkspace(root.value || undefined)
     } catch {
       tree.value = null
     }
@@ -60,7 +65,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     previewError.value = ''
     preview.value = { ...file, content: '' }
     try {
-      const full = await getWorkspaceFile(file.path)
+      const full = await getWorkspaceFile(file.path, root.value || undefined)
       preview.value = full
     } catch (e) {
       previewError.value = e instanceof Error ? e.message : String(e)
@@ -77,6 +82,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   return {
     tree,
+    root,
     panelOpen,
     preview,
     previewLoading,

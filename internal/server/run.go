@@ -44,6 +44,10 @@ type Run struct {
 	subs    map[*subscriber]struct{}
 	history []Event
 	pending *interruptState
+	done    bool // terminal event (done or error) emitted
+	// onFinish, when set, fires exactly once when the terminal event is
+	// emitted — on error and cancellation too, where onDone never runs.
+	onFinish func()
 }
 
 func newRun(id string, a *agent.Agent, ctx context.Context, cancel context.CancelFunc) *Run {
@@ -67,13 +71,13 @@ func (r *Run) start(history []messages.Message, onDone func([]messages.Message))
 		final, err := runner.New(r.a, r.handleInterrupt, r.render).Run(r.ctx, history)
 		if err != nil {
 			if r.ctx.Err() != nil {
-				r.emit(Event{Type: "done", Data: map[string]any{"cancelled": true}})
+				r.finish("done", map[string]any{"cancelled": true})
 			} else {
-				r.emit(Event{Type: "error", Data: map[string]any{"message": err.Error()}})
+				r.finish("error", map[string]any{"message": err.Error()})
 			}
 			return
 		}
-		r.emit(Event{Type: "done", Data: map[string]any{"cancelled": false}})
+		r.finish("done", map[string]any{"cancelled": false})
 		if onDone != nil {
 			onDone(final)
 		}
@@ -88,13 +92,13 @@ func (r *Run) startGoal(history []messages.Message, onDone func([]messages.Messa
 		final, err := runner.New(r.a, r.handleInterrupt, r.render).RunGoal(r.ctx, history)
 		if err != nil {
 			if r.ctx.Err() != nil {
-				r.emit(Event{Type: "done", Data: map[string]any{"cancelled": true}})
+				r.finish("done", map[string]any{"cancelled": true})
 			} else {
-				r.emit(Event{Type: "error", Data: map[string]any{"message": err.Error()}})
+				r.finish("error", map[string]any{"message": err.Error()})
 			}
 			return
 		}
-		r.emit(Event{Type: "done", Data: map[string]any{"cancelled": false}})
+		r.finish("done", map[string]any{"cancelled": false})
 		if onDone != nil {
 			onDone(final)
 		}
@@ -105,6 +109,10 @@ func (r *Run) startGoal(history []messages.Message, onDone func([]messages.Messa
 func (r *Run) render(step graph.Step) {
 	if s, ok := step.Delta.(string); ok && s != "" {
 		r.emit(Event{Type: "delta", Data: map[string]any{"text": s}})
+		return
+	}
+	if rd, ok := step.Delta.(agent.ReasoningDelta); ok && rd.Text != "" {
+		r.emit(Event{Type: "reasoning", Data: map[string]any{"text": rd.Text}})
 		return
 	}
 	msgs := agent.MessagesFrom(step.Update)
@@ -217,6 +225,27 @@ func (r *Run) emit(ev Event) {
 		}
 	}
 	r.mu.Unlock()
+}
+
+// finish emits the terminal event (done or error) and marks the run finished
+// so the server can prune it from its registry once it ages out.
+func (r *Run) finish(evType string, data map[string]any) {
+	r.mu.Lock()
+	first := !r.done
+	r.done = true
+	hook := r.onFinish
+	r.mu.Unlock()
+	r.emit(Event{Type: evType, Data: data})
+	if first && hook != nil {
+		hook()
+	}
+}
+
+// isDone reports whether the run already emitted its terminal event.
+func (r *Run) isDone() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.done
 }
 
 // subscribe registers a new SSE connection, replaying prior history first.

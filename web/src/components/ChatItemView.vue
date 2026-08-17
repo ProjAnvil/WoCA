@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Bug, Check, ChevronRight, Copy, Wrench } from 'lucide-vue-next'
-import type { Attachment, ChatItem } from '../types'
+import { Brain, Bug, Check, ChevronRight, Copy, Wrench } from 'lucide-vue-next'
+import type { ChatItem } from '../types'
 import { renderMarkdown } from '../lib/markdown'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
@@ -14,28 +14,55 @@ const sessions = useSessionStore()
 const isText = computed(() => props.item.kind === 'user' || props.item.kind === 'assistant')
 const isUser = computed(() => props.item.kind === 'user')
 
-const textContent = computed(() =>
-  isText.value ? (props.item as { content: string }).content : '',
-)
-const textHtml = computed(() => (isText.value ? renderMarkdown(textContent.value) : ''))
-const streaming = computed(() =>
-  props.item.kind === 'assistant' ? (props.item as { streaming: boolean }).streaming : false,
-)
-const attachments = computed(() =>
-  props.item.kind === 'user' ? (props.item as { attachments?: Attachment[] }).attachments : undefined,
-)
-
-const toolName = computed(() =>
-  props.item.kind === 'tool_call' ? (props.item as { name: string }).name : '',
-)
-const toolArgs = computed(() => {
-  if (props.item.kind !== 'tool_call') return ''
-  return JSON.stringify((props.item as { args: unknown }).args, null, 2)
+// Narrow item.kind inside each computed so the discriminated union yields
+// the fields directly — no blind casts on the raw item.
+const textContent = computed(() => {
+  const it = props.item
+  return it.kind === 'user' || it.kind === 'assistant' ? it.content : ''
 })
-const toolResultContent = computed(() =>
-  props.item.kind === 'tool_result' ? (props.item as { content: string }).content : '',
-)
+const textHtml = computed(() => (isText.value ? renderMarkdown(textContent.value) : ''))
+const streaming = computed(() => {
+  const it = props.item
+  return it.kind === 'assistant' ? it.streaming : false
+})
+const attachments = computed(() => {
+  const it = props.item
+  return it.kind === 'user' ? it.attachments : undefined
+})
 
+const reasoningContent = computed(() => {
+  const it = props.item
+  return it.kind === 'reasoning' ? it.content : ''
+})
+const reasoningStreaming = computed(() => {
+  const it = props.item
+  return it.kind === 'reasoning' ? it.streaming : false
+})
+// Live thinking stays expanded so the user can watch it; once the answer
+// starts the block collapses to its header (click to expand again).
+const reasoningOpen = ref(reasoningStreaming.value)
+
+const toolName = computed(() => {
+  const it = props.item
+  return it.kind === 'tool_call' ? it.name : ''
+})
+const toolArgs = computed(() => {
+  const it = props.item
+  return it.kind === 'tool_call' ? JSON.stringify(it.args, null, 2) : ''
+})
+// A call without a result is still executing — the header shows a running
+// hint instead of the output section.
+const toolHasResult = computed(() => {
+  const it = props.item
+  return it.kind === 'tool_call' && it.result !== undefined
+})
+const toolResultContent = computed(() => {
+  const it = props.item
+  return it.kind === 'tool_call' ? (it.result ?? '') : it.kind === 'tool_result' ? it.content : ''
+})
+
+// Tool input and output both start collapsed (autoCollapseTools); toggle to
+// expand per card.
 const collapsed = ref(settings.autoCollapseTools)
 
 /* -------------------------------- copy actions ---------------------------- */
@@ -64,17 +91,20 @@ function copyMarkdown() {
 // The debug bug copies the log-retrieval context for this bubble: workspace,
 // session, run, timestamp, and where the matching log files live.
 function copyDebugInfo() {
-  const it = props.item as { ts?: number; srcRun?: string }
+  // ts / srcRun only exist on the assistant variant — narrow, don't cast.
+  const it = props.item
+  const ts = it.kind === 'assistant' ? it.ts : undefined
+  const srcRun = it.kind === 'assistant' ? it.srcRun : undefined
   const ws = sessions.activeWorkspace
   const sid = sessions.activeId
   const logDir = settings.logDir || '~/.woca/logs'
   const lines = [
     '## woca debug context',
     '',
-    `- time: ${it.ts ? new Date(it.ts).toISOString() : new Date().toISOString()}`,
+    `- time: ${ts ? new Date(ts).toISOString() : new Date().toISOString()}`,
     `- workspace: ${ws?.path || '(unknown)'}${ws?.name ? ` (${ws.name})` : ''}`,
     `- session: ${sid || '(unknown)'}`,
-    `- run: ${it.srcRun || sessions.runId?.[sid || ''] || '(ended; see session trace)'}`,
+    `- run: ${srcRun || sessions.runId?.[sid || ''] || '(ended; see session trace)'}`,
     `- message: content ${textContent.value.length} chars${streaming.value ? ' (still streaming)' : ''}`,
     '',
     'logs (debug-log must be enabled when the message was produced):',
@@ -126,16 +156,38 @@ function copyDebugInfo() {
     </div>
   </div>
 
-  <!-- tool call -->
-  <div v-else-if="item.kind === 'tool_call'" class="tool-card">
-    <div class="tool-card-head">
-      <Wrench :size="13" />
-      <span class="tool-name">{{ toolName }}</span>
-    </div>
-    <pre class="tool-args">{{ toolArgs }}</pre>
+  <!-- reasoning (thinking process): collapsible block, live while streaming -->
+  <div v-else-if="item.kind === 'reasoning'" class="tool-card reasoning-card" :class="{ live: reasoningStreaming }">
+    <button class="tool-card-head tool-toggle" @click="reasoningOpen = !reasoningOpen">
+      <Brain :size="13" class="reasoning-icon" />
+      <ChevronRight :size="13" class="tool-chevron" :class="{ open: reasoningOpen }" />
+      <span class="tool-name">{{ reasoningStreaming ? '思考中…' : '思考过程' }}</span>
+      <span v-if="!reasoningStreaming" class="reasoning-size">{{ reasoningContent.length }} 字符</span>
+    </button>
+    <pre v-if="reasoningOpen" class="tool-output reasoning-body">{{ reasoningContent }}</pre>
+    <span v-else-if="reasoningStreaming" class="cursor reasoning-cursor"></span>
   </div>
 
-  <!-- tool result -->
+  <!-- tool call: input and output share one card (result merges in when it
+       arrives; a still-running call shows a hint instead of the output) -->
+  <div v-else-if="item.kind === 'tool_call'" class="tool-card">
+    <button class="tool-card-head tool-toggle" @click="collapsed = !collapsed">
+      <Wrench :size="13" />
+      <ChevronRight :size="13" class="tool-chevron" :class="{ open: !collapsed }" />
+      <span class="tool-name">{{ toolName }}</span>
+      <span v-if="!toolHasResult" class="tool-status">运行中…</span>
+    </button>
+    <template v-if="!collapsed">
+      <div class="tool-section-label">输入</div>
+      <pre class="tool-args tool-io">{{ toolArgs }}</pre>
+      <template v-if="toolHasResult">
+        <div class="tool-section-label">输出</div>
+        <pre class="tool-output tool-io">{{ toolResultContent }}</pre>
+      </template>
+    </template>
+  </div>
+
+  <!-- tool result (orphan: its call is no longer in the transcript) -->
   <div v-else class="tool-card tool-result">
     <button class="tool-card-head tool-toggle" @click="collapsed = !collapsed">
       <ChevronRight :size="13" class="tool-chevron" :class="{ open: !collapsed }" />

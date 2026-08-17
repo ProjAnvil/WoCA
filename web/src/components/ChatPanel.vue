@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Bot, Brain, PanelRight, Paperclip, Send, Sparkles, Square, Target, X } from 'lucide-vue-next'
+import { Bot, Brain, Gauge, Lightbulb, PanelRight, Paperclip, Send, ShieldCheck, Sparkles, Square, Target, X } from 'lucide-vue-next'
 import ChatItemView from './ChatItemView.vue'
 import { useSessionStore } from '../stores/sessions'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useCompletionsStore } from '../stores/completions'
 import { useMemoryStore } from '../stores/memory'
+import { useAgentStore, MODE_DESCRIPTIONS, MODE_LABELS, THINKING_BUDGETS, THINKING_LABELS } from '../stores/agent'
 import type { Attachment, CompletionEntry } from '../types'
 
 const store = useSessionStore()
 const workspace = useWorkspaceStore()
 const completions = useCompletionsStore()
 const memory = useMemoryStore()
+const agent = useAgentStore()
 const draft = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -23,7 +25,50 @@ const canSend = computed(
 
 onMounted(() => {
   void completions.load()
+  void agent.load()
+  void agent.refreshQuota()
 })
+
+/* ------------------------- input toolbar (mode/thinking/quota) ------------ */
+
+type CtlPop = '' | 'mode' | 'thinking' | 'quota'
+const pop = ref<CtlPop>('')
+
+function togglePop(which: CtlPop) {
+  pop.value = pop.value === which ? '' : which
+}
+
+async function pickMode(mode: string) {
+  try {
+    await agent.setMode(mode)
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e))
+    return
+  }
+  pop.value = ''
+}
+
+async function pickThinking(level: string) {
+  try {
+    await agent.setThinking(level)
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e))
+    return
+  }
+  pop.value = ''
+}
+
+// 点额度 chip 时先刷新一次再展开。
+async function openQuota() {
+  if (pop.value === 'quota') {
+    pop.value = ''
+    return
+  }
+  pop.value = 'quota'
+  void agent.refreshQuota()
+}
+
+const modeList = Object.entries(MODE_LABELS)
 
 /* ---------------------------------- attachments --------------------------- */
 
@@ -31,6 +76,11 @@ const attachments = ref<Attachment[]>([])
 const attachmentError = ref('')
 const MAX_ATTACHMENTS = 6
 let attachSeq = 0
+// Files whose FileReader has been started but not yet landed in attachments.
+// The cap must hold for queued + pending together: the real enqueue happens
+// asynchronously in reader.onload, so a synchronous length check alone lets a
+// whole pasted batch slip past the limit.
+let pendingCount = 0
 
 function addFiles(files: File[] | FileList) {
   attachmentError.value = ''
@@ -39,12 +89,15 @@ function addFiles(files: File[] | FileList) {
       attachmentError.value = `仅支持图片附件：${f.name}`
       continue
     }
-    if (attachments.value.length >= MAX_ATTACHMENTS) {
+    pendingCount++
+    if (attachments.value.length + pendingCount > MAX_ATTACHMENTS) {
+      pendingCount--
       attachmentError.value = `最多 ${MAX_ATTACHMENTS} 张图片`
       break
     }
     const reader = new FileReader()
     reader.onload = () => {
+      pendingCount--
       const dataUrl = String(reader.result ?? '')
       const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
       attachments.value = [
@@ -57,6 +110,11 @@ function addFiles(files: File[] | FileList) {
           base64,
         },
       ]
+    }
+    // A failed read never fires onload; release its reservation so the slot
+    // is not leaked.
+    reader.onerror = () => {
+      pendingCount--
     }
     reader.readAsDataURL(f)
   }
@@ -223,11 +281,12 @@ function send() {
         </button>
       </div>
       <button
-        class="icon-btn"
-        title="工作区记忆"
+        class="icon-btn mem-toggle"
+        title="查看这个工作区的记忆"
         @click="memory.open(store.activeWorkspace?.path ?? '', store.activeWorkspace?.name)"
       >
-        <Brain :size="16" />
+        <Brain :size="15" />
+        <span class="mem-toggle-label">记忆</span>
       </button>
       <button
         class="icon-btn panel-toggle"
@@ -250,6 +309,95 @@ function send() {
     </div>
 
     <div class="chat-input">
+      <!-- 点击弹层外的区域关闭 -->
+      <div v-if="pop" class="ctl-backdrop" @click="pop = ''"></div>
+
+      <!-- 聊天框工具条：权限模式 / 思考级别 / 剩余额度 -->
+      <div class="input-toolbar">
+        <div class="ctl-wrap">
+          <button
+            class="ctl-chip"
+            :class="{ open: pop === 'mode' }"
+            title="切换权限模式"
+            @click="togglePop('mode')"
+          >
+            <ShieldCheck :size="13" />
+            <span>{{ agent.modeLabel }}</span>
+          </button>
+          <div v-if="pop === 'mode'" class="ctl-pop">
+            <div class="ctl-pop-header">权限模式</div>
+            <button
+              v-for="[m, label] in modeList"
+              :key="m"
+              class="ctl-opt"
+              :class="{ active: agent.mode === m }"
+              type="button"
+              @click="pickMode(m)"
+            >
+              <span class="ctl-opt-name">{{ label }}<span class="ctl-opt-key">{{ m }}</span></span>
+              <span class="ctl-opt-desc">{{ MODE_DESCRIPTIONS[m] }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="ctl-wrap">
+          <button
+            class="ctl-chip"
+            :class="{ open: pop === 'thinking', disabled: !agent.thinkingSupported }"
+            :title="
+              agent.thinkingSupported
+                ? '修改思考级别'
+                : `${agent.state?.model ?? '当前模型'} 不支持思考，选择器已关闭`
+            "
+            :disabled="!agent.thinkingSupported"
+            @click="agent.thinkingSupported && togglePop('thinking')"
+          >
+            <Lightbulb :size="13" />
+            <span>思考·{{ agent.thinkingSupported ? agent.thinkingLabel : '不支持' }}</span>
+          </button>
+          <div v-if="pop === 'thinking'" class="ctl-pop">
+            <div class="ctl-pop-header">
+              思考级别（下一轮生效）
+              <span v-if="agent.thinkingNote" class="ctl-pop-note">{{ agent.thinkingNote }}</span>
+            </div>
+            <button
+              v-for="level in ['off', ...agent.thinkingLevels]"
+              :key="level"
+              class="ctl-opt"
+              :class="{ active: agent.thinkingLevel === level }"
+              type="button"
+              @click="pickThinking(level)"
+            >
+              <span class="ctl-opt-name"
+                >{{ THINKING_LABELS[level]
+                }}<span class="ctl-opt-key">{{
+                  THINKING_BUDGETS[level] ? `${THINKING_BUDGETS[level]} tokens` : '关闭'
+                }}</span></span
+              >
+            </button>
+          </div>
+        </div>
+
+        <div class="ctl-wrap">
+          <button
+            class="ctl-chip"
+            :class="{ open: pop === 'quota' }"
+            :title="agent.quotaShort === '额度 —' ? '查看剩余额度' : agent.quotaShort"
+            @click="openQuota"
+          >
+            <Gauge :size="13" />
+            <span>{{ agent.quotaLoading ? '查询中…' : agent.quotaShort }}</span>
+          </button>
+          <div v-if="pop === 'quota'" class="ctl-pop quota-pop">
+            <div class="ctl-pop-header">
+              剩余额度
+              <button class="ctl-refresh" type="button" @click="agent.refreshQuota()">刷新</button>
+            </div>
+            <div class="quota-body">{{ agent.quotaError || agent.quotaText }}</div>
+          </div>
+        </div>
+      </div>
+
       <!-- autocomplete popup: / for skills, @ for subagents -->
       <div v-if="ac.open && acItems.length" class="ac-popup">
         <div class="ac-header">

@@ -63,6 +63,15 @@ var categoryByName = map[string]Category{
 	"search_code":     CatRead,
 	"remember_fact":   CatMeta,  // one row into the local memory DB (TodoWrite class)
 	"index_code":      CatWrite, // cost consent gate: walks and indexes a source tree
+	// Built-in capability plugins (woca-plugins/; see internal/pluginrt).
+	// Browsing pages is read-only web access; acting on them (click/fill —
+	// submits forms, changes state) is a write. PDF reads are read-only.
+	"BrowserNavigate": CatWeb,
+	"BrowserSnapshot": CatWeb,
+	"BrowserText":     CatWeb,
+	"BrowserAction":   CatWrite,
+	"PdfRead":         CatRead,
+	"PdfWrite":        CatWrite,
 }
 
 // CategoryOf returns the permission category of a tool by name. Unknown tools
@@ -94,11 +103,12 @@ func IsReadOnly(name string, args map[string]any) bool {
 
 // Registry is an ordered, name-indexed collection of tools.
 type Registry struct {
-	byName map[string]coretools.Tool
-	order  []string
-	todos  *TodoStore
-	dir    *Dir
-	bg     *BackgroundShells
+	byName  map[string]coretools.Tool
+	order   []string
+	todos   *TodoStore
+	dir     *Dir
+	bg      *BackgroundShells
+	history *FileHistory
 }
 
 // NewRegistry builds a registry populated with the default tool set, bound to
@@ -108,16 +118,21 @@ func NewRegistry(workdir string) *Registry {
 		workdir = "."
 	}
 	r := &Registry{
-		byName: map[string]coretools.Tool{},
-		todos:  NewTodoStore(),
-		dir:    NewDir(workdir),
-		bg:     NewBackgroundShells(),
+		byName:  map[string]coretools.Tool{},
+		todos:   NewTodoStore(),
+		dir:     NewDir(workdir),
+		bg:      NewBackgroundShells(),
+		history: NewFileHistory(),
 	}
-	for _, t := range defaultTools(r.dir, r.todos, r.bg) {
+	for _, t := range defaultTools(r.dir, r.todos, r.bg, r.history) {
 		r.Register(t)
 	}
 	return r
 }
+
+// FileHistory returns the file-level undo/redo log shared by the mutating
+// file tools (backs /undo and /redo).
+func (r *Registry) FileHistory() *FileHistory { return r.history }
 
 // Background returns the manager for run_in_background Bash commands,
 // BashOutput, and KillShell.
