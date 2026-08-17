@@ -338,6 +338,20 @@ func TestSpeculativeAllowedReadOnlyGate(t *testing.T) {
 		if !a.speculativeAllowed(read) {
 			t.Fatalf("mode %v: read tool blocked, want allowed", mode)
 		}
+		// CatMeta tools with irreversible side effects are excluded from
+		// speculative dispatch: Task spawns a subagent and ScheduleCron
+		// registers a cron — a restarted model stream would run them twice.
+		for _, name := range []string{"Task", "ScheduleCron"} {
+			side := messages.ToolCall{ID: "3", Name: name, Args: map[string]any{}}
+			if a.speculativeAllowed(side) {
+				t.Fatalf("mode %v: %s speculatively dispatched, want blocked", mode, name)
+			}
+		}
+		// The remaining CatMeta tools keep the auto-allow behavior.
+		meta := messages.ToolCall{ID: "4", Name: "TaskList", Args: map[string]any{}}
+		if !a.speculativeAllowed(meta) {
+			t.Fatalf("mode %v: TaskList blocked, want allowed", mode)
+		}
 	}
 }
 

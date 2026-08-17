@@ -126,6 +126,11 @@ func (a *Agent) speculativeAllowed(call messages.ToolCall) bool {
 	switch call.Name {
 	case "AskUserQuestion", "EnterPlanMode", "ExitPlanMode":
 		return false // interaction gates must run in the tools node
+	case "Task", "ScheduleCron":
+		// CatMeta but with irreversible side effects (spawning a subagent,
+		// registering a cron): a speculated call whose stream is restarted
+		// would execute twice.
+		return false
 	}
 	if a.perms != nil {
 		if action, ok := a.perms.Action(call.Name, call.Args); ok && action != permissions.ActionAllow {
