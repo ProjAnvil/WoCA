@@ -19,6 +19,7 @@ func TestFindStyle(t *testing.T) {
 }
 
 func TestBuildWithStyleAppendsSection(t *testing.T) {
+	isolatedHome(t)
 	dir := t.TempDir()
 	base := BuildWithStyle(dir, "", "m", "default")
 	expl := BuildWithStyle(dir, "", "m", "explanatory")
