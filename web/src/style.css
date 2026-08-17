@@ -470,8 +470,8 @@ select {
   color: var(--text);
   box-shadow: inset 0 0 0 1px var(--border-strong);
 }
-/* The memory entry point is labeled (icon + 记忆): a bare brain glyph is
-   too cryptic for a title-bar button. */
+/* The memory entry point carries a text label next to its icon: a bare
+   brain glyph is too cryptic for a title-bar button. */
 .chat-header .mem-toggle {
   width: auto;
   gap: 5px;
@@ -722,7 +722,8 @@ html.dark .avatar.woca {
   color: var(--focus);
   border-color: var(--focus);
 }
-/* 思考选择器：模型不支持思考时禁用（drawer 保持关闭） */
+/* Thinking selector: disabled when the model lacks thinking support
+   (the drawer stays closed) */
 .ctl-chip.disabled {
   opacity: 0.55;
   cursor: not-allowed;
@@ -739,7 +740,7 @@ html.dark .avatar.woca {
   color: var(--faint);
   margin-left: 8px;
 }
-/* 透明遮罩：点击弹层外关闭（压在弹层之下） */
+/* Transparent backdrop: closes the popover on outside click (sits below it) */
 .ctl-backdrop {
   position: fixed;
   inset: 0;
@@ -825,8 +826,8 @@ html.dark .avatar.woca {
   white-space: pre-wrap;
 }
 
-/* 勾选行名称（设置面板的 claudeenv 与 plugins 分区共用；其余 env-check
-   样式 scoped 在 ClaudeEnvSection.vue） */
+/* Checkbox row name (shared by the settings panel's claudeenv and plugins
+   sections; the remaining env-check styles are scoped in ClaudeEnvSection.vue) */
 .env-check-name {
   flex: 0 0 auto;
   max-width: 200px;
@@ -1469,7 +1470,8 @@ html.dark .shiki-host span {
   overflow-y: auto;
 }
 
-/* 思考过程（reasoning）卡片：流式时展开 + 呼吸边框，结束后折叠为标题行 */
+/* Reasoning card: expanded with a breathing border while streaming;
+   collapses to a title row once done */
 .reasoning-card {
   border-style: dashed;
 }
@@ -2161,5 +2163,5 @@ html.dark .shiki-host span {
   gap: 8px;
 }
 
-/* 插件分区（plugin-*）样式 scoped 在 PluginsSection.vue。 */
+/* Plugin section (plugin-*) styles are scoped in PluginsSection.vue. */
 

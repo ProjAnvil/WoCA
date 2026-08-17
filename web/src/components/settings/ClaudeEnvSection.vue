@@ -155,7 +155,7 @@ async function saveClaudeEnv() {
 </template>
 
 <style scoped>
-/* 技能与 MCP 勾选列表 */
+/* Skill & MCP checkbox list */
 .env-check-list {
   display: flex;
   flex-direction: column;

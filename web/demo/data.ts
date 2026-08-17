@@ -216,7 +216,7 @@ export const demoInterrupts = {
 
 const readmeMd = `# woca
 
-一个用 Go 写的 coding-agent **harness**，模仿 Claude Code 的架构。
+一个用 Go 写的 coding-agent **harness**，构建在显式代理图之上。
 
 ## 特性
 

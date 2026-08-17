@@ -58,7 +58,7 @@ async function pickThinking(level: string) {
   pop.value = ''
 }
 
-// 点额度 chip 时先刷新一次再展开。
+// Refresh the quota once before expanding the chip's popover.
 async function openQuota() {
   if (pop.value === 'quota') {
     pop.value = ''
@@ -312,10 +312,10 @@ function send() {
     </div>
 
     <div class="chat-input">
-      <!-- 点击弹层外的区域关闭 -->
+      <!-- Clicking outside the popover closes it -->
       <div v-if="pop" class="ctl-backdrop" @click="pop = ''"></div>
 
-      <!-- 聊天框工具条：权限模式 / 思考级别 / 剩余额度 -->
+      <!-- Chat-input toolbar: permission mode / thinking level / remaining quota -->
       <div class="input-toolbar">
         <div class="ctl-wrap">
           <button

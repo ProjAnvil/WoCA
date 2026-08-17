@@ -408,7 +408,7 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   // closeReasoning freezes the live thinking block (its card collapses to a
-  // "思考过程" header the user can expand).
+  // "thinking process" header the user can expand).
   function closeReasoning(sid: string) {
     const id = reasoningId.value[sid]
     reasoningId.value[sid] = null
@@ -468,9 +468,11 @@ export const useSessionStore = defineStore('sessions', () => {
           runId.value[sid] = rid
         },
         onResync() {
-          // 缺口超出服务端重放窗口（或 seq 跳变）：回源拉全量会话消息兜底。
-          // loadSession 对已加载会话会跳过拉取，先重置 loaded 强制回源；
-          // 重建后旧的流式气泡槽位失效，清空让后续 delta 重新开泡。
+          // The gap exceeds the server's replay window (or a seq jump was
+          // detected): fall back to refetching the full session messages.
+          // loadSession skips already-loaded sessions, so reset loaded first
+          // to force the refetch; after the rebuild the old streaming bubble
+          // slots are stale — clear them so later deltas open fresh bubbles.
           const s = sessions.value.find((x) => x.id === sid)
           if (s) s.loaded = false
           void loadSession(sid).then(() => {
@@ -636,7 +638,8 @@ export const useSessionStore = defineStore('sessions', () => {
       }
       push(sid, { id: nid(), kind: 'assistant', content: out, streaming: false, ts: Date.now() })
     } catch (e) {
-      // 失败也要在聊天里留下反馈（横幅会随状态翻转消失，气泡不会）。
+      // Failures must also leave feedback in the chat (a banner disappears
+      // when the state flips again; a chat bubble does not).
       const msg = e instanceof Error ? e.message : String(e)
       push(sid, { id: nid(), kind: 'assistant', content: `⚠ 命令执行失败：${msg}`, streaming: false, ts: Date.now() })
     }

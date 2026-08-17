@@ -170,7 +170,8 @@ export const useSettingsStore = defineStore('settings', () => {
       ladym_embedding_base_url: ladymEmbeddingBaseURL.value,
       ladym_llm: ladymLLM.value,
       ladym_autoretain: ladymAutoRetain.value,
-      // 清空输入框会得到 ''/NaN，直接发送会 400 —— 无效值回落到默认 6。
+      // An emptied input yields ''/NaN, which the server would reject with a
+      // 400 — fall back to the default of 6 for invalid values.
       ladym_topk: Number.isFinite(ladymTopK.value) && ladymTopK.value >= 1 ? ladymTopK.value : 6,
       ladym_system2_interval:
         Number.isFinite(ladymSystem2Interval.value) && ladymSystem2Interval.value >= 60

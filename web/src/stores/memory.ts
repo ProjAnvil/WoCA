@@ -16,7 +16,7 @@ export const useMemoryStore = defineStore('memory', () => {
   const loading = ref(false)
   const engine = ref('ladym')
   const error = ref('')
-  const notice = ref('') // e.g. gate-drop feedback after 手动记住
+  const notice = ref('') // e.g. gate-drop feedback after a manual "remember"
   let offset = 0
   const pageSize = 20
   // Size of the most recently fetched batch; hasMore() keys off it because a

@@ -6,7 +6,7 @@ import type { MemoryItem } from '../types'
 
 const memory = useMemoryStore()
 
-// Layer labels carry the L1~L6 number (e.g. "L2 事实") so the chip, the badge
+// Layer labels carry the L1~L6 number (e.g. "L2 facts") so the chip, the badge
 // and the layer ordering all read consistently.
 const layerLabels: Record<string, string> = {
   L1_episodic: 'L1 经历',
@@ -52,7 +52,8 @@ function fmtTime(ts: number): string {
 
 async function removeItem(m: MemoryItem) {
   if (!window.confirm('忘记这条记忆？')) return
-  // remove() 内部捕获错误并写入 store 的 error，由 mem-error 行展示。
+  // remove() catches errors internally and writes them to the store's error,
+  // surfaced by the mem-error row.
   await memory.remove(m.id)
 }
 

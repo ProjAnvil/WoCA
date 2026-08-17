@@ -165,7 +165,7 @@ export function putClaudeEnv(body: {
   }, '保存失败')
 }
 
-// --- plugins (settings → 插件) ---
+// --- plugins (settings panel section) ---
 
 /** Lists built-in capability plugins with enabled + runtime install state. */
 export function getPlugins(): Promise<PluginsResponse> {
@@ -306,11 +306,11 @@ export function streamRun(runId: string, handlers: StreamHandlers): Promise<void
         }
       },
       onmessage(ev) {
-        attempts = 0 // 收到消息即重置退避
+        attempts = 0 // reset the backoff counter on every received message
         if (ev.id) {
           const seq = Number(ev.id)
           if (lastSeq != null && seq > lastSeq + 1) {
-            // seq 跳变：服务端未检测到缺口时客户端兜底触发重放
+            // seq jump: client-side fallback that triggers a replay when the server missed the gap
             handlers.onResync?.('seq_gap')
           }
           lastSeq = seq
@@ -369,7 +369,8 @@ export function streamRun(runId: string, handlers: StreamHandlers): Promise<void
       },
       onerror(err) {
         if (terminal || ++attempts > maxRetries) throw err
-        // 返回 number → fetch-event-source 按该毫秒数后重试（复用其内置重连）
+        // Returning a number makes fetch-event-source retry after that many
+        // milliseconds (reusing its built-in reconnection).
         return 1000
       },
     })

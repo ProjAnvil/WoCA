@@ -1,86 +1,92 @@
 # woca web
 
-woca 的 Web 前端（Vue 3 + TypeScript + Vite）。构建产物会被 Go 二进制通过
-`go:embed web/dist` 内嵌，实现单二进制交付。
+The web frontend of woca (Vue 3 + TypeScript + Vite). The production build is
+embedded into the Go binary via `go:embed web/dist`, giving a single-binary
+distribution.
 
-## 技术栈
+## Tech stack
 
-- Vue 3（`<script setup lang="ts">`）
-- Pinia（会话 / 工作区 / 设置状态）
-- @vueuse/core（`useDark` 主题切换）
-- lucide-vue-next（图标）
-- marked + dompurify（Markdown 渲染 + XSS 消毒）
-- shiki（文件预览代码高亮，VitePress/Nuxt 同款；细粒度按需加载）
-- @microsoft/fetch-event-source（SSE 流式客户端）
+- Vue 3 (`<script setup lang="ts">`)
+- Pinia (session / workspace / settings state)
+- @vueuse/core (`useDark` theme switching)
+- lucide-vue-next (icons)
+- marked + dompurify (Markdown rendering + XSS sanitization)
+- shiki (code highlighting for file previews; fine-grained lazy loading)
+- @microsoft/fetch-event-source (SSE streaming client)
 
-聊天输入支持：图片附件（回形针上传 / Cmd+V·Ctrl+V 粘贴截图，随消息以
-多模态 content blocks 发送）；`/` 前缀补全 skills、`@` 前缀补全 subagents
-（上下键选择、Enter/Tab 确认、Esc 取消，高亮项展示 description）。
+The chat input supports image attachments (paperclip upload or
+Cmd+V / Ctrl+V screenshot paste, sent with the message as multimodal content
+blocks) plus `/`-prefix completion for skills and `@`-prefix completion for
+subagents (arrow keys to select, Enter/Tab to confirm, Esc to cancel; the
+highlighted item shows its description).
 
-## 开发
+## Development
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173（/api 代理到 127.0.0.1:8899）
+npm run dev        # http://localhost:5173 (/api proxies to 127.0.0.1:8899)
 ```
 
-## 构建
+## Build
 
 ```bash
-npm run build      # vue-tsc 类型检查 + vite build，输出到 dist/
+npm run build      # vue-tsc type-check + vite build, output to dist/
 ```
 
-## 演示（standalone demo）
+## Standalone demo
 
-一个不依赖 Go 后端、可单独启动的演示工程，用丰富的 mock 数据预览全部 UI
-（会话、流式消息、工具卡片、Markdown 预览、审批弹窗、主题）：
+A self-contained demo that runs without the Go backend and previews the whole
+UI with rich mock data (sessions, streaming messages, tool cards, Markdown
+previews, approval modals, themes):
 
 ```bash
 npm run dev:demo       # http://localhost:5174
-npm run build:demo     # 构建到 dist-demo/
+npm run build:demo     # builds into dist-demo/
 ```
 
-演示数据在 `demo/data.ts`；演示页顶部有「权限审批 / 提问 / 计划审批」按钮，
-可直接触发三类审批弹窗。生产应用**不含**这些 mock 数据。
+Demo data lives in `demo/data.ts`; the demo page has buttons at the top that
+trigger the three approval modals (permission / question / plan approval). The
+production app does **not** include any mock data.
 
-## 目录结构
+## Layout
 
 ```
 src/
-├─ main.ts                 # 入口：createApp + pinia
-├─ style.css               # 设计令牌（灰白 + 阴影，light/dark）
-├─ types.ts                # 会话 / 消息 / 工作区文件 / transcript 类型
-├─ lib/markdown.ts         # marked + dompurify 渲染
-├─ lib/highlight.ts        # shiki 高亮封装（扩展名 → 语言映射）
-├─ lib/highlighter-engine.ts # shiki 语法包（懒加载 chunk）
-├─ lib/files.ts            # 文件是否可预览的客户端判断
-├─ api/client.ts           # REST + SSE 客户端（fetch-event-source）
+├─ main.ts                 # entry: createApp + pinia
+├─ style.css               # design tokens (light/dark)
+├─ types.ts                # session / message / workspace-file / transcript types
+├─ lib/markdown.ts         # marked + dompurify rendering
+├─ lib/highlight.ts        # shiki wrapper (extension → language mapping)
+├─ lib/highlighter-engine.ts # shiki grammar bundles (lazy chunk)
+├─ lib/files.ts            # client-side previewability checks
+├─ api/client.ts           # REST + SSE client (fetch-event-source)
 ├─ stores/
-│  ├─ settings.ts          # 主题 + 设置面板开关 + 偏好
-│  ├─ sessions.ts          # 会话 + 消息 + 运行状态（含 demo 模式）
-│  ├─ completions.ts       # / 命令与 @ 子代理补全列表
-│  └─ workspace.ts         # 工作区文件树 + 预览
+│  ├─ settings.ts          # theme + settings panel visibility + preferences
+│  ├─ sessions.ts          # sessions + messages + run state (incl. demo mode)
+│  ├─ completions.ts       # / command and @ subagent completion lists
+│  └─ workspace.ts         # workspace file tree + preview
 └─ components/
-   ├─ Sidebar.vue          # 左侧：workspace 分组会话 + 底部设置入口
-   ├─ SessionList.vue      # workspace 分组（可展开/收起）的会话列表
-   ├─ Avatar.vue           # 聊天气泡头像（woca 机器人 / 用户）
-   ├─ WorkspaceSidebar.vue # 右侧：工作区文件浏览 sidebar（可收起）
-   ├─ WorkspaceTree.vue    # 递归文件树
-   ├─ FilePreview.vue      # 文件预览（markdown / shiki 代码高亮）
+   ├─ Sidebar.vue          # left: sessions grouped by workspace + settings entry
+   ├─ SessionList.vue      # collapsible workspace-grouped session list
+   ├─ Avatar.vue           # chat bubble avatars (woca bot / user)
+   ├─ WorkspaceSidebar.vue # right: workspace file browser sidebar (collapsible)
+   ├─ WorkspaceTree.vue    # recursive file tree
+   ├─ FilePreview.vue      # file preview (markdown / shiki highlighting)
    ├─ TreeNode.vue
-   ├─ SettingsPanel.vue    # 卡片式设置（主题/偏好/模型）
-   ├─ ChatPanel.vue        # 对话窗口 + 附件栏（上传/粘贴截图）+ 自动补全弹层
-   ├─ ChatItemView.vue     # 消息气泡（用户右 / woca 左）+ 工具卡片
-   └─ InterruptModal.vue   # 权限 / 提问 / 计划审批弹窗
+   ├─ SettingsPanel.vue    # card-style settings (theme/preferences/model)
+   ├─ ChatPanel.vue        # chat pane + attachment bar + completion popovers
+   ├─ ChatItemView.vue     # message bubbles (user right / woca left) + tool cards
+   └─ InterruptModal.vue   # permission / question / plan approval modals
 demo/
-├─ index.html              # 演示入口
+├─ index.html              # demo entry
 ├─ main.ts
-├─ App.vue                 # 演示布局 + 审批触发按钮
-└─ data.ts                 # 丰富 mock 数据
+├─ App.vue                 # demo layout + approval trigger buttons
+└─ data.ts                 # rich mock data
 ```
 
-## 主题
+## Theming
 
-主题通过 CSS 变量实现，`.dark` 类挂在 `<html>` 上。`useDark` 持久化到
-`localStorage["woca-theme"]`，并跟随系统偏好；`index.html` 内置一段内联脚本在
-首帧前应用主题，避免闪烁。
+Themes are implemented with CSS variables and a `.dark` class on `<html>`.
+`useDark` persists the choice to `localStorage["woca-theme"]` and follows the
+system preference; an inline snippet in `index.html` applies the theme before
+first paint to avoid flicker.

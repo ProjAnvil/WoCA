@@ -4,10 +4,10 @@ import type { PluginStatus } from '../../types'
 
 // The section component itself is v-if'd per tab switch, but the plugin list
 // and status messages must survive switching away and back while the panel is
-// open (otherwise every revisit would flash "加载中…"). Module scope gives it
-// exactly the lifetime this state had inside the settings panel's setup scope
-// before the split; SettingsPanel calls resetPluginState() when the panel
-// closes.
+// open (otherwise every revisit would flash the loading placeholder). Module
+// scope gives it exactly the lifetime this state had inside the settings
+// panel's setup scope before the split; SettingsPanel calls resetPluginState()
+// when the panel closes.
 const sharedPluginState = reactive({
   loaded: false,
   loading: false,

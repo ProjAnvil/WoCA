@@ -4,7 +4,7 @@ import type { PermissionMode, QuotaResponse, ThinkingLevel } from '../types'
 import * as api from '../api/client'
 import { fmtTokens } from '../lib/format'
 
-/** 中文标签：权限模式 / 思考级别 / 额度窗口。 */
+/** UI display labels: permission modes / thinking levels / quota windows. */
 export const MODE_LABELS: Record<string, string> = {
   default: '默认',
   acceptEdits: '自动接受编辑',
@@ -79,7 +79,8 @@ export const useAgentStore = defineStore('agent', () => {
   const thinkingLevels = computed<string[]>(() => state.value?.thinking.levels ?? [])
   const thinkingNote = computed(() => state.value?.thinking.note ?? '')
 
-  // 额度 chip 的短摘要：余额型直接展示金额；套餐型优先 5h 窗口剩余。
+  // Short summary for the quota chip: balance-type quotas show the amount
+  // directly; plan-type quotas prefer the remaining 5h window.
   const quotaShort = computed(() => {
     const q = quota.value?.quota
     if (!q?.available) return '额度 —'
@@ -92,7 +93,7 @@ export const useAgentStore = defineStore('agent', () => {
     return parts.join(' · ') || '套餐额度'
   })
 
-  // /quota 命令与额度弹层的多行文本。
+  // Multi-line text for the /quota command and the quota popover.
   const quotaText = computed(() => {
     const q = quota.value
     if (!q) return '额度信息未加载。'
@@ -128,7 +129,7 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       state.value = await api.getAgent()
     } catch {
-      state.value = null // 工具条降级为占位显示
+      state.value = null // the toolbar falls back to placeholder display
     }
   }
 
