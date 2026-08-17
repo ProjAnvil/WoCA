@@ -3035,7 +3035,8 @@ git commit -m "feat(web): runtime stats section in settings panel"
 
 ## 收尾验证（全部 Task 完成后）
 
-- [ ] `go build ./... && go test -race ./...` 全绿。
-- [ ] `cd web && npm run build` 通过。
-- [ ] `golangci-lint run ./internal/...`（若本机已装）无新增告警。
-- [ ] 手工冒烟：启动 server，同一会话快速连发 3 条消息 → 徽标显示排队位置递减、无消息丢失；`curl localhost:PORT/api/stats` 计数正确。
+- [x] `go build ./... && go test -race ./...` 全绿。
+- [x] `cd web && npm run build` 通过。
+- [x] `golangci-lint run ./internal/...`（若本机已装）无新增告警。
+- [x] 手工冒烟：启动 server，同一会话快速连发 3 条消息 → 徽标显示排队位置递减、无消息丢失；`curl localhost:PORT/api/stats` 计数正确。
+  （冒烟以自动化近似完成：临时 go 测试起真实 server，同会话连发 3 条消息断言排队位置 0/1/2、/api/stats 全字段且 queued_runs=2/session_queue_depths=2/active_runs=1、三条 run 全部到达终止事件（无消息丢失）、计数器归零；排队徽标的浏览器渲染未无头验证。）
