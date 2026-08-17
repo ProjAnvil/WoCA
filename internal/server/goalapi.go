@@ -162,9 +162,11 @@ func (s *Server) handleGoalCommand(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// startGoalRun launches the goal loop as a run over the session history.
-// Goal-state changes stream into the run as "goal" events; the final
-// transcript (all cycle messages) persists back to the session on completion.
+// startGoalRun launches the goal loop as a run over the session history,
+// behind the session admission gate (same pattern as startRun; the
+// agent-level goal claim below stays as defense in depth). Goal-state
+// changes stream into the run as "goal" events; the final transcript (all
+// cycle messages) persists back to the session on completion.
 func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 	a := s.agent
 	if g := a.Goal(); g == nil || g.Status != agent.GoalActive {
@@ -199,14 +201,36 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 	// not leave its subscriber (and this Run closure) on the agent forever.
 	run.onFinish = unsub
 
-	history := s.sessions.load(sessionID)
-	run.startGoal(history, func(final []messages.Message) {
-		_ = s.sessions.save(sessionID, stripSystem(final), workspace)
-		if g := a.Goal(); g != nil {
-			s.log.Info().Str("run", id).Str("session", sessionID).
-				Str("status", string(g.Status)).Msg("goal run ended")
-		}
-		s.logObsRunEnd(sessionID, id, workspace, final)
+	w, pos, ok := s.admission.enter(sessionID, func(p int) {
+		run.emit(Event{Type: "queue_position", Data: map[string]any{"position": p}})
 	})
+	if !ok {
+		run.finish("error", map[string]any{"message": "session run queue is full"})
+		return nil, errQueueFull
+	}
+	if pos > 0 {
+		run.emit(Event{Type: "run_queued", Data: map[string]any{"position": pos}})
+	}
+	go func() {
+		if w != nil && !s.admission.wait(run.ctx, sessionID, w) {
+			// 排队中被取消（cancelRun 取消了 run.ctx）或停机
+			run.finish("done", map[string]any{"cancelled": true})
+			return
+		}
+		run.emit(Event{Type: "run_started", Data: map[string]any{}})
+		history := s.sessions.load(sessionID)
+		run.startGoal(history, func(final []messages.Message) {
+			if final != nil {
+				_ = s.sessions.save(sessionID, stripSystem(final), workspace)
+				if g := a.Goal(); g != nil {
+					s.log.Info().Str("run", id).Str("session", sessionID).
+						Str("status", string(g.Status)).Msg("goal run ended")
+				}
+				s.logObsRunEnd(sessionID, id, workspace, final)
+			}
+			// 正确性核心：onDone（含落盘）返回之后才释放 session 门。
+			s.admission.release(sessionID)
+		})
+	}()
 	return run, nil
 }

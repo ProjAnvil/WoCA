@@ -25,6 +25,10 @@ type sessionStore struct {
 	// defaultWorkspace labels sessions created before the workspace index
 	// existed (legacy transcripts without metadata).
 	defaultWorkspace string
+	// testAfterSave, when set, fires at the end of every successful save
+	// (after recordMeta) — a test hook for release-timing assertions; it
+	// must not call back into the store (save may still hold s.mu).
+	testAfterSave func(id string)
 
 	mu  sync.Mutex
 	mem map[string][]messages.Message
@@ -90,6 +94,9 @@ func (s *sessionStore) save(id string, msgs []messages.Message, workspace string
 			WorkspaceName: workspaceDisplayName(workspace),
 			UpdatedAt:     time.Now().Format(time.RFC3339),
 		})
+	}
+	if s.testAfterSave != nil {
+		s.testAfterSave(id)
 	}
 	return nil
 }

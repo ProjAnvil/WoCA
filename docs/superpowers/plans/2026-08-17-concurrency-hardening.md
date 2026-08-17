@@ -44,7 +44,7 @@
   - 新 SSE 事件：`run_queued{position}`、`queue_position{position}`、`run_started{}`。
   - `Run.start`/`Run.startGoal` 的 `onDone` 语义变为**每条退出路径恰好调用一次**，失败/取消路径传 `final=nil`。
 
-- [ ] **Step 1: 写失败测试** `internal/server/admission_test.go`
+- [x] **Step 1: 写失败测试** `internal/server/admission_test.go`
 
 ```go
 package server
@@ -132,12 +132,12 @@ func TestAdmissionIndependentSessions(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/server/ -run TestAdmission -v`
 Expected: 编译失败 `undefined: newAdmission`。
 
-- [ ] **Step 3: 实现** `internal/server/admission.go`
+- [x] **Step 3: 实现** `internal/server/admission.go`
 
 ```go
 package server
@@ -300,12 +300,12 @@ func (a *admission) stats() (int, map[string]int) {
 }
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `go test -race ./internal/server/ -run TestAdmission -v`
 Expected: 4 个测试全 PASS。
 
-- [ ] **Step 5: 改 `Run.start`/`Run.startGoal` 让 onDone 全路径触发**（run.go:69-106）
+- [x] **Step 5: 改 `Run.start`/`Run.startGoal` 让 onDone 全路径触发**（run.go:69-106）
 
 `start` 改为（`startGoal` 同构，调 `runner.New(...).RunGoal`）：
 
@@ -338,7 +338,7 @@ func (r *Run) start(history []messages.Message, onDone func([]messages.Message))
 
 注意：现有测试若依赖"取消路径 onDone 不执行"，逐一检查 `internal/server/*_test.go` 中 `run.start(` 调用点并适配（onDone 判 `final == nil`）。
 
-- [ ] **Step 6: 接入 server.go**
+- [x] **Step 6: 接入 server.go**
 
 `Server` 结构体加字段：`admission *admission`。`New` 中初始化 `admission: newAdmission()`。
 
@@ -406,7 +406,7 @@ writeJSON(w, map[string]any{"run_id": run.id, "session_id": sid, "state": state,
 - `startGoalRun`（goalapi.go:168-212）同模式过门：`enter` → 排队 goroutine `wait` → `run.emit(run_started)` → 重载 history → `run.startGoal(history, onDone 包装)`，包装内 `if final != nil { 现有 onDone 逻辑 } ; s.admission.release(sessionID)`。agent 级 goal claim 保留不动（纵深防御）。
 - sessionStore 加测试挂钩（一行，供 Step 7 的时序断言用）：结构体加字段 `testAfterSave func(id string)`，`save` 函数末尾（recordMeta 之后）加 `if s.testAfterSave != nil { s.testAfterSave(id) }`。
 
-- [ ] **Step 7: 写集成测试**（追加到 `internal/server/admission_test.go`）
+- [x] **Step 7: 写集成测试**（追加到 `internal/server/admission_test.go`）
 
 现成 helper（server_test.go）：`createRun(t, base, sessionID) (runID, sessionID)`（:770，prompt 固定 "hi"）、`readSSEEvent`（:869，自动跳过 `id:` 行）。`driveToDone`（:794）带 interrupt 应答逻辑，不适用无 interrupt 的 run，用下面自带的 `waitRunDone`。
 
@@ -580,12 +580,12 @@ func TestSessionGateQueueFull409(t *testing.T) {
 // 差别是返回的 stream 在 Next 时阻塞于 block channel（测试结束 close 后返回 cancelled）。
 ```
 
-- [ ] **Step 8: 运行 server 包全量测试**
+- [x] **Step 8: 运行 server 包全量测试**
 
 Run: `go test -race ./internal/server/ -v`
 Expected: 全 PASS（含既有回归）。
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add internal/server/admission.go internal/server/admission_test.go internal/server/server.go internal/server/run.go internal/server/goalapi.go internal/server/session.go

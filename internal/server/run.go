@@ -46,7 +46,7 @@ type Run struct {
 	pending *interruptState
 	done    bool // terminal event (done or error) emitted
 	// onFinish, when set, fires exactly once when the terminal event is
-	// emitted — on error and cancellation too, where onDone never runs.
+	// emitted — on error and cancellation too, before onDone runs.
 	onFinish func()
 }
 
@@ -63,9 +63,10 @@ func newRun(id string, a *agent.Agent, ctx context.Context, cancel context.Cance
 // ID returns the run identifier.
 func (r *Run) ID() string { return r.id }
 
-// start launches the agent run in a background goroutine and streams its
-// progress to subscribers. onDone, when non-nil, receives the final transcript
-// (including the leading system message) on successful completion.
+// start runs the agent loop in a goroutine. onDone fires exactly once on
+// every exit path; final is nil when the run ended with an error or cancel
+// (nothing to persist), which lets callers hook post-run cleanup (session
+// gate release) to a single point.
 func (r *Run) start(history []messages.Message, onDone func([]messages.Message)) {
 	go func() {
 		final, err := runner.New(r.a, r.handleInterrupt, r.render).Run(r.ctx, history)
@@ -74,6 +75,9 @@ func (r *Run) start(history []messages.Message, onDone func([]messages.Message))
 				r.finish("done", map[string]any{"cancelled": true})
 			} else {
 				r.finish("error", map[string]any{"message": err.Error()})
+			}
+			if onDone != nil {
+				onDone(nil)
 			}
 			return
 		}
@@ -86,7 +90,8 @@ func (r *Run) start(history []messages.Message, onDone func([]messages.Message))
 
 // startGoal launches the goal loop (assess → execute → evaluate cycles) as a
 // run, streaming its progress through the same SSE event vocabulary plus
-// "goal" events pushed by the server on every goal-state change.
+// "goal" events pushed by the server on every goal-state change. onDone
+// fires exactly once on every exit path; final is nil on error or cancel.
 func (r *Run) startGoal(history []messages.Message, onDone func([]messages.Message)) {
 	go func() {
 		final, err := runner.New(r.a, r.handleInterrupt, r.render).RunGoal(r.ctx, history)
@@ -95,6 +100,9 @@ func (r *Run) startGoal(history []messages.Message, onDone func([]messages.Messa
 				r.finish("done", map[string]any{"cancelled": true})
 			} else {
 				r.finish("error", map[string]any{"message": err.Error()})
+			}
+			if onDone != nil {
+				onDone(nil)
 			}
 			return
 		}

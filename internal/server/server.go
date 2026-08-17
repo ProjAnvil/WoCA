@@ -98,6 +98,7 @@ type Server struct {
 	runs           map[string]*Run
 	runOrder       []string // registration order, backs finished-run pruning
 	sessions       *sessionStore
+	admission      *admission
 	workdir        string
 	settings       *settings.Store
 	memory         *store.Store
@@ -140,6 +141,7 @@ func New(cfg Config) *Server {
 		log:            cfg.Logger,
 		runs:           map[string]*Run{},
 		sessions:       store,
+		admission:      newAdmission(),
 		workdir:        cfg.WorkDir,
 		settings:       cfg.Settings,
 		memory:         cfg.Memory,
@@ -229,6 +231,7 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 		}
 		return err
 	case <-ctx.Done():
+		s.admission.stop()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
@@ -308,8 +311,20 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	run, sessionID := s.startRun(req.SessionID, human, req.Workspace)
-	writeJSON(w, http.StatusOK, map[string]any{"run_id": run.ID(), "session_id": sessionID})
+	run, sid, pos, err := s.startRun(req.SessionID, human, req.Workspace)
+	if err == errQueueFull {
+		http.Error(w, "session run queue is full", http.StatusConflict)
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	state := "running"
+	if pos > 0 {
+		state = "queued"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"run_id": run.ID(), "session_id": sid, "state": state, "queue_position": pos})
 }
 
 // humanMessage builds the prompt message, upgrading it to multimodal content
@@ -623,21 +638,51 @@ func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, st
 	return run, sid, workspace, history
 }
 
-func (s *Server) startRun(sessionID string, human messages.Message, workspace string) (*Run, string) {
-	run, sid, workspace, history := s.newRegisteredRun(sessionID, workspace)
-	s.log.Info().Str("run", run.id).Str("session", sid).Msg("run started")
+// errQueueFull is returned by startRun (and surfaced as HTTP 409) when a
+// session already has maxQueuedPerSession runs waiting on its gate.
+var errQueueFull = errors.New("session run queue is full")
+
+// startRun creates, registers and launches a run behind the session
+// admission gate. It returns the run, the session id and the queue
+// position (0 = running immediately). errQueueFull is returned when the
+// session already has maxQueuedPerSession runs waiting.
+func (s *Server) startRun(sessionID string, human messages.Message, workspace string) (*Run, string, int, error) {
+	run, sid, workspace, _ := s.newRegisteredRun(sessionID, workspace) // 预载的 history 弃用：获得门后重载，保证看到前一条 run 已落盘的回复
+	s.log.Info().Str("run", run.id).Str("session", sid).Msg("run queued")
 	s.refreshDebugLog()
 	if obs := s.agent.Obs(); obs != nil {
 		s.agent.SetObsRun(workspace, sid, run.id)
-		obs.Log("info", "run_start", map[string]any{
-			"prompt": previewForLog(human.Content),
-		})
+		obs.Log("info", "run_start", map[string]any{"session": sid, "run": run.id})
 	}
-	run.start(append(history, human), func(final []messages.Message) {
-		_ = s.sessions.save(sid, stripSystem(final), workspace)
-		s.logObsRunEnd(sid, run.id, workspace, final)
+	w, pos, ok := s.admission.enter(sid, func(p int) {
+		run.emit(Event{Type: "queue_position", Data: map[string]any{"position": p}})
 	})
-	return run, sid
+	if !ok {
+		run.finish("error", map[string]any{"message": "session run queue is full"})
+		return nil, sid, -1, errQueueFull
+	}
+	if pos > 0 {
+		run.emit(Event{Type: "run_queued", Data: map[string]any{"position": pos}})
+	}
+	go func() {
+		if w != nil && !s.admission.wait(run.ctx, sid, w) {
+			// 排队中被取消（cancelRun 取消了 run.ctx）或停机
+			run.finish("done", map[string]any{"cancelled": true})
+			return
+		}
+		run.emit(Event{Type: "run_started", Data: map[string]any{}})
+		history := s.sessions.load(sid)
+		run.start(append(history, human), func(final []messages.Message) {
+			if final != nil {
+				_ = s.sessions.save(sid, stripSystem(final), workspace)
+				s.logObsRunEnd(sid, run.id, workspace, final)
+			}
+			// 正确性核心：onDone（含落盘）返回之后才释放 session 门，
+			// 下一条排队的 run 被提升时前一条的回复必然已持久化。
+			s.admission.release(sid)
+		})
+	}()
+	return run, sid, pos, nil
 }
 
 // startCommandRun creates a run that completes immediately with a fixed
