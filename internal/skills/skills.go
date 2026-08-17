@@ -54,7 +54,11 @@ func Load(root string) ([]Skill, error) {
 					continue
 				}
 				sk := parseSkill(filepath.Base(dir), data)
-				sk.Source = path
+				if abs, err := filepath.Abs(path); err == nil {
+					sk.Source = abs
+				} else {
+					sk.Source = path
+				}
 				out = append(out, sk)
 			}
 		}

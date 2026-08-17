@@ -34,6 +34,19 @@ func TestEntriesOrderBreaksTies(t *testing.T) {
 	}
 }
 
+func TestEntriesSourceBreaksFinalTie(t *testing.T) {
+	out, conflicts := Entries([]Entry[string]{
+		{Name: "a", Value: "b-val", Level: LevelUser, Order: 1, Source: "b-entry"},
+		{Name: "a", Value: "a-val", Level: LevelUser, Order: 1, Source: "a-entry"},
+	})
+	if len(out) != 1 || out[0].Value != "a-val" {
+		t.Fatalf("lexicographically smaller Source must win, got %+v", out)
+	}
+	if len(conflicts) != 1 || conflicts[0].Winner != "a-entry" || conflicts[0].Loser != "b-entry" {
+		t.Fatalf("bad conflict: %+v", conflicts)
+	}
+}
+
 func TestEntriesDeterministicOutput(t *testing.T) {
 	out, _ := Entries([]Entry[int]{
 		{Name: "b", Value: 1, Level: LevelUser, Order: 0, Source: "u"},

@@ -47,7 +47,8 @@ type Conflict struct {
 // Entries merges es by Name: higher Level wins, then smaller Order, then
 // lexicographic Source (total determinism). The result is sorted by
 // (Level desc, Order asc, Name asc); every same-name collision appends one
-// Conflict. Entries with an empty Name are dropped.
+// Conflict, except fully duplicate entries (same Source), which are skipped.
+// Entries with an empty Name are dropped.
 func Entries[T any](es []Entry[T]) ([]Entry[T], []Conflict) {
 	byName := make(map[string]Entry[T], len(es))
 	var conflicts []Conflict
@@ -62,7 +63,9 @@ func Entries[T any](es []Entry[T]) ([]Entry[T], []Conflict) {
 		}
 		winner, loser := pick(prev, e)
 		byName[e.Name] = winner
-		conflicts = append(conflicts, Conflict{Name: e.Name, Winner: winner.Source, Loser: loser.Source})
+		if winner.Source != loser.Source {
+			conflicts = append(conflicts, Conflict{Name: e.Name, Winner: winner.Source, Loser: loser.Source})
+		}
 	}
 	out := make([]Entry[T], 0, len(byName))
 	for _, e := range byName {

@@ -18,22 +18,25 @@ var workspaceCache sync.Map // workDir -> []string
 // directory or the file git worktrees use both mark the root; outside a
 // repository the chain is workDir alone (D3).
 func WorkspaceDirs(workDir string) []string {
-	if v, ok := workspaceCache.Load(workDir); ok {
+	key := filepath.Clean(workDir)
+	if v, ok := workspaceCache.Load(key); ok {
 		return append([]string(nil), v.([]string)...)
 	}
-	chain := workspaceDirs(workDir)
-	workspaceCache.Store(workDir, chain)
+	chain := workspaceDirs(key)
+	workspaceCache.Store(key, chain)
 	return append([]string(nil), chain...)
 }
 
 // ResetWorkspaceCache drops cached WorkspaceDirs results (tests).
 func ResetWorkspaceCache() {
-	workspaceCache = sync.Map{}
+	workspaceCache.Clear()
 }
 
 func workspaceDirs(workDir string) []string {
 	abs, err := filepath.Abs(workDir)
 	if err != nil {
+		// Abs only fails when Getwd fails: keep the (possibly relative)
+		// path as-is, so chain resolution falls back to the process cwd.
 		abs = workDir
 	}
 	root := findGitRoot(abs)
