@@ -359,7 +359,9 @@ func TestCheckPermissionModes(t *testing.T) {
 	if ok, err := ae.checkPermission(context.Background(), read); err != nil || !ok {
 		t.Fatalf("acceptEdits read = %v/%v", ok, err)
 	}
-	askOutsideRun(t, func() { _, _ = ae.checkPermission(context.Background(), messages.ToolCall{Name: "Bash", Args: map[string]any{"command": "make"}}) })
+	askOutsideRun(t, func() {
+		_, _ = ae.checkPermission(context.Background(), messages.ToolCall{Name: "Bash", Args: map[string]any{"command": "make"}})
+	})
 
 	// Default asks for writes.
 	def := newAgent(config.ModeDefault)

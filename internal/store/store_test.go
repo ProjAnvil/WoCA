@@ -170,7 +170,6 @@ func TestSortEntriesOrdering(t *testing.T) {
 	}
 }
 
-
 func TestPostgresPlaceholderRewrite(t *testing.T) {
 	// The postgres dialect rewrites ? placeholders; sqlite passes through.
 	sqlite := &Store{dialect: "sqlite"}

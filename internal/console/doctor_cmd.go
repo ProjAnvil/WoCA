@@ -10,10 +10,10 @@ import (
 	"github.com/projanvil/woca/internal/settings"
 )
 
-// doctorCmd implements /doctor (a port of Claude Code's self-check command):
-// it probes the pieces a session depends on — working directory, tool
-// registry, settings database, credentials, session storage, memory store,
-// hooks, permission rules — and reports ok / warn / fail per check.
+// doctorCmd implements /doctor, the self-check command: it probes the pieces
+// a session depends on — working directory, tool registry, settings database,
+// credentials, session storage, memory store, hooks, permission rules — and
+// reports ok / warn / fail per check.
 func (c *Console) doctorCmd() Result {
 	type check struct {
 		name   string

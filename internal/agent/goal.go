@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 )
 
 // Goal mode, a graph-based persistent-objective loop: the user declares an
@@ -94,10 +94,10 @@ func (g *Goal) clone() *Goal {
 // must stay unmutated so the execute node can resume the inner graph on the
 // answer).
 type goalManager struct {
-	mu            sync.Mutex
-	goal          *Goal
-	running       bool
-	graph         *lggraph.CompiledGraph
+	mu      sync.Mutex
+	goal    *Goal
+	running bool
+	graph   *lggraph.CompiledGraph
 	// thread is the outer goal graph's checkpoint thread; innerThread is
 	// the inner agent-graph thread of the paused execute cycle.
 	thread        string

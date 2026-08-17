@@ -1,7 +1,7 @@
-// Package tools implements the Claude-Code-style tool set for the woca
-// harness: shell execution, file read/write/edit, glob/grep search, a todo
-// list, and web access. Each tool is a langchain-golang core/tools.Tool built
-// with FromFunc, so they plug directly into a language.ChatModel.BindTools.
+// Package tools implements the coding-agent tool set for the woca harness:
+// shell execution, file read/write/edit, glob/grep search, a todo list, and
+// web access. Each tool is a langchain-golang core/tools.Tool built with
+// FromFunc, so they plug directly into a language.ChatModel.BindTools.
 package tools
 
 import (

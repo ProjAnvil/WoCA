@@ -9,8 +9,8 @@ func TestProvidersAndDefaults(t *testing.T) {
 		t.Fatalf("Providers = %v", got)
 	}
 	for _, c := range []struct {
-		p    Provider
-		url  string
+		p     Provider
+		url   string
 		model string
 	}{
 		{ProviderGLM, "https://open.bigmodel.cn/api/anthropic", "glm-4.6"},

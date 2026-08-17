@@ -10,7 +10,7 @@ import (
 
 	"github.com/projanvil/woca/internal/config"
 
-	"github.com/projanvil/woca/internal/graph"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 )
 
 func TestModelWriteAccumulatesLines(t *testing.T) {
@@ -28,11 +28,11 @@ func TestRendererEmitsDeltasAndTools(t *testing.T) {
 	m := New(nil, nil, config.Config{})
 	ch := make(chan tea.Msg, 8)
 	r := m.renderer(ch)
-	r(graph.Step{Delta: "hello "})
-	r(graph.Step{Delta: "world"})
-	r(graph.Step{Update: graph.State{"messages": []messages.Message{
+	r(lggraph.StreamChunk{Mode: lggraph.StreamCustom, Payload: "hello "})
+	r(lggraph.StreamChunk{Mode: lggraph.StreamCustom, Payload: "world"})
+	r(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"model": map[string]any{"messages": []messages.Message{
 		{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{Name: "Bash", Args: map[string]any{"command": "ls"}}}},
-	}}})
+	}}}})
 
 	got := make([]string, 0, 3)
 	for i := 0; i < 3; i++ {
@@ -110,9 +110,9 @@ func TestRendererEmitsInFlight(t *testing.T) {
 	m := New(nil, nil, config.Config{})
 	ch := make(chan tea.Msg, 8)
 	r := m.renderer(ch)
-	r(graph.Step{Update: graph.State{"messages": []messages.Message{
+	r(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"model": map[string]any{"messages": []messages.Message{
 		{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{ID: "1", Name: "Bash", Args: map[string]any{"command": "ls"}}}},
-	}}})
+	}}}})
 	<-ch // tool chip
 	msg := <-ch
 	flight, ok := msg.(inFlightMsg)

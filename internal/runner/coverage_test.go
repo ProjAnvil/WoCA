@@ -8,10 +8,10 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -23,7 +23,7 @@ func TestRunGoalInterruptResume(t *testing.T) {
 			messages.Message{Role: messages.RoleAI, Content: "writing", ToolCalls: []messages.ToolCall{
 				{ID: "1", Name: "Write", Args: map[string]any{"file_path": "g.txt", "content": "x"}},
 			}}, // execute → permission interrupt
-			messages.AI("written and verified"), // execute final after approval
+			messages.AI("written and verified"),                                              // execute final after approval
 			messages.AI(`{"verdict":"complete","confidence":0.9,"evidence":"file written"}`), // evaluate
 		),
 	)
@@ -128,14 +128,19 @@ func TestHistoryFromAndTokenEstimate(t *testing.T) {
 	}
 }
 
-// The renderer's non-delta branches (tool call / result steps) execute even
-// when unused by other tests.
+// The renderer's non-delta branches (tool call / result chunks) execute
+// even when unused by other tests.
 func TestDefaultRendererToolSteps(t *testing.T) {
 	var buf bytes.Buffer
 	r := DefaultRenderer(&buf)
-	r(graph.Step{Node: "tools", Update: map[string]any{}})
-	r(graph.Step{Done: true, Update: map[string]any{}})
-	if buf.Len() == 0 {
-		t.Log("plain steps render nothing (only deltas do)")
+	r(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"tools": map[string]any{}}})
+	r(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"model": map[string]any{
+		"messages": []messages.Message{
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{Name: "Read", Args: map[string]any{"file_path": "a.go"}}}},
+			messages.Tool("1", "file body"),
+		},
+	}}})
+	if !strings.Contains(buf.String(), "Read(") || !strings.Contains(buf.String(), "file body") {
+		t.Fatalf("tool chunks not rendered:\n%s", buf.String())
 	}
 }

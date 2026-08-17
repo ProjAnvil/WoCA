@@ -7,9 +7,9 @@ import (
 	"github.com/projanvil/woca/internal/cost"
 )
 
-// cost renders the cumulative session usage and estimated cost (a port of
-// Claude Code's /cost backed by the agent's usage tracker instead of history
-// scans, so totals survive compaction and /clear).
+// cost renders the cumulative session usage and estimated cost, backed by
+// the agent's usage tracker instead of history scans, so totals survive
+// compaction and /clear.
 func (c *Console) cost() string {
 	u := c.deps.Agent.Usage()
 	if u.Requests == 0 {

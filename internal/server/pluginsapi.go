@@ -1,6 +1,6 @@
 package server
 
-// The built-in plugin management API backing the settings panel's 插件
+// The built-in plugin management API backing the settings panel's plugin
 // section. GET /api/plugins lists the catalog (manifests embedded in the
 // binary) with enabled flags and runtime install state; PUT /api/plugins
 // persists the enabled selection and rebinds the agent's tools live;

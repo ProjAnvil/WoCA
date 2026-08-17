@@ -6,7 +6,7 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
-	"github.com/projanvil/woca/internal/graph"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 )
 
 func TestNewFormats(t *testing.T) {
@@ -19,7 +19,7 @@ func TestNewFormats(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Empty format behaves like json: only the final object.
-	w.Step(graph.Step{Update: map[string]any{}})
+	w.Step(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"model": map[string]any{}}})
 	if out.Len() != 0 {
 		t.Fatalf("json writer should not stream steps: %q", out.String())
 	}
@@ -34,10 +34,10 @@ func TestStreamJSONStepToolMessages(t *testing.T) {
 	// Assistant with tool calls and a tool result are streamed; empty
 	// assistant messages and Done steps are not.
 	state := map[string]any{}
-	steps := []graph.Step{
-		{Update: state},
+	chunks := []lggraph.StreamChunk{
+		{Mode: lggraph.StreamUpdates, Payload: map[string]any{"model": state}},
 	}
-	for _, s := range steps {
+	for _, s := range chunks {
 		w.Step(s)
 	}
 	if !bytes.Contains(out.Bytes(), []byte(`"type"`)) && out.Len() > 0 {

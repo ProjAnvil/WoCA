@@ -65,7 +65,7 @@ func TestLoadSkillsLayered(t *testing.T) {
 func TestLoadSkillsSameDirWocaBeatsClaude(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	dir := t.TempDir() // 无 .git：只看本目录
+	dir := t.TempDir() // no .git: only this directory is considered
 	writeFileT(t, filepath.Join(dir, ".woca", "skills", "dup", "SKILL.md"), "WOCA")
 	writeFileT(t, filepath.Join(dir, ".claude", "skills", "dup", "SKILL.md"), "CLAUDE")
 	merge.ResetWorkspaceCache()

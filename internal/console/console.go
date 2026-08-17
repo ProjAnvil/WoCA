@@ -1,8 +1,8 @@
 // Package console implements the interactive console's slash commands, shared
-// by the bubbletea TUI and the line-based REPL — a miniature of Claude Code's
-// command registry (commands.ts) covering session control (/clear, /compact),
-// introspection (/status, /context, /todos, /tasks, /skills, /mcp), runtime
-// configuration (/model, /permissions), and the on-demand web GUI (/web).
+// by the bubbletea TUI and the line-based REPL — a compact command registry
+// covering session control (/clear, /compact), introspection (/status,
+// /context, /todos, /tasks, /skills, /mcp), runtime configuration (/model,
+// /permissions), and the on-demand web GUI (/web).
 package console
 
 import (

@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/messages"
-
 )
 
 func readLines(t *testing.T, path string) []Event {

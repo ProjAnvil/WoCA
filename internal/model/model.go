@@ -1,5 +1,5 @@
 // Package model provides a chat-model Router with retry and fallback behavior,
-// mirroring Claude Code's model-fallback on overload/transient errors.
+// falling back to an alternate model on overload/transient errors.
 package model
 
 import (
@@ -121,13 +121,12 @@ func (r *Router) Batch(ctx context.Context, inputs [][]messages.Message, opts ..
 }
 
 // Stream retries transient errors and falls back to the fallback model,
-// mirroring the Invoke path and Claude Code's streaming fallback
-// (withRetry.ts + query.ts's FallbackTriggeredError handling): a failed
+// mirroring the Invoke path with streaming-aware fallback: a failed
 // attempt is retried on the primary model and, once retries are exhausted,
 // retried on the fallback model. When a restart happens after chunks were
 // already delivered, the consumer first receives a restart marker chunk so
 // it can discard the partial response — the tombstone equivalent for
-// Claude Code's orphaned assistant messages.
+// orphaned assistant messages.
 func (r *Router) Stream(ctx context.Context, input []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
 	return &retryStream{r: r, ctx: ctx, input: input, opts: opts}, nil
 }

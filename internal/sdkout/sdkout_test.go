@@ -9,14 +9,14 @@ import (
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
 
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/tools"
 )
 
 // runFakeAgent drives an agent whose model issues one tool call then answers.
-func runFakeAgent(t *testing.T) ([]graph.Step, []messages.Message, *agent.Agent) {
+func runFakeAgent(t *testing.T) ([]lggraph.StreamChunk, []messages.Message, *agent.Agent) {
 	t.Helper()
 	model := language.NewFakeChatModel(
 		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
@@ -36,15 +36,15 @@ func runFakeAgent(t *testing.T) ([]graph.Step, []messages.Message, *agent.Agent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("run it")})
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("run it")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Reconstruct the steps the runner would have rendered: state updates per
 	// node transition.
-	var steps []graph.Step
-	steps = append(steps, graph.Step{Update: graph.State{"messages": []messages.Message{out[2]}}}) // AI tool call
-	steps = append(steps, graph.Step{Update: graph.State{"messages": []messages.Message{out[3]}}}) // tool result
+	var steps []lggraph.StreamChunk
+	steps = append(steps, lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"model": map[string]any{"messages": []messages.Message{out[2]}}}}) // AI tool call
+	steps = append(steps, lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"tools": map[string]any{"messages": []messages.Message{out[3]}}}}) // tool result
 	return steps, out, a
 }
 
@@ -151,6 +151,6 @@ func (boomError) Error() string { return "boom" }
 
 var errBoom = boomError{}
 
-func steps(out []messages.Message) []graph.Step {
-	return []graph.Step{{Update: graph.State{"messages": out}}}
+func steps(out []messages.Message) []lggraph.StreamChunk {
+	return []lggraph.StreamChunk{{Mode: lggraph.StreamUpdates, Payload: map[string]any{"model": map[string]any{"messages": out}}}}
 }

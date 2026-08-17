@@ -220,7 +220,8 @@ func TestSessionStoreListVariants(t *testing.T) {
 	}
 }
 
-// list() 只读内存索引：删掉磁盘上的 .jsonl 后仍能列出（证明零 JSONL 读）。
+// list() reads only the in-memory index: sessions still list after their
+// on-disk .jsonl is deleted (proving zero JSONL reads).
 func TestSessionStoreListReadsIndexOnly(t *testing.T) {
 	dir := t.TempDir()
 	s := newSessionStore(dir)
@@ -231,7 +232,8 @@ func TestSessionStoreListReadsIndexOnly(t *testing.T) {
 	if err := s.save("sess-a", msgs, "/tmp/ws-a"); err != nil {
 		t.Fatal(err)
 	}
-	// 删除 transcript 文件：旧实现 list() 会丢这个 session，新实现不受影响。
+	// Delete the transcript file: the old list() implementation would drop
+	// this session; the new one is unaffected.
 	files, _ := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	for _, f := range files {
 		_ = os.Remove(f)
@@ -245,7 +247,8 @@ func TestSessionStoreListReadsIndexOnly(t *testing.T) {
 	}
 }
 
-// 并发 recordMeta（经由 save）不交错、不竞态（-race 把关）。
+// Concurrent recordMeta calls (via save) must not interleave or race
+// (-race guards this).
 func TestSessionStoreConcurrentSave(t *testing.T) {
 	dir := t.TempDir()
 	s := newSessionStore(dir)
@@ -265,7 +268,8 @@ func TestSessionStoreConcurrentSave(t *testing.T) {
 	}
 }
 
-// 启动对账：目录里有 index 之外的遗留 .jsonl，新 store 启动后应被收编。
+// Startup reconciliation: a leftover .jsonl in the directory that is not in
+// the index should be absorbed when a new store starts.
 func TestSessionStoreStartupReconcile(t *testing.T) {
 	dir := t.TempDir()
 	legacy := []messages.Message{{Role: messages.RoleHuman, Content: "legacy chat"}}
@@ -282,8 +286,9 @@ func TestSessionStoreStartupReconcile(t *testing.T) {
 	}
 }
 
-// 启动对账剪除僵尸条目：崩溃窗口可使 index.json 残留已删 transcript 的条目
-//（delete 的 flush 未及落盘），list 会显示一个 load 为 nil 的会话。
+// Startup reconciliation prunes zombie entries: a crash window can leave
+// index.json holding an entry whose transcript was deleted (delete's flush
+// never reached disk), and list would show a session whose load is nil.
 func TestSessionStoreStartupReconcilePrunesZombies(t *testing.T) {
 	dir := t.TempDir()
 	s := newSessionStore(dir)
@@ -293,7 +298,8 @@ func TestSessionStoreStartupReconcilePrunesZombies(t *testing.T) {
 	if err := s.save("zombie", []messages.Message{{Role: messages.RoleHuman, Content: "dead"}}, "/ws"); err != nil {
 		t.Fatal(err)
 	}
-	// 模拟崩溃窗口：index.json 已记录两个会话，但 zombie 的 transcript 丢失。
+	// Simulate the crash window: index.json already records both sessions,
+	// but the zombie's transcript is lost.
 	if err := os.Remove(filepath.Join(dir, "zombie.jsonl")); err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +314,7 @@ func TestSessionStoreStartupReconcilePrunesZombies(t *testing.T) {
 	if s2.load("zombie") != nil {
 		t.Fatal("zombie session should not resolve")
 	}
-	// 索引被清理（写回磁盘）。
+	// The index is cleaned up (written back to disk).
 	idx := s2.loadIndex()
 	if _, ok := idx["zombie"]; ok {
 		t.Fatal("zombie entry survived in index.json")

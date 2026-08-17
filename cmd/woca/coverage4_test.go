@@ -257,7 +257,7 @@ func TestAppRebuildMemoryError(t *testing.T) {
 
 func TestResolveBaseURLFromSettings(t *testing.T) {
 	db := settings.Settings{
-		GLMBaseURL:     "http://db-glm",
+		GLMBaseURL:      "http://db-glm",
 		DeepSeekBaseURL: "http://db-deepseek",
 	}
 	if got := resolveBaseURL("", "glm", db); got != "http://db-glm" {

@@ -36,7 +36,7 @@ func TestSubscribeSinceGap(t *testing.T) {
 	r := &Run{id: "test", subs: map[*subscriber]struct{}{}}
 	r.history = append(r.history, Event{Type: "delta", Seq: 41}, Event{Type: "delta", Seq: 42})
 	r.seq = 42
-	_, gap := r.subscribeSince(10) // 11..40 已不可见
+	_, gap := r.subscribeSince(10) // 11..40 are no longer visible
 	if !gap {
 		t.Fatal("want gap=true when lastSeq falls outside retained history")
 	}
@@ -44,7 +44,7 @@ func TestSubscribeSinceGap(t *testing.T) {
 
 func TestEmitDropCounter(t *testing.T) {
 	r := &Run{id: "test", subs: map[*subscriber]struct{}{}}
-	full := &subscriber{ch: make(chan Event)} // 无缓冲 → 永远满
+	full := &subscriber{ch: make(chan Event)} // unbuffered → always full
 	r.subs[full] = struct{}{}
 	r.emit(Event{Type: "delta", Data: map[string]any{}})
 	if n := r.droppedCount(); n != 1 {
@@ -62,7 +62,7 @@ func TestParkTimesOut(t *testing.T) {
 	r := &Run{id: "test", ctx: ctx, cancel: cancel, subs: map[*subscriber]struct{}{}}
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.park("permission", map[string]any{"tool_name": "Write"}) // 无 answer，直到超时
+		_, err := r.park("permission", map[string]any{"tool_name": "Write"}) // no answer until timeout
 		done <- err
 	}()
 	select {

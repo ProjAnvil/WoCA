@@ -1,6 +1,6 @@
-// Package plugins implements woca's plugin loader (a lightweight port of
-// Claude Code's plugin system): a plugin is a directory containing a
-// plugin.json manifest plus optional skills/ and agents/ subdirectories.
+// Package plugins implements woca's plugin loader: a plugin is a directory
+// containing a plugin.json manifest plus optional skills/ and agents/
+// subdirectories.
 // Plugins are installed under ~/.woca/plugins (from a local path or a git
 // URL — the marketplace-level distribution unit) and their skills and
 // subagent definitions merge into the session at startup.

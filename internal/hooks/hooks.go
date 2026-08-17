@@ -1,4 +1,4 @@
-// Package hooks ports Claude Code's hook system: shell commands that run on
+// Package hooks implements a hook system: shell commands that run on
 // events (PreToolUse, PostToolUse, UserPromptSubmit, Stop) and can inject
 // feedback or block a tool. Hooks are configured in settings.json.
 package hooks

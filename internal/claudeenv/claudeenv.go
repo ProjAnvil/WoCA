@@ -1,4 +1,4 @@
-// Package claudeenv imports Claude Code's user-level environment into
+// Package claudeenv imports the user-level Claude environment into
 // woca: skills under ~/.claude/skills and the global mcpServers from
 // ~/.claude.json. Selected skills are symlinked into ~/.woca/skills (so the
 // existing skill loader picks them up), and selected MCP servers are
@@ -228,8 +228,8 @@ func Servers() ([]MCPServer, error) {
 	return out, nil
 }
 
-// parseServer decodes one mcpServers entry across the shapes Claude Code
-// writes: remote servers carry type http|sse + url; local ones carry
+// parseServer decodes one mcpServers entry across the shapes found in
+// ~/.claude.json: remote servers carry type http|sse + url; local ones carry
 // command + args (+ env), with the type omitted.
 func parseServer(name string, raw json.RawMessage) (MCPServer, error) {
 	var cfg struct {

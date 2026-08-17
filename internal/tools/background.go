@@ -12,12 +12,11 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 )
 
-// BackgroundShells manages Bash commands started with run_in_background
-// (Claude Code's background-shell support): the command runs detached while
-// the turn continues, its combined output accumulates in memory, and
-// completion fires a notification that the agent injects after the next tool
-// round (the queued-attachment mechanism). Output is polled with BashOutput
-// and the shell terminated with KillShell.
+// BackgroundShells manages Bash commands started with run_in_background:
+// the command runs detached while the turn continues, its combined output
+// accumulates in memory, and completion fires a notification that the agent
+// injects after the next tool round (the queued-attachment mechanism). Output
+// is polled with BashOutput and the shell terminated with KillShell.
 
 // BackgroundShellStatus is a snapshot of one background shell.
 type BackgroundShellStatus struct {

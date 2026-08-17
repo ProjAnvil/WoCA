@@ -1,8 +1,7 @@
 // Package prompt builds the system prompt for the woca coding agent. It
-// mirrors the structure of Claude Code's system prompt (intro, system, doing
-// tasks, executing actions with care, using your tools, tone and style,
-// output efficiency, session-specific guidance, environment) while using
-// original wording.
+// assembles a fixed section order (intro, system, doing tasks, executing
+// actions with care, using your tools, tone and style, output efficiency,
+// session-specific guidance, environment) with original wording.
 package prompt
 
 import (

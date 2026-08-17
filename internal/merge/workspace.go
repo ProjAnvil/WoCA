@@ -10,7 +10,7 @@ import (
 // chain per session workspace and rebuilds prompts often, so the walk (and
 // its stats) must not repeat. Entries never expire within the process
 // lifetime — a workspace that runs `git init` later keeps its old chain
-// until restart (accepted per design §8 "启动时算一次并缓存").
+// until restart (accepted per design §8 "compute once at startup and cache").
 var workspaceCache sync.Map // workDir -> []string
 
 // WorkspaceDirs returns the workspace directory chain for workDir: workDir

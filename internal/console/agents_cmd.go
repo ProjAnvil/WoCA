@@ -10,9 +10,9 @@ import (
 	"github.com/projanvil/woca/internal/session"
 )
 
-// agentsCmd implements /agents (a port of Claude Code's subagent manager):
-// list definitions, show one, create from a template, or delete. Definitions
-// load at startup, so structural changes note that a restart applies them.
+// agentsCmd implements /agents, the subagent manager: list definitions, show
+// one, create from a template, or delete. Definitions load at startup, so
+// structural changes note that a restart applies them.
 //
 //	/agents                 list
 //	/agents show <name>     print the definition file

@@ -188,11 +188,14 @@ func TestLSPToolConfiguredServer(t *testing.T) {
 	}
 }
 
-// 同一 registry 连续两次 LSP 调用必须复用同一 server 进程且都成功：池化后
-// initialize 只能发生一次（spawn 时由池完成）。旧实现对每次调用都发
-// initialize，真实 gopls 会对第二次 initialize 报错（"initialize called
-// while server in initialized state"），复用必然失败并触发重启——池化收益
-// 归零。countinit 模式的 server 用诊断消息回报它收到的 initialize 次数。
+// Two consecutive LSP calls on the same registry must reuse the same server
+// process and both succeed: with pooling, initialize may happen only once
+// (the pool does it at spawn). The old implementation sent initialize on
+// every call, and real gopls errors on a second initialize ("initialize
+// called while server in initialized state"), so reuse always failed and
+// triggered a restart — zeroing out the pooling benefit. The countinit-mode
+// server reports how many initialize calls it received via its diagnostic
+// message.
 func TestLSPToolPooledServerInitializedOnce(t *testing.T) {
 	bin := buildLSPTestServer(t)
 	t.Setenv("WOCA_LSP_SERVER", bin+" countinit")

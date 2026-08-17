@@ -15,11 +15,10 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-// Image input support (Claude Code's FileReadTool imageProcessor): Read on an
-// image file attaches it to the tool result as a vision content block instead
-// of dumping bytes as text. Payloads are validated by magic bytes, capped at
-// 5 MB, and downscaled on the long edge (1568 px, the Claude Code rule) to
-// control token cost.
+// Image input support: Read on an image file attaches it to the tool result
+// as a vision content block instead of dumping bytes as text. Payloads are
+// validated by magic bytes, capped at 5 MB, and downscaled on the long edge
+// (1568 px) to control token cost.
 
 const (
 	maxImageBytes = 5 << 20

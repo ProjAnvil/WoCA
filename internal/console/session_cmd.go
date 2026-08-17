@@ -12,9 +12,9 @@ import (
 	"github.com/projanvil/woca/internal/session"
 )
 
-// exportCmd implements /export (a port of Claude Code's session export): it
-// writes the conversation to a file — markdown transcript by default, or the
-// resumable session JSON when the path ends in .json.
+// exportCmd implements /export: it writes the conversation to a file —
+// markdown transcript by default, or the resumable session JSON when the path
+// ends in .json.
 func (c *Console) exportCmd(args []string, s *Session) (Result, error) {
 	if len(s.History) == 0 {
 		return Result{}, fmt.Errorf("nothing to export (the conversation is empty)")

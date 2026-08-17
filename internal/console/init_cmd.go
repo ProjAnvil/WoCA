@@ -5,9 +5,8 @@ import (
 	"path/filepath"
 )
 
-// initPrompt is submitted as a user turn by /init (a port of Claude Code's
-// /init command): the agent explores the repo with its own tools and writes
-// the project guide file itself.
+// initPrompt is submitted as a user turn by /init: the agent explores the
+// repo with its own tools and writes the project guide file itself.
 const initPrompt = `Please analyze this codebase and create a project guide file with:
 
 1. Commands that will be commonly used, such as how to build, lint, and run tests. Include the necessary flags.

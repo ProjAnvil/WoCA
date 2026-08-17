@@ -213,7 +213,7 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 	}
 	go func() {
 		if w != nil && !s.admission.wait(run.ctx, sessionID, w) {
-			// 排队中被取消（cancelRun 取消了 run.ctx）或停机
+			// Cancelled while queued (cancelRun cancelled run.ctx) or shutdown.
 			run.finish("done", map[string]any{"cancelled": true})
 			return
 		}
@@ -228,7 +228,8 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 				}
 				s.logObsRunEnd(sessionID, id, workspace, final)
 			}
-			// 正确性核心：onDone（含落盘）返回之后才释放 session 门。
+			// Correctness core: the session gate is released only after
+			// onDone (including persistence) returns.
 			s.admission.release(sessionID)
 		})
 	}()

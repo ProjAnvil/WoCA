@@ -125,8 +125,8 @@ func TestGoalCycleSurvivesInnerRecursionLimit(t *testing.T) {
 	model := language.NewFakeChatModel(
 		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
 		language.WithResponses(
-			messages.AI("assess 1"),                                   // cycle 1 assess
-			tc("1"), tc("2"), tc("3"),                                 // cycle 1 execute: 3rd tool round is cut
+			messages.AI("assess 1"),   // cycle 1 assess
+			tc("1"), tc("2"), tc("3"), // cycle 1 execute: 3rd tool round is cut
 			messages.AI(`{"verdict":"continue","gaps":"more to do"}`), // cycle 1 evaluate
 		),
 	)

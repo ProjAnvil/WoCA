@@ -5,24 +5,25 @@ import (
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
+
 	"github.com/projanvil/woca/internal/agent"
-	"github.com/projanvil/woca/internal/graph"
 )
 
-// TestRenderReasoningDelta locks the SSE vocabulary: a ReasoningDelta step
-// becomes a "reasoning" event, text deltas stay "delta", and AI/tool updates
-// keep producing tool_call / tool_result events.
+// TestRenderReasoningDelta locks the SSE vocabulary: a ReasoningDelta custom
+// payload becomes a "reasoning" event, text payloads stay "delta", and
+// update chunks keep producing tool_call / tool_result events.
 func TestRenderReasoningDelta(t *testing.T) {
 	run := &Run{id: "test", subs: map[*subscriber]struct{}{}}
 
-	run.render(graph.Step{Delta: "answer text"})
-	run.render(graph.Step{Delta: agent.ReasoningDelta{Text: "thinking hard"}})
-	run.render(graph.Step{Update: graph.State{"messages": []messages.Message{
+	run.render(lggraph.StreamChunk{Mode: lggraph.StreamCustom, Payload: "answer text"})
+	run.render(lggraph.StreamChunk{Mode: lggraph.StreamCustom, Payload: agent.ReasoningDelta{Text: "thinking hard"}})
+	run.render(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"model": map[string]any{"messages": []messages.Message{
 		{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{ID: "t1", Name: "Read"}}},
-	}}})
-	run.render(graph.Step{Update: graph.State{"messages": []messages.Message{
+	}}}})
+	run.render(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"tools": map[string]any{"messages": []messages.Message{
 		{Role: messages.RoleTool, ToolCallID: "t1", Content: "file body"},
-	}}})
+	}}}})
 
 	want := []struct {
 		typ string

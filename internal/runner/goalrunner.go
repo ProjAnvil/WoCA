@@ -3,12 +3,14 @@ package runner
 import (
 	"context"
 	"fmt"
+	"iter"
 	"strings"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 
 	"github.com/projanvil/woca/internal/agent"
-	"github.com/projanvil/woca/internal/graph"
 )
 
 // goalSummary extracts the terminal narrative from a goal snapshot: the
@@ -34,7 +36,7 @@ func goalSummary(g *agent.Goal) string {
 // over the session history. It mirrors Run's interrupt handling — permission
 // and question interrupts park at the harness, answers resume the goal graph,
 // which re-enters the interrupted execute cycle and its nested agent graph —
-// and renders every step (cycle headers, execution deltas, tool use, verdict
+// and renders every chunk (cycle headers, execution deltas, tool use, verdict
 // lines) through the same Renderer. The loop itself decides when to stop
 // (verified completion, blocked, paused, or budget exhaustion); unlike Run
 // there are no stop-hook or token-budget auto-continuations at this layer,
@@ -71,30 +73,16 @@ func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) (final
 	}
 	started = true
 	runID = r.agent.GoalRunID()
-	defer stream.Close()
 	for {
-		step, ok, err := stream.Next(ctx)
-		if err != nil {
-			return nil, err
+		paused, values, streamErr := r.pumpGoal(ctx, stream)
+		if streamErr != nil {
+			return nil, streamErr
 		}
-		if !ok {
-			return nil, fmt.Errorf("runner: goal stream ended without a terminal step")
-		}
-		if step.Done {
-			if r.render != nil {
-				r.render(step)
-			}
-			return agent.MessagesFrom(step.Values), nil
-		}
-		if step.Err != nil {
-			ie, isInterrupt := graph.AsInterrupt(step.Err)
-			if !isInterrupt {
-				return nil, step.Err
-			}
+		if len(paused) > 0 {
 			if r.handle == nil {
-				return nil, step.Err
+				return nil, fmt.Errorf("runner: goal paused with no interrupt handler")
 			}
-			answer, err := r.handle(ie.Value)
+			answer, err := r.handle(agent.DecodeInterruptValue(paused[0].Value))
 			if err != nil {
 				return nil, err
 			}
@@ -103,21 +91,43 @@ func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) (final
 					r.RenderSummary(s)
 				}
 			}
-			stream.Close()
-			stream, err = r.agent.GoalResume(ctx, ie, answer)
+			stream, err = r.agent.GoalResume(ctx, answer)
 			if err != nil {
 				return nil, err
 			}
-			defer stream.Close()
 			continue
 		}
-		if r.render != nil {
-			r.render(step)
+		// Completed: values holds the final goal-graph state.
+		return agent.MessagesFrom(values), nil
+	}
+}
+
+// pumpGoal consumes one goal stream to its end, rendering as it goes. It
+// reports the pause interrupts (non-empty when the loop paused), the final
+// values snapshot, and the terminal stream error.
+func (r *Runner) pumpGoal(ctx context.Context, stream iter.Seq2[lggraph.StreamChunk, error]) (paused []lgtypes.Interrupt, values map[string]any, streamErr error) {
+	for chunk, cerr := range stream {
+		if cerr != nil {
+			streamErr = cerr
+			return
 		}
-		if r.RenderSummary != nil {
-			for _, s := range r.agent.TakeReadyToolUseSummaries() {
-				r.RenderSummary(s)
+		if intrs := chunkInterrupts(chunk); len(intrs) > 0 {
+			paused = intrs
+			return
+		}
+		switch chunk.Mode {
+		case lggraph.StreamCustom, lggraph.StreamUpdates:
+			if r.render != nil {
+				r.render(chunk)
 			}
+			if r.RenderSummary != nil {
+				for _, s := range r.agent.TakeReadyToolUseSummaries() {
+					r.RenderSummary(s)
+				}
+			}
+		case lggraph.StreamValues:
+			values = valuesState(chunk.Payload)
 		}
 	}
+	return
 }

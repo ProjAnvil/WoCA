@@ -1,6 +1,6 @@
 // Package oauth implements an OAuth 2.0 device-authorization-grant client
-// (the flow Claude Code uses for browser-based login). Endpoints and client ID
-// are configured by the caller.
+// for browser-based login. Endpoints and client ID are configured by the
+// caller.
 package oauth
 
 import (

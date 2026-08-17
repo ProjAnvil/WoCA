@@ -20,8 +20,9 @@ type memoryFile struct {
 // down to workDir — the more local a file, the later it is injected.
 func collectMemoryFiles(workDir string) []memoryFile {
 	var out []memoryFile
-	// seen 按绝对路径去重：git root == $HOME 时 ~/.claude/CLAUDE.md 会同时
-	// 命中 user 级 fallback 与 project 级遍历，只注入一次。
+	// seen deduplicates by absolute path: when the git root == $HOME,
+	// ~/.claude/CLAUDE.md would match both the user-level fallback and the
+	// project-level walk; inject it only once.
 	seen := map[string]bool{}
 	if home, err := os.UserHomeDir(); err == nil {
 		for _, p := range []string{

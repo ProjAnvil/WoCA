@@ -1,6 +1,6 @@
 // Package quota queries per-provider account usage — the quota/balance APIs
 // each provider template knows about (GLM Coding Plan monitor, DeepSeek
-// balance, the Claude Code OAuth subscription usage, the Codex/ChatGPT usage
+// balance, the Anthropic OAuth subscription usage, the Codex/ChatGPT usage
 // endpoint) — and turns it into a display-ready summary used by the chat UI's
 // quota chip and /quota command. Providers without a known quota endpoint
 // report unavailable; callers fall back to session usage.

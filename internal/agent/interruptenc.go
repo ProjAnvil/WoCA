@@ -144,3 +144,8 @@ func decodeResumeValue(v any) any {
 	}
 	return derefAny(out)
 }
+
+// DecodeInterruptValue restores a concrete interrupt payload from its
+// durable-persistence envelope (see encodeInterruptPayload). The harness's
+// interrupt handlers (runner, server park) receive decoded values.
+func DecodeInterruptValue(v any) any { return decodeInterruptPayload(v) }

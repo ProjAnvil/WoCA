@@ -19,11 +19,12 @@ var (
 	codexUsageURL     = "https://chatgpt.com/backend-api/wham/usage"
 )
 
-// fetchAnthropicSubscription reports the Claude Code subscription usage
-// (five-hour and seven-day windows) from the OAuth credentials Claude Code
-// itself stores, mirroring cc-switch's official-subscription template. The
-// Anthropic API-key billing console has no public quota endpoint, so a
-// custom gateway or missing credentials simply reports unavailable.
+// fetchAnthropicSubscription reports the Anthropic subscription usage
+// (five-hour and seven-day windows) from the OAuth credentials imported from
+// ~/.claude/.credentials.json, mirroring cc-switch's official-subscription
+// template. The Anthropic API-key billing console has no public quota
+// endpoint, so a custom gateway or missing credentials simply reports
+// unavailable.
 func fetchAnthropicSubscription(ctx context.Context, baseURL string) (Info, error) {
 	info := Info{Type: TypePlan}
 	if u := strings.TrimSpace(baseURL); u != "" && !strings.Contains(strings.ToLower(u), "api.anthropic.com") {
@@ -156,7 +157,7 @@ type usageWindow struct {
 	ResetAt           any     `json:"reset_at"`
 }
 
-// claudeOAuthToken reads the Claude Code OAuth access token from
+// claudeOAuthToken reads the Anthropic OAuth access token imported from
 // ~/.claude/.credentials.json (both the claudeAiOauth and claude.ai_oauth
 // spellings seen in the wild).
 func claudeOAuthToken() string {

@@ -1,10 +1,9 @@
-// MCP OAuth 2.0 authorization (a port of Claude Code's McpAuthTool flow):
-// discovers the authorization server from the MCP server's protected-resource
-// metadata, registers a dynamic client when needed, and completes an
-// authorization-code + PKCE flow against a localhost callback. The resulting
-// access token is handed to the caller (persisted as an encrypted secret by
-// the harness) and injected as a Bearer header by the streamable-HTTP
-// transport.
+// MCP OAuth 2.0 authorization: discovers the authorization server from the
+// MCP server's protected-resource metadata, registers a dynamic client when
+// needed, and completes an authorization-code + PKCE flow against a localhost
+// callback. The resulting access token is handed to the caller (persisted as
+// an encrypted secret by the harness) and injected as a Bearer header by the
+// streamable-HTTP transport.
 package mcp
 
 import (

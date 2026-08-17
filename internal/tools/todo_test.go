@@ -13,8 +13,8 @@ func TestTodoStoreMerge(t *testing.T) {
 		{Content: "second", Status: "in_progress", ActiveForm: "working on second"},
 	})
 	s.Merge([]Todo{
-		{Content: "second", Status: "completed"},           // updates in place
-		{Content: "third", Status: "pending"},              // appended
+		{Content: "second", Status: "completed"},                 // updates in place
+		{Content: "third", Status: "pending"},                    // appended
 		{Content: "second", Status: "cancelled", ActiveForm: ""}, // updates again
 	})
 	got := s.Get()

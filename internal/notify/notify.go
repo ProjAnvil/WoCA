@@ -1,6 +1,5 @@
-// Package notify delivers terminal notifications, a small port of Claude
-// Code's notifier: a BEL attention bell plus an iTerm2/ConEmu-style OSC 9
-// toast. Enabled unless WOCA_NOTIFY=0.
+// Package notify delivers terminal notifications: a BEL attention bell plus
+// an iTerm2/ConEmu-style OSC 9 toast. Enabled unless WOCA_NOTIFY=0.
 package notify
 
 import (
@@ -27,8 +26,8 @@ func OSC9(w io.Writer, title string) {
 	fmt.Fprintf(w, "\x1b]9;%s\x07", title)
 }
 
-// Attention rings the bell and posts a toast when enabled (Claude Code
-// notifies on permission requests and turn completion).
+// Attention rings the bell and posts a toast when enabled (used to signal
+// permission requests and turn completion).
 func Attention(w io.Writer, message string) {
 	if !Enabled() {
 		return

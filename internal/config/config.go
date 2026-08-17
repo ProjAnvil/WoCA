@@ -146,7 +146,7 @@ func (c Config) Normalize() (Config, error) {
 			out.ThinkingBudget = MaxThinkingBudget
 		}
 		// The API requires max_tokens > budget_tokens; raise the output cap
-		// when the budget would swallow it (Claude Code's linked caps).
+		// when the budget would swallow it (the two caps are linked).
 		if out.MaxTokens <= out.ThinkingBudget {
 			out.MaxTokens = out.ThinkingBudget + ThinkingOutputHeadroom
 		}
@@ -158,8 +158,8 @@ func (c Config) Normalize() (Config, error) {
 }
 
 // Thinking-budget constraints (Anthropic extended thinking). The budget is
-// clamped to [1024, 31999] — Claude Code's MAX_THINKING_TOKENS semantics —
-// which keeps the 64k escalation cap comfortably above any budget.
+// clamped to [1024, 31999] (MAX_THINKING_TOKENS semantics), which keeps the
+// 64k escalation cap comfortably above any budget.
 const (
 	MinThinkingBudget      = 1024
 	MaxThinkingBudget      = 31999
@@ -167,7 +167,7 @@ const (
 )
 
 // Thinking levels are the user-facing names for extended-thinking budgets
-// (Claude Code's think / think hard / ultrathink ladder, condensed to four).
+// (a think / think hard / ultrathink ladder, condensed to four).
 const (
 	ThinkingLevelOff    = "off"
 	ThinkingLevelLow    = "low"

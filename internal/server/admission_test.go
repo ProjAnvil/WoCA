@@ -60,7 +60,7 @@ func TestAdmissionFIFO(t *testing.T) {
 	if got := <-granted; got != "w2" {
 		t.Fatalf("second promoted = %s, want w2", got)
 	}
-	// w1 promoted 时 w2 应收到的位置更新：1
+	// When w1 is promoted, w2 should receive a position update: 1.
 	mu.Lock()
 	defer mu.Unlock()
 	if len(positions) == 0 || positions[len(positions)-1] != 1 {
@@ -110,7 +110,7 @@ func TestAdmissionIndependentSessions(t *testing.T) {
 	}
 }
 
-// 无 interrupt 的 run：读 SSE 直到 done/error。
+// A run without interrupts: read SSE until done/error.
 func waitRunDone(t *testing.T, base, runID string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -140,7 +140,7 @@ func waitRunDone(t *testing.T, base, runID string) {
 	}
 }
 
-// POST /api/runs 并解析完整响应（含 state/queue_position）。
+// POST /api/runs and parse the full response (including state/queue_position).
 func postRun(t *testing.T, base, sessionID, prompt string) (runID, sid string, pos int) {
 	t.Helper()
 	body := fmt.Sprintf(`{"prompt":%q,"session_id":%q}`, prompt, sessionID)
@@ -168,10 +168,12 @@ func newScriptedAgent(t *testing.T, replies ...string) *agent.Agent {
 		msgs[i] = messages.AI(r)
 	}
 	a, err := agent.New(agent.Config{
-		// 偏差说明：计划原文无 limiter。热路径下 FakeChatModel 单轮 run 在
-		// 微秒级完成，第二条 POST 到达前门已被释放（pos=0，-count 下必挂），
-		// 故借 WithRateLimiter 钩子给每次模型调用加固定延迟，保证 run1 在
-		// flight 中可被第二条 POST 观察到排队。
+		// Deviation note: the plan text has no limiter. On the hot path a
+		// FakeChatModel single-turn run completes in microseconds, so the gate
+		// is released before the second POST arrives (pos=0, which would
+		// always fail under -count). We therefore use the WithRateLimiter
+		// hook to add a fixed delay to each model call, ensuring run1 is
+		// still in flight when the second POST observes the queue.
 		Model: language.NewFakeChatModel(
 			language.WithResponses(msgs...),
 			language.WithRateLimiter(delayLimiter{d: 200 * time.Millisecond}),
@@ -201,15 +203,17 @@ func (l delayLimiter) Acquire(ctx context.Context, _ bool) (bool, error) {
 	}
 }
 
-// 同 session 两条 run 串行：run2 的 history 必须包含 run1 已落盘的回复。
+// Two runs in the same session serialize: run2's history must contain run1's
+// already-persisted reply.
 func TestSessionGateSerializesRuns(t *testing.T) {
 	a := newScriptedAgent(t, "reply-1", "reply-2")
 	s := New(Config{Agent: a, Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: t.TempDir(), WorkDir: t.TempDir()})
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
-	// 偏差说明：done 事件先于 onDone 落盘发出；等齐两个 save 事件再结束，
-	// 避免 t.TempDir 清理与异步写盘竞态（"directory not empty"）。
+	// Deviation note: the done event is emitted before onDone persists; wait
+	// for both save events before ending, avoiding a race between t.TempDir
+	// cleanup and the async write ("directory not empty").
 	saved := make(chan string, 4)
 	s.sessions.testAfterSave = func(id string) { saved <- id }
 
@@ -234,8 +238,9 @@ func TestSessionGateSerializesRuns(t *testing.T) {
 		}
 	}
 
-	// 偏差说明：done 事件先于 onDone 落盘发出，单次 GET 存在固有竞态，
-	// 改为有界轮询（断言不变：两条回复都必须出现）。
+	// Deviation note: the done event is emitted before onDone persists, so a
+	// single GET has an inherent race; use bounded polling instead (assertion
+	// unchanged: both replies must appear).
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		resp, err := http.Get(srv.URL + "/api/sessions/" + sid1)
@@ -254,17 +259,20 @@ func TestSessionGateSerializesRuns(t *testing.T) {
 	}
 }
 
-// 冒烟断言入库（终审遗留）：同 session 3 连发时 queue_position 0/1/2，
-// 中途态 /api/stats 必须报 active_runs=1（持门的 run1）、queued_runs=2、
-// session_queue_depths 含该会话且深度 2；最终三条 run 全部终态、队列清空。
+// Smoke assertions (kept from final review): with 3 back-to-back runs in one
+// session, queue_position is 0/1/2; the mid-flight /api/stats must report
+// active_runs=1 (run1 holding the gate), queued_runs=2, and
+// session_queue_depths containing that session with depth 2; finally all
+// three runs reach a terminal state and the queue drains.
 func TestSessionGateThreeRunsStatsMidFlight(t *testing.T) {
 	a := newScriptedAgent(t, "reply-1", "reply-2", "reply-3")
 	s := New(Config{Agent: a, Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: t.TempDir(), WorkDir: t.TempDir()})
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 
-	// 偏差说明：done 事件先于 onDone 落盘发出；等齐三个 save 事件再结束，
-	// 避免 t.TempDir 清理与异步写盘竞态（"directory not empty"）。
+	// Deviation note: the done event is emitted before onDone persists; wait
+	// for all three save events before ending, avoiding a race between
+	// t.TempDir cleanup and the async write ("directory not empty").
 	saved := make(chan string, 6)
 	s.sessions.testAfterSave = func(id string) { saved <- id }
 
@@ -300,8 +308,10 @@ func TestSessionGateThreeRunsStatsMidFlight(t *testing.T) {
 		return body
 	}
 
-	// 中途态：run1 持门（delayLimiter 的 200ms 窗口内可观察），run2/run3
-	// 排队。有界轮询到精确计数——错过窗口则 2 深度不会再出现，超时即败。
+	// Mid-flight state: run1 holds the gate (observable within delayLimiter's
+	// 200ms window) while run2/run3 queue. Bounded-poll for the exact counts
+	// — if the window is missed the depth-2 state never reappears, so a
+	// timeout fails the test.
 	deadline := time.Now().Add(10 * time.Second)
 	var mid statsBody
 	for {
@@ -318,7 +328,8 @@ func TestSessionGateThreeRunsStatsMidFlight(t *testing.T) {
 		t.Fatalf("mid-flight session_queue_depths = %v, want [%s]=2", mid.SessionQueueDepths, sid1)
 	}
 
-	// 收尾：三条 run 全部到达终态；等齐三个 save 事件后队列必须清空。
+	// Wrap-up: all three runs reach a terminal state; after waiting for all
+	// three save events the queue must be empty.
 	waitRunDone(t, srv.URL, run1)
 	waitRunDone(t, srv.URL, run2)
 	waitRunDone(t, srv.URL, run3)
@@ -342,7 +353,8 @@ func TestSessionGateThreeRunsStatsMidFlight(t *testing.T) {
 	}
 }
 
-// 释放时序断言（spec §8）：session 门必须在 transcript 落盘完成后才释放。
+// Release-timing assertion (spec §8): the session gate must be released only
+// after the transcript is persisted.
 func TestSessionGateReleasesAfterPersist(t *testing.T) {
 	a := newScriptedAgent(t, "reply-1", "reply-2")
 	s := New(Config{Agent: a, Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: t.TempDir(), WorkDir: t.TempDir()})
@@ -355,7 +367,8 @@ func TestSessionGateReleasesAfterPersist(t *testing.T) {
 	run1, sid1, _ := postRun(t, srv.URL, "", "first")
 	run2, _, _ := postRun(t, srv.URL, sid1, "second")
 
-	// run1 落盘完成前，run2 不得开始（收不到任何 delta）。
+	// Before run1 finishes persisting, run2 must not start (no delta may
+	// arrive).
 	select {
 	case got := <-saved:
 		if got != sid1 {
@@ -364,11 +377,12 @@ func TestSessionGateReleasesAfterPersist(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("run1 transcript not saved")
 	}
-	// 落盘已完成 → 门已释放 → run2 的流里应出现 reply-2 且不再有 reply-1 之后的状态错乱。
+	// Persist completed → gate released → run2's stream should show reply-2
+	// with no state confusion after reply-1.
 	waitRunDone(t, srv.URL, run1)
 	waitRunDone(t, srv.URL, run2)
-	// 偏差说明：等 run2 的 save 事件再返回，避免 t.TempDir 清理与异步
-	// 写盘竞态（"directory not empty"）。
+	// Deviation note: return only after run2's save event, avoiding a race
+	// between t.TempDir cleanup and the async write ("directory not empty").
 	select {
 	case <-saved:
 	case <-time.After(10 * time.Second):
@@ -376,11 +390,11 @@ func TestSessionGateReleasesAfterPersist(t *testing.T) {
 	}
 }
 
-// 深度超限：门被占住时第 9 条排队 POST 返回 409。
+// Depth overflow: with the gate held, the 9th queued POST returns 409.
 func TestSessionGateQueueFull409(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)
-	model := &blockingModel{block: block} // Stream 阻塞在 block 上，永不返回回复
+	model := &blockingModel{block: block} // Stream blocks on block, never returning a reply
 	a, err := agent.New(agent.Config{
 		Model:          model,
 		Registry:       tools.NewRegistry(t.TempDir()),
@@ -412,9 +426,10 @@ func TestSessionGateQueueFull409(t *testing.T) {
 	}
 }
 
-// blockingModel 的 Stream 实现参照 internal/agent/streamingexec_test.go:55
-// 的 scriptedModel，差别是返回的 stream 在 Next 时阻塞于 block channel
-// （测试结束 close 后返回 cancelled）。
+// blockingModel's Stream follows the scriptedModel at
+// internal/agent/streamingexec_test.go:55, except the returned stream blocks
+// in Next on the block channel (returning cancelled after the test closes
+// it).
 type blockingModel struct {
 	block chan struct{}
 }

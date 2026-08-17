@@ -218,7 +218,7 @@ func TestCleanDuckDuckGoURL(t *testing.T) {
 		{"https://example.com/page", "https://example.com/page"},
 		{"//duckduckgo.com/l/?uddg=https%3A%2F%2Fgo.dev%2Fdoc", "https://go.dev/doc"},
 		{"//duckduckgo.com/l/?uddg=not%zz-escapable", "//duckduckgo.com/l/?uddg=not%zz-escapable"}, // invalid escape: dropped, href kept
-		{"ht tp://bad url", "ht tp://bad url"},                            // url.Parse failure: passthrough
+		{"ht tp://bad url", "ht tp://bad url"},                                                     // url.Parse failure: passthrough
 	}
 	for _, c := range cases {
 		if got := cleanDuckDuckGoURL(c.href); got != c.want {

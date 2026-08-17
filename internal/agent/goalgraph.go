@@ -422,7 +422,7 @@ func (a *Agent) goalExecuteNode() lggraph.NodeFunc {
 			hist = a.CompactHistory(ctx, hist)
 			cycleMsg := goalCycleMsg(goal.Cycles, goal.MaxCycles, goal.Objective, assessment, goal.TokensUsed, goal.MaxTokens)
 			prefix = len(hist)
-			pendingThread = newThreadID()
+			pendingThread = NewThreadID()
 			stream = a.Stream(ctx, append(hist, cycleMsg), pendingThread)
 			a.ResetTurnCounter()
 			turnsBefore = 0

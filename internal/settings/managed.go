@@ -7,10 +7,10 @@ import (
 	"sync"
 )
 
-// Managed settings (a port of Claude Code's enterprise managed-settings
-// tier): a settings file that overrides user/database values AND locks every
-// field it sets against further changes (/settings and Save reject writes to
-// locked fields). Sourced from --managed-settings / WOCA_MANAGED_SETTINGS.
+// Managed settings (an enterprise tier): a settings file that overrides
+// user/database values AND locks every field it sets against further changes
+// (/settings and Save reject writes to locked fields). Sourced from
+// --managed-settings / WOCA_MANAGED_SETTINGS.
 
 // managedFile is the on-disk shape: the persisted Settings fields.
 type managedFile struct {

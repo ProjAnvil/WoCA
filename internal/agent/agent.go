@@ -14,11 +14,11 @@ import (
 	"iter"
 	"path/filepath"
 	"runtime/debug"
-	"time"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -256,14 +256,14 @@ type Agent struct {
 	// starting: the fork layers fresh input onto a thread's latest
 	// checkpoint, while woca's turn model starts every fresh run from
 	// scratch (see resetThread).
-	saver          lgcheckpoint.Saver
-	tasks          *TaskManager
-	taskList       *TaskList
-	hooks          *hooks.Runner
-	skills         []skills.Skill
-	compactLimit   int
-	summarizer     language.ChatModel
-	bus            *bus.Bus
+	saver        lgcheckpoint.Saver
+	tasks        *TaskManager
+	taskList     *TaskList
+	hooks        *hooks.Runner
+	skills       []skills.Skill
+	compactLimit int
+	summarizer   language.ChatModel
+	bus          *bus.Bus
 	// agentName is this session's identity in a team (lead for the
 	// interactive session, the teammate name for spawned members).
 	agentName string

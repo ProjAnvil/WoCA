@@ -7,10 +7,9 @@ import (
 	"github.com/projanvil/woca/internal/prompt"
 )
 
-// outputStyleCmd implements /output-style (a port of Claude Code's output
-// styles): with no args it lists the styles and marks the current one; with a
-// name it rebuilds the live system prompt with that style's personality
-// section and persists the choice.
+// outputStyleCmd implements /output-style: with no args it lists the styles
+// and marks the current one; with a name it rebuilds the live system prompt
+// with that style's personality section and persists the choice.
 func (c *Console) outputStyleCmd(args []string) (Result, error) {
 	current := "default"
 	if c.deps.Settings != nil {

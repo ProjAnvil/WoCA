@@ -57,7 +57,7 @@ func TestEntriesDeterministicOutput(t *testing.T) {
 	for _, e := range out {
 		got = append(got, e.Name)
 	}
-	// 高 Level 在前；同 Level 内 Order 小者在前
+	// Higher Level first; within a Level, lower Order first.
 	if len(got) != 3 || got[0] != "c" || got[1] != "a" || got[2] != "b" {
 		t.Fatalf("unexpected order: %v", got)
 	}

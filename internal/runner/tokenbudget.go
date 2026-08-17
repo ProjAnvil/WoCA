@@ -8,24 +8,23 @@ import (
 	"github.com/projanvil/woca/internal/tokens"
 )
 
-// Token budget auto-continue, a port of Claude Code's query/tokenBudget.ts +
-// query.ts stage 22e: when a turn ends naturally but the configured output
-// budget is not yet 90% spent, a nudge message is injected and the run
+// Token budget auto-continue: when a turn ends naturally but the configured
+// output budget is not yet 90% spent, a nudge message is injected and the run
 // continues ("500k auto-continue"). Continuation stops on diminishing
 // returns — 3+ consecutive continuations whose token deltas are both under
 // 500 — or when the budget is reached.
 
 const (
-	// DefaultTurnTokenBudget mirrors Claude Code's 500k auto-continue.
+	// DefaultTurnTokenBudget mirrors the 500k auto-continue default.
 	DefaultTurnTokenBudget = 500_000
 	// budgetCompletionThreshold is the fraction of the budget at which the
-	// turn is considered complete (Claude Code's COMPLETION_THRESHOLD 0.9).
+	// turn is considered complete.
 	budgetCompletionThreshold = 0.9
 	// diminishingThreshold is the per-continuation token delta below which
-	// progress counts as diminishing (Claude Code's 500).
+	// progress counts as diminishing.
 	diminishingThreshold = 500
 	// maxDiminishingContinuations is the continuation count from which the
-	// diminishing check applies (Claude Code's >= 3).
+	// diminishing check applies (>= 3).
 	maxDiminishingContinuations = 3
 )
 
@@ -72,7 +71,7 @@ func checkTokenBudget(tr *tokenBudgetTracker, budget, cumulative int) tokenBudge
 	return tokenBudgetDecision{Diminishing: diminishing}
 }
 
-// budgetContinuationMessage mirrors Claude Code's nudge text.
+// budgetContinuationMessage renders the nudge text.
 func budgetContinuationMessage(pct, turnTokens, budget int) string {
 	return fmt.Sprintf("Stopped at %d%% of token target (%d / %d). Keep working — do not summarize.", pct, turnTokens, budget)
 }

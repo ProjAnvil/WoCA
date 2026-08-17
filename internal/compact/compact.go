@@ -1,4 +1,4 @@
-// Package compact ports Claude Code's auto-compaction: when a conversation
+// Package compact implements auto-compaction: when a conversation
 // approaches the context budget, older messages are summarized and replaced by
 // a summary message, keeping the recent tail intact.
 package compact

@@ -12,10 +12,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/console"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/tools"
@@ -208,7 +208,7 @@ func TestRendererEmitsGoalDeltas(t *testing.T) {
 	m := New(nil, nil, config.Config{})
 	ch := make(chan tea.Msg, 8)
 	r := m.renderer(ch)
-	r(graph.Step{Delta: agent.GoalDelta{Message: messages.Message{
+	r(lggraph.StreamChunk{Mode: lggraph.StreamCustom, Payload: agent.GoalDelta{Message: messages.Message{
 		Role:      messages.RoleAI,
 		ToolCalls: []messages.ToolCall{{ID: "g1", Name: "Edit", Args: map[string]any{"old_string": "a", "new_string": "b"}}},
 	}}})

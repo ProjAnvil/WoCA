@@ -1,5 +1,5 @@
 // Package skills loads agent skills (SKILL.md files with YAML frontmatter)
-// from a skills directory, mirroring Claude Code's skill loading.
+// from a skills directory.
 package skills
 
 import (
@@ -30,7 +30,7 @@ type SkillArg struct {
 
 // Load walks root and loads every SKILL.md, using the containing directory
 // name as the default skill name. Directory symlinks are followed (skills
-// imported from Claude Code / cc-switch are linked into ~/.woca/skills).
+// imported from ~/.claude / cc-switch are linked into ~/.woca/skills).
 func Load(root string) ([]Skill, error) {
 	var out []Skill
 	var walk func(dir string)

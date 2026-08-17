@@ -325,7 +325,7 @@ func (t *TeamManager) run(ctx context.Context, m *teammate, spawnPrompt string) 
 		// A hard cap per turn so a parked permission prompt or a stuck
 		// provider call cannot wedge the teammate forever.
 		tctx, tcancel := context.WithTimeout(ctx, 10*time.Minute)
-			out, err := m.agent.Invoke(tctx, append(history, messages.Human(turnPrompt)), newThreadID())
+		out, err := m.agent.Invoke(tctx, append(history, messages.Human(turnPrompt)), NewThreadID())
 		tcancel()
 		if err != nil {
 			t.mu.Lock()

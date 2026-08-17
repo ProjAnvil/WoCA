@@ -12,10 +12,10 @@ import (
 	"github.com/projanvil/woca/internal/session"
 )
 
-// rewindCmd implements /rewind (a conversation-level port of Claude Code's
-// rewind): with no args it lists rewind points (one per user turn); with a
-// turn number it truncates the conversation to just before that turn. File
-// snapshots are not restored — only the transcript rewinds.
+// rewindCmd implements /rewind, a conversation-level rewind: with no args it
+// lists rewind points (one per user turn); with a turn number it truncates
+// the conversation to just before that turn. File snapshots are not restored
+// — only the transcript rewinds.
 func (c *Console) rewind(args []string, s *Session) (Result, error) {
 	idx := userTurns(s.History)
 	if len(args) == 0 {

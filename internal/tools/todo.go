@@ -9,7 +9,7 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 )
 
-// Todo is a single todo-list entry (mirrors Claude Code's TodoWrite shape).
+// Todo is a single todo-list entry for the TodoWrite tool.
 type Todo struct {
 	Content    string `json:"content"`
 	Status     string `json:"status"` // pending | in_progress | completed | cancelled

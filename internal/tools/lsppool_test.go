@@ -43,7 +43,7 @@ func TestLSPPoolRestartOnCrash(t *testing.T) {
 	err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error {
 		calls++
 		if calls == 1 {
-			return errors.New("process died") // 首次 Call 报错 → 摘除、重启重试一次
+			return errors.New("process died") // first Call errors → evict, restart, retry once
 		}
 		return nil
 	})
@@ -66,7 +66,7 @@ func TestLSPPoolBrokenCircuitBreaker(t *testing.T) {
 	for i := 0; i < lspMaxSpawnFailures; i++ {
 		_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
 	}
-	// 第 3 次：熔断冷却中，直接报错且不再 spawn
+	// 3rd call: in breaker cooldown, errors immediately without spawning
 	err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
 	if err == nil {
 		t.Fatal("want broken error during cooldown")
@@ -88,7 +88,7 @@ func TestLSPPoolIdleReap(t *testing.T) {
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
 	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
-	time.Sleep(150 * time.Millisecond) // 等回收
+	time.Sleep(150 * time.Millisecond) // wait for the reaper
 	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
 	if n := spawns.Load(); n != 2 {
 		t.Fatalf("spawns = %d, want 2 (idle entry reaped)", n)
@@ -108,9 +108,10 @@ func (c *countingInitTransport) Call(ctx context.Context, method string, params,
 	return c.lspTransport.Call(ctx, method, params, result)
 }
 
-// 池负责一次握手：同一 key 连续两次 call 复用同一 server 且 initialize
-// 恰好一次（旧的 per-call initialize 会让第二次复用必失败——真实 gopls
-// 对二次 initialize 报协议错误）。
+// The pool owns the single handshake: two consecutive calls on the same key
+// reuse the same server with exactly one initialize (the old per-call
+// initialize made every second reuse fail — real gopls reports a protocol
+// error for a second initialize).
 func TestLSPPoolInitializesOncePerServer(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.go")
@@ -141,7 +142,8 @@ func TestLSPPoolInitializesOncePerServer(t *testing.T) {
 	}
 }
 
-// 握手失败视为 spawn 失败：计入熔断（连续失败后进入冷却，不再 spawn）。
+// A handshake failure counts as a spawn failure: it feeds the breaker
+// (after consecutive failures it enters cooldown and stops spawning).
 func TestLSPPoolInitFailureFeedsBreaker(t *testing.T) {
 	var spawns atomic.Int32
 	p := newLSPPool(func([]string) (lspTransport, error) {
@@ -156,7 +158,7 @@ func TestLSPPoolInitFailureFeedsBreaker(t *testing.T) {
 			t.Fatal("want handshake failure surfaced")
 		}
 	}
-	// 熔断冷却中：直接报错且不再 spawn。
+	// In breaker cooldown: errors immediately without spawning.
 	if err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil }); err == nil {
 		t.Fatal("want broken error during cooldown")
 	}
@@ -165,8 +167,9 @@ func TestLSPPoolInitFailureFeedsBreaker(t *testing.T) {
 	}
 }
 
-// 同一 server 上的并发 call 必须串行：didOpen/diagnostic/didClose 序列交错
-// 时（同文件场景 A 的 didClose 可先于 B 的 diagnostic）语义就坏了。
+// Concurrent calls on the same server must serialize: if
+// didOpen/diagnostic/didClose sequences interleave (in a same-file scenario
+// A's didClose can precede B's diagnostic), the semantics break.
 func TestLSPPoolPerEntrySerialization(t *testing.T) {
 	var cur, maxDepth atomic.Int32
 	record := func() {
@@ -190,7 +193,7 @@ func TestLSPPoolPerEntrySerialization(t *testing.T) {
 			defer wg.Done()
 			_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error {
 				record()
-				time.Sleep(10 * time.Millisecond) // 足够让并发裸奔时重叠
+				time.Sleep(10 * time.Millisecond) // long enough to overlap if calls ran unserialized
 				cur.Add(-1)
 				return nil
 			})
@@ -202,8 +205,9 @@ func TestLSPPoolPerEntrySerialization(t *testing.T) {
 	}
 }
 
-// acquire 复用必须刷新 lastUsed：entry 空闲到接近阈值后被复用、fn 执行中
-// 越过阈值，idle reaper 不得关掉在用的 transport（否则复用即失败）。
+// acquire-reuse must refresh lastUsed: an entry idle close to the threshold
+// gets reused and fn crosses the threshold mid-run; the idle reaper must not
+// close an in-use transport (otherwise the reuse fails).
 func TestLSPPoolAcquireReuseRefreshesLastUsed(t *testing.T) {
 	oldIdle, oldTick := lspIdleTimeout, lspReapInterval
 	lspIdleTimeout, lspReapInterval = 500*time.Millisecond, 100*time.Millisecond
@@ -216,14 +220,15 @@ func TestLSPPoolAcquireReuseRefreshesLastUsed(t *testing.T) {
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
 	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
-	// 空闲 350ms（阈值 500ms 内），随后复用并在 fn 内越过阈值：reaper 在
-	// fn 期间的 tick（600ms 处，cutoff=100ms）若看旧 lastUsed 就会回收。
+	// Idle for 350ms (within the 500ms threshold), then reused and crossing
+	// the threshold inside fn: a reaper tick during fn (at 600ms, cutoff=100ms)
+	// would reap the entry if it saw the stale lastUsed.
 	time.Sleep(350 * time.Millisecond)
 	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error {
 		time.Sleep(350 * time.Millisecond)
 		return nil
 	})
-	// 复用成功且未被回收 → 仍是同一进程。
+	// Reuse succeeded without being reaped → still the same process.
 	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
 	if n := spawns.Load(); n != 1 {
 		t.Fatalf("spawns = %d, want 1 (in-use entry must not be reaped)", n)

@@ -10,9 +10,9 @@ import (
 
 // Pool tuning (vars so tests can shrink them).
 var (
-	lspIdleTimeout      = 5 * time.Minute  // 空闲回收
-	lspBrokenCooldown   = 10 * time.Minute // 熔断冷却
-	lspMaxSpawnFailures = 2                // 连续 spawn 失败熔断阈值
+	lspIdleTimeout      = 5 * time.Minute  // idle reaping
+	lspBrokenCooldown   = 10 * time.Minute // circuit-breaker cooldown
+	lspMaxSpawnFailures = 2                // consecutive spawn-failure breaker threshold
 	lspReapInterval     = time.Minute
 )
 
@@ -150,7 +150,7 @@ func (p *lspPool) acquire(key, workspace string, command []string) (*lspEntry, l
 		}
 		return nil, nil, err
 	}
-	if e.tr != nil { // 并发 spawn 竞速：保留先入池者
+	if e.tr != nil { // concurrent spawn race: keep the one that entered the pool first
 		_ = tr.Close()
 		return e, e.tr, nil
 	}

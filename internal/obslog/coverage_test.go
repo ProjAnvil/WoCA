@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/messages"
-
 )
 
 func TestStoreToggleAndContext(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
-	coretools "github.com/projanvil/langchain-golang/core/tools"
 	"github.com/projanvil/langchain-golang/core/schema"
+	coretools "github.com/projanvil/langchain-golang/core/tools"
 	"github.com/rs/zerolog"
 
 	"github.com/projanvil/woca/internal/agent"
@@ -259,9 +259,9 @@ func newAgentConsole(t *testing.T, mutate func(*agent.Config)) (*Console, *confi
 // mcp__server__tool entries for /mcp).
 type stubTool struct{ name string }
 
-func (s stubTool) Name() string                                        { return s.name }
-func (s stubTool) Description() string                                 { return "stub tool" }
-func (s stubTool) ArgsSchema() schema.Schema                           { return nil }
+func (s stubTool) Name() string              { return s.name }
+func (s stubTool) Description() string       { return "stub tool" }
+func (s stubTool) ArgsSchema() schema.Schema { return nil }
 func (s stubTool) Invoke(ctx context.Context, in map[string]any) (coretools.Result, error) {
 	return coretools.Result{}, nil
 }

@@ -1,6 +1,6 @@
 // Package cost estimates session cost from accumulated token usage and a
-// model pricing table (a small port of Claude Code's cost-tracker). Prices are
-// USD per million tokens; estimates are informational, not billing.
+// model pricing table. Prices are USD per million tokens; estimates are
+// informational, not billing.
 package cost
 
 import (

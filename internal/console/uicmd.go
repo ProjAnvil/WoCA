@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// themeCmd implements /theme (a port of Claude Code's theme switcher): no
-// args lists palettes, a name switches the TUI palette live.
+// themeCmd implements /theme, the theme switcher: no args lists palettes, a
+// name switches the TUI palette live.
 func (c *Console) themeCmd(args []string) (Result, error) {
 	if len(args) == 0 {
 		var b strings.Builder

@@ -59,7 +59,7 @@ const (
 )
 
 // MaxThinkingBudget mirrors config.MaxThinkingBudget (the Anthropic extended
-// thinking ceiling, Claude Code's MAX_THINKING_TOKENS semantics).
+// thinking ceiling semantics of MAX_THINKING_TOKENS).
 const MaxThinkingBudget = 31999
 
 // Secret names stored encrypted in the secrets table.

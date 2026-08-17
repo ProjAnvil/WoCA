@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 
 	"github.com/projanvil/woca/internal/agent"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/runner"
 )
 
@@ -48,7 +48,7 @@ type Run struct {
 	subs    map[*subscriber]struct{}
 	history []Event
 	pending *interruptState
-	done    bool // terminal event (done or error) emitted
+	done    bool         // terminal event (done or error) emitted
 	seq     int64        // under mu; last assigned Seq
 	dropped atomic.Int64 // fanout drops on full subscriber channels
 	// onFinish, when set, fires exactly once when the terminal event is
@@ -119,38 +119,53 @@ func (r *Run) startGoal(history []messages.Message, onDone func([]messages.Messa
 	}()
 }
 
-// render translates one graph step into SSE events.
-func (r *Run) render(step graph.Step) {
-	if s, ok := step.Delta.(string); ok && s != "" {
-		r.emit(Event{Type: "delta", Data: map[string]any{"text": s}})
-		return
-	}
-	if rd, ok := step.Delta.(agent.ReasoningDelta); ok && rd.Text != "" {
-		r.emit(Event{Type: "reasoning", Data: map[string]any{"text": rd.Text}})
-		return
-	}
-	msgs := agent.MessagesFrom(step.Update)
-	if g, ok := step.Delta.(agent.GoalDelta); ok {
-		// Messages produced inside a goal execute cycle stream through the
-		// delta channel; render them exactly like normal-run messages.
-		msgs = append(msgs, g.Message)
-	}
-	for _, m := range msgs {
-		switch m.Role {
-		case messages.RoleAI:
-			for _, tc := range m.ToolCalls {
-				r.emit(Event{Type: "tool_call", Data: map[string]any{
-					"id":   tc.ID,
-					"name": tc.Name,
-					"args": tc.Args,
-				}})
+// render translates one stream chunk into SSE events: custom payloads carry
+// token/reasoning deltas (and goal-cycle messages), update chunks carry the
+// message batches nodes produced.
+func (r *Run) render(chunk lggraph.StreamChunk) {
+	switch chunk.Mode {
+	case lggraph.StreamCustom:
+		switch v := chunk.Payload.(type) {
+		case string:
+			if v != "" {
+				r.emit(Event{Type: "delta", Data: map[string]any{"text": v}})
 			}
-		case messages.RoleTool:
-			r.emit(Event{Type: "tool_result", Data: map[string]any{
-				"tool_call_id": m.ToolCallID,
-				"content":      m.Content,
+		case agent.ReasoningDelta:
+			if v.Text != "" {
+				r.emit(Event{Type: "reasoning", Data: map[string]any{"text": v.Text}})
+			}
+		case agent.GoalDelta:
+			// Messages produced inside a goal execute cycle stream through
+			// the custom channel; render them like normal-run messages.
+			r.renderMessage(v.Message)
+		}
+	case lggraph.StreamUpdates:
+		updates, _ := chunk.Payload.(map[string]any)
+		for _, nodeUpdate := range updates {
+			state, _ := nodeUpdate.(map[string]any)
+			for _, m := range agent.MessagesFrom(state) {
+				r.renderMessage(m)
+			}
+		}
+	}
+}
+
+// renderMessage emits the SSE events for one transcript message.
+func (r *Run) renderMessage(m messages.Message) {
+	switch m.Role {
+	case messages.RoleAI:
+		for _, tc := range m.ToolCalls {
+			r.emit(Event{Type: "tool_call", Data: map[string]any{
+				"id":   tc.ID,
+				"name": tc.Name,
+				"args": tc.Args,
 			}})
 		}
+	case messages.RoleTool:
+		r.emit(Event{Type: "tool_result", Data: map[string]any{
+			"tool_call_id": m.ToolCallID,
+			"content":      m.Content,
+		}})
 	}
 }
 
@@ -194,7 +209,7 @@ func (r *Run) park(kind string, payload any) (any, error) {
 	case answer := <-reply:
 		return answer, nil
 	case <-r.ctx.Done():
-		return nil, r.ctx.Err() // 原取消路径语义不变
+		return nil, r.ctx.Err() // original cancellation-path semantics unchanged
 	}
 }
 
@@ -250,7 +265,7 @@ func (r *Run) emit(ev Event) {
 		select {
 		case sub.ch <- ev:
 		default:
-			r.dropped.Add(1) // 慢消费者丢事件可观测（/api/stats）
+			r.dropped.Add(1) // dropped events on slow consumers are observable (/api/stats)
 		}
 	}
 	r.mu.Unlock()

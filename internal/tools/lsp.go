@@ -17,8 +17,8 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 )
 
-// LSP tool (a lightweight port of Claude Code's LSPTool): pulls diagnostics
-// for one file from a language server speaking LSP over stdio. The server
+// LSP tool: pulls diagnostics for one file from a language server speaking
+// LSP over stdio. The server
 // command comes from the WOCA_LSP_SERVER environment variable (e.g.
 // "gopls", "typescript-language-server --stdio"); the pool initializes a
 // server once at spawn and each call speaks enough JSON-RPC for didOpen →

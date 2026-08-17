@@ -184,8 +184,8 @@ func TestHostMatches(t *testing.T) {
 		{"https://open.bigmodel.cn/v4", "bigmodel.cn", true},
 		{"https://evil-z.ai.example.com/v4", "z.ai", false},
 		{"https://z.ai.false.com/v4", "z.ai", false},
-		{"api.z.ai", "z.ai", true},   // scheme-less
-		{"", "z.ai", false},          // empty
+		{"api.z.ai", "z.ai", true}, // scheme-less
+		{"", "z.ai", false},        // empty
 		{"https://x.cn", "bigmodel.cn", false},
 	}
 	for _, c := range cases {

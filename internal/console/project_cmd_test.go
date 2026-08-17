@@ -78,7 +78,7 @@ func newUsageConsole(t *testing.T, um messages.UsageMetadata, model string) *Con
 	fake := language.NewFakeChatModel(language.WithResponses(resp))
 	c, cfg, _ := newTestConsoleWithModel(t, fake)
 	cfg.Model = model
-	if _, err := c.deps.Agent.Invoke(context.Background(), nil); err != nil {
+	if _, err := c.deps.Agent.Invoke(context.Background(), nil, "t"); err != nil {
 		t.Fatal(err)
 	}
 	return c

@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 )
 
-// Output styles (a port of Claude Code's outputStyles): a personality section
-// appended to the system prompt that changes how responses are delivered —
-// same tools and knowledge, different presentation contract.
+// Output styles: a personality section appended to the system prompt that
+// changes how responses are delivered — same tools and knowledge, different
+// presentation contract.
 
 // Style is one output style preset.
 type Style struct {
@@ -64,10 +64,10 @@ func StyleNames() []string {
 	return out
 }
 
-// Segment caching (Claude Code's systemPromptSections cache): dynamic prompt
-// segments — project memory files, environment — are cached by content key so
-// repeated builds (style switches, /clear, /compact) produce byte-identical
-// prompts without re-reading disk, keeping provider prompt caches valid.
+// Segment caching: dynamic prompt segments — project memory files,
+// environment — are cached by content key so repeated builds (style switches,
+// /clear, /compact) produce byte-identical prompts without re-reading disk,
+// keeping provider prompt caches valid.
 
 var (
 	segmentCache sync.Map

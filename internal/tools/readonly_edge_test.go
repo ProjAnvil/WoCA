@@ -15,21 +15,21 @@ func TestIsReadOnlyCommandStrippingEdges(t *testing.T) {
 		command string
 		want    bool
 	}{
-		{"sudo", false},                 // wrapper alone strips to nothing
-		{"env", true},                   // bare env is printenv
-		{"env FOO=bar", true},           // assignment-only env stays "env"
-		{"timeout 5", false},            // timeout without a command
-		{"timeout -s KILL 5", false},    // timeout signal form without a command
-		{"timeout -s KILL", false},      // signal flag without duration
-		{"cd", false},                   // bare "cd" word
-		{"cdfoo", false},                // prefix match must respect word chars
-		{"cd /tmp & cmd", false},        // single "&" is not a stripped chain
-		{"ls && sudo", false},           // empty segment after stripping is not read-only
-		{"cat < in.txt", true},          // input redirection stays read-only
-		{"sudo cat f | grep x", true},   // wrapper inside a pipe segment
-		{"cd /a && cd /b && ls", true},  // repeated cd chains
-		{"FOO=1 BAR=2 ls", true},        // multiple assignments
-		{"FOO=bar", false},              // assignment without a command
+		{"sudo", false},                // wrapper alone strips to nothing
+		{"env", true},                  // bare env is printenv
+		{"env FOO=bar", true},          // assignment-only env stays "env"
+		{"timeout 5", false},           // timeout without a command
+		{"timeout -s KILL 5", false},   // timeout signal form without a command
+		{"timeout -s KILL", false},     // signal flag without duration
+		{"cd", false},                  // bare "cd" word
+		{"cdfoo", false},               // prefix match must respect word chars
+		{"cd /tmp & cmd", false},       // single "&" is not a stripped chain
+		{"ls && sudo", false},          // empty segment after stripping is not read-only
+		{"cat < in.txt", true},         // input redirection stays read-only
+		{"sudo cat f | grep x", true},  // wrapper inside a pipe segment
+		{"cd /a && cd /b && ls", true}, // repeated cd chains
+		{"FOO=1 BAR=2 ls", true},       // multiple assignments
+		{"FOO=bar", false},             // assignment without a command
 	}
 	for _, c := range cases {
 		if got := IsReadOnlyCommand(c.command); got != c.want {

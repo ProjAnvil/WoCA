@@ -33,6 +33,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
+	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
 	"github.com/projanvil/woca"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/agents"
@@ -40,8 +41,9 @@ import (
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/console"
 	contextx "github.com/projanvil/woca/internal/context"
-	"github.com/projanvil/woca/internal/graph"
+
 	"github.com/projanvil/woca/internal/hooks"
+	"github.com/projanvil/woca/internal/lgcp"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/mcp"
 	"github.com/projanvil/woca/internal/memory"
@@ -152,7 +154,7 @@ func newRootCmd() *cobra.Command {
 	fl.StringVar(&opts.searchAPI, "search-api", "", "JSON web-search API endpoint for WebSearch (with {q} placeholder)")
 	fl.StringVar(&opts.searchAPIKey, "search-api-key", "", "bearer key for --search-api")
 	fl.StringVar(&opts.checkpointDir, "checkpoint-dir", "", "directory to persist graph checkpoints (enables cross-process interrupt/resume)")
-	fl.StringVar(&opts.resumeCheckpoint, "resume-checkpoint", "", "resume from a persisted checkpoint key")
+	fl.StringVar(&opts.resumeCheckpoint, "resume-checkpoint", "", "resume a paused run by its checkpoint thread ID (durable saver required)")
 	fl.StringVar(&opts.resumeValue, "resume-value", "", "resume value for --resume-checkpoint (e.g. y/n)")
 	fl.StringArrayVar(&opts.allowCommands, "allow-command", nil, "Bash command prefix to allow (repeatable); when set, only these may run")
 	fl.StringArrayVar(&opts.denyCommands, "deny-command", nil, "Bash command substring to block (repeatable)")
@@ -1133,25 +1135,25 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		return st.DB()
 	}
 
-	var checkpointer graph.Checkpointer
+	var checkpointer lgcheckpoint.Saver
 	backend := dbSettings.CheckpointBackend
 	if backend == "" {
 		backend = settings.CheckpointSQLite
 	}
 	switch {
 	case opts.checkpointDir != "":
-		checkpointer = graph.NewFileCheckpointer(opts.checkpointDir)
+		checkpointer = lgcp.NewFileSaver(opts.checkpointDir)
 	case backend == settings.CheckpointFile:
 		if dir := dbSettings.CheckpointDir; dir != "" {
-			checkpointer = graph.NewFileCheckpointer(dir)
+			checkpointer = lgcp.NewFileSaver(dir)
 		}
 	case backend == settings.CheckpointPostgres:
 		if db := openPostgres(); db != nil {
-			checkpointer = graph.NewSQLCheckpointer(db.DB, string(db.Dialect))
+			checkpointer = lgcp.NewSQLSaver(db.DB, string(db.Dialect))
 		}
 	case backend == settings.CheckpointSQLite:
 		if db := localDB(); db != nil {
-			checkpointer = graph.NewSQLCheckpointer(db.DB, string(db.Dialect))
+			checkpointer = lgcp.NewSQLSaver(db.DB, string(db.Dialect))
 		}
 	}
 

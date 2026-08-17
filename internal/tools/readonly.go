@@ -5,8 +5,8 @@ import (
 )
 
 // readOnlyCommandPrefixes are command prefixes whose effect is to inspect, not
-// mutate, the filesystem or process state. This is a conservative subset of
-// Claude Code's read-only Bash classifier.
+// mutate, the filesystem or process state. This is a deliberately conservative
+// subset of a read-only Bash classifier.
 var readOnlyCommandPrefixes = []string{
 	"ls", "ll", "l.", "dir",
 	"cat", "head", "tail", "more", "less", "zcat",

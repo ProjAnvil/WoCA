@@ -32,7 +32,7 @@ func goarch() string { return goarchPinned }
 // Runtime downloads are pinned to exact versions with SHA-256 digests taken
 // from the projects' published checksum manifests (uv: sha256.sum; pinchtab:
 // checksums.txt) and re-verified locally at download time. Upgrading a
-// runtime means updating these tables (see docs/plugin-research.md).
+// runtime means updating these tables.
 
 const (
 	uvVersion   = "0.12.5"

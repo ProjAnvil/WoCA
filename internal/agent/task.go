@@ -323,7 +323,7 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 		return "", err
 	}
 	if onText == nil {
-		msgs, err := sub.Invoke(ctx, history, newThreadID())
+		msgs, err := sub.Invoke(ctx, history, NewThreadID())
 		if err != nil {
 			return "", err
 		}
@@ -334,7 +334,7 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 	// updates for complete AI messages and the final values snapshot.
 	final := ""
 	for chunk, err := range sub.Graph().Stream(ctx, sub.NewState(ctx, history), lggraph.StreamOptions{
-		Options: lggraph.Options{ThreadID: newThreadID()},
+		Options: lggraph.Options{ThreadID: NewThreadID()},
 		Modes:   []lggraph.StreamMode{lggraph.StreamUpdates, lggraph.StreamValues},
 	}) {
 		if err != nil {
@@ -370,8 +370,8 @@ func valuesState(payload any) map[string]any {
 	return state
 }
 
-// newThreadID mints a fresh checkpoint thread identifier.
-func newThreadID() string {
+// NewThreadID mints a fresh checkpoint thread identifier.
+func NewThreadID() string {
 	return "run-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 

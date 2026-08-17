@@ -7,10 +7,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Themes (a small port of Claude Code's /theme): named palettes that
-// re-style the transcript. SetTheme reassigns the package styles; it runs on
-// the bubbletea goroutine (the /theme command), so no locking is needed
-// beyond the mutex guarding concurrent tests.
+// Themes: named palettes that re-style the transcript. SetTheme reassigns
+// the package styles; it runs on the bubbletea goroutine (the /theme
+// command), so no locking is needed beyond the mutex guarding concurrent
+// tests.
 
 type Theme struct {
 	Name        string

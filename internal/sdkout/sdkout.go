@@ -1,8 +1,7 @@
 // Package sdkout renders agent runs as machine-readable output for headless
-// SDK consumption — a port of Claude Code's --output-format json and
-// stream-json. "json" prints one result object after the run; "stream-json"
-// prints one JSON object per line as events complete (assistant messages,
-// tool results, then the final result envelope).
+// SDK consumption. "json" prints one result object after the run;
+// "stream-json" prints one JSON object per line as events complete (assistant
+// messages, tool results, then the final result envelope).
 package sdkout
 
 import (
@@ -13,9 +12,9 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/cost"
-	"github.com/projanvil/woca/internal/graph"
 )
 
 // Formats.
@@ -61,20 +60,26 @@ type event struct {
 	ErrorText string          `json:"error,omitempty"`
 }
 
-// Step emits one graph step as stream events (stream-json only).
-func (w *Writer) Step(step graph.Step) {
-	if w.format != FormatStreamJSON || step.Done {
+// Step emits one stream chunk as stream events (stream-json only). Only
+// update chunks carry transcript messages; custom payloads (token deltas)
+// have no stream-json event.
+func (w *Writer) Step(chunk lggraph.StreamChunk) {
+	if w.format != FormatStreamJSON || chunk.Mode != lggraph.StreamUpdates {
 		return
 	}
-	for _, m := range agent.MessagesFrom(step.Update) {
-		switch m.Role {
-		case messages.RoleAI:
-			if m.Content == "" && len(m.ToolCalls) == 0 {
-				continue
+	updates, _ := chunk.Payload.(map[string]any)
+	for _, nodeUpdate := range updates {
+		state, _ := nodeUpdate.(map[string]any)
+		for _, m := range agent.MessagesFrom(state) {
+			switch m.Role {
+			case messages.RoleAI:
+				if m.Content == "" && len(m.ToolCalls) == 0 {
+					continue
+				}
+				w.write(event{Type: "assistant", Message: messageJSON(m)})
+			case messages.RoleTool:
+				w.write(event{Type: "user", Message: messageJSON(m)})
 			}
-			w.write(event{Type: "assistant", Message: messageJSON(m)})
-		case messages.RoleTool:
-			w.write(event{Type: "user", Message: messageJSON(m)})
 		}
 	}
 }

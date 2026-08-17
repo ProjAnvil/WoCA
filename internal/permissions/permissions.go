@@ -1,4 +1,4 @@
-// Package permissions implements the Claude-Code-style tool permission rules:
+// Package permissions implements tool permission rules:
 // an allow/deny/ask list read from a JSON settings file, plus the matcher that
 // resolves a tool call to its effective action.
 package permissions

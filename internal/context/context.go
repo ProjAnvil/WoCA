@@ -1,5 +1,5 @@
 // Package contextx collects runtime context (git status, etc.) that is
-// injected into the system prompt, mirroring Claude Code's context.ts.
+// injected into the system prompt.
 package contextx
 
 import (

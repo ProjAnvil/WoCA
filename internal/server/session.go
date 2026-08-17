@@ -35,7 +35,7 @@ type sessionStore struct {
 	mu         sync.Mutex
 	mem        map[string][]messages.Message
 	tombstones map[string]bool
-	index      map[string]sessionMeta // 唯一事实源；启动时 loadIndex+对账
+	index      map[string]sessionMeta // single source of truth; loadIndex + reconciliation at startup
 
 	// writeMu serializes index.json write+rename so concurrent recorders
 	// never interleave the tmp file.
@@ -93,7 +93,8 @@ func (s *sessionStore) reconcileOnStartup() {
 		}
 		changed = true
 	}
-	// 剪除僵尸条目：索引中不存在对应 .jsonl 的会话（写回索引前过滤）。
+	// Prune zombie entries: sessions in the index with no corresponding
+	// .jsonl file (filtered before the index is written back).
 	for id := range s.index {
 		if _, err := os.Stat(s.path(id)); err != nil {
 			delete(s.index, id)
@@ -124,7 +125,7 @@ func (s *sessionStore) load(id string) []messages.Message {
 	if s.dir == "" {
 		return nil
 	}
-	msgs, err := session.Load(s.path(id)) // 磁盘读在锁外
+	msgs, err := session.Load(s.path(id)) // disk read outside the lock
 	if err != nil {
 		return nil
 	}
@@ -174,7 +175,7 @@ type sessionMeta struct {
 	WorkspaceName string `json:"workspace_name"` // display name (dir basename)
 	UpdatedAt     string `json:"updated_at"`
 	Title         string `json:"title,omitempty"`
-	MessageCount  int    `json:"message_count,omitempty"` // 旧 index 缺字段显示 0，下次 save 自愈
+	MessageCount  int    `json:"message_count,omitempty"` // absent in old indexes shows 0; self-heals on next save
 }
 
 // loadIndex reads the sidecar metadata index (empty map when absent).

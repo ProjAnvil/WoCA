@@ -17,17 +17,17 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/console"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/notify"
 	"github.com/projanvil/woca/internal/runner"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/tools"
 )
 
-// lipgloss styles approximating Claude Code's terminal look.
+// lipgloss styles for the terminal look.
 var (
 	dimStyle     = lipgloss.NewStyle().Faint(true)
 	boldDimStyle = lipgloss.NewStyle().Bold(true).Faint(true)
@@ -42,8 +42,7 @@ var (
 	selDescStyle = lipgloss.NewStyle().Background(lipgloss.Color("5")).Foreground(lipgloss.Color("15")).Faint(true)
 )
 
-// toolColor returns a per-tool accent color, approximating Claude Code's
-// colored tool-name chips.
+// toolColor returns a per-tool accent color used for colored tool-name chips.
 func toolColor(name string) lipgloss.Style {
 	color := lipgloss.Color("6") // cyan default
 	switch name {
@@ -79,8 +78,7 @@ type interruptMsg struct {
 	answerCh chan any
 }
 
-// bannerLines is the welcome banner shown when the transcript is empty, in the
-// spirit of Claude Code's "Welcome to Claude Code" startup screen.
+// bannerLines is the welcome banner shown when the transcript is empty.
 func (m *Model) bannerLines() []string {
 	logo := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("208")).
 		Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("208")).
@@ -171,7 +169,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pending != nil {
 			return m.resolvePendingKey(msg)
 		}
-		// Vim modal input (Claude Code's /vim): in normal mode keys edit,
+		// Vim modal input (/vim): in normal mode keys edit,
 		// enter still submits. Interception happens before the standard
 		// handling; enter falls through to it.
 		if VimMode() && !m.vimInsert && !m.running {
@@ -452,8 +450,8 @@ func readCmd(ch <-chan tea.Msg) tea.Cmd {
 	}
 }
 
-// renderer converts graph steps into streamMsg increments, styled like Claude
-// Code: colored tool-name chips, dimmed results, edit diffs, live todo
+// renderer converts graph steps into streamMsg increments, styled with
+// colored tool-name chips, dimmed results, edit diffs, live todo
 // snapshots, and an in-flight tool spinner tree.
 func (m *Model) renderer(ch chan<- tea.Msg) runner.Renderer {
 	running := map[string]string{} // toolCallID -> tool name
@@ -479,18 +477,26 @@ func (m *Model) renderer(ch chan<- tea.Msg) runner.Renderer {
 			ch <- inFlightMsg(sortedValues(running))
 		}
 	}
-	return func(step graph.Step) {
-		if s, ok := step.Delta.(string); ok && s != "" {
-			ch <- streamMsg(s)
-			return
-		}
-		// Goal cycles stream their tool use through the delta channel.
-		if g, ok := step.Delta.(agent.GoalDelta); ok {
-			renderMsg(g.Message)
-			return
-		}
-		for _, msg := range agent.MessagesFrom(step.Update) {
-			renderMsg(msg)
+	return func(chunk lggraph.StreamChunk) {
+		switch chunk.Mode {
+		case lggraph.StreamCustom:
+			if s, ok := chunk.Payload.(string); ok && s != "" {
+				ch <- streamMsg(s)
+				return
+			}
+			// Goal cycles stream their tool use through the custom channel.
+			if g, ok := chunk.Payload.(agent.GoalDelta); ok {
+				renderMsg(g.Message)
+				return
+			}
+		case lggraph.StreamUpdates:
+			updates, _ := chunk.Payload.(map[string]any)
+			for _, nodeUpdate := range updates {
+				state, _ := nodeUpdate.(map[string]any)
+				for _, msg := range agent.MessagesFrom(state) {
+					renderMsg(msg)
+				}
+			}
 		}
 	}
 }

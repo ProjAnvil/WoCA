@@ -1,6 +1,5 @@
 // Package webgui manages the embedded web UI as an on-demand service that can
-// be started and stopped from the console (the /web command), in the spirit of
-// Claude Code's `claude server` (Direct Connect).
+// be started and stopped from the console (the /web command).
 package webgui
 
 import (

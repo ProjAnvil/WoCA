@@ -11,7 +11,7 @@ import (
 )
 
 // FileHistory is the file-level undo/redo log backing /undo and /redo (woca's
-// counterpart of opencode's /undo and Claude Code's file rewind). Every
+// counterpart of opencode's /undo). Every
 // mutation performed through the Write/Edit/NotebookEdit tools records the
 // file's before/after bytes; undo restores the earlier state (deleting files
 // the change created), redo re-applies it. Consecutive changes to the same
