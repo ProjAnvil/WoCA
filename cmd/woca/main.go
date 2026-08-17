@@ -1003,7 +1003,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		log.Info().Strs("skills", linked).Msg("imported claude skills via ~/.woca/skills")
 	}
 	skillList := loadSkills(workdir, log)
-	agentDefs := loadAgents(workdir)
+	agentDefs := loadAgents(workdir, log)
 	// Plugins (marketplace-level units under ~/.woca/plugins) contribute
 	// namespaced skills and subagent definitions.
 	pluginList, pluginErrs := plugins.Load(plugins.DefaultRoot())
@@ -1172,7 +1172,7 @@ func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, er
 		Summarizer:         model,
 		Permissions:        loadPermissions(workdir),
 		Agents:             agentDefs,
-		AgentsFor:          loadAgents,
+		AgentsFor:          func(ws string) []agents.Definition { return loadAgents(ws, log) },
 		CheckpointDir:      opts.checkpointDir,
 		Checkpointer:       checkpointer,
 		BashPolicy:         tools.NewCommandPolicy(opts.allowCommands, opts.denyCommands),
@@ -1727,18 +1727,38 @@ func skillManifest(list []skills.Skill) string {
 	return b.String()
 }
 
-// loadAgents loads custom subagent definitions from project and user dirs.
-func loadAgents(workdir string) []agents.Definition {
-	var roots []string
-	if home, err := os.UserHomeDir(); err == nil {
-		roots = append(roots, filepath.Join(home, ".woca", "agents"))
-	}
-	roots = append(roots, filepath.Join(workdir, ".woca", "agents"))
-	var out []agents.Definition
-	for _, root := range roots {
-		if list, err := agents.Load(root); err == nil {
-			out = append(out, list...)
+// loadAgents loads custom subagent definitions from layered directories:
+// workDir/.woca/agents plus every ancestor's up to the git root, winning
+// over the user root ~/.woca/agents on name conflicts.
+func loadAgents(workdir string, log zerolog.Logger) []agents.Definition {
+	var es []merge.Entry[agents.Definition]
+	for i, dir := range merge.WorkspaceDirs(workdir) {
+		list, err := agents.Load(filepath.Join(dir, ".woca", "agents"))
+		if err != nil || len(list) == 0 {
+			continue
 		}
+		for _, d := range list {
+			es = append(es, merge.Entry[agents.Definition]{
+				Name: d.Name, Value: d, Level: merge.LevelWorkspace,
+				Order: i, Source: d.Source,
+			})
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		if list, err := agents.Load(filepath.Join(home, ".woca", "agents")); err == nil {
+			for _, d := range list {
+				es = append(es, merge.Entry[agents.Definition]{
+					Name: d.Name, Value: d, Level: merge.LevelUser,
+					Order: 0, Source: d.Source,
+				})
+			}
+		}
+	}
+	merged, conflicts := merge.Entries(es)
+	logMergeConflicts(log, "agent", conflicts)
+	out := make([]agents.Definition, 0, len(merged))
+	for _, e := range merged {
+		out = append(out, e.Value)
 	}
 	return out
 }

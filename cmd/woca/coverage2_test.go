@@ -407,7 +407,7 @@ func TestHomeUnsetBranches(t *testing.T) {
 	if got := loadSkills(t.TempDir(), zerolog.Nop()); len(got) != 0 {
 		t.Fatal("skills should be empty without home")
 	}
-	if got := loadAgents(t.TempDir()); len(got) != 0 {
+	if got := loadAgents(t.TempDir(), zerolog.Nop()); len(got) != 0 {
 		t.Fatal("agents should be empty without home")
 	}
 }

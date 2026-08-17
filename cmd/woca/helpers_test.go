@@ -14,6 +14,7 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/rs/zerolog"
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
@@ -477,6 +478,7 @@ func TestInterruptHandler(t *testing.T) {
 }
 
 func TestLoadAgents(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	agentsDir := filepath.Join(dir, ".woca", "agents")
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
@@ -486,7 +488,7 @@ func TestLoadAgents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.md"), []byte(doc), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	list := loadAgents(dir)
+	list := loadAgents(dir, zerolog.Nop())
 	if len(list) != 1 || list[0].Name != "reviewer" {
 		t.Fatalf("agents = %+v", list)
 	}

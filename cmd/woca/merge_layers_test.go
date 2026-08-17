@@ -74,3 +74,33 @@ func TestLoadSkillsSameDirWocaBeatsClaude(t *testing.T) {
 		t.Fatalf("same-dir .woca must beat .claude, got %+v", list)
 	}
 }
+
+func TestLoadAgentsLayered(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := t.TempDir()
+	deep := filepath.Join(root, "a")
+	writeFileT(t, filepath.Join(root, ".git", ".keep"), "")
+	writeFileT(t, filepath.Join(home, ".woca", "agents", "dup.md"), "---\nname: dup\ndescription: user\n---\nUSER AGENT")
+	writeFileT(t, filepath.Join(deep, ".woca", "agents", "dup.md"), "---\nname: dup\ndescription: ws\n---\nWS AGENT")
+	writeFileT(t, filepath.Join(home, ".woca", "agents", "only-user.md"), "---\nname: only-user\ndescription: u\n---\nONLY USER")
+	merge.ResetWorkspaceCache()
+	t.Cleanup(merge.ResetWorkspaceCache)
+
+	var buf bytes.Buffer
+	list := loadAgents(deep, zerolog.New(&buf))
+
+	byName := map[string]string{}
+	for _, d := range list {
+		byName[d.Name] = d.Prompt
+	}
+	if byName["dup"] != "WS AGENT" {
+		t.Fatalf("dup winner must be workspace, got %q", byName["dup"])
+	}
+	if byName["only-user"] != "ONLY USER" {
+		t.Fatalf("user-only agent missing: %+v", list)
+	}
+	if !strings.Contains(buf.String(), "config merge conflict resolved") {
+		t.Fatalf("conflicts not logged: %q", buf.String())
+	}
+}
