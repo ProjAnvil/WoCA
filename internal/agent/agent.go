@@ -243,18 +243,18 @@ type Agent struct {
 	planMode bool
 	// promptFor rebuilds the system prompt per run workspace and model
 	// (nil = SystemPrompt for every run); wsPrompts caches the results keyed
-	// by workspace+model and is invalidated by SetSystemPrompt.
+	// by workspace+model (bounded LRU) and is invalidated by SetSystemPrompt.
 	promptFor func(workDir, model string) string
-	wsPrompts sync.Map
+	wsPrompts *wsCache[string]
 	// skillsForFn/agentsForFn/hooksForFn resolve the per-workspace skill
 	// set, subagent definitions and hook runner (nil = the startup values);
-	// the ws* maps cache their per-workspace results.
+	// the ws* caches bound their per-workspace results (LRU).
 	skillsForFn func(workdir string) []skills.Skill
-	wsSkills    sync.Map
+	wsSkills    *wsCache[[]skills.Skill]
 	agentsForFn func(workdir string) []agents.Definition
-	wsAgents    sync.Map
+	wsAgents    *wsCache[[]agents.Definition]
 	hooksForFn  func(workdir string) *hooks.Runner
-	wsHooks     sync.Map
+	wsHooks     *wsCache[*hooks.Runner]
 	// spec tracks speculatively executed tool calls started while the model
 	// was still streaming (streaming tool execution).
 	spec speculativeRegistry
@@ -386,6 +386,12 @@ func New(cfg Config) (*Agent, error) {
 		agentsForFn:    cfg.AgentsFor,
 		hooksForFn:     cfg.HooksFor,
 	}
+	// The four per-workspace caches are bounded LRU (wsCacheCapacity) — the
+	// sync.Map versions grew without bound across distinct workspaces.
+	a.wsPrompts = newWSCache[string](wsCacheCapacity)
+	a.wsSkills = newWSCache[[]skills.Skill](wsCacheCapacity)
+	a.wsAgents = newWSCache[[]agents.Definition](wsCacheCapacity)
+	a.wsHooks = newWSCache[*hooks.Runner](wsCacheCapacity)
 	// The cron scheduler's only host dependency is the notification queue;
 	// the method value is safe to capture before the rest of the wiring
 	// because it is only invoked by the scheduler loop, never here.
@@ -665,7 +671,7 @@ func (a *Agent) SetSystemPrompt(s string) {
 // InvalidateWorkspacePrompts drops the cached per-workspace system prompts so
 // the next run in each workspace rebuilds them (style or model changes).
 func (a *Agent) InvalidateWorkspacePrompts() {
-	a.wsPrompts = sync.Map{}
+	a.wsPrompts.Clear()
 }
 
 // systemPromptFor resolves the system prompt for one run. With a builder
@@ -685,11 +691,11 @@ func (a *Agent) systemPromptFor(ctx context.Context) string {
 	}
 	model := a.CurrentModelName()
 	key := ws + "\x00" + model
-	if v, ok := a.wsPrompts.Load(key); ok {
-		return v.(string)
+	if p, ok := a.wsPrompts.Get(key); ok {
+		return p
 	}
 	p := a.promptFor(ws, model)
-	a.wsPrompts.Store(key, p)
+	a.wsPrompts.Set(key, p)
 	return p
 }
 
@@ -703,11 +709,11 @@ func (a *Agent) skillsFor(ctx context.Context) []skills.Skill {
 	if !ok || ws == "" {
 		return a.skills
 	}
-	if v, ok := a.wsSkills.Load(ws); ok {
-		return v.([]skills.Skill)
+	if v, ok := a.wsSkills.Get(ws); ok {
+		return v
 	}
 	list := a.skillsForFn(ws)
-	a.wsSkills.Store(ws, list)
+	a.wsSkills.Set(ws, list)
 	return list
 }
 
@@ -721,11 +727,11 @@ func (a *Agent) agentsFor(ctx context.Context) []agents.Definition {
 	if !ok || ws == "" {
 		return a.agentDefs
 	}
-	if v, ok := a.wsAgents.Load(ws); ok {
-		return v.([]agents.Definition)
+	if v, ok := a.wsAgents.Get(ws); ok {
+		return v
 	}
 	list := a.agentsForFn(ws)
-	a.wsAgents.Store(ws, list)
+	a.wsAgents.Set(ws, list)
 	return list
 }
 
@@ -740,11 +746,11 @@ func (a *Agent) hooksFor(ctx context.Context) *hooks.Runner {
 	if !ok || ws == "" {
 		return a.hooks
 	}
-	if v, ok := a.wsHooks.Load(ws); ok {
-		return v.(*hooks.Runner)
+	if v, ok := a.wsHooks.Get(ws); ok {
+		return v
 	}
 	h := a.hooksForFn(ws)
-	a.wsHooks.Store(ws, h)
+	a.wsHooks.Set(ws, h)
 	return h
 }
 

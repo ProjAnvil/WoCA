@@ -1830,7 +1830,7 @@ git commit -m "feat(tools): pooled LSP servers with crash restart and broken bre
 **Interfaces:**
 - Produces: `newWSCache[V any](capacity int) *wsCache[V]`、`Get(key) (V, bool)`、`Set(key, V)`、`Clear()`；容量常量 `wsCacheCapacity = 32`。
 
-- [ ] **Step 1: 写失败测试** `internal/agent/wscache_test.go`
+- [x] **Step 1: 写失败测试** `internal/agent/wscache_test.go`
 
 ```go
 package agent
@@ -1864,12 +1864,12 @@ func TestWSCacheClear(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/agent/ -run TestWSCache -v`
 Expected: 编译失败 `undefined: newWSCache`。
 
-- [ ] **Step 3: 实现** `internal/agent/wscache.go`
+- [x] **Step 3: 实现** `internal/agent/wscache.go`
 
 ```go
 package agent
@@ -1936,7 +1936,7 @@ func (c *wsCache[V]) Clear() {
 }
 ```
 
-- [ ] **Step 4: 替换 agent.go 四个 sync.Map**
+- [x] **Step 4: 替换 agent.go 四个 sync.Map**
 
 字段区（:243-255）改为：
 
@@ -1966,12 +1966,12 @@ wsHooks     *wsCache[*hooks.Runner]
 
 `InvalidateWorkspacePrompts`（:665-667）改为 `a.wsPrompts.Clear()`——顺带修复原 `a.wsPrompts = sync.Map{}` 整体替换与并发 Load/Store 不同步的问题。
 
-- [ ] **Step 5: 运行测试**
+- [x] **Step 5: 运行测试**
 
 Run: `go test -race ./internal/agent/ -v`
 Expected: 全 PASS（runws_test.go、memws_test.go 等跨 workspace 用例覆盖缓存路径）。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/agent/wscache.go internal/agent/wscache_test.go internal/agent/agent.go
