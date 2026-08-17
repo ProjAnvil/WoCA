@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -166,5 +167,23 @@ func TestTeamSharedListClaimRules(t *testing.T) {
 	lead.agentName = LeadName
 	if _, err := lead.taskUpdate(context.Background(), taskUpdateArgs{TaskID: third.ID, Status: "completed"}); err != nil {
 		t.Fatalf("lead override failed: %v", err)
+	}
+}
+
+func TestTeamSpawnCap(t *testing.T) {
+	lead, _ := newTeamLead(t, nil)
+	team := lead.ensureTeam()
+	defer team.Close()
+	for i := 0; i < maxActiveTeammates; i++ {
+		if err := team.Spawn(context.Background(), fmt.Sprintf("mate-%d", i), "idle", nil); err != nil {
+			t.Fatalf("spawn %d: %v", i, err)
+		}
+	}
+	err := team.Spawn(context.Background(), "one-too-many", "idle", nil)
+	if err == nil || !strings.Contains(err.Error(), "上限") {
+		t.Fatalf("err = %v, want cap error with guidance", err)
+	}
+	if n := team.ActiveCount(); n != maxActiveTeammates {
+		t.Fatalf("ActiveCount = %d, want %d", n, maxActiveTeammates)
 	}
 }

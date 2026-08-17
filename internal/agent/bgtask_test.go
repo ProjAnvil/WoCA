@@ -106,8 +106,14 @@ func TestTaskManagerStartGetList(t *testing.T) {
 	if list := m.list(); len(list) != 0 {
 		t.Fatalf("list = %v", list)
 	}
-	first := m.start("subject", "description")
-	second := m.start("another", "d2")
+	first, err := m.start("subject", "description")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := m.start("another", "d2")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if first.ID != "task-1" || second.ID != "task-2" {
 		t.Fatalf("ids = %s %s", first.ID, second.ID)
 	}
@@ -521,5 +527,20 @@ func TestRunTaskDescriptionFallsBackToPrompt(t *testing.T) {
 	res, err := a.runTask(context.Background(), taskArgs{Description: "only description"})
 	if err != nil || res.Content != "report" {
 		t.Fatalf("runTask = %q, %v", res.Content, err)
+	}
+}
+
+func TestTaskManagerCap(t *testing.T) {
+	m := newTaskManager()
+	for i := 0; i < maxBackgroundTasks; i++ {
+		if _, err := m.start("s", "d"); err != nil {
+			t.Fatalf("start %d: %v", i, err)
+		}
+	}
+	if _, err := m.start("s", "d"); err == nil || !strings.Contains(err.Error(), "上限") {
+		t.Fatalf("err = %v, want cap error", err)
+	}
+	if n := m.RunningCount(); n != maxBackgroundTasks {
+		t.Fatalf("RunningCount = %d, want %d", n, maxBackgroundTasks)
 	}
 }

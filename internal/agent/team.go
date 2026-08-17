@@ -35,6 +35,10 @@ const (
 	LeadName = "lead"
 )
 
+// maxActiveTeammates caps concurrently alive teammates; the model gets a
+// steerable error (not a hang) so it can restructure its plan.
+const maxActiveTeammates = 8
+
 type teammateStatus string
 
 const (
@@ -187,6 +191,16 @@ func (t *TeamManager) Spawn(ctx context.Context, name, prompt string, def *agent
 		t.mu.Unlock()
 		return fmt.Errorf("teammate %q already exists", name)
 	}
+	active := 0
+	for _, m := range t.members {
+		if m.status != teammateStopped {
+			active++
+		}
+	}
+	if active >= maxActiveTeammates {
+		t.mu.Unlock()
+		return fmt.Errorf("已达 teammate 上限（%d 个活跃）：请改用顺序 Task，或先 Stop 不需要的 teammate", maxActiveTeammates)
+	}
 	t.mu.Unlock()
 
 	sub, err := t.factory.newSubagent(ctx, def)
@@ -209,6 +223,19 @@ func (t *TeamManager) Spawn(ctx context.Context, name, prompt string, def *agent
 	t.mu.Unlock()
 	go t.run(mctx, m, prompt)
 	return nil
+}
+
+// ActiveCount reports teammates that have not stopped (for /api/stats).
+func (t *TeamManager) ActiveCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for _, m := range t.members {
+		if m.status != teammateStopped {
+			n++
+		}
+	}
+	return n
 }
 
 // joinTeam binds a freshly built subagent to the team as member name. The

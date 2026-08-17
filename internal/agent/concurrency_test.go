@@ -274,7 +274,10 @@ func TestTeamSpawnStopConcurrent(t *testing.T) {
 // the status back to completed.
 func TestBackgroundTaskStopBeatsLateCompletion(t *testing.T) {
 	tm := newTaskManager()
-	task := tm.start("subject", "description")
+	task, err := tm.start("subject", "description")
+	if err != nil {
+		t.Fatal(err)
+	}
 	task.stop()
 	// The background goroutine reports completion through setFinalIfRunning;
 	// after TaskStop that report must be dropped.

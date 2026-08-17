@@ -111,9 +111,21 @@ func newTaskManager() *TaskManager {
 	return &TaskManager{tasks: map[string]*backgroundTask{}}
 }
 
-func (m *TaskManager) start(subject, description string) *backgroundTask {
+// maxBackgroundTasks caps concurrently running background tasks.
+const maxBackgroundTasks = 16
+
+func (m *TaskManager) start(subject, description string) (*backgroundTask, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	running := 0
+	for _, t := range m.tasks {
+		if st, _, _ := t.snapshot(); st == TaskRunning {
+			running++
+		}
+	}
+	if running >= maxBackgroundTasks {
+		return nil, fmt.Errorf("已达后台 task 上限（%d 个运行中）：请先等待其完成或用 TaskStop 停止部分 task", maxBackgroundTasks)
+	}
 	m.next++
 	t := &backgroundTask{
 		ID:          fmt.Sprintf("task-%d", m.next),
@@ -122,7 +134,20 @@ func (m *TaskManager) start(subject, description string) *backgroundTask {
 		status:      TaskRunning,
 	}
 	m.tasks[t.ID] = t
-	return t
+	return t, nil
+}
+
+// RunningCount reports running background tasks (for /api/stats).
+func (m *TaskManager) RunningCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, t := range m.tasks {
+		if st, _, _ := t.snapshot(); st == TaskRunning {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *TaskManager) get(id string) (*backgroundTask, bool) {
@@ -213,7 +238,10 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 	}
 
 	if args.RunInBackground {
-		t := a.tasks.start(args.Description, prompt)
+		t, err := a.tasks.start(args.Description, prompt)
+		if err != nil {
+			return coretools.Result{}, err
+		}
 		runCtx, cancel := context.WithCancel(ctx)
 		t.setCancel(cancel)
 		go func() {

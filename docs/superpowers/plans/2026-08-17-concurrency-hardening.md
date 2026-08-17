@@ -1990,7 +1990,7 @@ git commit -m "fix(agent): bound per-workspace caches with a 32-entry LRU"
 **Interfaces:**
 - Produces: `maxActiveTeammates = 8`、`maxBackgroundTasks = 16`（包级常量）；`(*TeamManager).ActiveCount() int`、`(*TaskManager).RunningCount() int`（Task 14 的 /api/stats 复用）；`(*TaskManager).start` 签名改为 `(*backgroundTask, error)`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 team_test.go 追加：
 
@@ -2033,12 +2033,12 @@ func TestTaskManagerCap(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/agent/ -run 'TestTeamSpawnCap|TestTaskManagerCap' -v`
 Expected: 编译失败 `undefined: maxActiveTeammates`。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 team.go 顶部常量区（:33 `teamIdleTimeout` 附近）加：
 
@@ -2128,12 +2128,12 @@ func (m *TaskManager) RunningCount() int {
 
 注意：若 `backgroundTask.status` 有独立锁（查 task.go 的 accessor），计数循环改用现有读取方式，保持锁纪律一致。
 
-- [ ] **Step 4: 运行测试**
+- [x] **Step 4: 运行测试**
 
 Run: `go test -race ./internal/agent/ -v`
 Expected: 全 PASS（含 TestTeamSpawnStopConcurrent 等并发用例）。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/agent/team.go internal/agent/task.go internal/agent/team_test.go internal/agent/bgtask_test.go
