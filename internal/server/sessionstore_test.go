@@ -1,14 +1,17 @@
 package server
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/session"
 )
 
 func TestSessionStoreLoadFromDisk(t *testing.T) {
@@ -69,12 +72,11 @@ func TestSessionStoreIndexVariants(t *testing.T) {
 
 	// Recording metadata for a session that already has workspace metadata
 	// but whose new entry carries none keeps the previous workspace.
+	// (recordMeta locks internally — no caller-side lock.)
 	if err := st.save("s", []messages.Message{messages.Human("x")}, "/ws/one"); err != nil {
 		t.Fatal(err)
 	}
-	st.mu.Lock()
 	st.recordMeta(sessionMeta{ID: "s"})
-	st.mu.Unlock()
 	idx := st.loadIndex()
 	if idx["s"].Workspace != "/ws/one" || idx["s"].WorkspaceName != "one" {
 		t.Fatalf("workspace not preserved across metadata-only updates: %+v", idx["s"])
@@ -104,9 +106,7 @@ func TestSessionStoreDeleteVariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := newSessionStore(filepath.Join(blocker, "sessions"))
-	bad.mu.Lock()
 	bad.recordMeta(sessionMeta{ID: "x", Workspace: "/w"})
-	bad.mu.Unlock()
 }
 
 func TestWorkspaceDisplayNameEdges(t *testing.T) {
@@ -169,32 +169,34 @@ func TestSessionStoreGoalSidecar(t *testing.T) {
 func TestSessionStoreListVariants(t *testing.T) {
 	// A nonexistent dir lists nothing (restart before first save).
 	missing := newSessionStore(filepath.Join(t.TempDir(), "nope"))
-	if list, err := missing.list(); err != nil || list != nil {
+	if list, err := missing.list(); err != nil || len(list) != 0 {
 		t.Fatalf("list(missing dir) = %v, %v", list, err)
 	}
 
-	// A dir that exists but is a regular file errors.
+	// list() is index-only, so a dir that is a regular file no longer
+	// errors — it lists the (empty) in-memory index.
 	file := t.TempDir() + "/notadir"
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newSessionStore(file).list(); err == nil {
-		t.Fatal("list(file) should error")
+	if list, err := newSessionStore(file).list(); err != nil || len(list) != 0 {
+		t.Fatalf("list(file) = %v, %v", list, err)
 	}
 
 	dir := t.TempDir()
 	st := newSessionStore(dir)
-	// A corrupt transcript is skipped rather than failing the listing.
+	// A corrupt transcript is never reconciled into the index, so it is
+	// skipped rather than failing the listing.
 	if err := os.WriteFile(filepath.Join(dir, "corrupt.jsonl"), []byte("{not json\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// A transcript with no human message falls back to the default title.
-	if err := st.save("only-ai", []messages.Message{messages.AI("hi")}, ""); err != nil {
+	if err := st.save("only-ai", []messages.Message{messages.AI("hi")}, "/ws/one"); err != nil {
 		t.Fatal(err)
 	}
 	// A long first human message truncates for the title.
 	long := strings.Repeat("很长的会话标题", 12) // 60 runes > 40
-	if err := st.save("long-title", []messages.Message{messages.Human(long)}, ""); err != nil {
+	if err := st.save("long-title", []messages.Message{messages.Human(long)}, "/ws/one"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -215,5 +217,67 @@ func TestSessionStoreListVariants(t *testing.T) {
 	want := string([]rune(strings.TrimSpace(long))[:40]) + "…"
 	if got := byID["long-title"].Title; got != want {
 		t.Fatalf("long title = %q, want %q", got, want)
+	}
+}
+
+// list() 只读内存索引：删掉磁盘上的 .jsonl 后仍能列出（证明零 JSONL 读）。
+func TestSessionStoreListReadsIndexOnly(t *testing.T) {
+	dir := t.TempDir()
+	s := newSessionStore(dir)
+	msgs := []messages.Message{
+		{Role: messages.RoleHuman, Content: "hello world"},
+		{Role: messages.RoleAI, Content: "hi"},
+	}
+	if err := s.save("sess-a", msgs, "/tmp/ws-a"); err != nil {
+		t.Fatal(err)
+	}
+	// 删除 transcript 文件：旧实现 list() 会丢这个 session，新实现不受影响。
+	files, _ := filepath.Glob(filepath.Join(dir, "*.jsonl"))
+	for _, f := range files {
+		_ = os.Remove(f)
+	}
+	list, err := s.list()
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list = %v, %v; want 1 summary from index", list, err)
+	}
+	if list[0].MessageCount != 2 || list[0].Title != "hello world" {
+		t.Fatalf("summary = %+v, want MessageCount=2 Title=hello world", list[0])
+	}
+}
+
+// 并发 recordMeta（经由 save）不交错、不竞态（-race 把关）。
+func TestSessionStoreConcurrentSave(t *testing.T) {
+	dir := t.TempDir()
+	s := newSessionStore(dir)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("sess-%d", i%3)
+			_ = s.save(id, []messages.Message{{Role: messages.RoleHuman, Content: "x"}}, "/tmp/ws")
+		}(i)
+	}
+	wg.Wait()
+	list, err := s.list()
+	if err != nil || len(list) != 3 {
+		t.Fatalf("list = %v, %v; want 3 sessions", list, err)
+	}
+}
+
+// 启动对账：目录里有 index 之外的遗留 .jsonl，新 store 启动后应被收编。
+func TestSessionStoreStartupReconcile(t *testing.T) {
+	dir := t.TempDir()
+	legacy := []messages.Message{{Role: messages.RoleHuman, Content: "legacy chat"}}
+	if err := session.Save(filepath.Join(dir, "sess-legacy.jsonl"), legacy); err != nil {
+		t.Fatal(err)
+	}
+	s := newSessionStore(dir)
+	list, err := s.list()
+	if err != nil || len(list) != 1 || list[0].ID != "sess-legacy" {
+		t.Fatalf("list = %v, %v; want reconciled legacy session", list, err)
+	}
+	if list[0].Title != "legacy chat" || list[0].MessageCount != 1 {
+		t.Fatalf("summary = %+v", list[0])
 	}
 }

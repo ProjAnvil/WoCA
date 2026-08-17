@@ -24,6 +24,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/skills"
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/tools"
@@ -307,7 +308,9 @@ func TestGoalCommandFreeTextSetsObjective(t *testing.T) {
 
 func TestSessionPersistenceAndList(t *testing.T) {
 	dir := t.TempDir()
-	s := New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: dir})
+	// WorkDir mirrors the real binary (always resolved non-empty): saves are
+	// tagged with the workspace, which puts them in the listing index.
+	s := New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: dir, WorkDir: dir})
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
@@ -492,13 +495,15 @@ func TestWorkspaceFileEndpoint(t *testing.T) {
 
 func TestSessionListGroupsByWorkspace(t *testing.T) {
 	dir := t.TempDir()
-	st := newSessionStore(dir)
-	st.defaultWorkspace = "/tmp/current-project"
-
-	// Legacy session (no metadata recorded) falls back to the default workspace.
-	if err := st.save("legacy", []messages.Message{messages.Human("old")}, ""); err != nil {
+	// Legacy session: a transcript with no metadata, present before the
+	// store starts. Startup reconcile folds it into the index; the entry
+	// carries no workspace, so it falls back to the store default.
+	legacy := []messages.Message{messages.Human("old")}
+	if err := session.Save(filepath.Join(dir, "legacy.jsonl"), legacy); err != nil {
 		t.Fatal(err)
 	}
+	st := newSessionStore(dir)
+	st.defaultWorkspace = "/tmp/current-project"
 	// New session explicitly tagged with another workspace.
 	if err := st.save("tagged", []messages.Message{messages.Human("new")}, "/tmp/other-project"); err != nil {
 		t.Fatal(err)

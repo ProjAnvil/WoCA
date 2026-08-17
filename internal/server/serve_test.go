@@ -612,7 +612,9 @@ func TestListSessionsDegradedPaths(t *testing.T) {
 		t.Fatal("session list should be [], not null")
 	}
 
-	// A session dir that is a regular file makes listing fail: 500.
+	// A session dir that is a regular file no longer breaks listing: list()
+	// reads only the in-memory index (zero filesystem access at request
+	// time), so it degrades to an empty 200 list.
 	file := t.TempDir() + "/not-a-dir"
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -624,9 +626,13 @@ func TestListSessionsDegradedPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var empty []json.RawMessage
+	if err := json.NewDecoder(resp2.Body).Decode(&empty); err != nil {
+		t.Fatal(err)
+	}
 	resp2.Body.Close()
-	if resp2.StatusCode != http.StatusInternalServerError {
-		t.Fatalf("unreadable session dir status = %d, want 500", resp2.StatusCode)
+	if resp2.StatusCode != http.StatusOK || empty == nil {
+		t.Fatalf("unreadable session dir: status = %d list = %v, want 200 []", resp2.StatusCode, empty)
 	}
 }
 

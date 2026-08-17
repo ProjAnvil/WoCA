@@ -1096,7 +1096,7 @@ git commit -m "fix(agent): non-blocking extra-tool refresh via singleflight + TT
 - Consumes: `session.Load`/`session.Save`（internal/session）、`sessionTitle`（session.go:298）。
 - Produces: `sessionMeta` 增加 `Title string \`json:"title,omitempty"\`` 与 `MessageCount int \`json:"message_count,omitempty"\``；`list()` 零 JSONL 读；锁内零文件 I/O。
 
-- [ ] **Step 1: 写失败测试**（追加到 sessionstore_test.go）
+- [x] **Step 1: 写失败测试**（追加到 sessionstore_test.go）
 
 ```go
 // list() 只读内存索引：删掉磁盘上的 .jsonl 后仍能列出（证明零 JSONL 读）。
@@ -1162,12 +1162,12 @@ func TestSessionStoreStartupReconcile(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/server/ -run TestSessionStore -v`
 Expected: `TestSessionStoreListReadsIndexOnly` FAIL（旧 list 读不到被删文件的 session）。
 
-- [ ] **Step 3: 重构 session.go**
+- [x] **Step 3: 重构 session.go**
 
 结构体（:23-35）改为：
 
@@ -1399,12 +1399,12 @@ func (s *sessionStore) workspaceOfMeta(m sessionMeta) (string, string) {
 
 `workspaceOf`（:288-296）若不再被引用则删除（grep 确认；list 是唯一调用点）。注意 `dir == ""` 时 `s.index` 为空 map，`list` 返回空——与旧行为（ReadDir 失败返回 nil）等价。
 
-- [ ] **Step 4: 运行测试**
+- [x] **Step 4: 运行测试**
 
 Run: `go test -race ./internal/server/ -run 'Session' -v && go test -race ./internal/server/`
 Expected: 全 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/server/session.go internal/server/sessionstore_test.go
