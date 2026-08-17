@@ -110,3 +110,36 @@ func TestBuildInjectsAllLayersInOrder(t *testing.T) {
 		t.Fatalf("user header missing:\n%s", got)
 	}
 }
+
+func TestMemoryFileSectionMissing(t *testing.T) {
+	dir := t.TempDir()
+	dirFile := memoryFile{Path: filepath.Join(dir, "CLAUDE.md"), Kind: "Project", Label: "CLAUDE.md"}
+	// A missing memory file reports false.
+	if _, ok := memorySection(dirFile); ok {
+		t.Fatal("missing file should not yield a section")
+	}
+	// A directory in place of the memory file is skipped.
+	if err := os.MkdirAll(filepath.Join(dir, "CLAUDE.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := memorySection(dirFile); ok {
+		t.Fatal("directory should not yield a section")
+	}
+	// An empty CLAUDE.md yields no section (blank content is skipped).
+	dir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir2, "CLAUDE.md"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := memorySection(memoryFile{Path: filepath.Join(dir2, "CLAUDE.md"), Kind: "Project", Label: "CLAUDE.md"}); ok {
+		t.Fatal("empty file should not yield a section")
+	}
+	// Content produces the section.
+	dir3 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir3, "CLAUDE.md"), []byte("be terse"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	section, ok := memorySection(memoryFile{Path: filepath.Join(dir3, "CLAUDE.md"), Kind: "Project", Label: "CLAUDE.md"})
+	if !ok || !strings.Contains(section, "be terse") {
+		t.Fatalf("section = %q ok=%v", section, ok)
+	}
+}

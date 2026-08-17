@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/runnables"
 	"github.com/projanvil/langchain-golang/core/schema"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
@@ -571,3 +573,49 @@ func (s *oneShotStream) Next(_ context.Context) (messages.Message, bool, error) 
 	return s.chunk, true, nil
 }
 func (s *oneShotStream) Close() error { return nil }
+
+func TestSummarizeHelpers(t *testing.T) {
+	if got := summarizeArgs(nil); got != "" {
+		t.Errorf("nil args = %q", got)
+	}
+	if got := summarizeArgs(map[string]any{"a": "b"}); got != `{"a":"b"}` {
+		t.Errorf("args = %q", got)
+	}
+	long := map[string]any{"k": strings.Repeat("x", 300)}
+	if got := summarizeArgs(long); len(got) <= 160 || !strings.HasSuffix(got, "…") {
+		t.Errorf("long args = %q", got)
+	}
+	if got := summarizeResult(""); got != "(no output)" {
+		t.Errorf("empty result = %q", got)
+	}
+	if got := summarizeResult("  first\nsecond  "); got != "first" {
+		t.Errorf("multiline = %q", got)
+	}
+	if got := summarizeResult(strings.Repeat("y", 250)); len(got) <= 200 {
+		t.Errorf("long result = %q", got)
+	}
+	// The summary renderer prints the text line.
+	var buf bytes.Buffer
+	DefaultSummaryRenderer(&buf)(agent.ToolUseSummary{Text: "used Bash"})
+	if !strings.Contains(buf.String(), "· used Bash") {
+		t.Errorf("summary render = %q", buf.String())
+	}
+	DefaultSummaryRenderer(&buf)(agent.ToolUseSummary{Text: ""})
+}
+
+// The renderer's non-delta branches (tool call / result chunks) execute
+// even when unused by other tests.
+func TestDefaultRendererToolSteps(t *testing.T) {
+	var buf bytes.Buffer
+	r := DefaultRenderer(&buf)
+	r(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"tools": map[string]any{}}})
+	r(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"model": map[string]any{
+		"messages": []messages.Message{
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{Name: "Read", Args: map[string]any{"file_path": "a.go"}}}},
+			messages.Tool("1", "file body"),
+		},
+	}}})
+	if !strings.Contains(buf.String(), "Read(") || !strings.Contains(buf.String(), "file body") {
+		t.Fatalf("tool chunks not rendered:\n%s", buf.String())
+	}
+}

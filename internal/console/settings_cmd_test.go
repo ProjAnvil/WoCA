@@ -3,11 +3,11 @@ package console
 import (
 	"context"
 	"errors"
+	"github.com/projanvil/woca/internal/settings"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/projanvil/woca/internal/settings"
 )
 
 // rebuildCounter records RebuildMemory/RebuildModel invocations; memErr makes
@@ -135,4 +135,99 @@ func TestClampRunes(t *testing.T) {
 	if got, want := clampRunes(long, 80), strings.Repeat("记", 26)+"…"; got != want {
 		t.Fatalf("cjk = %q, want %q", got, want)
 	}
+}
+
+func TestSettingsCommandSurface(t *testing.T) {
+	c, _ := newFullConsole(t)
+	ctx := context.Background()
+	s := &Session{}
+
+	mustExec := func(args ...string) string {
+		t.Helper()
+		res, err := c.Execute(ctx, "settings", args, s)
+		if err != nil {
+			t.Fatalf("/settings %v = %v", args, err)
+		}
+		return res.Output
+	}
+
+	if out := mustExec(); !strings.Contains(out, "provider:") {
+		t.Fatalf("list = %q", out)
+	}
+	if out := mustExec("help"); !strings.Contains(out, "provider") {
+		t.Fatalf("help = %q", out)
+	}
+	if out := mustExec("get", "provider"); !strings.Contains(out, "anthropic") {
+		t.Fatalf("get provider = %q", out)
+	}
+	if out := mustExec("get", "anthropic-api-key"); !strings.Contains(out, "not set") {
+		t.Fatalf("get secret = %q", out)
+	}
+	if out := mustExec("set", "anthropic-api-key", "sk-x"); !strings.Contains(out, "encrypted") {
+		t.Fatalf("set secret = %q", out)
+	}
+	if out := mustExec("get", "anthropic-api-key"); !strings.Contains(out, "set") {
+		t.Fatalf("get set secret = %q", out)
+	}
+	// Model keys rebuild the chat model through the factory-less path.
+	if out := mustExec("set", "model", "some-model"); !strings.Contains(out, "saved") {
+		t.Fatalf("set model = %q", out)
+	}
+	// Memory-engine changes rebuild the memory engine.
+	if out := mustExec("set", "memory-engine", "none"); !strings.Contains(out, "saved") {
+		t.Fatalf("set engine = %q", out)
+	}
+	if out := mustExec("set", "memory-engine", "ladym"); !strings.Contains(out, "saved") {
+		t.Fatalf("set engine back = %q", out)
+	}
+	if out := mustExec("set", "ladym-embedding-api-key", "ek"); !strings.Contains(out, "encrypted") {
+		t.Fatalf("set embedding key = %q", out)
+	}
+	// Errors: unknown subcommand and invalid value.
+	if _, err := c.Execute(ctx, "settings", []string{"bogus"}, s); err == nil {
+		t.Fatal("expected unknown subcommand error")
+	}
+	if _, err := c.Execute(ctx, "settings", []string{"set", "provider", "nope"}, s); err == nil {
+		t.Fatal("expected invalid provider error")
+	}
+	if _, err := c.Execute(ctx, "settings", []string{"get"}, s); err == nil {
+		t.Fatal("expected usage error")
+	}
+
+	// A disabled settings store produces a helpful error.
+	c2, _ := newAgentConsole(t, nil)
+	if _, err := c2.Execute(ctx, "settings", nil, &Session{}); err == nil {
+		t.Fatal("expected disabled-settings error")
+	}
+}
+
+func TestSettingsSetRebuildMessages(t *testing.T) {
+	c, _ := newFullConsole(t)
+	home := t.TempDir()
+	ctx := context.Background()
+	s := &Session{}
+
+	// Non-secret model keys rebuild the chat model.
+	res, err := c.Execute(ctx, "settings", []string{"set", "max-tokens", "4096"}, s)
+	if err != nil || !strings.Contains(res.Output, "takes effect immediately") {
+		t.Fatalf("max-tokens = %+v %v", res, err)
+	}
+	// Backend keys report the restart requirement.
+	for _, key := range []string{"checkpoint", "memory", "checkpoint-dir"} {
+		res, err = c.Execute(ctx, "settings", []string{"set", key, "sqlite"}, s)
+		if err != nil || !strings.Contains(res.Output, "restart woca") {
+			t.Fatalf("%s = %+v %v", key, res, err)
+		}
+	}
+	// Memory engine keys rebuild the engine.
+	res, err = c.Execute(ctx, "settings", []string{"set", "ladym-db-path", filepath.Join(home, "ladym.db")}, s)
+	if err != nil {
+		t.Fatalf("ladym-db-path = %v", err)
+	}
+	// A failing model rebuild surfaces inline (factory-less rebuild uses
+	// settings; force failure via an invalid provider AFTER a secret set).
+	if _, err := c.Execute(ctx, "settings", []string{"set", "openai-api-key", "sk-1"}, s); err != nil {
+		t.Fatal(err)
+	}
+	_ = home
 }

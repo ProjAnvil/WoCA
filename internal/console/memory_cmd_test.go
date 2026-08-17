@@ -2,11 +2,18 @@ package console
 
 import (
 	"context"
+	"github.com/projanvil/langchain-golang/core/language"
+	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/memory"
+	"github.com/projanvil/woca/internal/store"
+	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/wocadb"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/projanvil/woca/internal/memory"
 )
 
 // fakeMemEngine is an in-memory memory.Engine for /memory command tests.
@@ -92,5 +99,189 @@ func TestMemoryCmdEngineNilFallsBackToKVMessage(t *testing.T) {
 	_, err := c.Execute(context.Background(), "memory", []string{"list"}, &Session{})
 	if err == nil || !strings.Contains(err.Error(), "memory") {
 		t.Fatalf("expected helpful error, got %v", err)
+	}
+}
+
+func TestMemoryEngineCommandSurface(t *testing.T) {
+	c, eng := newFullConsole(t)
+	ctx := context.Background()
+	s := &Session{}
+
+	exec := func(args ...string) (string, error) {
+		res, err := c.Execute(ctx, "memory", args, s)
+		return res.Output, err
+	}
+
+	out, err := exec("list")
+	if err != nil || !strings.Contains(out, "stored fact") {
+		t.Fatalf("list = %q %v", out, err)
+	}
+	out, err = exec("recall", "deploy")
+	if err != nil || !strings.Contains(out, "hit for deploy") {
+		t.Fatalf("recall = %q %v", out, err)
+	}
+	out, err = exec("remember", "the answer is 42")
+	if err != nil || !strings.Contains(out, "id-1") {
+		t.Fatalf("remember = %q %v", out, err)
+	}
+	out, err = exec("remember", "drop-me please")
+	if err != nil || !strings.Contains(out, "attention gate") {
+		t.Fatalf("dropped = %q %v", out, err)
+	}
+	out, err = exec("stats")
+	if err != nil || !strings.Contains(out, "total: 3") {
+		t.Fatalf("stats = %q %v", out, err)
+	}
+	out, err = exec("forget", "h9")
+	if err != nil || !strings.Contains(out, "forgotten") {
+		t.Fatalf("forget = %q %v", out, err)
+	}
+	if len(eng.forgotten) != 1 || eng.forgotten[0] != "h9" {
+		t.Fatalf("engine forget = %v", eng.forgotten)
+	}
+	out, err = exec("consolidate")
+	if err != nil || !strings.Contains(out, "consolidated") {
+		t.Fatalf("consolidate = %q %v", out, err)
+	}
+	out, err = exec("index", "/tmp")
+	if err != nil || !strings.Contains(out, "indexed") {
+		t.Fatalf("index = %q %v", out, err)
+	}
+	// Usage errors and unknown subcommands.
+	for _, args := range [][]string{{"recall"}, {"remember"}, {"forget"}, {"nope"}} {
+		if _, err := exec(args...); err == nil {
+			t.Fatalf("expected error for %v", args)
+		}
+	}
+	// The kv subcommand still reaches the store under an engine.
+	out, err = exec("kv", "put", "ns", "k", "value")
+	if err != nil || !strings.Contains(out, "stored") {
+		t.Fatalf("kv put = %q %v", out, err)
+	}
+	out, err = exec("kv", "get", "ns", "k")
+	if err != nil || !strings.Contains(out, "value") {
+		t.Fatalf("kv get = %q %v", out, err)
+	}
+}
+
+func TestMemoryKVCommandSurface(t *testing.T) {
+	// No engine wired: the KV store is the surface.
+	c, _ := newAgentConsole(t, nil)
+	c.deps.Memory = store.NewMemory()
+	ctx := context.Background()
+	s := &Session{}
+
+	res, err := c.Execute(ctx, "memory", []string{"list"}, s)
+	out := res.Output
+	if err != nil || !strings.Contains(out, "empty") {
+		t.Fatalf("empty list = %q %v", out, err)
+	}
+	// Put/get/del round trip with namespace listing.
+	for _, args := range [][]string{
+		{"put", "ns", "k1", "v1"},
+		{"put", "ns2", "k2", "v2"},
+	} {
+		if _, err := c.Execute(ctx, "memory", args, s); err != nil {
+			t.Fatalf("%v = %v", args, err)
+		}
+	}
+	res, _ = c.Execute(ctx, "memory", []string{"list"}, s)
+	out = res.Output
+	if !strings.Contains(out, `ns/k1 = "v1"`) {
+		t.Fatalf("list = %q", out)
+	}
+	res, _ = c.Execute(ctx, "memory", []string{"get", "ns", "k1"}, s)
+	out = res.Output
+	if !strings.Contains(out, "v1") {
+		t.Fatalf("get = %q", out)
+	}
+	res, _ = c.Execute(ctx, "memory", []string{"get", "ns", "missing"}, s)
+	out = res.Output
+	if !strings.Contains(out, "not found") {
+		t.Fatalf("missing get = %q", out)
+	}
+	if _, err := c.Execute(ctx, "memory", []string{"del", "ns", "k1"}, s); err != nil {
+		t.Fatal(err)
+	}
+	// Usage errors.
+	for _, args := range [][]string{{"get", "ns"}, {"put", "ns", "k"}, {"del", "ns"}, {"bogus"}} {
+		if _, err := c.Execute(ctx, "memory", args, s); err == nil {
+			t.Fatalf("expected error for %v", args)
+		}
+	}
+
+	// Neither engine nor store: helpful error.
+	c2, _ := newAgentConsole(t, nil)
+	if _, err := c2.Execute(ctx, "memory", nil, &Session{}); err == nil {
+		t.Fatal("expected disabled error")
+	}
+}
+
+func TestMemoryEngineErrorPaths(t *testing.T) {
+	home := t.TempDir()
+	acfg := agent.Config{
+		Model:          language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))),
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeDefault,
+		MemoryEngine:   &errEngine{},
+	}
+	a, err := agent.New(acfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(Deps{Agent: a, Cfg: &config.Config{Model: "m", WorkDir: home}})
+	ctx := context.Background()
+	s := &Session{}
+	for _, args := range [][]string{
+		{"list"}, {"recall", "q"}, {"remember", "x"}, {"stats"}, {"forget", "id"},
+		{"consolidate"}, {"index", "/tmp"},
+	} {
+		if _, err := c.Execute(ctx, "memory", args, s); err == nil {
+			t.Errorf("expected error for %v", args)
+		}
+	}
+	// /memory kv without a store under an engine errors.
+	if _, err := c.Execute(ctx, "memory", []string{"kv", "list"}, s); err == nil {
+		t.Fatal("expected kv disabled error")
+	}
+	// Empty engine list output (the fake returns nothing for empty ws).
+	c2 := New(Deps{
+		Agent:           newAgentWithEngine(t, &fakeEngine{}),
+		Cfg:             &config.Config{WorkDir: home},
+		MemoryWorkspace: func() string { return "empty-ws" },
+	})
+	if out, err := c2.Execute(ctx, "memory", []string{"list"}, s); err != nil || !strings.Contains(out.Output, "no memories yet") {
+		t.Fatalf("empty engine list = %+v %v", out, err)
+	}
+}
+
+func TestMemoryKVErrorPaths(t *testing.T) {
+	c, _ := newAgentConsole(t, nil)
+	mem := store.NewMemory()
+	c.deps.Memory = mem
+	ctx := context.Background()
+	s := &Session{}
+	// Seed one entry, then close the backend so every op errors.
+	if err := mem.Put(ctx, "ns", "k", "v"); err != nil {
+		t.Fatal(err)
+	}
+	// A closed sqlite store makes every op error.
+	home := t.TempDir()
+	db, err := wocadb.Open(filepath.Join(home, "m.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlStore := store.NewSQL(db.DB, string(db.Dialect), db.Path)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c.deps.Memory = sqlStore
+	for _, args := range [][]string{
+		{"list"}, {"get", "ns", "k"}, {"put", "ns", "k", "v"}, {"del", "ns", "k"},
+	} {
+		if _, err := c.Execute(ctx, "memory", args, s); err == nil {
+			t.Errorf("expected error for %v", args)
+		}
 	}
 }

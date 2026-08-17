@@ -69,3 +69,74 @@ func TestCryptoKeyFilePermissions(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCryptoLifecycle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// KeyPath reflects the isolated home.
+	if got := KeyPath(); got != filepath.Join(home, ".woca", "secret.key") {
+		t.Fatalf("KeyPath = %q", got)
+	}
+
+	// Creating the key persists it; a reload yields the same crypto.
+	path := filepath.Join(home, ".woca", "secret.key")
+	c1, err := LoadOrCreateCrypto(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, err := LoadOrCreateCrypto(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ct, err := c1.Encrypt("secret-value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt, err := c2.Decrypt(ct)
+	if err != nil || pt != "secret-value" {
+		t.Fatalf("round trip = %q %v", pt, err)
+	}
+
+	// Empty key path falls back to the default location.
+	c3, err := LoadOrCreateCrypto("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c3.Encrypt("x"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Error branches.
+	if _, err := newCrypto([]byte("short")); err == nil {
+		t.Error("short key should fail")
+	}
+	if _, err := c1.Decrypt([]byte("tiny")); err == nil {
+		t.Error("short ciphertext should fail")
+	}
+	if _, err := c1.Decrypt([]byte("0123456789abcdef0123456789abcdef")); err == nil {
+		t.Error("tampered ciphertext should fail")
+	}
+
+	// An unwritable key directory fails at create time.
+	blocker := filepath.Join(home, "blocker")
+	if err := writeBlocker(blocker); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateCrypto(filepath.Join(blocker, "secret.key")); err == nil {
+		t.Error("expected key dir failure")
+	}
+	// A directory in place of the key file fails at read time.
+	dir := filepath.Join(home, "adir")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadOrCreateCrypto(dir); err == nil {
+		t.Error("expected key read failure")
+	}
+}
+
+func writeBlocker(path string) error {
+	return os.WriteFile(path, []byte("x"), 0o644)
+}

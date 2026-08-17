@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 const fixture = `{"code":200,"msg":"Operation successful","data":{
@@ -191,6 +192,91 @@ func TestHostMatches(t *testing.T) {
 	for _, c := range cases {
 		if got := hostMatches(c.base, c.target); got != c.want {
 			t.Errorf("hostMatches(%q, %q) = %v, want %v", c.base, c.target, got, c.want)
+		}
+	}
+}
+
+func TestFetchDispatch(t *testing.T) {
+	ctx := context.Background()
+
+	// Empty/glm provider with a monitor host and no key.
+	info, err := Fetch(ctx, "", "https://open.bigmodel.cn/api/anthropic", "", nil)
+	if err != nil || info.Available || info.Reason == "" {
+		t.Fatalf("glm no key = %+v %v", info, err)
+	}
+	// Unknown provider without a monitor host.
+	for _, p := range []string{"glm", "", "other"} {
+		info, err := Fetch(ctx, p, "https://example.com", "", nil)
+		if err != nil || info.Available || info.Reason == "" {
+			t.Fatalf("Fetch(%q) = %+v %v", p, info, err)
+		}
+	}
+}
+
+func TestFormatAndHelpers(t *testing.T) {
+	if got := Format(Info{Available: false, Reason: "无接口"}); !strings.Contains(got, "套餐额度不可用") {
+		t.Fatalf("unavailable format = %q", got)
+	}
+	if got := Format(Info{Available: true, Type: TypeBalance, Balance: "CNY 1.00"}); !strings.Contains(got, "账户余额：CNY 1.00") {
+		t.Fatalf("balance format = %q", got)
+	}
+	plan := Format(Info{
+		Available: true,
+		Level:     "max",
+		Windows: []Window{
+			{Kind: "5h", UsedPercent: 120, NextResetMS: time.Now().Add(time.Hour).UnixMilli()},
+			{Kind: "weekly", UsedPercent: 30},
+			{Kind: "mcp", UsedPercent: 10, NextResetMS: time.Now().Add(-time.Hour).UnixMilli()},
+		},
+	})
+	if !strings.Contains(plan, "GLM Coding Plan（max）") || !strings.Contains(plan, "0.0%（已用 120.0%") || !strings.Contains(plan, "即将") {
+		t.Fatalf("plan format = %q", plan)
+	}
+	plain := Format(Info{Available: true, Windows: []Window{{Kind: "5h", UsedPercent: 50}}})
+	if !strings.Contains(plain, "套餐剩余额度") {
+		t.Fatalf("plain format = %q", plain)
+	}
+
+	for _, c := range []struct {
+		kind, want string
+	}{{"5h", "5小时"}, {"weekly", "每周"}, {"mcp", "MCP"}, {"x", "x"}} {
+		if got := windowLabel(c.kind); got != c.want {
+			t.Errorf("windowLabel(%q) = %q", c.kind, got)
+		}
+	}
+
+	// parseResetMS spellings.
+	if parseResetMS("2026-08-17T12:00:00Z") == 0 {
+		t.Error("RFC3339 should parse")
+	}
+	if parseResetMS("2026-08-17T12:00:00+0800") == 0 {
+		t.Error("no-colon offset should parse")
+	}
+	if parseResetMS("2026-08-17 12:00:00") == 0 {
+		t.Error("space layout should parse")
+	}
+	if parseResetMS("garbage") != 0 || parseResetMS(42) != 0 || parseResetMS(nil) != 0 {
+		t.Error("unusable values should be zero")
+	}
+	if got := parseResetMS(1_700_000_000.0); got != 1_700_000_000_000 {
+		t.Errorf("epoch seconds = %d", got)
+	}
+	if got := parseResetMS(1_700_000_000_000.0); got != 1_700_000_000_000 {
+		t.Errorf("epoch millis = %d", got)
+	}
+	if parseResetMS(-5.0) != 0 || parseResetMS(0.0) != 0 {
+		t.Error("non-positive should be zero")
+	}
+
+	if asPercent(0.42) != 42 || asPercent(87.5) != 87.5 || asPercent("x") != 0 || asPercent(1) != 0 || asPercent(1.0) != 100 {
+		t.Error("asPercent")
+	}
+}
+
+func TestUnavailableReasonAllProviders(t *testing.T) {
+	for _, p := range []string{"anthropic", "openai", "glm", "", "mystery"} {
+		if got := unavailableReason(p); got == "" {
+			t.Errorf("unavailableReason(%q) empty", p)
 		}
 	}
 }

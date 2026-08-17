@@ -361,3 +361,29 @@ func TestRunnerMaxTurnsUnlimitedByDefault(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoryFromAndTokenEstimate(t *testing.T) {
+	msgs := []messages.Message{messages.System("s"), messages.Human("h")}
+	if got := historyFrom(msgs); len(got) != 1 || got[0].Role != messages.RoleHuman {
+		t.Errorf("historyFrom = %+v", got)
+	}
+	if got := historyFrom(nil); got != nil {
+		t.Errorf("nil = %+v", got)
+	}
+	if got := historyFrom([]messages.Message{messages.Human("h")}); len(got) != 1 {
+		t.Errorf("no system = %+v", got)
+	}
+
+	// AI messages with content and tool calls count; other roles do not.
+	n := estimateTurnOutputTokens([]messages.Message{
+		messages.Human("q"),
+		messages.AI("answer"),
+		{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{Name: "Read", Args: map[string]any{"file_path": "a.go"}}}},
+	})
+	if n <= 0 {
+		t.Errorf("estimate = %d", n)
+	}
+	if got := estimateTurnOutputTokens([]messages.Message{messages.Human("q")}); got != 0 {
+		t.Errorf("human-only estimate = %d", got)
+	}
+}

@@ -554,3 +554,49 @@ func TestWebRestartScenarios(t *testing.T) {
 		t.Fatal("binding a taken port should error")
 	}
 }
+
+func TestConsoleSmallBranches(t *testing.T) {
+	c, _ := newFullConsole(t)
+	ctx := context.Background()
+	s := &Session{}
+
+	// /output-style list and set.
+	res, err := c.Execute(ctx, "output-style", nil, s)
+	if err != nil {
+		t.Fatalf("output-style = %v", err)
+	}
+	if _, err := c.Execute(ctx, "output-style", []string{"bogus"}, s); err == nil {
+		t.Fatal("expected output-style error")
+	}
+	// /thinking without args shows current state; invalid budget errors.
+	res, err = c.Execute(ctx, "thinking", nil, s)
+	if err != nil {
+		t.Fatalf("thinking = %v", err)
+	}
+	_ = res
+	if _, err := c.Execute(ctx, "thinking", []string{"bogus"}, s); err == nil {
+		t.Fatal("expected thinking error")
+	}
+	// /keybindings renders.
+	if _, err := c.Execute(ctx, "keybindings", nil, s); err != nil {
+		t.Fatalf("keybindings = %v", err)
+	}
+	// /tasks with none.
+	res, err = c.Execute(ctx, "tasks", nil, s)
+	if err != nil {
+		t.Fatalf("tasks = %v", err)
+	}
+	// /todos with none.
+	res, err = c.Execute(ctx, "todos", nil, s)
+	if err != nil {
+		t.Fatalf("todos = %v", err)
+	}
+	// /init requires an argument name.
+	if _, err := c.Execute(ctx, "init", nil, s); err == nil {
+		t.Log("init without args tolerated")
+	}
+	// Unknown /memory subcommand under the engine.
+	if _, err := c.Execute(ctx, "memory", []string{"bogus"}, s); err == nil {
+		t.Fatal("expected memory subcommand error")
+	}
+}

@@ -162,3 +162,115 @@ func TestNotificationDispatch(t *testing.T) {
 	}
 	_ = client.Initialize(context.Background())
 }
+
+func TestClientRequestErrorPaths(t *testing.T) {
+	// The fake server rejects everything with an RPC error.
+	w, r := startFakeServer(t, func(method string, params json.RawMessage) (any, error) {
+		return nil, &rpcError{Code: -32000, Message: "boom"}
+	})
+	client := NewClient("err", w, r, nil)
+	if err := client.Initialize(context.Background()); err == nil {
+		t.Fatal("expected initialize error")
+	}
+	if _, err := client.ListTools(context.Background()); err == nil {
+		t.Fatal("expected list error")
+	}
+	if _, err := client.CallTool(context.Background(), "echo", nil); err == nil {
+		t.Fatal("expected call error")
+	}
+	if _, err := client.ListResources(context.Background()); err == nil {
+		t.Fatal("expected resources error")
+	}
+	if _, err := client.ReadResource(context.Background(), "u"); err == nil {
+		t.Fatal("expected read error")
+	}
+	if _, err := client.ListPrompts(context.Background()); err == nil {
+		t.Fatal("expected prompts error")
+	}
+	if _, err := client.GetPrompt(context.Background(), "p", nil); err == nil {
+		t.Fatal("expected prompt error")
+	}
+	_ = client.Close()
+
+	// Tool-call results flagged isError surface as errors.
+	w2, r2 := startFakeServer(t, func(method string, params json.RawMessage) (any, error) {
+		if method == "tools/call" {
+			return map[string]any{"content": []map[string]any{{"type": "text", "text": "went wrong"}}, "isError": true}, nil
+		}
+		return map[string]any{}, nil
+	})
+	c2 := NewClient("flag", w2, r2, nil)
+	defer c2.Close()
+	if err := c2.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c2.CallTool(context.Background(), "x", nil); err == nil {
+		t.Fatal("expected isError to surface")
+	}
+}
+
+func TestDecodeErrorResults(t *testing.T) {
+	w, r := startFakeServer(t, func(method string, params json.RawMessage) (any, error) {
+		switch method {
+		case "initialize":
+			return map[string]any{"protocolVersion": "2024-11-05"}, nil
+		default:
+			// Results that cannot decode into the expected shapes.
+			return json.RawMessage(`42`), nil
+		}
+	})
+	client := NewClient("bad", w, r, nil)
+	defer client.Close()
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.ListTools(context.Background()); err == nil {
+		t.Error("expected tools/list decode error")
+	}
+	if _, err := client.CallTool(context.Background(), "x", nil); err == nil {
+		t.Error("expected tools/call decode error")
+	}
+	if _, err := client.ListResources(context.Background()); err == nil {
+		t.Error("expected resources/list decode error")
+	}
+	if _, err := client.ReadResource(context.Background(), "u"); err == nil {
+		t.Error("expected resources/read decode error")
+	}
+	if _, err := client.ListPrompts(context.Background()); err == nil {
+		t.Error("expected prompts/list decode error")
+	}
+	if _, err := client.GetPrompt(context.Background(), "p", nil); err == nil {
+		t.Error("expected prompts/get decode error")
+	}
+	if _, err := client.CreateMessage(context.Background(), CreateMessageParams{}); err == nil {
+		t.Error("expected sampling decode error")
+	}
+	// Cancelled contexts fail before any request is written.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := client.ListTools(ctx); err == nil {
+		t.Error("expected ctx error")
+	}
+}
+
+func TestCallToolNonTextContent(t *testing.T) {
+	w, r := startFakeServer(t, func(method string, params json.RawMessage) (any, error) {
+		switch method {
+		case "initialize":
+			return map[string]any{"protocolVersion": "2024-11-05"}, nil
+		case "tools/call":
+			return map[string]any{"content": []map[string]any{{"type": "image", "data": "..."}}}, nil
+		default:
+			return map[string]any{}, nil
+		}
+	})
+	client := NewClient("img", w, r, nil)
+	defer client.Close()
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	out, err := client.CallTool(context.Background(), "x", nil)
+	if err != nil || out != "" {
+		t.Fatalf("non-text content = %q %v (text parts only)", out, err)
+	}
+}

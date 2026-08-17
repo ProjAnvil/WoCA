@@ -32,3 +32,28 @@ func TestBuildSkipsMissingMemory(t *testing.T) {
 		t.Fatalf("should not include project instructions when no memory file exists:\n%s", got)
 	}
 }
+
+func TestStyleNamesAndSubagentPrompt(t *testing.T) {
+	names := StyleNames()
+	if len(names) == 0 || names[0] == "" {
+		t.Fatalf("StyleNames = %v", names)
+	}
+	sp := SubagentPrompt("/tmp/x")
+	if !strings.Contains(sp, "Working directory: /tmp/x") || !strings.Contains(sp, "subagent") {
+		t.Fatalf("SubagentPrompt = %q", sp)
+	}
+}
+
+func TestDetectShell(t *testing.T) {
+	for _, c := range []struct{ shell, want string }{
+		{"/bin/zsh", "zsh"},
+		{"/usr/local/bin/fish", "fish"},
+		{"/opt/strange/shell", "/opt/strange/shell"},
+		{"", "unknown"},
+	} {
+		t.Setenv("SHELL", c.shell)
+		if got := DetectShell(); got != c.want {
+			t.Errorf("DetectShell(%q) = %q, want %q", c.shell, got, c.want)
+		}
+	}
+}

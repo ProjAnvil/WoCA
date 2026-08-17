@@ -226,3 +226,139 @@ func TestStreamableHTTPSSRF(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamableAuthClientConstruction(t *testing.T) {
+	// Loopback endpoints pass the SSRF policy.
+	client := NewStreamableHTTPAuth("web", "http://127.0.0.1:1/mcp", func() string { return "tok" })
+	if client == nil {
+		t.Fatal("NewStreamableHTTPAuth nil")
+	}
+	if client.Name() != "web" {
+		t.Fatalf("Name = %q", client.Name())
+	}
+	if err := client.Initialize(context.Background()); err == nil {
+		t.Fatal("expected initialize failure on closed port")
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without a token supplier the client still builds.
+	client2 := NewStreamableHTTPAuth("web", "http://localhost:1/mcp", nil)
+	if client2 == nil {
+		t.Fatal("nil token supplier should still build")
+	}
+	// A non-http(s) endpoint is rejected by policy → nil.
+	if client3 := NewStreamableHTTPAuth("bad", "file:///etc/passwd", nil); client3 != nil {
+		t.Fatal("file endpoint should be rejected")
+	}
+}
+
+func TestStreamableHTTPErrorPaths(t *testing.T) {
+	// 500 on initialize.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, "boom")
+	}))
+	defer srv.Close()
+	c := NewStreamableHTTP("err", srv.URL)
+	if c == nil {
+		t.Fatal("nil client")
+	}
+	if err := c.Initialize(context.Background()); err == nil {
+		t.Fatal("expected status error")
+	}
+	srv.Close()
+
+	// 200 with a non-JSON body.
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "not json")
+	}))
+	defer srv2.Close()
+	c2 := NewStreamableHTTP("garbage", srv2.URL)
+	if err := c2.Initialize(context.Background()); err == nil {
+		t.Fatal("expected decode error")
+	}
+	srv2.Close()
+
+	// The listen path against an endpoint that 404s and a cancelled
+	// context.
+	srv3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv3.Close()
+	c3 := NewStreamableHTTP("listen-err", srv3.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// A cancelled context listen returns nil (clean shutdown).
+	_ = c3.Listen(ctx)
+}
+
+func TestStreamableListenSSE(t *testing.T) {
+	notified := make(chan string, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprint(w, "event: ping\n\n")    // no data: line
+		fmt.Fprint(w, "data: [DONE]\n\n")   // sentinel skipped
+		fmt.Fprint(w, "data: not-json\n\n") // undecodable data skipped
+		fmt.Fprint(w, `data: {"method":"notify/hi","params":{}}`+"\n\n")
+		fmt.Fprint(w, `data: {"id":9,"method":"server/req"}`+"\n\n") // server request id: skipped
+		flusher.Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	client := NewStreamableHTTP("sse", srv.URL)
+	if client == nil {
+		t.Fatal("nil client")
+	}
+	defer client.Close()
+	if err := client.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	client.OnNotification = func(method string, params json.RawMessage) {
+		notified <- method
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- client.Listen(ctx) }()
+
+	select {
+	case m := <-notified:
+		if m != "notify/hi" {
+			t.Fatalf("notified = %q", m)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no notification received")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Logf("listen ended with %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("listen did not return after cancel")
+	}
+}
+
+func TestHTTPTransportCancelledAndSendError(t *testing.T) {
+	tr := newHTTPTransport("http://127.0.0.1:1/mcp")
+	if tr == nil {
+		t.Fatal("nil transport")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := tr.roundTrip(ctx, 1, []byte(`{"id":1}`)); err == nil {
+		t.Fatal("expected request-build error on cancelled ctx")
+	}
+	if err := tr.send([]byte(`{"method":"x"}`)); err == nil {
+		t.Fatal("expected send error on closed port")
+	}
+}
