@@ -11,7 +11,6 @@ import (
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/config"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/hooks"
 	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/permissions"
@@ -49,7 +48,7 @@ func TestMessagesReducerAndFrom(t *testing.T) {
 	if MessagesFrom(nil) != nil {
 		t.Fatal("MessagesFrom(nil) must be nil")
 	}
-	if MessagesFrom(graph.State{"other": 1}) != nil {
+	if MessagesFrom(map[string]any{"other": 1}) != nil {
 		t.Fatal("MessagesFrom on messageless state must be nil")
 	}
 }
@@ -360,15 +359,11 @@ func TestCheckPermissionModes(t *testing.T) {
 	if ok, err := ae.checkPermission(context.Background(), read); err != nil || !ok {
 		t.Fatalf("acceptEdits read = %v/%v", ok, err)
 	}
-	if _, err := ae.checkPermission(context.Background(), messages.ToolCall{Name: "Bash", Args: map[string]any{"command": "make"}}); err == nil {
-		t.Fatal("acceptEdits should ask for shell tools (interrupt error expected)")
-	}
+	askOutsideRun(t, func() { _, _ = ae.checkPermission(context.Background(), messages.ToolCall{Name: "Bash", Args: map[string]any{"command": "make"}}) })
 
 	// Default asks for writes.
 	def := newAgent(config.ModeDefault)
-	if _, err := def.checkPermission(context.Background(), write); err == nil {
-		t.Fatal("default should ask for writes (interrupt error expected)")
-	}
+	askOutsideRun(t, func() { _, _ = def.checkPermission(context.Background(), write) })
 
 	// Explicit rules win over the mode.
 	rules := newAgent(config.ModeDefault)
@@ -556,26 +551,14 @@ func TestPreCompactHookBlocksCompaction(t *testing.T) {
 
 func TestStreamDelegatesAndResumeCheckpointError(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("hi"))))
-	s, err := a.Stream(context.Background(), []messages.Message{messages.Human("x")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	for {
-		step, ok, err := s.Next(context.Background())
+	for _, err := range a.Stream(context.Background(), []messages.Message{messages.Human("x")}, "t") {
 		if err != nil {
 			t.Fatalf("stream error: %v", err)
 		}
-		if !ok {
-			t.Fatal("stream ended without a terminal step")
-		}
-		if step.Done {
-			break
-		}
 	}
-	// ResumeCheckpoint on an unknown key errors.
-	if _, err := a.ResumeCheckpoint(context.Background(), "no-such-key", "y"); err == nil {
-		t.Fatal("ResumeCheckpoint on unknown key must error")
+	// ResumeCheckpoint on an unknown thread errors.
+	if _, err := a.ResumeCheckpoint(context.Background(), "no-such-thread", "y"); err == nil {
+		t.Fatal("ResumeCheckpoint on unknown thread must error")
 	}
 }
 
@@ -603,7 +586,21 @@ func TestCurrentModelNameUsesNameMethod(t *testing.T) {
 
 func TestRunTurnSurfacesGraphError(t *testing.T) {
 	a := newBypassAgent(t, erroringSubagentModel{language.NewFakeChatModel()})
-	if _, err := a.runTurn(context.Background(), []messages.Message{messages.Human("x")}); err == nil {
+	if _, err := a.runTurn(context.Background(), []messages.Message{messages.Human("x")}, "t"); err == nil {
 		t.Fatal("model error must propagate through the graph")
 	}
+}
+
+// askOutsideRun asserts that a permission ask outside a graph run does not
+// silently allow: the fork runtime's Interrupt guard panics (there is no
+// node execution to pause), which this helper recovers as the expected
+// outcome. It fails the test when the call instead returns cleanly.
+func askOutsideRun(t *testing.T, f func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("ask outside a graph run must not return cleanly (interrupt guard expected)")
+		}
+	}()
+	f()
 }

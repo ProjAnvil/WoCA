@@ -9,13 +9,11 @@ import (
 	"github.com/projanvil/woca/internal/compact"
 )
 
-// Reactive compaction, a port of Claude Code's prompt-too-long recovery
-// (query.ts's isPromptTooLongMessage + tryReactiveCompact): when a model call
+// Reactive compaction (prompt-too-long recovery): when a model call
 // fails because the prompt exceeds the provider's context window, the
 // conversation is compacted (summarized) and the turn is retried once with
-// the compacted history. A single-attempt guard mirrors
-// hasAttemptedReactiveCompact — a second prompt-too-long failure surfaces the
-// error instead of looping.
+// the compacted history. A single-attempt guard ensures a second
+// prompt-too-long failure surfaces the error instead of looping.
 
 // promptTooLongPatterns matches the provider error strings for an oversized
 // prompt: Anthropic "prompt is too long: N tokens > M maximum", OpenAI

@@ -45,7 +45,7 @@ func TestAgentGraphObservedEndToEnd(t *testing.T) {
 	// Enable mid-flight (the live toggle path) and scope a run.
 	obs.SetEnabled(true)
 	a.SetObsRun("/tmp/demo-project", "sess-obs-1", "run-obs-1")
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("read x")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("read x")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

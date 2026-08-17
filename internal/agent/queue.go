@@ -7,14 +7,13 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 )
 
-// Mid-turn input queue, a port of Claude Code's queued-command attachments
-// (query.ts stage 27): input submitted while a run is in flight is buffered
+// Mid-turn input queue: input submitted while a run is in flight is buffered
 // and, once the current tool round completes, appended AFTER the tool
 // results so the model can address it within the same turn — the API forbids
 // interleaving tool results with user messages, so the attachment must come
 // after the whole result batch. Each Agent owns its queue, so subagents
-// (separate Agent instances) never receive the parent's queued input —
-// Claude Code's per-agent drain scoping.
+// (separate Agent instances) never receive the parent's queued input — the
+// drain scope is per-agent.
 
 // QueuedInput is one unit of mid-turn input. A non-empty Tag wraps the text
 // in a differently-named element (e.g. background-task completions) so the

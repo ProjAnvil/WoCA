@@ -9,7 +9,8 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 )
 
-// fake 慢 MCP：工具轮不被阻塞；TTL 内不二次刷新；后台完成后换绑生效。
+// Fake slow MCP: the tool round must not block; no second refresh within the
+// TTL; rebinding takes effect once the background refresh completes.
 func TestMaybeRefreshToolsNonBlocking(t *testing.T) {
 	release := make(chan struct{})
 	var calls atomic.Int32
@@ -23,7 +24,7 @@ func TestMaybeRefreshToolsNonBlocking(t *testing.T) {
 	done := make(chan struct{})
 	go func() { a.maybeRefreshTools(context.Background()); close(done) }()
 	select {
-	case <-done: // 必须立即返回，不被 refreshTools 阻塞
+	case <-done: // must return immediately, not blocked by refreshTools
 	case <-time.After(2 * time.Second):
 		t.Fatal("maybeRefreshTools blocked on slow refresh")
 	}
@@ -35,7 +36,7 @@ func TestMaybeRefreshToolsNonBlocking(t *testing.T) {
 		return calls.Load() == 1 && a.refreshLast.Load() != 0
 	}, "first refresh completes")
 
-	// TTL 内：不再触发
+	// Within the TTL: not triggered again
 	a.maybeRefreshTools(context.Background())
 	time.Sleep(50 * time.Millisecond)
 	if n := calls.Load(); n != 1 {
@@ -43,7 +44,8 @@ func TestMaybeRefreshToolsNonBlocking(t *testing.T) {
 	}
 }
 
-// RefreshToolsNow 绕过 TTL，且与在途刷新去重（singleflight）。
+// RefreshToolsNow bypasses the TTL and deduplicates against in-flight
+// refreshes (singleflight).
 func TestRefreshToolsNowBypassesTTL(t *testing.T) {
 	var calls atomic.Int32
 	a := newRunAgent(t, t.TempDir(), nil)
@@ -55,8 +57,9 @@ func TestRefreshToolsNowBypassesTTL(t *testing.T) {
 	}
 }
 
-// 后台 flight 必须有超时：挂死的 MCP client（无内部超时）不能让 flight 永不
-// 完成——否则同步的 RefreshToolsNow 加入同一 singleflight key 后永久阻塞。
+// Background flights must have a timeout: a hung MCP client (no internal
+// timeout) must not stall the flight forever — otherwise a synchronous
+// RefreshToolsNow joining the same singleflight key blocks forever.
 func TestMaybeRefreshToolsFlightTimeout(t *testing.T) {
 	old := refreshFlightTimeout
 	refreshFlightTimeout = 50 * time.Millisecond
@@ -64,12 +67,13 @@ func TestMaybeRefreshToolsFlightTimeout(t *testing.T) {
 	a := newRunAgent(t, t.TempDir(), nil)
 	unblocked := make(chan struct{})
 	a.refreshTools = func(ctx context.Context) []coretools.Tool {
-		<-ctx.Done() // 挂死：只有 flight 超时能解开
+		<-ctx.Done() // hangs forever: only the flight timeout can release it
 		close(unblocked)
 		return nil
 	}
 	a.maybeRefreshTools(context.Background())
-	// 同步路径加入在途的挂死 flight：必须随超时一起解开，而非永久阻塞。
+	// The synchronous path joins the in-flight hung flight: it must be
+	// released by the same timeout, not blocked forever.
 	nowDone := make(chan struct{})
 	go func() { a.RefreshToolsNow(context.Background()); close(nowDone) }()
 	select {

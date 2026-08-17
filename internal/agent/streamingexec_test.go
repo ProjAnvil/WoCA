@@ -14,7 +14,6 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/config"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -220,7 +219,7 @@ func TestStreamingToolExecutionOverlaps(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("sleep please")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("sleep please")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,11 +300,8 @@ func TestStreamingExecutionSkipsGatedCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write a file")})
-	ie, ok := graph.AsInterrupt(err)
-	if !ok {
-		t.Fatalf("expected permission interrupt, got %v", err)
-	}
+	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write a file")}, "t")
+	ie := interruptFromError(t, err)
 	if req, ok := ie.Value.(PermissionRequest); !ok || req.ToolName != "Write" {
 		t.Fatalf("interrupt value = %+v", ie.Value)
 	}
@@ -314,11 +310,9 @@ func TestStreamingExecutionSkipsGatedCalls(t *testing.T) {
 	}
 
 	// Approve: the run completes and the write happened exactly once.
-	st, err := a.Graph().Resume(context.Background(), ie, "y")
-	if err != nil {
+	if _, err := a.Resume(context.Background(), "t", "y"); err != nil {
 		t.Fatal(err)
 	}
-	_ = MessagesFrom(st)
 	if got := rec.count(); got != 0 {
 		t.Fatalf("Sleep unexpectedly ran %d times", got)
 	}
@@ -393,7 +387,7 @@ func TestStreamingExecutionReadOnlyDefaultMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("search it")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("search it")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

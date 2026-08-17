@@ -15,14 +15,13 @@ import (
 	"github.com/projanvil/woca/internal/store"
 )
 
-// Relevant-memory prefetch and attachments, a port of Claude Code's
-// startRelevantMemoryPrefetch + stage 27 consumption: at the start of each
+// Relevant-memory prefetch and attachments: at the start of each
 // model turn the memory store is searched asynchronously for entries relevant
 // to the latest user message; after each tool round the settled, not-yet-
 // injected entries are attached as <relevant-memory> messages after the
 // result batch, so the model sees long-term context it would otherwise miss.
-// Relevance is deliberately naive (keyword containment) — the woca
-// equivalent of Claude Code's memory search.
+// Relevance is deliberately naive (keyword containment), serving the role of
+// a memory search.
 //
 // The subsystem lives in memoryRuntime, a value component of Agent: it owns
 // the engine, the KV-store fallback, the per-turn prefetch state and the

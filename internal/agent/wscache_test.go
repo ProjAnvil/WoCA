@@ -6,8 +6,8 @@ func TestWSCacheEvictsOldest(t *testing.T) {
 	c := newWSCache[string](2)
 	c.Set("a", "1")
 	c.Set("b", "2")
-	c.Get("a")      // a 变热
-	c.Set("c", "3") // 淘汰 b
+	c.Get("a")      // a becomes hot
+	c.Set("c", "3") // evicts b
 	if _, ok := c.Get("b"); ok {
 		t.Fatal("b should have been evicted")
 	}

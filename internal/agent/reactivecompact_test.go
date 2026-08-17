@@ -80,7 +80,7 @@ func TestInvokePromptTooLongRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), longHistory())
+	out, err := a.Invoke(context.Background(), longHistory(), "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestInvokePromptTooLongSingleRetryGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), longHistory())
+	_, err = a.Invoke(context.Background(), longHistory(), "t")
 	if !IsPromptTooLongError(err) {
 		t.Fatalf("expected the second prompt-too-long error to surface, got %v", err)
 	}
@@ -153,7 +153,7 @@ func TestInvokePromptTooLongNothingToCompact(t *testing.T) {
 	// A single huge human message: compaction has no cut point, so the
 	// provider error surfaces without a pointless retry.
 	huge := messages.Human(strings.Repeat("one enormous prompt ", 2000))
-	_, err = a.Invoke(context.Background(), []messages.Message{huge})
+	_, err = a.Invoke(context.Background(), []messages.Message{huge}, "t")
 	if !IsPromptTooLongError(err) {
 		t.Fatalf("expected prompt-too-long to surface, got %v", err)
 	}

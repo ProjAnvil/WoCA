@@ -130,7 +130,7 @@ func (m *bindTrackingModel) BindTools(bound []coreTool) (language.ChatModel, err
 }
 func (m *bindTrackingModel) Capabilities() caps { return capsV }
 
-// TestTaskSummaryPeriodicGeneration verifies the claude-ps-style summary:
+// TestTaskSummaryPeriodicGeneration verifies the periodic task summary:
 // generated every taskSummaryInterval rounds, stored, and readable.
 func TestTaskSummaryPeriodicGeneration(t *testing.T) {
 	summarizer := &countingSummarizer{reply: "Refactoring the auth middleware"}

@@ -7,8 +7,7 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 )
 
-// Between-turn tool refresh, a port of Claude Code's stage 28
-// (options.refreshTools): after each tool round the agent re-collects its
+// Between-turn tool refresh: after each tool round the agent re-collects its
 // extra tools (e.g. re-listing MCP servers, whose tool set can change at
 // runtime) and, when the set changed, rebinds the model so the next round
 // sees them.

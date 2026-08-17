@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"iter"
 	"strings"
 	"testing"
 	"time"
@@ -11,10 +12,13 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/langchain-golang/core/runnables"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
+	lgruntime "github.com/projanvil/langchain-golang/langgraph/runtime"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/config"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/hooks"
 	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/permissions"
@@ -65,7 +69,7 @@ func TestNewRouterAndBindErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t")
 	if err != nil || out[len(out)-1].Content != "routed" {
 		t.Fatalf("routed reply = %q, %v", out[len(out)-1].Content, err)
 	}
@@ -94,12 +98,12 @@ func TestNewWithCheckpointer(t *testing.T) {
 		Model:        language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))),
 		Registry:     tools.NewRegistry(t.TempDir()),
 		SystemPrompt: "t",
-		Checkpointer: graph.NewMemoryCheckpointer(),
+		Checkpointer: lgcheckpoint.NewMemorySaver(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}); err != nil {
+	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -166,7 +170,8 @@ func TestToolsNodeNoopStates(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
 	node := a.toolsNode()
 	// Empty state: nothing to do.
-	v, err := node(context.Background(), graph.State{})
+	rt := lgruntime.NewRuntime(context.Background())
+	v, err := node(rt, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,14 +179,14 @@ func TestToolsNodeNoopStates(t *testing.T) {
 		t.Fatalf("empty state update = %v", v)
 	}
 	// Last message is not an AI tool request: nothing to do.
-	v, err = node(context.Background(), graph.State{"messages": []messages.Message{messages.Human("hi")}})
+	v, err = node(rt, map[string]any{"messages": []messages.Message{messages.Human("hi")}})
 	if err != nil || v != nil {
 		t.Fatalf("human-tail state = %v, %v", v, err)
 	}
 	// Route agrees: an empty state ends the turn.
-	next, err := a.route(context.Background(), graph.State{})
-	if err != nil || next != graph.END {
-		t.Fatalf("route(empty) = %q, %v", next, err)
+	next, err := a.route(rt, map[string]any{})
+	if err != nil || len(next) != 1 || next[0] != lgtypes.END {
+		t.Fatalf("route(empty) = %v, %v", next, err)
 	}
 }
 
@@ -219,7 +224,7 @@ func TestToolsNodeHookFeedbackAndDeny(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +254,7 @@ func TestToolsNodePreToolUseHookDenyInGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,23 +279,20 @@ func TestPermissionDeniedOnResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write")})
-	ie, ok := graph.AsInterrupt(err)
-	if !ok {
-		t.Fatalf("expected interrupt, got %v", err)
-	}
-	state, err := a.Graph().Resume(context.Background(), ie, "n")
+	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
+	_ = interruptFromError(t, err)
+	state, err := a.Resume(context.Background(), "t", "n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
-	for _, m := range MessagesFrom(state) {
+	for _, m := range state {
 		if m.Role == messages.RoleTool && m.ToolCallID == "w" && strings.Contains(m.Content, "permission denied") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("denied result missing: %+v", MessagesFrom(state))
+		t.Fatalf("denied result missing: %+v", state)
 	}
 }
 
@@ -316,33 +318,30 @@ func TestPlanRejectionAndAskRuleInterrupt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("plan")})
-	ie, ok := graph.AsInterrupt(err)
-	if !ok {
-		t.Fatalf("expected plan interrupt, got %v", err)
-	}
-	state, err := a.Graph().Resume(context.Background(), ie, "n")
+	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("plan")}, "t")
+	_ = interruptFromError(t, err)
+	state, err := a.Resume(context.Background(), "t", "n")
 	if err != nil {
 		t.Fatal(err)
 	}
 	found := false
-	for _, m := range MessagesFrom(state) {
+	for _, m := range state {
 		if m.Role == messages.RoleTool && m.ToolCallID == "x" && strings.Contains(m.Content, "Plan rejected") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("rejection missing: %+v", MessagesFrom(state))
+		t.Fatalf("rejection missing: %+v", state)
 	}
 
 	// An ask rule in default mode interrupts (outside a graph run it errors).
 	asking := &Agent{mode: config.ModeDefault}
 	asking.perms = &permissions.Rules{Ask: []string{"Write"}}
-	if _, err := asking.checkPermission(context.Background(), messages.ToolCall{
-		Name: "Write", Args: map[string]any{"file_path": "x"},
-	}); err == nil {
-		t.Fatal("ask rule should interrupt outside a run")
-	}
+	askOutsideRun(t, func() {
+		_, _ = asking.checkPermission(context.Background(), messages.ToolCall{
+			Name: "Write", Args: map[string]any{"file_path": "x"},
+		})
+	})
 	// Bypass allows everything; default auto-allows reads.
 	byp := &Agent{mode: config.ModeBypass}
 	if ok, err := byp.checkPermission(context.Background(), messages.ToolCall{Name: "Bash", Args: map[string]any{"command": "anything"}}); err != nil || !ok {
@@ -373,7 +372,7 @@ func TestMaxTurnsMarkerEndsTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("read")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("read")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,26 +525,20 @@ func TestGoalPauseMidLoopEndsAtBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
-	var term graph.Step
-	for {
-		step, ok, err := stream.Next(ctx)
-		if err != nil {
-			t.Fatalf("stream error: %v", err)
-		}
-		if !ok {
-			t.Fatal("stream ended")
-		}
-		if step.Done || step.Err != nil {
-			term = step
+	var termErr error
+	for c, cerr := range stream {
+		if cerr != nil {
+			termErr = cerr
 			break
 		}
-		if s, ok := step.Delta.(string); ok && strings.Contains(s, "[goal cycle") {
-			a.PauseGoal() // user pauses mid-loop
+		if c.Mode == lggraph.StreamCustom {
+			if s, ok := c.Payload.(string); ok && strings.Contains(s, "[goal cycle") {
+				a.PauseGoal() // user pauses mid-loop
+			}
 		}
 	}
-	if !term.Done {
-		t.Fatalf("paused loop should end cleanly, got %v", term.Err)
+	if termErr != nil {
+		t.Fatalf("paused loop should end cleanly, got %v", termErr)
 	}
 	if g := a.Goal(); g.Status != GoalPaused {
 		t.Fatalf("status = %q, want paused", g.Status)
@@ -571,9 +564,9 @@ func TestGoalAssessRendersNotesAndEmptyAssessment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("unexpected error: %v", step.Err)
+	restep := pumpGoalChunks(t, stream)
+	if restep.err != nil || len(restep.interrupts) > 0 {
+		t.Fatalf("unexpected error: %v", restep.err)
 	}
 	g := a.Goal()
 	if g.Status != GoalComplete {
@@ -595,9 +588,9 @@ func TestGoalEvaluatorBlockedVerdict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("unexpected error: %v", step.Err)
+	restep := pumpGoalChunks(t, stream)
+	if restep.err != nil || len(restep.interrupts) > 0 {
+		t.Fatalf("unexpected error: %v", restep.err)
 	}
 	g := a.Goal()
 	if g.Status != GoalBlocked || g.BlockedReason != "needs human input" {
@@ -656,26 +649,16 @@ func TestGoalEvaluateModelErrorSurfaces(t *testing.T) {
 	}
 }
 
-// pumpError drains the stream and returns the first error step (nil when the
-// run completes cleanly).
-func pumpError(t *testing.T, s graph.Stream[graph.Step]) error {
+// pumpError drains a goal chunk stream and returns the terminal error (nil
+// when the run completes cleanly).
+func pumpError(t *testing.T, s iter.Seq2[lggraph.StreamChunk, error]) error {
 	t.Helper()
-	ctx := context.Background()
-	for {
-		step, ok, err := s.Next(ctx)
+	for _, err := range s {
 		if err != nil {
 			return err
 		}
-		if !ok {
-			return nil
-		}
-		if step.Err != nil {
-			return step.Err
-		}
-		if step.Done {
-			return nil
-		}
 	}
+	return nil
 }
 
 func TestGoalExecuteStreamErrorSurfaces(t *testing.T) {
@@ -727,16 +710,11 @@ func TestGoalReasoningDeltaForwarded(t *testing.T) {
 		t.Fatal(err)
 	}
 	sawReasoning := false
-	ctx := context.Background()
-	for {
-		step, ok, err := stream.Next(ctx)
-		if err != nil {
-			t.Fatalf("stream error: %v", err)
+	for c, cerr := range stream {
+		if cerr != nil {
+			t.Fatalf("stream error: %v", cerr)
 		}
-		if !ok || step.Done || step.Err != nil {
-			break
-		}
-		if _, isR := step.Delta.(ReasoningDelta); isR {
+		if _, isR := c.Payload.(ReasoningDelta); isR {
 			sawReasoning = true
 		}
 	}
@@ -762,9 +740,9 @@ func TestGoalProgressWindowTrimsAtFifty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("unexpected error: %v", step.Err)
+	restep := pumpGoalChunks(t, stream)
+	if restep.err != nil || len(restep.interrupts) > 0 {
+		t.Fatalf("unexpected error: %v", restep.err)
 	}
 	if g := a.Goal(); len(g.Progress) != 50 {
 		t.Fatalf("progress = %d, want trimmed to 50", len(g.Progress))

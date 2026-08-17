@@ -30,7 +30,7 @@ func TestSetModelSwapsRuntimeModel(t *testing.T) {
 		t.Fatalf("SetModel: %v", err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

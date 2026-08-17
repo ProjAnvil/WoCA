@@ -1,16 +1,20 @@
-// Package agent builds the woca coding agent as an explicit langgraph-style
+// Package agent builds the woca coding agent as an explicit langgraph
 // graph: a model node bound to the tool set, a tools node that executes tool
 // calls (with a permission gate and user-interaction interrupts), and a
 // conditional edge that loops back through the tools until the model stops
 // requesting them. It also provides plan mode and Task-spawned subagents.
+// The graph runtime itself is the langchain-golang langgraph package; this
+// file only wires woca's nodes, reducers, and interrupt payloads into it.
 package agent
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"path/filepath"
 	"runtime/debug"
+	"time"
 	"sort"
 	"strings"
 	"sync"
@@ -19,14 +23,18 @@ import (
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
+	lgruntime "github.com/projanvil/langchain-golang/langgraph/runtime"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/bus"
 	"github.com/projanvil/woca/internal/compact"
 	"github.com/projanvil/woca/internal/config"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/hooks"
+	"github.com/projanvil/woca/internal/lgcp"
 	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/model"
 	"github.com/projanvil/woca/internal/obslog"
@@ -43,6 +51,19 @@ const (
 	nodeModel = "model"
 	nodeTools = "tools"
 )
+
+// Interrupt payloads and resume answers are woca structs; registering them
+// with lgcp lets the durable checkpoint savers round-trip them (the fork's
+// serde registry covers only langchain core types). Names are persisted —
+// stable across releases.
+func init() {
+	lgcp.RegisterType(PermissionRequest{}, "woca.agent.PermissionRequest")
+	lgcp.RegisterType(AskUserRequest{}, "woca.agent.AskUserRequest")
+	lgcp.RegisterType(AskUserAnswer{}, "woca.agent.AskUserAnswer")
+	lgcp.RegisterType(PlanApprovalRequest{}, "woca.agent.PlanApprovalRequest")
+	lgcp.RegisterType(GoalDelta{}, "woca.agent.GoalDelta")
+	lgcp.RegisterType(ReasoningDelta{}, "woca.agent.ReasoningDelta")
+}
 
 // MessagesReducer implements langgraph's add_messages semantics: append a
 // batch of messages, replacing any existing message with the same ID.
@@ -74,12 +95,18 @@ func MessagesReducer(existing, update any) any {
 }
 
 // MessagesFrom extracts the message slice from a graph state.
-func MessagesFrom(state graph.State) []messages.Message {
+func MessagesFrom(state map[string]any) []messages.Message {
 	if state == nil {
 		return nil
 	}
 	msgs, _ := state["messages"].([]messages.Message)
 	return msgs
+}
+
+// messagesChannel adapts MessagesReducer to the fork channels.Reducer shape
+// (identical semantics; the fork's error return is always nil here).
+func messagesChannel(existing, update any) (any, error) {
+	return MessagesReducer(existing, update), nil
 }
 
 // PermissionRequest is surfaced when a tool needs approval.
@@ -163,8 +190,8 @@ type Config struct {
 	CheckpointDir string
 	// Checkpointer, when set, is used directly as the graph checkpointer
 	// (e.g. the sqlite/postgres backend selected in settings). It takes
-	// precedence over CheckpointDir.
-	Checkpointer graph.Checkpointer
+	// precedence over CheckpointDir. Type is the fork langgraph Saver.
+	Checkpointer lgcheckpoint.Saver
 	// MaxTokensEscalator, when set, rebuilds the chat model with a higher
 	// output-token cap for the escalation path of max-output-tokens recovery
 	// (the 8k→64k retry). Wire it only when the user did not set an explicit
@@ -178,16 +205,16 @@ type Config struct {
 	// EmitToolUseSummaries generates short human-readable labels for each
 	// completed tool batch asynchronously (UI-only, never enters the model
 	// context). Requires Summarizer; skipped for subagents. Wire it for
-	// interactive sessions only, mirroring Claude Code's mobile-display gate.
+	// interactive sessions only (the mobile-display gate).
 	EmitToolUseSummaries bool
 	// RefreshTools, when set, re-collects the extra (non-registry) tools
-	// between turns (Claude Code's refreshTools): a changed set rebinds the
+	// between turns: a changed set rebinds the
 	// model so newly available tools (e.g. hot-added MCP tools) are usable
 	// in the next round.
 	RefreshTools func(ctx context.Context) []coretools.Tool
 	// Memory is the long-term memoryStore; when set, relevant memories are
-	// prefetched at turn start and attached after tool rounds (Claude Code's
-	// memory attachments).
+	// prefetched at turn start and attached after tool rounds as
+	// memory attachments.
 	Memory *store.Store
 	// MemoryEngine is the factual-memory engine (ladyM). When set, the
 	// per-turn prefetch runs semantic Recall instead of the KV keyword
@@ -197,8 +224,8 @@ type Config struct {
 	// tests); the memory paths read ladym-topk / ladym-autoretain /
 	// ladym-system2 live.
 	LoadSettings func() settings.Settings
-	// MaxTurns caps the model rounds within one turn (Claude Code's SDK
-	// maxTurns); 0 is unlimited. Reaching the cap ends the turn with a
+	// MaxTurns caps the model rounds within one turn; 0 is unlimited.
+	// Reaching the cap ends the turn with a
 	// <max-turns-reached> marker.
 	MaxTurns int
 	// BashPolicy, when non-empty, gates Bash commands (allow/deny).
@@ -223,7 +250,13 @@ type Agent struct {
 	workdir        string
 	recursionLimit int
 	subagentModel  language.ChatModel
-	graph          *graph.CompiledGraph
+	graph          *lggraph.CompiledGraph
+	// saver is the checkpointer the graph was compiled with (nil only when
+	// the graph has none). Fresh-input runs reset their thread before
+	// starting: the fork layers fresh input onto a thread's latest
+	// checkpoint, while woca's turn model starts every fresh run from
+	// scratch (see resetThread).
+	saver          lgcheckpoint.Saver
 	tasks          *TaskManager
 	taskList       *TaskList
 	hooks          *hooks.Runner
@@ -263,7 +296,7 @@ type Agent struct {
 	escalate func() (language.ChatModel, error)
 	// toolBudget is the per-round tool-result character budget (0 disables).
 	toolBudget int
-	// inputs buffers mid-turn user input (Claude Code's queued commands).
+	// inputs buffers mid-turn user input (queued commands).
 	inputs queue
 	// emitSummaries enables async tool-use summary generation; summaries
 	// buffers them for non-blocking consumption.
@@ -285,7 +318,7 @@ type Agent struct {
 	// maxTurns caps rounds per turn (0 = unlimited); turns counts rounds.
 	maxTurns int
 	turns    turnCounter
-	// taskState tracks the periodic task summary (claude ps).
+	// taskState tracks the periodic task summary.
 	taskState taskSummaryState
 	// cron schedules session-scoped scheduled prompts (ScheduleCron); the
 	// host dependency is injected as a notification sink at construction.
@@ -311,7 +344,7 @@ type Agent struct {
 	lastTranscript []messages.Message
 	// compactFails counts consecutive summarization failures; after
 	// maxCompactFails auto-compaction is disabled until a manual compact
-	// succeeds (mirrors Claude Code's auto-compact circuit breaker).
+	// succeeds (the auto-compact circuit breaker).
 	compactFails int
 }
 
@@ -459,26 +492,29 @@ func New(cfg Config) (*Agent, error) {
 	}
 	a.boundModel = bound
 
-	g := graph.NewStateGraph()
-	g.AddReducer("messages", MessagesReducer)
-	g.AddStreamingNode(nodeModel, a.modelNode())
+	g := lggraph.NewStateGraph()
+	g.AddReducer("messages", messagesChannel)
+	g.AddNode(nodeModel, a.observedNode("agent", nodeModel, a.modelNode()))
 	if len(a.toolList) > 0 {
-		g.AddNode(nodeTools, a.toolsNode())
+		g.AddNode(nodeTools, a.observedNode("agent", nodeTools, a.toolsNode()))
 		g.AddEdge(nodeTools, nodeModel)
 	}
 	g.AddConditionalEdges(nodeModel, a.route)
 	g.SetEntryPoint(nodeModel)
 
-	compileOpts := []graph.CompileOption{graph.WithRecursionLimit(cfg.RecursionLimit)}
-	if a.obs != nil {
-		compileOpts = append(compileOpts, graph.WithObserver("agent", a.obs))
-	}
+	compileOpts := []lggraph.CompileOption{lggraph.WithRecursionLimit(cfg.RecursionLimit)}
+	// A Saver is mandatory for in-node interrupts to be resumable: default
+	// to the in-process MemorySaver (per-run isolation comes from distinct
+	// thread IDs), upgrade to a durable backend when configured.
 	switch {
 	case cfg.Checkpointer != nil:
-		compileOpts = append(compileOpts, graph.WithCheckpointer(cfg.Checkpointer))
+		a.saver = cfg.Checkpointer
 	case cfg.CheckpointDir != "":
-		compileOpts = append(compileOpts, graph.WithCheckpointer(graph.NewFileCheckpointer(cfg.CheckpointDir)))
+		a.saver = lgcp.NewFileSaver(cfg.CheckpointDir)
+	default:
+		a.saver = lgcheckpoint.NewMemorySaver()
 	}
+	compileOpts = append(compileOpts, lggraph.WithCheckpointer(a.saver))
 	cg, err := g.Compile(compileOpts...)
 	if err != nil {
 		return nil, err
@@ -493,7 +529,7 @@ func New(cfg Config) (*Agent, error) {
 }
 
 // Graph returns the compiled graph for streaming/resume.
-func (a *Agent) Graph() *graph.CompiledGraph { return a.graph }
+func (a *Agent) Graph() *lggraph.CompiledGraph { return a.graph }
 
 // Obs returns the observability store (nil when not wired).
 func (a *Agent) Obs() *obslog.Store { return a.obs }
@@ -784,11 +820,11 @@ func (a *Agent) hooksFor(ctx context.Context) *hooks.Runner {
 // by the provided conversation history. The context carries the run
 // workspace (see WithRunWorkspace), which selects the environment the model
 // is told about.
-func (a *Agent) NewState(ctx context.Context, history []messages.Message) graph.State {
+func (a *Agent) NewState(ctx context.Context, history []messages.Message) map[string]any {
 	msgs := make([]messages.Message, 0, len(history)+1)
 	msgs = append(msgs, messages.System(a.systemPromptFor(ctx)))
 	msgs = append(msgs, history...)
-	return graph.State{"messages": msgs}
+	return map[string]any{"messages": msgs}
 }
 
 // CompactThreshold returns the configured auto-compaction token threshold
@@ -838,10 +874,12 @@ func (a *Agent) SetModel(m language.ChatModel) error {
 // Invoke runs the agent to completion and returns the full message transcript
 // (system prompt included). A prompt-too-long failure first triggers reactive
 // compaction with a single retry (RecoverPromptTooLong semantics); a truncated
-// final response is then recovered per RecoverOutputLimit.
-func (a *Agent) Invoke(ctx context.Context, history []messages.Message) ([]messages.Message, error) {
+// final response is then recovered per RecoverOutputLimit. threadID keys the
+// run's checkpoints (resume via Resume with the same threadID); an interrupt
+// surfaces as a *lgtypes.GraphInterrupt error carrying the pending request.
+func (a *Agent) Invoke(ctx context.Context, history []messages.Message, threadID string) ([]messages.Message, error) {
 	a.ResetTurnCounter() // one Invoke = one turn for MaxTurns accounting
-	out, err := a.runTurn(ctx, history)
+	out, err := a.runTurn(ctx, history, threadID)
 	if err != nil {
 		if !IsPromptTooLongError(err) {
 			return nil, err
@@ -851,25 +889,64 @@ func (a *Agent) Invoke(ctx context.Context, history []messages.Message) ([]messa
 			return nil, err // nothing to compact; surface the provider error
 		}
 		// Single retry on the compacted history — the
-		// hasAttemptedReactiveCompact guard: a second prompt-too-long error
+		// single-attempt guard: a second prompt-too-long error
 		// here is returned as-is.
 		history = compacted
-		out, err = a.runTurn(ctx, history)
+		out, err = a.runTurn(ctx, history, threadID)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return a.RecoverOutputLimit(ctx, history, out, a.runTurn)
+	return a.RecoverOutputLimit(ctx, history, out, func(ctx context.Context, h []messages.Message) ([]messages.Message, error) {
+		return a.runTurn(ctx, h, threadID)
+	})
+}
+
+// resetThread clears a checkpoint thread so the next fresh-input run starts
+// from scratch. The fork applies fresh input on top of a thread's latest
+// checkpoint (new-turn semantics); woca's turns always begin from the
+// harness-supplied history, so a fresh run wipes the thread first. Pause and
+// resume keep the thread (that is the point of it).
+func (a *Agent) resetThread(ctx context.Context, threadID string) {
+	if a.saver != nil {
+		_ = a.saver.DeleteThread(ctx, threadID)
+	}
 }
 
 // runTurn compacts history and runs one full graph turn.
-func (a *Agent) runTurn(ctx context.Context, history []messages.Message) ([]messages.Message, error) {
+func (a *Agent) runTurn(ctx context.Context, history []messages.Message, threadID string) ([]messages.Message, error) {
 	history = a.CompactHistory(ctx, history)
-	state, err := a.graph.Invoke(ctx, a.NewState(ctx, history))
+	a.resetThread(ctx, threadID)
+	res, err := a.graph.InvokeWithOptions(ctx, a.NewState(ctx, history), lggraph.Options{ThreadID: threadID})
 	if err != nil {
 		return nil, err
 	}
-	return MessagesFrom(state), nil
+	if len(res.Interrupts) > 0 {
+		return nil, &lgtypes.GraphInterrupt{Interrupt: res.Interrupts[0]}
+	}
+	return MessagesFrom(res.Values), nil
+}
+
+// Resume answers a pending interrupt on threadID and runs the graph to
+// completion, returning the transcript. It is also the cross-process resume
+// path: with a durable Saver configured, a process restart can resume the
+// thread's latest paused checkpoint (the old ResumeCheckpoint semantics).
+func (a *Agent) Resume(ctx context.Context, threadID string, resumeValue any) ([]messages.Message, error) {
+	res, err := a.graph.InvokeWithOptions(ctx, nil, lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue)})
+	if err != nil {
+		return nil, err
+	}
+	if len(res.Interrupts) > 0 {
+		return nil, &lgtypes.GraphInterrupt{Interrupt: res.Interrupts[0]}
+	}
+	return MessagesFrom(res.Values), nil
+}
+
+// ResumeCheckpoint resumes a run from its checkpoint thread (requires a
+// durable Saver to have been configured). Kept as the cmd --resume-checkpoint
+// entry point; threadID is the thread the paused run used.
+func (a *Agent) ResumeCheckpoint(ctx context.Context, threadID string, resumeValue any) ([]messages.Message, error) {
+	return a.Resume(ctx, threadID, resumeValue)
 }
 
 // CurrentModel returns the active chat model (before tool binding).
@@ -888,20 +965,29 @@ func (a *Agent) CurrentModelName() string {
 	return fmt.Sprintf("%T", a.CurrentModel())
 }
 
-// Stream runs the agent and streams graph progress steps.
-func (a *Agent) Stream(ctx context.Context, history []messages.Message) (graph.Stream[graph.Step], error) {
+// streamModes is the chunk vocabulary the harness consumes: node updates
+// (message batches), custom payloads (token/reasoning deltas), full-state
+// values (final transcript and pause detection), and task events (the
+// observability bridge).
+var streamModes = []lggraph.StreamMode{lggraph.StreamUpdates, lggraph.StreamCustom, lggraph.StreamValues, lggraph.StreamTasks}
+
+// Stream runs the agent on threadID and streams graph progress chunks.
+func (a *Agent) Stream(ctx context.Context, history []messages.Message, threadID string) iter.Seq2[lggraph.StreamChunk, error] {
 	history = a.CompactHistory(ctx, history)
-	return a.graph.Stream(ctx, a.NewState(ctx, history))
+	a.resetThread(ctx, threadID)
+	return a.graph.Stream(ctx, a.NewState(ctx, history), lggraph.StreamOptions{
+		Options: lggraph.Options{ThreadID: threadID},
+		Modes:   streamModes,
+	})
 }
 
-// ResumeCheckpoint resumes a run from a persisted checkpoint key (requires
-// CheckpointDir to have been configured).
-func (a *Agent) ResumeCheckpoint(ctx context.Context, key string, resumeValue any) ([]messages.Message, error) {
-	state, err := a.graph.ResumeCheckpoint(ctx, key, resumeValue)
-	if err != nil {
-		return nil, err
-	}
-	return MessagesFrom(state), nil
+// ResumeStream answers a pending interrupt on threadID and continues the run
+// as a chunk stream (the streaming counterpart of Resume).
+func (a *Agent) ResumeStream(ctx context.Context, threadID string, resumeValue any) iter.Seq2[lggraph.StreamChunk, error] {
+	return a.graph.Stream(ctx, nil, lggraph.StreamOptions{
+		Options: lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue)},
+		Modes:   streamModes,
+	})
 }
 
 // CompactHistory compacts history when auto-compaction is enabled and the
@@ -1012,20 +1098,22 @@ func (a *Agent) RunSessionEnd(ctx context.Context, reason string) error {
 // execution) so they overlap with the remaining model output. When the
 // model router restarts the stream (transient-error retry or fallback
 // model), the restart marker resets the accumulated partial response —
-// Claude Code's tombstone equivalent — and cancels the speculative calls
+// the tombstone equivalent — and cancels the speculative calls
 // dispatched from the failed attempt.
-func (a *Agent) modelNode() graph.StreamingNodeFunc {
-	return func(ctx context.Context, state graph.State, emit func(any)) (any, error) {
+func (a *Agent) modelNode() lggraph.NodeFunc {
+	return func(rt lgruntime.Runtime, state map[string]any) (any, error) {
+		emit := streamWriter(rt)
+		ctx := rt
 		msgs := MessagesFrom(state)
-		// Record the conversation for Task fork=true (Claude Code's
-		// forkSubagent copies the live transcript into the subagent).
+		// Record the conversation for Task fork=true (the fork copies
+		// the live transcript into the subagent).
 		a.setTranscript(msgs)
-		// Relevant-memory prefetch (Claude Code's turn-start prefetch): the
+		// Relevant-memory prefetch (turn-start prefetch): the
 		// store is searched in the background while the model streams; the
 		// attachments are consumed after tool rounds.
 		a.beginMemoryPrefetch(ctx, msgs)
-		// Tool-result budget runs before every model request (Claude Code's
-		// stage 8): oversized rounds are preview-replaced so the prompt fits.
+		// Tool-result budget runs before every model request:
+		// oversized rounds are preview-replaced so the prompt fits.
 		// The transcript/state keeps the originals.
 		msgs = ApplyToolResultBudget(msgs, a.toolBudget)
 		// Snapshot the bound model under a.mu: SetModel and tool refreshes
@@ -1080,27 +1168,78 @@ func (a *Agent) modelNode() graph.StreamingNodeFunc {
 		if full.Role == "" {
 			full = messages.AI("")
 		}
-		// Session usage accounting (Claude Code's cost tracker): fold this
+		// Session usage accounting (cost tracking): fold this
 		// call's reported tokens into the running totals for /cost.
 		a.usage.recordUsage(full.UsageMetadata)
 		if a.obs != nil {
 			a.obs.LogUsage(a.CurrentModelName(), full.UsageMetadata)
 		}
-		// PostSampling hooks analyze the response asynchronously (Claude
-		// Code's post-sampling evaluators); detached from the stream ctx so
+		// PostSampling hooks analyze the response asynchronously
+		// (post-sampling evaluators); detached from the stream ctx so
 		// graph teardown does not kill an in-flight analysis.
 		if h := a.hooksFor(ctx); h != nil && (full.Content != "" || len(full.ToolCalls) > 0) {
 			resp := full.Content
 			go func() { _ = h.PostSampling(context.WithoutCancel(ctx), resp) }()
 		}
-		return graph.State{"messages": []messages.Message{full}}, nil
+		return map[string]any{"messages": []messages.Message{full}}, nil
+	}
+}
+
+// streamWriter adapts the fork's StreamCustom carrier into the emit-callback
+// shape woca's nodes use: nil (no-op) when streaming is not active, matching
+// the old engine's nil-emit contract for non-streaming Invoke.
+func streamWriter(rt lgruntime.Runtime) func(any) {
+	w := lggraph.StreamWriterFromContext(rt)
+	if w == nil {
+		return func(any) {}
+	}
+	return func(v any) { w(v) }
+}
+
+// observedNode wraps one node with observability: a start event on entry,
+// then end / interrupt / error on exit, mirroring the phase vocabulary the
+// obslog store records as session traces. The fork runtime has no compile-
+// time observer hook, so the agent emits from the node boundary instead.
+func (a *Agent) observedNode(graphName, nodeName string, fn lggraph.NodeFunc) lggraph.NodeFunc {
+	if a.obs == nil {
+		return fn
+	}
+	return func(rt lgruntime.Runtime, state map[string]any) (out any, err error) {
+		a.obs.ObserveNode(obslog.NodeEvent{Graph: graphName, Node: nodeName, Phase: obslog.PhaseStart, Values: state})
+		start := time.Now()
+		defer func() {
+			ev := obslog.NodeEvent{Graph: graphName, Node: nodeName, Update: out, DurationMS: float64(time.Since(start).Nanoseconds()) / 1e6}
+			switch {
+			case err != nil:
+				ev.Phase, ev.Err = obslog.PhaseError, err.Error()
+			default:
+				ev.Phase = obslog.PhaseEnd
+			}
+			if r := recover(); r != nil {
+				if gi, ok := r.(*lgtypes.GraphInterrupt); ok {
+					a.obs.ObserveNode(obslog.NodeEvent{
+						Graph: graphName, Node: nodeName, Phase: obslog.PhaseInterrupt,
+						DurationMS: ev.DurationMS, Err: gi.Error(),
+					})
+				} else {
+					a.obs.ObserveNode(obslog.NodeEvent{
+						Graph: graphName, Node: nodeName, Phase: obslog.PhaseError,
+						DurationMS: ev.DurationMS, Err: fmt.Sprint(r),
+					})
+				}
+				panic(r)
+			}
+			a.obs.ObserveNode(ev)
+		}()
+		return fn(rt, state)
 	}
 }
 
 // toolsNode executes pending tool calls, applying the interaction gate and
 // Pre/Post tool-use hooks.
-func (a *Agent) toolsNode() graph.NodeFunc {
-	return func(ctx context.Context, state graph.State) (any, error) {
+func (a *Agent) toolsNode() lggraph.NodeFunc {
+	return func(rt lgruntime.Runtime, state map[string]any) (any, error) {
+		ctx := rt
 		msgs := MessagesFrom(state)
 		if len(msgs) == 0 {
 			return nil, nil
@@ -1203,7 +1342,7 @@ func (a *Agent) toolsNode() graph.NodeFunc {
 				a.spec.consume(calls[i].ID)
 			}
 		}
-		// Mid-turn user input (Claude Code's stage 27): anything queued while
+		// Mid-turn user input: anything queued while
 		// the tools ran is appended strictly after the result batch — the API
 		// forbids interleaving tool results with user messages — so the model
 		// addresses it in this turn. Drained after execution, so input
@@ -1212,22 +1351,22 @@ func (a *Agent) toolsNode() graph.NodeFunc {
 		for _, q := range a.inputs.drain() {
 			results = append(results, formatQueuedInput(q))
 		}
-		// Kick off the async tool-use summary (stage 24): UI-only, generated
+		// Kick off the async tool-use summary: UI-only, generated
 		// in the background with the summarizer while the next model round
 		// runs; consumed via TakeReadyToolUseSummaries.
 		a.beginToolUseSummary(ctx, calls, results, last.Content)
-		// Periodic task summary (claude ps): refresh what the agent is
+		// Periodic task summary: refresh what the agent is
 		// working on every few rounds.
 		a.maybeBeginTaskSummary(ctx, msgs)
-		// Relevant-memory attachments (stage 27): consume the turn's
+		// Relevant-memory attachments: consume the turn's
 		// prefetch after the result batch.
 		results = append(results, a.takeMemoryAttachments(ctx)...)
-		// Between-turn tool refresh (stage 28): re-collect extra tools so
+		// Between-turn tool refresh: re-collect extra tools so
 		// hot-added ones are available in the next round. Non-blocking: a
 		// slow MCP re-list runs in the background (singleflight-deduped,
 		// TTL-throttled) and the swap commits when it lands.
 		a.maybeRefreshTools(ctx)
-		// MaxTurns (stage 28): this tool round completes a model round; at
+		// MaxTurns: this tool round completes a model round; at
 		// the cap, append the marker and short-circuit to END — the tools
 		// node otherwise has an unconditional edge back to the model.
 		a.turns.mu.Lock()
@@ -1237,9 +1376,9 @@ func (a *Agent) toolsNode() graph.NodeFunc {
 		a.turns.mu.Unlock()
 		if atCap {
 			results = append(results, messages.Human(maxTurnsMarker(rounds)))
-			return graph.Command{Update: graph.State{"messages": results}, Goto: graph.END}, nil
+			return &lgtypes.Command{Update: map[string]any{"messages": results}, Goto: []any{lgtypes.END}}, nil
 		}
-		return graph.State{"messages": results}, nil
+		return map[string]any{"messages": results}, nil
 	}
 }
 
@@ -1255,10 +1394,7 @@ func (a *Agent) gate(ctx context.Context, call messages.ToolCall) (run bool, ove
 		if err := decodeArgs(call.Args, &q); err != nil {
 			return false, nil, err
 		}
-		answerAny, err := graph.Interrupt(ctx, AskUserRequest{Questions: q.Questions})
-		if err != nil {
-			return false, nil, err
-		}
+		answerAny := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(AskUserRequest{Questions: q.Questions}))))
 		answer, _ := answerAny.(AskUserAnswer)
 		res := formatAskUserAnswers(q.Questions, answer.Answers)
 		return false, &coretools.Result{Content: res}, nil
@@ -1279,10 +1415,7 @@ func (a *Agent) gate(ctx context.Context, call messages.ToolCall) (run bool, ove
 		if err := decodeArgs(call.Args, &p); err != nil {
 			return false, nil, err
 		}
-		answerAny, err := graph.Interrupt(ctx, PlanApprovalRequest{Plan: p.Plan})
-		if err != nil {
-			return false, nil, err
-		}
+		answerAny := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(PlanApprovalRequest{Plan: p.Plan}))))
 		if parseAnswer(answerAny) {
 			a.setPlanMode(false)
 			res := coretools.Result{Content: "Plan approved by the user. Proceeding with implementation."}
@@ -1326,19 +1459,19 @@ func (a *Agent) execute(ctx context.Context, name string, args map[string]any) c
 }
 
 // route decides whether to run tools or end the turn.
-func (a *Agent) route(ctx context.Context, state graph.State) (string, error) {
+func (a *Agent) route(rt lgruntime.Runtime, state map[string]any) ([]any, error) {
 	msgs := MessagesFrom(state)
 	if len(msgs) == 0 {
-		return graph.END, nil
+		return []any{lgtypes.END}, nil
 	}
 	last := msgs[len(msgs)-1]
 	a.mu.Lock()
 	hasTools := len(a.toolList) > 0
 	a.mu.Unlock()
 	if last.Role == messages.RoleAI && len(last.ToolCalls) > 0 && hasTools {
-		return nodeTools, nil
+		return []any{nodeTools}, nil
 	}
-	return graph.END, nil
+	return []any{lgtypes.END}, nil
 }
 
 // checkPermission decides whether a tool call may run. Explicit permission
@@ -1401,10 +1534,7 @@ func (a *Agent) askPermission(ctx context.Context, call messages.ToolCall) (bool
 		Reason:     toolReason(call),
 		IsReadOnly: tools.IsReadOnly(call.Name, call.Args),
 	}
-	answer, err := graph.Interrupt(ctx, req)
-	if err != nil {
-		return false, err
-	}
+	answer := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(req))))
 	return parseAnswer(answer), nil
 }
 

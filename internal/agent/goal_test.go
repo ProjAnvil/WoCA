@@ -2,14 +2,16 @@ package agent
 
 import (
 	"context"
+	"iter"
 	"strings"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 
 	"github.com/projanvil/woca/internal/config"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -33,22 +35,34 @@ func newGoalAgent(t *testing.T, responses ...messages.Message) *Agent {
 	return a
 }
 
-// pumpGoal drains a goal stream to its terminal step and returns it.
-func pumpGoal(t *testing.T, s graph.Stream[graph.Step]) graph.Step {
+// goalPumpResult is the drained terminal state of a goal chunk stream.
+type goalPumpResult struct {
+	values     map[string]any
+	interrupts []lgtypes.Interrupt // non-empty when the loop paused for an answer
+	err        error               // terminal error (nil on completion or pause)
+}
+
+// pumpGoalChunks drains a goal chunk stream to its terminal state (completion,
+// pause, or error) and reports what it ended with.
+func pumpGoalChunks(t *testing.T, s iter.Seq2[lggraph.StreamChunk, error]) goalPumpResult {
 	t.Helper()
-	ctx := context.Background()
-	for {
-		step, ok, err := s.Next(ctx)
-		if err != nil {
-			t.Fatalf("goal stream error: %v", err)
+	var out goalPumpResult
+	for c, cerr := range s {
+		if cerr != nil {
+			out.err = cerr
+			return out
 		}
-		if !ok {
-			t.Fatal("goal stream ended without a terminal step")
+		if intrs := goalInterrupts(c.Mode, c.Payload); len(intrs) > 0 {
+			for i := range intrs {
+				intrs[i].Value = decodeInterruptPayload(intrs[i].Value)
+			}
+			out.interrupts = intrs
 		}
-		if step.Done || step.Err != nil {
-			return step
+		if c.Mode == lggraph.StreamValues {
+			out.values = valuesState(c.Payload)
 		}
 	}
+	return out
 }
 
 func TestGoalCompletesAfterVerification(t *testing.T) {
@@ -64,9 +78,9 @@ func TestGoalCompletesAfterVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("goal stream ended with error: %v", step.Err)
+	resg := pumpGoalChunks(t, stream)
+	if resg.err != nil || len(resg.interrupts) > 0 {
+		t.Fatalf("goal stream ended with error: %v", resg.err)
 	}
 	g := a.Goal()
 	if g.Status != GoalComplete {
@@ -78,7 +92,7 @@ func TestGoalCompletesAfterVerification(t *testing.T) {
 	if len(g.Progress) != 1 || g.Progress[0].Verdict != "complete" {
 		t.Fatalf("progress = %+v", g.Progress)
 	}
-	msgs := MessagesFrom(step.Values)
+	msgs := MessagesFrom(resg.values)
 	found := false
 	for _, m := range msgs {
 		if m.Role == messages.RoleAI && strings.Contains(m.Content, "Goal complete") {
@@ -97,6 +111,83 @@ func TestGoalCompletesAfterVerification(t *testing.T) {
 	}
 }
 
+func TestGoalCycleSurvivesInnerRecursionLimit(t *testing.T) {
+	// A goal execute cycle that outgrows the inner agent graph's recursion
+	// limit must not kill the goal loop: the cycle's work is salvaged,
+	// dangling tool calls are answered, and evaluation proceeds. (Regression:
+	// "graph: recursion limit 50 exceeded at node \"model\"" used to end the
+	// run and drop every message the cycle had produced.)
+	tc := func(id string) messages.Message {
+		return messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+			ID: id, Name: "Read", Args: map[string]any{"file_path": "x"},
+		}}}
+	}
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.AI("assess 1"),                                   // cycle 1 assess
+			tc("1"), tc("2"), tc("3"),                                 // cycle 1 execute: 3rd tool round is cut
+			messages.AI(`{"verdict":"continue","gaps":"more to do"}`), // cycle 1 evaluate
+		),
+	)
+	a, err := New(Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+		RecursionLimit: 5, // model,tools,model,tools,model — the next tools dispatch is refused
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetGoal("long-running goal", "", 2, 1_000_000)
+	stream, err := a.GoalStream(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resg := pumpGoalChunks(t, stream)
+	if resg.err != nil || len(resg.interrupts) > 0 {
+		t.Fatalf("goal loop died on the recursion limit instead of salvaging: %v", resg.err)
+	}
+
+	// Both cycles ran to their evaluations; the loop ended on its own budget.
+	g := a.Goal()
+	if g.Status != GoalBudgetLimited {
+		t.Fatalf("status = %q, want budget_limited after 2 salvaged cycles", g.Status)
+	}
+	if len(g.Progress) != 2 {
+		t.Fatalf("progress entries = %d, want 2 (both cycles were evaluated)", len(g.Progress))
+	}
+	if a.GoalRunning() {
+		t.Fatal("goal run flag not cleared")
+	}
+
+	msgs := MessagesFrom(resg.values)
+	markers := 0
+	answered := map[string]bool{}
+	for _, m := range msgs {
+		if m.Role == messages.RoleAI && strings.Contains(m.Content, "goal cycle cut short") {
+			markers++
+		}
+		if m.Role == messages.RoleTool {
+			answered[m.ToolCallID] = true
+		}
+	}
+	if markers == 0 {
+		t.Fatal("salvaged transcript misses the cut-short marker")
+	}
+	// Every tool call in the salvaged transcript — including the one cut off
+	// mid-flight ("3") — must have a tool result, or the next cycle would feed
+	// an invalid history to the provider.
+	for _, m := range msgs {
+		for _, call := range m.ToolCalls {
+			if !answered[call.ID] {
+				t.Fatalf("tool call %q has no result: transcript would be rejected by the provider", call.ID)
+			}
+		}
+	}
+}
+
 func TestGoalBudgetLimitedByCycles(t *testing.T) {
 	a := newGoalAgent(t,
 		messages.AI("assess 1"),
@@ -107,9 +198,9 @@ func TestGoalBudgetLimitedByCycles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("unexpected error: %v", step.Err)
+	resg := pumpGoalChunks(t, stream)
+	if resg.err != nil || len(resg.interrupts) > 0 {
+		t.Fatalf("unexpected error: %v", resg.err)
 	}
 	if g := a.Goal(); g.Status != GoalBudgetLimited {
 		t.Fatalf("status = %q, want budget_limited", g.Status)
@@ -128,9 +219,9 @@ func TestGoalStallBlockedAfterTwoEmptyCycles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("unexpected error: %v", step.Err)
+	resg := pumpGoalChunks(t, stream)
+	if resg.err != nil || len(resg.interrupts) > 0 {
+		t.Fatalf("unexpected error: %v", resg.err)
 	}
 	g := a.Goal()
 	if g.Status != GoalBlocked {
@@ -159,9 +250,9 @@ func TestGoalClaimNeedsEvaluatorVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("unexpected error: %v", step.Err)
+	resg := pumpGoalChunks(t, stream)
+	if resg.err != nil || len(resg.interrupts) > 0 {
+		t.Fatalf("unexpected error: %v", resg.err)
 	}
 	g := a.Goal()
 	if g.Status != GoalComplete {
@@ -172,7 +263,7 @@ func TestGoalClaimNeedsEvaluatorVerification(t *testing.T) {
 	}
 	// The UpdateGoal tool ran inside the cycle (a tool message came back).
 	found := false
-	for _, m := range MessagesFrom(step.Values) {
+	for _, m := range MessagesFrom(resg.values) {
 		if m.Role == messages.RoleTool && m.ToolCallID == "1" {
 			found = true
 		}
@@ -213,23 +304,22 @@ func TestGoalInterruptResumesMidCycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	ie, ok := graph.AsInterrupt(step.Err)
-	if !ok {
-		t.Fatalf("expected a permission interrupt, got done=%v err=%v", step.Done, step.Err)
+	res := pumpGoalChunks(t, stream)
+	if len(res.interrupts) == 0 {
+		t.Fatalf("expected a permission interrupt, got err=%v", res.err)
 	}
-	req, ok := ie.Value.(PermissionRequest)
+	req, ok := res.interrupts[0].Value.(PermissionRequest)
 	if !ok || req.ToolName != "Write" {
-		t.Fatalf("interrupt value = %#v", ie.Value)
+		t.Fatalf("interrupt value = %#v", res.interrupts[0].Value)
 	}
 
-	resumed, err := a.GoalResume(context.Background(), ie, true)
+	resumed, err := a.GoalResume(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	step = pumpGoal(t, resumed)
-	if !step.Done {
-		t.Fatalf("resume failed: %v", step.Err)
+	res = pumpGoalChunks(t, resumed)
+	if res.err != nil || len(res.interrupts) > 0 {
+		t.Fatalf("resume failed: %v (interrupts: %v)", res.err, res.interrupts)
 	}
 	if g := a.Goal(); g.Status != GoalComplete {
 		t.Fatalf("status = %q, want complete", g.Status)
@@ -239,7 +329,7 @@ func TestGoalInterruptResumesMidCycle(t *testing.T) {
 	}
 	// Exactly one assess ran (the resume did not restart the cycle).
 	found := 0
-	for _, m := range MessagesFrom(step.Values) {
+	for _, m := range MessagesFrom(res.values) {
 		if m.Role == messages.RoleAI && m.Content == "assess 1" {
 			found++
 		}
@@ -248,7 +338,7 @@ func TestGoalInterruptResumesMidCycle(t *testing.T) {
 		t.Fatalf("assess leaked into the transcript %d times", found)
 	}
 	toolResult := false
-	for _, m := range MessagesFrom(step.Values) {
+	for _, m := range MessagesFrom(res.values) {
 		if m.Role == messages.RoleTool && m.ToolCallID == "1" {
 			toolResult = true
 		}
@@ -280,9 +370,9 @@ func TestGoalPauseAndResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("unexpected error: %v", step.Err)
+	resg := pumpGoalChunks(t, stream)
+	if resg.err != nil || len(resg.interrupts) > 0 {
+		t.Fatalf("unexpected error: %v", resg.err)
 	}
 	if g := a.Goal(); g.Status != GoalComplete {
 		t.Fatalf("status = %q, want complete", g.Status)
@@ -305,30 +395,24 @@ func TestGoalClearEndsLoopAtBoundary(t *testing.T) {
 		messages.AI(`{"verdict":"continue","gaps":"more"}`))
 	a.SetGoal("goal", "", 10, 1_000_000)
 	stream, _ := a.GoalStream(context.Background(), nil)
-	ctx := context.Background()
 	cycles := 0
-	var term graph.Step
-	for {
-		step, ok, err := stream.Next(ctx)
-		if err != nil {
-			t.Fatalf("stream error: %v", err)
-		}
-		if !ok {
-			t.Fatal("stream ended")
-		}
-		if step.Done || step.Err != nil {
-			term = step
+	var termErr error
+	for c, cerr := range stream {
+		if cerr != nil {
+			termErr = cerr
 			break
 		}
-		if s, ok := step.Delta.(string); ok && strings.Contains(s, "[goal cycle") {
-			cycles++
-			if cycles == 1 {
-				a.ClearGoal() // user clears mid-loop
+		if c.Mode == lggraph.StreamCustom {
+			if s, ok := c.Payload.(string); ok && strings.Contains(s, "[goal cycle") {
+				cycles++
+				if cycles == 1 {
+					a.ClearGoal() // user clears mid-loop
+				}
 			}
 		}
 	}
-	if !term.Done {
-		t.Fatalf("loop should end cleanly after clear, got %v", term.Err)
+	if termErr != nil {
+		t.Fatalf("loop should end cleanly after clear, got %v", termErr)
 	}
 	// The clear lands asynchronously: the loop may already have emitted the
 	// next cycle header before the ClearGoal call below takes effect, so the
@@ -450,9 +534,9 @@ func TestGoalBlockedByModelEndsLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("unexpected error: %v", step.Err)
+	resg := pumpGoalChunks(t, stream)
+	if resg.err != nil || len(resg.interrupts) > 0 {
+		t.Fatalf("unexpected error: %v", resg.err)
 	}
 	if g := a.Goal(); g.Status != GoalBlocked || g.BlockedReason != "missing API key" {
 		t.Fatalf("goal = %+v", g)

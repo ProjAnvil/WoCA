@@ -8,7 +8,6 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
-	"github.com/projanvil/woca/internal/graph"
 )
 
 func TestStoreToggleAndContext(t *testing.T) {
@@ -51,7 +50,7 @@ func TestStoreToggleAndContext(t *testing.T) {
 	nilStore.SetContext("a", "b", "c", "d")
 	nilStore.Log("evt", "", nil)
 	nilStore.DumpMessages(nil, nil)
-	nilStore.ObserveNode(graph.NodeEvent{})
+	nilStore.ObserveNode(NodeEvent{})
 	nilStore.LogUsage("m", messages.UsageMetadata{TotalTokens: 5})
 	if nilStore.Enabled() || nilStore.Root() != "" {
 		t.Fatal("nil store misbehaves")
@@ -67,7 +66,7 @@ func TestDumpAndUsageWhenEnabled(t *testing.T) {
 		messages.Human("hello"),
 		messages.AI("hi"),
 	}, map[string]any{"summary": true})
-	s.ObserveNode(graph.NodeEvent{Node: "node-a", Phase: "end", DurationMS: 3})
+	s.ObserveNode(NodeEvent{Node: "node-a", Phase: "end", DurationMS: 3})
 	s.LogUsage("claude-sonnet-4-5", messages.UsageMetadata{InputTokens: 10, OutputTokens: 5, TotalTokens: 15})
 	// Zero usage is skipped.
 	s.LogUsage("m", messages.UsageMetadata{})

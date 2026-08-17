@@ -8,11 +8,10 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 )
 
-// Task summaries, a port of Claude Code's `claude ps` support
-// (utils/taskSummary + query.ts's maybeGenerateTaskSummary): every few
-// model rounds the summarizer condenses what the agent is currently working
-// on into one line, kept as the agent's latest task summary for status
-// surfaces (/status). Generation is async and best-effort.
+// Task summaries: every few model rounds the summarizer condenses what the
+// agent is currently working on into one line, kept as the agent's latest
+// task summary for status surfaces (/status). Generation is async and
+// best-effort.
 
 // taskSummaryInterval is the model-round cadence between regenerations.
 const taskSummaryInterval = 5

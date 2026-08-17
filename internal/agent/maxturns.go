@@ -5,12 +5,11 @@ import (
 	"sync"
 )
 
-// MaxTurns, a port of Claude Code's SDK maxTurns (query.ts stage 28): the
-// number of model rounds within one turn is capped; reaching the cap ends
-// the turn with a <max-turns-reached> marker message. The check runs in the
-// tools node — one completed tool round counts as one turn, and appending
-// the (non-tool-carrying) marker makes the conditional route end the turn
-// deterministically, without a wasted model call.
+// MaxTurns: the number of model rounds within one turn is capped; reaching
+// the cap ends the turn with a <max-turns-reached> marker message. The check
+// runs in the tools node — one completed tool round counts as one turn, and
+// appending the (non-tool-carrying) marker makes the conditional route end
+// the turn deterministically, without a wasted model call.
 
 // turnCounter tracks model rounds within the current turn.
 type turnCounter struct {

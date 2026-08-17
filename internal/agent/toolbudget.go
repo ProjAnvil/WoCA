@@ -8,22 +8,20 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 )
 
-// Tool result size budget, a port of Claude Code's applyToolResultBudget
-// (query.ts stage 8 + utils/toolResultStorage.ts): the tool results of one
-// tool round (a maximal run of consecutive tool messages) must fit an
-// aggregate character budget. When a round exceeds it, the largest results
-// are replaced by a preview placeholder until it fits — the full content is
-// dropped, the model is told to re-run the tool narrower.
+// Tool result size budget: the tool results of one tool round (a maximal run
+// of consecutive tool messages) must fit an aggregate character budget. When
+// a round exceeds it, the largest results are replaced by a preview
+// placeholder until it fits — the full content is dropped, the model is told
+// to re-run the tool narrower.
 //
 // The function is deterministic per round and idempotent, so re-applying it
 // on every model request yields byte-identical messages (prompt-cache safe)
 // and results the model already saw unreplaced are never retroactively
-// replaced — Claude Code's "frozen" semantics fall out of determinism
-// because a finished round's content never changes.
+// replaced — "frozen" semantics fall out of determinism because a finished
+// round's content never changes.
 
 const (
-	// DefaultToolResultBudgetChars is the aggregate budget per tool round
-	// (Claude Code's MAX_TOOL_RESULTS_PER_MESSAGE_CHARS).
+	// DefaultToolResultBudgetChars is the aggregate budget per tool round.
 	DefaultToolResultBudgetChars = 200_000
 	// ToolResultPreviewChars is how much of a replaced result is kept.
 	ToolResultPreviewChars = 2000

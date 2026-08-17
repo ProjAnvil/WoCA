@@ -54,7 +54,7 @@ func TestReadImageAttachesContentBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("what color?")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("what color?")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

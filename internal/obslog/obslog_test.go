@@ -10,7 +10,6 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
-	"github.com/projanvil/woca/internal/graph"
 )
 
 func readLines(t *testing.T, path string) []Event {
@@ -131,13 +130,13 @@ func TestObserveNodeSummarizesUpdates(t *testing.T) {
 	s := New(dir, true)
 	s.SetContext("/tmp/p", "p", "sess-1", "run-1")
 
-	s.ObserveNode(graph.NodeEvent{
-		Graph: "agent", Node: "model", Phase: graph.PhaseStart,
-		Values: graph.State{"messages": []messages.Message{messages.Human("hi")}},
+	s.ObserveNode(NodeEvent{
+		Graph: "agent", Node: "model", Phase: PhaseStart,
+		Values: map[string]any{"messages": []messages.Message{messages.Human("hi")}},
 	})
-	s.ObserveNode(graph.NodeEvent{
-		Graph: "agent", Node: "model", Phase: graph.PhaseEnd, DurationMS: 1.5,
-		Update: graph.State{"messages": []messages.Message{
+	s.ObserveNode(NodeEvent{
+		Graph: "agent", Node: "model", Phase: PhaseEnd, DurationMS: 1.5,
+		Update: map[string]any{"messages": []messages.Message{
 			messages.AI("done"),
 			{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{ID: "1", Name: "Read"}}},
 		}},

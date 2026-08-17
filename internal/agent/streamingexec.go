@@ -13,8 +13,8 @@ import (
 	"github.com/projanvil/woca/internal/tools"
 )
 
-// Streaming tool execution, a port of Claude Code's StreamingToolExecutor:
-// while the model node is still consuming the response stream, tool calls
+// Streaming tool execution: while the model node is still consuming the
+// response stream, tool calls
 // that have already arrived complete are started in the background when the
 // permission mode deterministically allows them. The tools node later awaits
 // these futures instead of re-running the calls.
@@ -103,8 +103,7 @@ func (r *speculativeRegistry) consume(ids ...string) {
 }
 
 // cancel aborts and removes the futures for ids — used when the model
-// stream they were dispatched from is discarded (stream retry/fallback), the
-// equivalent of Claude Code's StreamingToolExecutor.discard().
+// stream they were dispatched from is discarded (stream retry/fallback).
 func (r *speculativeRegistry) cancel(ids ...string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -209,9 +208,8 @@ func (a *Agent) runToolCall(ctx context.Context, call messages.ToolCall) message
 }
 
 // toolMessageFromResult builds the tool-result message, attaching the image
-// content block a tool may carry in its metadata (Read on an image file) —
-// Claude Code's image attachments. Providers without tool-result images drop
-// the block at translation.
+// content block a tool may carry in its metadata (Read on an image file).
+// Providers without tool-result images drop the block at translation.
 func toolMessageFromResult(callID, content string, res *coretools.Result) messages.Message {
 	m := messages.Tool(callID, content)
 	if res == nil || len(res.Metadata) == 0 {

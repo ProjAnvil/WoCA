@@ -57,7 +57,7 @@ func TestInvokeOutputLimitRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("long answer please")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("long answer please")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestInvokeOutputLimitExhaustion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("long answer please")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("long answer please")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestInvokeOutputLimitEscalation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("long answer please")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("long answer please")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

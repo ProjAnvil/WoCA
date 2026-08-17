@@ -132,7 +132,7 @@ func TestToolUseSummaryGeneratedAsync(t *testing.T) {
 	a := newSummaryTestAgent(t, summarizer, true)
 
 	start := time.Now()
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")}, "t")
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +178,7 @@ func TestToolUseSummaryGeneratedAsync(t *testing.T) {
 func TestToolUseSummaryDisabled(t *testing.T) {
 	summarizer := &slowSummarizer{}
 	a := newSummaryTestAgent(t, summarizer, false)
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")}); err != nil {
+	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -217,7 +217,7 @@ func TestToolUseSummarySubagentSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check")}); err != nil {
+	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -229,7 +229,7 @@ func TestToolUseSummarySubagentSkipped(t *testing.T) {
 func TestToolUseSummaryFailureSilent(t *testing.T) {
 	summarizer := &slowSummarizer{fail: true, delay: 20 * time.Millisecond}
 	a := newSummaryTestAgent(t, summarizer, true)
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")}, "t")
 	if err != nil {
 		t.Fatalf("summarizer failure must not fail the run: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestToolUseSummaryFailureSilent(t *testing.T) {
 func TestTakeReadyNonBlockingSemantics(t *testing.T) {
 	summarizer := &slowSummarizer{delay: 10 * time.Millisecond}
 	a := newSummaryTestAgent(t, summarizer, true)
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")}); err != nil {
+	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 	// TakeReady never blocks: immediately after the turn it may legitimately

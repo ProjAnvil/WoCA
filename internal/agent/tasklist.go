@@ -16,8 +16,7 @@ const (
 	TaskRecordCancelled  TaskRecordStatus = "cancelled"
 )
 
-// TaskRecord is one entry in the task list (Claude Code's TaskCreate/Get/
-// Update/List family).
+// TaskRecord is one entry in the task list.
 type TaskRecord struct {
 	ID          string           `json:"id"`
 	Subject     string           `json:"subject"`

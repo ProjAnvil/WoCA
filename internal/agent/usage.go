@@ -7,7 +7,7 @@ import (
 )
 
 // UsageTotals accumulates provider-reported token usage across every model
-// call of a session (Claude Code's cost tracker input). Unlike history-derived
+// call of a session (the input of cost tracking). Unlike history-derived
 // counts it survives compaction and /clear.
 type UsageTotals struct {
 	Requests         int `json:"requests"`

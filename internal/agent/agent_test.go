@@ -12,7 +12,6 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/config"
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/hooks"
 	"github.com/projanvil/woca/internal/permissions"
 	"github.com/projanvil/woca/internal/tools"
@@ -39,7 +38,7 @@ func TestAgentToolLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("read the file")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("read the file")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,11 +81,8 @@ func TestAgentPermissionInterrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write a file")})
-	ie, ok := graph.AsInterrupt(err)
-	if !ok {
-		t.Fatalf("expected interrupt, got %v", err)
-	}
+	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write a file")}, "t")
+	ie := interruptFromError(t, err)
 	req, ok := ie.Value.(PermissionRequest)
 	if !ok {
 		t.Fatalf("interrupt value = %T (%v)", ie.Value, ie.Value)
@@ -95,11 +91,10 @@ func TestAgentPermissionInterrupt(t *testing.T) {
 		t.Fatalf("interrupt tool = %q, want Write", req.ToolName)
 	}
 
-	state, err := a.Graph().Resume(context.Background(), ie, "y")
+	out, err := a.Resume(context.Background(), "t", "y")
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := MessagesFrom(state)
 	if out[len(out)-1].Content != "ok" {
 		t.Fatalf("resumed run final = %+v", out[len(out)-1])
 	}
@@ -124,7 +119,7 @@ func TestAgentAcceptEdits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write a file")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write a file")}, "t")
 	if err != nil {
 		t.Fatalf("acceptEdits should not interrupt on Write: %v", err)
 	}
@@ -156,11 +151,8 @@ func TestAgentPlanMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("plan a feature")})
-	ie, ok := graph.AsInterrupt(err)
-	if !ok {
-		t.Fatalf("expected ExitPlanMode interrupt, got %v", err)
-	}
+	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("plan a feature")}, "t")
+	ie := interruptFromError(t, err)
 	req, ok := ie.Value.(PlanApprovalRequest)
 	if !ok {
 		t.Fatalf("interrupt value = %T", ie.Value)
@@ -172,14 +164,14 @@ func TestAgentPlanMode(t *testing.T) {
 		t.Fatal("should still be in plan mode before approval")
 	}
 
-	state, err := a.Graph().Resume(context.Background(), ie, "y")
+	state, err := a.Resume(context.Background(), "t", "y")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.PlanMode() {
 		t.Fatal("should have exited plan mode after approval")
 	}
-	if got := MessagesFrom(state)[len(MessagesFrom(state))-1].Content; got != "implementing now" {
+	if got := state[len(state)-1].Content; got != "implementing now" {
 		t.Fatalf("final = %q", got)
 	}
 }
@@ -209,11 +201,8 @@ func TestAgentAskUserQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("help")})
-	ie, ok := graph.AsInterrupt(err)
-	if !ok {
-		t.Fatalf("expected AskUserQuestion interrupt, got %v", err)
-	}
+	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("help")}, "t")
+	ie := interruptFromError(t, err)
 	req, ok := ie.Value.(AskUserRequest)
 	if !ok {
 		t.Fatalf("interrupt value = %T", ie.Value)
@@ -222,11 +211,10 @@ func TestAgentAskUserQuestion(t *testing.T) {
 		t.Fatalf("questions = %+v", req.Questions)
 	}
 
-	state, err := a.Graph().Resume(context.Background(), ie, AskUserAnswer{Answers: []string{"a"}})
+	msgs, err := a.Resume(context.Background(), "t", AskUserAnswer{Answers: []string{"a"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgs := MessagesFrom(state)
 	if got := msgs[len(msgs)-1].Content; got != "thanks" {
 		t.Fatalf("final = %q", got)
 	}
@@ -257,7 +245,7 @@ func TestAgentTaskSubagent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("delegate")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("delegate")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +292,7 @@ func TestAgentPreToolUseHookDenies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run it")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run it")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +327,7 @@ func TestAgentPermissionRulesAllow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
 	if err != nil {
 		t.Fatalf("allow rule should bypass the default ask: %v", err)
 	}
@@ -368,7 +356,7 @@ func TestAgentPermissionRulesDeny(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("rm")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("rm")}, "t")
 	if err != nil {
 		t.Fatalf("deny rule should not interrupt: %v", err)
 	}
@@ -402,7 +390,7 @@ func TestAgentTaskUnknownSubagentType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("delegate")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("delegate")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,16 +426,10 @@ func TestAgentResumeCheckpointPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write")})
-	ie, ok := graph.AsInterrupt(err)
-	if !ok {
-		t.Fatalf("expected interrupt, got %v", err)
-	}
-	if ie.Key == "" {
-		t.Fatal("expected a persisted checkpoint key")
-	}
+	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
+	_ = interruptFromError(t, err)
 
-	out, err := a.ResumeCheckpoint(context.Background(), ie.Key, "y")
+	out, err := a.ResumeCheckpoint(context.Background(), "t", "y")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +458,7 @@ func TestAgentBashPolicyDeny(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("rm")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("rm")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -491,7 +473,8 @@ func TestAgentBashPolicyDeny(t *testing.T) {
 	}
 }
 
-// recordingModel 记录每轮模型调用的输入（第二轮输入含 toolsNode 产出的工具结果）。
+// recordingModel records the input of every model call (the second-round input
+// contains the tool results produced by toolsNode).
 type recordingModel struct {
 	*language.FakeChatModel
 	mu   sync.Mutex
@@ -505,8 +488,8 @@ func (c *recordingModel) Stream(ctx context.Context, in []messages.Message, opts
 	return c.FakeChatModel.Stream(ctx, in, opts...)
 }
 
-// BindTools 返回自身：嵌入的 FakeChatModel.BindTools 会返回裸拷贝，
-// agent 在 New 时绑定工具后记录器会被丢弃。
+// BindTools returns itself: the embedded FakeChatModel.BindTools returns a bare
+// copy, so the recorder would be dropped when the agent rebinds tools in New.
 func (c *recordingModel) BindTools([]coretools.Tool) (language.ChatModel, error) { return c, nil }
 
 func TestToolPanicBecomesErrorResult(t *testing.T) {
@@ -540,26 +523,16 @@ func TestToolPanicBecomesErrorResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// pump 模式见 agentapi_test.go:557-575
-	s, err := a.Stream(context.Background(), []messages.Message{messages.Human("go")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	for {
-		step, ok, err := s.Next(context.Background())
+	// pump mode: see agentapi_test.go
+	for _, err := range a.Stream(context.Background(), []messages.Message{messages.Human("go")}, "t") {
 		if err != nil {
 			t.Fatalf("stream error: %v", err)
 		}
-		if !ok {
-			t.Fatal("stream ended without terminal step")
-		}
-		if step.Done {
-			break
-		}
 	}
 
-	// 进程活着走到这里即 recover 生效；再断言第二轮模型输入里的工具结果是结构化错误。
+	// Reaching here with the process alive proves the recover works; then
+	// assert the second-round model input carries the tool result as a
+	// structured error.
 	model.mu.Lock()
 	defer model.mu.Unlock()
 	if len(model.seen) < 2 {
@@ -574,4 +547,68 @@ func TestToolPanicBecomesErrorResult(t *testing.T) {
 	if !found {
 		t.Fatalf("want structured panic tool result in round-2 input: %+v", model.seen[1])
 	}
+}
+
+// TestAgentTwoAsksInOneBatchConverge pins the multi-approval livelock fix:
+// one AI message carrying two permission-gated calls must ask each call
+// exactly once, and each call's execution decision must match the answer the
+// user gave for THAT call (the fork's consumed-resume-prefix semantics; the
+// old in-house engine misrouted the second answer onto the first gate and
+// re-prompted forever).
+func TestAgentTwoAsksInOneBatchConverge(t *testing.T) {
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+				{ID: "1", Name: "Write", Args: map[string]any{"file_path": "x.txt", "content": "x"}},
+				{ID: "2", Name: "Write", Args: map[string]any{"file_path": "y.txt", "content": "y"}},
+			}},
+			messages.AI("done"),
+		),
+	)
+	a, err := New(Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeDefault,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write two files")}, "t")
+	asked := map[string]int{}
+	for round := 0; round < 4; round++ {
+		ie := interruptFromError(t, err)
+		req := ie.Value.(PermissionRequest)
+		file, _ := req.ToolArgs["file_path"].(string)
+		asked[file]++
+		if asked[file] > 1 {
+			t.Fatalf("asked about %s twice — livelock", file)
+		}
+		var out []messages.Message
+		out, err = a.Resume(context.Background(), "t", file == "x.txt") // approve x, deny y
+		if err == nil {
+			if got := out[len(out)-1].Content; got != "done" {
+				t.Fatalf("final = %q, want done", got)
+			}
+			for _, m := range out {
+				if m.Role != messages.RoleTool {
+					continue
+				}
+				switch m.ToolCallID {
+				case "1":
+					if strings.Contains(m.Content, "permission denied") {
+						t.Fatalf("x.txt approved by user but denied: %q", m.Content)
+					}
+				case "2":
+					if !strings.Contains(m.Content, "permission denied") {
+						t.Fatalf("y.txt denied by user but ran: %q", m.Content)
+					}
+				}
+			}
+			return
+		}
+	}
+	t.Fatalf("did not converge within 4 rounds (asked: %v)", asked)
 }

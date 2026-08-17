@@ -14,14 +14,13 @@ import (
 	"github.com/projanvil/woca/internal/bus"
 )
 
-// Agent teams (a port of Claude Code's experimental feature, mechanism-level):
-// a teammate is a persistent named agent session with its own context — not a
-// one-shot Task subagent. Teammates share one task list (the regular
-// TaskCreate/Get/Update/List tools become team-scoped once a team exists) with
-// claim-by-owner and dependency gating, and coordinate through SendMessage
-// (push delivery: a message pokes an idle teammate into its next turn).
-// Isolation is by task ownership in the shared worktree (worktree-per-member
-// is deliberately NOT the model, matching Claude Code).
+// Agent teams: a teammate is a persistent named agent session with its own
+// context — not a one-shot Task subagent. Teammates share one task list (the
+// regular TaskCreate/Get/Update/List tools become team-scoped once a team
+// exists) with claim-by-owner and dependency gating, and coordinate through
+// SendMessage (push delivery: a message pokes an idle teammate into its next
+// turn). Isolation is by task ownership in the shared worktree
+// (worktree-per-member is deliberately NOT the model).
 //
 // v1 scope: teammates live in-process next to the lead agent, auto-idle after
 // teamIdleTimeout, and stop via TeamStop or context cancellation. Team state
@@ -29,7 +28,7 @@ import (
 
 const (
 	// teamIdleTimeout auto-stops a teammate that stays idle this long
-	// (Claude Code's "idle teammates terminate" behavior).
+	// (idle teammates terminate).
 	teamIdleTimeout = 10 * time.Minute
 	// LeadName is the reserved name of the interactive session in a team.
 	LeadName = "lead"
@@ -80,8 +79,8 @@ type TeamManager struct {
 }
 
 // ensureTeam lazily creates the lead's team. From this point the lead's
-// TaskCreate/Get/Update/List tools operate on the shared team list (the
-// Claude Code semantic: same tools, team scope).
+// TaskCreate/Get/Update/List tools operate on the shared team list (the same
+// tools, scoped to the team).
 func (a *Agent) ensureTeam() *TeamManager {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -326,7 +325,7 @@ func (t *TeamManager) run(ctx context.Context, m *teammate, spawnPrompt string) 
 		// A hard cap per turn so a parked permission prompt or a stuck
 		// provider call cannot wedge the teammate forever.
 		tctx, tcancel := context.WithTimeout(ctx, 10*time.Minute)
-		out, err := m.agent.Invoke(tctx, append(history, messages.Human(turnPrompt)))
+			out, err := m.agent.Invoke(tctx, append(history, messages.Human(turnPrompt)), newThreadID())
 		tcancel()
 		if err != nil {
 			t.mu.Lock()

@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/skills"
@@ -228,7 +231,7 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 
 	history := []messages.Message{messages.Human(prompt)}
 	if args.Fork {
-		// forkSubagent: the subagent inherits the parent's live transcript
+		// Subagent fork: the subagent inherits the parent's live transcript
 		// (minus the system prompt) and continues with the task at hand.
 		base := a.transcriptSnapshot()
 		for len(base) > 0 && base[0].Role == messages.RoleSystem {
@@ -320,50 +323,56 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 		return "", err
 	}
 	if onText == nil {
-		msgs, err := sub.Invoke(ctx, history)
+		msgs, err := sub.Invoke(ctx, history, newThreadID())
 		if err != nil {
 			return "", err
 		}
 		return lastAIText(msgs), nil
 	}
 
-	stream, err := sub.Graph().Stream(ctx, sub.NewState(ctx, history))
-	if err != nil {
-		return "", err
-	}
-	defer stream.Close()
+	// Streaming subagent run (background Task output): consume node
+	// updates for complete AI messages and the final values snapshot.
 	final := ""
-	for {
-		step, ok, err := stream.Next(ctx)
+	for chunk, err := range sub.Graph().Stream(ctx, sub.NewState(ctx, history), lggraph.StreamOptions{
+		Options: lggraph.Options{ThreadID: newThreadID()},
+		Modes:   []lggraph.StreamMode{lggraph.StreamUpdates, lggraph.StreamValues},
+	}) {
 		if err != nil {
 			return "", err
 		}
-		if !ok {
-			break
-		}
-		if step.Done {
-			for _, m := range MessagesFrom(step.Values) {
-				if m.Role == messages.RoleAI && m.Content != "" {
-					final = m.Content
+		switch chunk.Mode {
+		case lggraph.StreamUpdates:
+			updates, _ := chunk.Payload.(map[string]any)
+			for _, v := range updates {
+				nodeUpdate, _ := v.(map[string]any)
+				for _, m := range MessagesFrom(nodeUpdate) {
+					if m.Role != messages.RoleAI {
+						continue
+					}
+					if text := strings.TrimSpace(m.Content); text != "" {
+						onText(text)
+					}
+					for _, tc := range m.ToolCalls {
+						onText(fmt.Sprintf("  %s(%v)", tc.Name, tc.Args))
+					}
 				}
 			}
-			break
-		}
-		if step.Err != nil {
-			return "", step.Err
-		}
-		for _, m := range MessagesFrom(step.Update) {
-			if m.Role == messages.RoleAI {
-				if text := strings.TrimSpace(m.Content); text != "" {
-					onText(text)
-				}
-				for _, tc := range m.ToolCalls {
-					onText(fmt.Sprintf("  %s(%v)", tc.Name, tc.Args))
-				}
-			}
+		case lggraph.StreamValues:
+			final = lastAIText(MessagesFrom(valuesState(chunk.Payload)))
 		}
 	}
 	return final, nil
+}
+
+// valuesState extracts the channel-state map from a values-chunk payload.
+func valuesState(payload any) map[string]any {
+	state, _ := payload.(map[string]any)
+	return state
+}
+
+// newThreadID mints a fresh checkpoint thread identifier.
+func newThreadID() string {
+	return "run-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 }
 
 func lastAIText(msgs []messages.Message) string {

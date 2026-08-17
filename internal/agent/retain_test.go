@@ -18,8 +18,8 @@ import (
 func TestRetainRunStoresFactAndEvent(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{
-		mem: memoryRuntime{engine: f},
-		workdir:   "/ws",
+		mem:     memoryRuntime{engine: f},
+		workdir: "/ws",
 		loadSettings: func() settings.Settings {
 			s := settings.Default()
 			s.LadyMAutoRetain = true
@@ -49,8 +49,8 @@ func TestRetainRunDisabled(t *testing.T) {
 	off := settings.Default()
 	off.LadyMAutoRetain = false
 	a := &Agent{
-		mem:          memoryRuntime{engine: f, loadSettings: func() settings.Settings { return off }},
-		workdir:      "/ws",
+		mem:     memoryRuntime{engine: f, loadSettings: func() settings.Settings { return off }},
+		workdir: "/ws",
 	}
 	a.RetainRun(context.Background(),
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
@@ -189,8 +189,8 @@ func TestRetainGoalDisabled(t *testing.T) {
 	off := settings.Default()
 	off.LadyMAutoRetain = false
 	a := &Agent{
-		mem:          memoryRuntime{engine: f, loadSettings: func() settings.Settings { return off }},
-		workdir:      "/ws",
+		mem:     memoryRuntime{engine: f, loadSettings: func() settings.Settings { return off }},
+		workdir: "/ws",
 	}
 	a.RetainGoal(context.Background(), "objective", "complete", "summary", nil)
 	if len(f.remembered) != 0 || len(f.events) != 0 {
@@ -229,8 +229,8 @@ func TestSystem2ThrottledPerWorkspace(t *testing.T) {
 	on := settings.Default()
 	on.LadyMSystem2 = true
 	a := &Agent{
-		mem:          memoryRuntime{engine: f, loadSettings: func() settings.Settings { return on }},
-		workdir:      "/ws",
+		mem:     memoryRuntime{engine: f, loadSettings: func() settings.Settings { return on }},
+		workdir: "/ws",
 	}
 	hist := []messages.Message{messages.Human("q")}
 	fin := []messages.Message{messages.AI("a")}

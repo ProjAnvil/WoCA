@@ -45,7 +45,7 @@ func TestQueuedInputInjectedAfterToolResults(t *testing.T) {
 	a := newQueueTestAgent(t, &recorder{}, 10)
 	a.QueueInput("actually, also check the tests")
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run the check")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run the check")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestQueuedInputDuringToolExecution(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run the check")})
+		out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run the check")}, "t")
 		done <- result{out, err}
 	}()
 
@@ -113,7 +113,7 @@ func TestQueuedInputDuringToolExecution(t *testing.T) {
 
 func TestNoQueuedInputNoExtraMessages(t *testing.T) {
 	a := newQueueTestAgent(t, &recorder{}, 10)
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run the check")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run the check")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

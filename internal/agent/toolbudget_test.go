@@ -104,8 +104,8 @@ func TestToolResultBudgetIdempotent(t *testing.T) {
 
 func TestToolResultBudgetRoundsIndependent(t *testing.T) {
 	// Two separate tool rounds, each under budget: untouched even though
-	// their combined size exceeds the budget (Claude Code's per-message
-	// scope).
+	// their combined size exceeds the budget (the budget scope is
+	// per-message).
 	msgs := []messages.Message{
 		messages.AI("round 1"),
 		messages.Tool("a", strings.Repeat("a", 40_000)),
@@ -227,7 +227,7 @@ func TestModelNodeAppliesToolResultBudget(t *testing.T) {
 		messages.AI("using tools"),
 		messages.Tool("t1", strings.Repeat("r", 30_000)),
 	}
-	out, err := a.Invoke(context.Background(), history)
+	out, err := a.Invoke(context.Background(), history, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,7 +8,8 @@ import (
 	"github.com/projanvil/woca/internal/store"
 )
 
-// 并发两 run 各自 Begin/TakeAttachments 互不覆盖（改造原承认互踩的用例）。
+// Two concurrent runs doing Begin/TakeAttachments each must not overwrite one
+// another (reworked from the original case that acknowledged the clobbering).
 func TestMemoryScopeIsolatesConcurrentRuns(t *testing.T) {
 	m := &memoryRuntime{}
 	ctxA := WithMemoryScope(context.Background())
@@ -26,13 +27,14 @@ func TestMemoryScopeIsolatesConcurrentRuns(t *testing.T) {
 	if len(gotB) != 1 || !strings.Contains(gotB[0].Content, "beta") {
 		t.Fatalf("run B got %+v, want beta attachment", gotB)
 	}
-	// 二次取为空（Take 清空 scope）
+	// A second take is empty (Take clears the scope)
 	if again := m.TakeAttachments(ctxA); len(again) != 0 {
 		t.Fatalf("second take = %+v, want empty", again)
 	}
 }
 
-// ctx 无 scope 时回退 agent 级字段（CLI 单 run 路径不回归）。
+// Without a scope in ctx, fall back to agent-level fields (the CLI single-run
+// path must not regress).
 func TestTakeAttachmentsFallbackWithoutScope(t *testing.T) {
 	m := &memoryRuntime{}
 	m.prefetch.entries = []store.Entry{{Namespace: "ns", Key: "x", Value: []byte(`"legacy"`)}}

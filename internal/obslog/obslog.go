@@ -27,8 +27,8 @@ import (
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 
-	"github.com/projanvil/woca/internal/graph"
 )
 
 // Rotation defaults.
@@ -214,11 +214,31 @@ func (s *Store) write(rel string, b []byte) {
 	_, _ = w.Write(b)
 }
 
-// --- graph.Observer bridge ---
+// --- node-observation bridge ---
 
-// ObserveNode implements graph.Observer: every node dispatch of every
-// observed graph (the agent graph, the goal graph) becomes a trace event.
-func (s *Store) ObserveNode(ev graph.NodeEvent) {
+// NodeEvent describes one node dispatch of an observed graph (the agent
+// graph, the goal graph). The agent package emits these from its node
+// wrappers; the store turns them into trace events.
+type NodeEvent struct {
+	Graph      string         // graph name ("agent", "goal")
+	Node       string         // node name
+	Phase      string         // start | end | interrupt | error
+	DurationMS float64        // dispatch duration (end/interrupt/error events)
+	Err        string         // error text (interrupt/error events)
+	Update     any            // the node's return value (end events)
+	Values     map[string]any // state entering the node (start events)
+}
+
+// Node phases.
+const (
+	PhaseStart     = "start"
+	PhaseEnd       = "end"
+	PhaseInterrupt = "interrupt"
+	PhaseError     = "error"
+)
+
+// ObserveNode records one node dispatch as a trace event.
+func (s *Store) ObserveNode(ev NodeEvent) {
 	if !s.Enabled() {
 		return
 	}
@@ -233,7 +253,7 @@ func (s *Store) ObserveNode(ev graph.NodeEvent) {
 	if ev.Err != "" {
 		data["error"] = ev.Err
 	}
-	if ev.Phase == graph.PhaseStart {
+	if ev.Phase == PhaseStart {
 		data["messages"] = len(messagesOf(ev.Values["messages"]))
 	} else if upd := updateOf(ev.Update); upd != nil {
 		data["update_keys"] = keysOf(upd)
@@ -267,19 +287,19 @@ func messagesOf(v any) []messages.Message {
 	return msgs
 }
 
-func updateOf(v any) graph.State {
+func updateOf(v any) map[string]any {
 	switch t := v.(type) {
-	case graph.State:
+	case map[string]any:
 		return t
-	case graph.Command:
+	case lgtypes.Command:
 		return t.Update
-	case *graph.Command:
+	case *lgtypes.Command:
 		return t.Update
 	}
 	return nil
 }
 
-func keysOf(state graph.State) []string {
+func keysOf(state map[string]any) []string {
 	out := make([]string, 0, len(state))
 	for k := range state {
 		out = append(out, k)

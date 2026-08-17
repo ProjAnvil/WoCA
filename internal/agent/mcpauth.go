@@ -7,10 +7,9 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 )
 
-// McpAuth tool (a port of Claude Code's McpAuthTool): starts the OAuth flow
-// for a configured MCP HTTP server so its tools become authorized. The flow
-// itself (browser + callback + token persistence) is wired by the harness via
-// Config.McpAuth.
+// McpAuth tool: starts the OAuth flow for a configured MCP HTTP server so its
+// tools become authorized. The flow itself (browser + callback + token
+// persistence) is wired by the harness via Config.McpAuth.
 
 const mcpAuthDescription = `Start the OAuth authorization flow for an MCP server (HTTP transport). A browser window opens for consent; the resulting token is stored encrypted and used automatically for that server's tools from the next connection. Use when a server reports 401/403 Unauthorized.`
 

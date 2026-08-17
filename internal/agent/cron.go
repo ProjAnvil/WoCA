@@ -12,12 +12,12 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 )
 
-// ScheduleCron (a port of Claude Code's ScheduleCronTool): the model can
-// schedule prompts that fire on a cron schedule for the lifetime of the
-// session. A fired entry injects a <scheduled-task> notification through the
-// mid-turn queue, so the agent acts on it in the next tool round (or the next
-// run's first round when idle) — the same delivery path as background-shell
-// completions. Entries die with the session (nothing is persisted).
+// ScheduleCron: the model can schedule prompts that fire on a cron schedule
+// for the lifetime of the session. A fired entry injects a <scheduled-task>
+// notification through the mid-turn queue, so the agent acts on it in the
+// next tool round (or the next run's first round when idle) — the same
+// delivery path as background-shell completions. Entries die with the
+// session (nothing is persisted).
 
 // cronEntry is one scheduled prompt.
 type cronEntry struct {

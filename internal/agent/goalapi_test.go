@@ -8,7 +8,6 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
-	"github.com/projanvil/woca/internal/graph"
 	"github.com/projanvil/woca/internal/obslog"
 )
 
@@ -194,6 +193,8 @@ func TestGoalRunBookkeeping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Keep the stream referenced: the run stays in flight until abandoned.
+	_ = stream
 	run := a.GoalRunID()
 	if run == 0 {
 		t.Fatal("GoalRunID must be non-zero during a run")
@@ -208,7 +209,6 @@ func TestGoalRunBookkeeping(t *testing.T) {
 	if a.GoalRunID() != 0 {
 		t.Fatal("abandon did not clear the run")
 	}
-	stream.Close()
 }
 
 func TestGoalStreamGuardErrors(t *testing.T) {
@@ -235,7 +235,7 @@ func TestGoalStreamGuardErrors(t *testing.T) {
 	a.goal.running = false
 	a.goal.graph = nil
 	a.goal.mu.Unlock()
-	if _, err := a.GoalResume(context.Background(), &graph.InterruptError{}, true); err == nil {
+	if _, err := a.GoalResume(context.Background(), true); err == nil {
 		t.Fatal("GoalResume without a run must error")
 	}
 }
@@ -253,9 +253,9 @@ func TestGoalBudgetLimitedByTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("unexpected error: %v", step.Err)
+	res := pumpGoalChunks(t, stream)
+	if res.err != nil || len(res.interrupts) > 0 {
+		t.Fatalf("unexpected error: %v", res.err)
 	}
 	g := a.Goal()
 	if g.Status != GoalBudgetLimited {
@@ -278,8 +278,14 @@ func TestGoalModelErrorEndsRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step, _, err := stream.Next(context.Background())
-	if err == nil && step.Err == nil {
+	var streamErr error
+	for _, cerr := range stream {
+		if cerr != nil {
+			streamErr = cerr
+			break
+		}
+	}
+	if streamErr == nil {
 		t.Fatal("expected the model error to surface")
 	}
 	if a.GoalRunning() {
@@ -289,15 +295,15 @@ func TestGoalModelErrorEndsRun(t *testing.T) {
 
 func TestParseGoalVerdictLenient(t *testing.T) {
 	cases := []struct {
-		in     string
+		in      string
 		verdict string
 	}{
 		{`{"verdict":"complete","evidence":"e"}`, "complete"},
 		{`prose {"verdict":"blocked","gaps":"g"} trailing`, "blocked"},
-		{`{"verdict":"weird"}`, "continue"},        // unknown verdict coerced
-		{`not json at all`, "continue"},            // unparsable → continue
-		{`{"verdict": 42}`, "continue"},            // type error → continue
-		{`{broken`, "continue"},                    // no closing brace
+		{`{"verdict":"weird"}`, "continue"}, // unknown verdict coerced
+		{`not json at all`, "continue"},     // unparsable → continue
+		{`{"verdict": 42}`, "continue"},     // type error → continue
+		{`{broken`, "continue"},             // no closing brace
 	}
 	for _, tc := range cases {
 		v := parseGoalVerdict(tc.in)
@@ -558,9 +564,9 @@ func TestGoalGraphWithObserver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	step := pumpGoal(t, stream)
-	if !step.Done {
-		t.Fatalf("unexpected error: %v", step.Err)
+	res := pumpGoalChunks(t, stream)
+	if res.err != nil || len(res.interrupts) > 0 {
+		t.Fatalf("unexpected error: %v", res.err)
 	}
 	if g := a.Goal(); g.Status != GoalComplete {
 		t.Fatalf("status = %q", g.Status)
@@ -578,7 +584,7 @@ func TestGoalStampsAndZeroTurns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pumpGoal(t, stream)
+	pumpGoalChunks(t, stream)
 	g := a.Goal()
 	if g.UpdatedAt.Before(before) {
 		t.Fatal("UpdatedAt not refreshed")

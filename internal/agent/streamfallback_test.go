@@ -95,8 +95,9 @@ func (s *scheduledStream) Next(_ context.Context) (messages.Message, bool, error
 func (s *scheduledStream) Close() error { return nil }
 
 // TestStreamFallbackCleanMessage verifies the agent-level semantics of a
-// mid-stream model fallback (Claude Code's FallbackTriggeredError handling):
-// the failed attempt's partial text is discarded from the final message,
+// mid-stream model fallback: the failed attempt's partial text is discarded
+// from the final message, speculative tool calls from the failed attempt are
+// cancelled, and the fallback attempt's tool call runs exactly once.
 // speculative tool calls from the failed attempt are cancelled, and the
 // fallback attempt's tool call runs exactly once.
 func TestStreamFallbackCleanMessage(t *testing.T) {
@@ -155,7 +156,7 @@ func TestStreamFallbackCleanMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("go")})
+	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("go")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

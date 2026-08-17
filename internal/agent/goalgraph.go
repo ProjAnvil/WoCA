@@ -4,30 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"strings"
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
-
-	"github.com/projanvil/woca/internal/graph"
+	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
+	lgruntime "github.com/projanvil/langchain-golang/langgraph/runtime"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 )
 
-// The goal graph: an explicit langgraph-style orchestration of the
+// The goal graph: an explicit langgraph orchestration of the
 // persistent-objective loop.
 //
 //	assess → execute → evaluate ─┬─ (active)   → assess (next cycle)
 //	                              └─ (terminal) → END
 //
 // assess and evaluate are focused single model calls (no tools); execute is a
-// streaming node that runs the REAL agent graph (model ⇄ tools, permissions,
-// hooks, compaction) as a nested sub-execution on the live session history,
-// forwarding its deltas so the harness renders goal cycles exactly like a
-// normal run. evaluate is the verification gate: a skeptical evaluator must
-// confirm any completion claim with evidence before the goal may complete.
-// Interrupts raised inside execute (permissions, AskUserQuestion) are
-// surfaced to the harness as fresh interrupts and resumed through the stashed
-// inner checkpoint, so human-in-the-loop approvals work mid-cycle.
+// node that runs the REAL agent graph (model ⇄ tools, permissions, hooks,
+// compaction) as a nested execution on the live session history, forwarding
+// its deltas so the harness renders goal cycles exactly like a normal run.
+// evaluate is the verification gate: a skeptical evaluator must confirm any
+// completion claim with evidence before the goal may complete. Interrupts
+// raised inside execute (permissions, AskUserQuestion) pause the outer goal
+// graph via lggraph.Interrupt carrying the same payload; the answer feeds the
+// inner graph's resume (Options.Resume on the stashed inner thread), so
+// human-in-the-loop approvals work mid-cycle.
 
 const (
 	goalNodeAssess   = "assess"
@@ -36,16 +40,32 @@ const (
 )
 
 // GoalDelta forwards one message produced inside a goal execute cycle (tool
-// calls, tool results) through the goal graph's delta channel so UI renderers
+// calls, tool results) through the goal graph's custom stream so UI renderers
 // can display goal-cycle tool use live, exactly like a normal run.
 type GoalDelta struct {
 	Message messages.Message
 }
 
+// goalInterrupts extracts the pause interrupts from an updates- or
+// values-chunk payload, or nil when the chunk is not a pause.
+func goalInterrupts(mode lggraph.StreamMode, payload any) []lgtypes.Interrupt {
+	switch mode {
+	case lggraph.StreamUpdates:
+		updates, _ := payload.(map[string]any)
+		intrs, _ := updates[lgcheckpoint.ReservedInterrupt].([]lgtypes.Interrupt)
+		return intrs
+	case lggraph.StreamValues:
+		state, _ := payload.(map[string]any)
+		intrs, _ := state[lgcheckpoint.ReservedInterrupt].([]lgtypes.Interrupt)
+		return intrs
+	}
+	return nil
+}
+
 // GoalStream starts the goal loop over the session history and streams its
-// progress. The harness pumps it like Agent.Stream, renders steps, and
-// resolves interrupts via GoalResume.
-func (a *Agent) GoalStream(ctx context.Context, history []messages.Message) (graph.Stream[graph.Step], error) {
+// progress. The harness pumps the returned chunk iterator like Agent.Stream,
+// renders chunks, and resolves pauses via GoalResume.
+func (a *Agent) GoalStream(ctx context.Context, history []messages.Message) (iter.Seq2[lggraph.StreamChunk, error], error) {
 	a.goal.mu.Lock()
 	if a.goal.goal == nil {
 		a.goal.mu.Unlock()
@@ -63,36 +83,46 @@ func (a *Agent) GoalStream(ctx context.Context, history []messages.Message) (gra
 	a.goal.runID++
 	run := a.goal.runID
 	a.goal.graph = g
+	a.goal.thread = fmt.Sprintf("goal-%d-%d", run, time.Now().UnixNano())
 	a.goal.running = true
 	a.goal.pending = nil
 	a.goal.mu.Unlock()
 
-	inner, err := g.Stream(ctx, a.NewState(ctx, history))
-	if err != nil {
-		a.endGoalRun()
-		return nil, err
-	}
-	return &goalStream{a: a, inner: inner, run: run}, nil
+	return a.goalChunkStream(ctx, history, g, run), nil
 }
 
 // GoalResume continues a goal loop paused at an interrupt, feeding answer
-// back into the interrupted execute cycle. The resumed stream keeps the same
-// run id (it is the same run).
-func (a *Agent) GoalResume(ctx context.Context, ie *graph.InterruptError, answer any) (graph.Stream[graph.Step], error) {
+// back into the paused outer goal graph (which re-enters the execute node,
+// where the answer reaches the inner agent graph's resume). The resumed
+// stream keeps the same run id (it is the same run).
+func (a *Agent) GoalResume(ctx context.Context, answer any) (iter.Seq2[lggraph.StreamChunk, error], error) {
 	a.goal.mu.Lock()
 	g := a.goal.graph
 	running := a.goal.running
-	run := a.goal.runID
+	thread := a.goal.thread
 	a.goal.mu.Unlock()
 	if g == nil || !running {
 		return nil, fmt.Errorf("agent: no goal run in flight")
 	}
-	inner, err := g.StreamResume(ctx, ie, answer)
-	if err != nil {
-		a.endGoalRun()
-		return nil, err
-	}
-	return &goalStream{a: a, inner: inner, run: run}, nil
+	return func(yield func(lggraph.StreamChunk, error) bool) {
+		paused := false
+		defer func() {
+			if !paused {
+				a.endGoalRun()
+			}
+		}()
+		for c, err := range g.Stream(ctx, nil, lggraph.StreamOptions{
+			Options: lggraph.Options{ThreadID: thread, Resume: encodeResumeValue(answer)},
+			Modes:   streamModes,
+		}) {
+			if err == nil && len(goalInterrupts(c.Mode, c.Payload)) > 0 {
+				paused = true
+			}
+			if !yield(c, err) {
+				return
+			}
+		}
+	}, nil
 }
 
 // GoalRunID returns the id of the goal run in flight (0 when none). The
@@ -126,39 +156,34 @@ func (a *Agent) AbandonGoalRun(run uint64) {
 	a.goal.graph = nil
 }
 
-// goalStream wraps the compiled goal graph stream, clearing the goal-run
-// bookkeeping when the stream reaches a terminal state (done, error, or an
-// abandoned/cancelled pump).
-type goalStream struct {
-	a     *Agent
-	inner graph.Stream[graph.Step]
-	run   uint64
-	done  bool
-}
-
-func (s *goalStream) Next(ctx context.Context) (graph.Step, bool, error) {
-	step, ok, err := s.inner.Next(ctx)
-	if err != nil || !ok || step.Done {
-		if !s.done {
-			s.done = true
-			s.a.endGoalRun()
-		}
-		return step, ok, err
-	}
-	if step.Err != nil {
-		// A terminal interrupt parks the loop for an answer; the run stays
-		// alive so GoalResume can continue it. Any other error ends it.
-		if _, isInterrupt := graph.AsInterrupt(step.Err); !isInterrupt {
-			if !s.done {
-				s.done = true
-				s.a.endGoalRun()
+// goalChunkStream wraps the goal graph's fresh-input stream, clearing the
+// goal-run bookkeeping when the stream reaches a terminal state. A pause
+// (interrupt chunk) keeps the run alive so GoalResume can continue it; an
+// abandoned pump (consumer break) releases it.
+func (a *Agent) goalChunkStream(ctx context.Context, history []messages.Message, g *lggraph.CompiledGraph, run uint64) iter.Seq2[lggraph.StreamChunk, error] {
+	return func(yield func(lggraph.StreamChunk, error) bool) {
+		a.goal.mu.Lock()
+		thread := a.goal.thread
+		a.goal.mu.Unlock()
+		paused := false
+		defer func() {
+			if !paused {
+				a.AbandonGoalRun(run)
+			}
+		}()
+		for c, err := range g.Stream(ctx, a.NewState(ctx, history), lggraph.StreamOptions{
+			Options: lggraph.Options{ThreadID: thread},
+			Modes:   streamModes,
+		}) {
+			if err == nil && len(goalInterrupts(c.Mode, c.Payload)) > 0 {
+				paused = true
+			}
+			if !yield(c, err) {
+				return
 			}
 		}
 	}
-	return step, ok, err
 }
-
-func (s *goalStream) Close() error { return s.inner.Close() }
 
 func (a *Agent) endGoalRun() {
 	a.goal.mu.Lock()
@@ -169,23 +194,23 @@ func (a *Agent) endGoalRun() {
 }
 
 // buildGoalGraph compiles the assess → execute → evaluate loop. The recursion
-// limit bounds dispatches, not cycles; each cycle costs three dispatches.
-func (a *Agent) buildGoalGraph(maxCycles int) *graph.CompiledGraph {
-	g := graph.NewStateGraph()
-	g.AddReducer("messages", MessagesReducer)
-	g.AddStreamingNode(goalNodeAssess, a.goalAssessNode())
-	g.AddStreamingNode(goalNodeExecute, a.goalExecuteNode())
-	g.AddStreamingNode(goalNodeEvaluate, a.goalEvaluateNode())
+// limit bounds dispatches, not cycles; each cycle costs three dispatches. The
+// in-memory Saver backs the outer pauses (interrupts) with per-run threads.
+func (a *Agent) buildGoalGraph(maxCycles int) *lggraph.CompiledGraph {
+	g := lggraph.NewStateGraph()
+	g.AddReducer("messages", messagesChannel)
+	g.AddNode(goalNodeAssess, a.observedNode("goal", goalNodeAssess, a.goalAssessNode()))
+	g.AddNode(goalNodeExecute, a.observedNode("goal", goalNodeExecute, a.goalExecuteNode()))
+	g.AddNode(goalNodeEvaluate, a.observedNode("goal", goalNodeEvaluate, a.goalEvaluateNode()))
 	g.AddEdge(goalNodeAssess, goalNodeExecute)
 	g.AddEdge(goalNodeExecute, goalNodeEvaluate)
 	g.AddConditionalEdges(goalNodeEvaluate, a.goalRoute)
 	g.SetEntryPoint(goalNodeAssess)
 	limit := maxCycles*3 + 8
-	opts := []graph.CompileOption{graph.WithRecursionLimit(limit)}
-	if a.obs != nil {
-		opts = append(opts, graph.WithObserver("goal", a.obs))
-	}
-	cg, err := g.Compile(opts...)
+	cg, err := g.Compile(
+		lggraph.WithRecursionLimit(limit),
+		lggraph.WithCheckpointer(lgcheckpoint.NewMemorySaver()),
+	)
 	if err != nil {
 		// The graph is valid by construction; a compile failure is a bug.
 		panic(fmt.Sprintf("agent: compile goal graph: %v", err))
@@ -193,16 +218,44 @@ func (a *Agent) buildGoalGraph(maxCycles int) *graph.CompiledGraph {
 	return cg
 }
 
+// answerDanglingToolCalls appends synthetic tool results when the cycle was cut
+// between the model and tools nodes, leaving a trailing AI message whose tool
+// calls never ran. Without this the salvaged transcript is rejected by
+// OpenAI-compatible providers (a tool_call message must be followed by its
+// tool results before the next human message).
+func answerDanglingToolCalls(msgs []messages.Message) []messages.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != messages.RoleAI || len(last.ToolCalls) == 0 {
+		return msgs
+	}
+	out := append([]messages.Message(nil), msgs...)
+	for _, tc := range last.ToolCalls {
+		out = append(out, messages.Tool(tc.ID,
+			"Error: this tool call never ran — the goal cycle was cut short by the agent graph's recursion limit."))
+	}
+	return out
+}
+
+// isRecursionLimit reports whether err is the graph runtime's recursion
+// (superstep) limit error. The fork returns it as a plain error, so the match
+// is on the stable message prefix.
+func isRecursionLimit(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "graph: recursion limit")
+}
+
 // goalRoute ends the loop unless the goal is still active (the evaluate node
 // applies every terminal transition itself).
-func (a *Agent) goalRoute(_ context.Context, _ graph.State) (string, error) {
+func (a *Agent) goalRoute(rt lgruntime.Runtime, _ map[string]any) ([]any, error) {
 	a.goal.mu.Lock()
 	g := a.goal.goal
 	a.goal.mu.Unlock()
 	if g == nil || g.Status != GoalActive {
-		return graph.END, nil
+		return []any{lgtypes.END}, nil
 	}
-	return goalNodeAssess, nil
+	return []any{goalNodeAssess}, nil
 }
 
 // goalCycleMsg builds the deterministic <goal-cycle> human message that seeds
@@ -246,11 +299,13 @@ func (a *Agent) goalModel() language.ChatModel {
 
 // goalAssessNode is the planner: a focused model call that assesses progress
 // against the objective and lays out this cycle's actions.
-func (a *Agent) goalAssessNode() graph.StreamingNodeFunc {
-	return func(ctx context.Context, state graph.State, emit func(any)) (any, error) {
+func (a *Agent) goalAssessNode() lggraph.NodeFunc {
+	return func(rt lgruntime.Runtime, state map[string]any) (any, error) {
+		ctx := rt
+		emit := streamWriter(rt)
 		if !a.goalBeginCycle() {
 			// Cleared or paused since the last node: end the loop.
-			return graph.Command{Goto: graph.END}, nil
+			return &lgtypes.Command{Goto: []any{lgtypes.END}}, nil
 		}
 		a.goal.mu.Lock()
 		goal := a.goal.goal.clone()
@@ -258,7 +313,7 @@ func (a *Agent) goalAssessNode() graph.StreamingNodeFunc {
 		// The goal may have been cleared between goalBeginCycle and this
 		// read; clone() of nil is nil, so guard like the other nodes.
 		if goal == nil {
-			return graph.Command{Goto: graph.END}, nil
+			return &lgtypes.Command{Goto: []any{lgtypes.END}}, nil
 		}
 
 		var b strings.Builder
@@ -300,10 +355,8 @@ func (a *Agent) goalAssessNode() graph.StreamingNodeFunc {
 		if assessment == "" {
 			assessment = "(no assessment produced; proceeding to execution)"
 		}
-		if emit != nil {
-			emit(fmt.Sprintf("\n[goal cycle %d/%d] %s\n", goal.Cycles, goal.MaxCycles, goalTruncate(firstLine(assessment), 200)))
-		}
-		return graph.State{"assessment": assessment}, nil
+		emit(fmt.Sprintf("\n[goal cycle %d/%d] %s\n", goal.Cycles, goal.MaxCycles, goalTruncate(firstLine(assessment), 200)))
+		return map[string]any{"assessment": assessment}, nil
 	}
 }
 
@@ -326,18 +379,22 @@ func (a *Agent) goalBeginCycle() bool {
 
 // goalExecuteNode runs one full agent turn (the nested model ⇄ tools graph)
 // against the live session history, seeded with the cycle prompt. Inner
-// interrupts are surfaced to the harness as fresh interrupt errors; the inner
-// checkpoint is stashed so a resume re-enters the inner graph mid-cycle.
-func (a *Agent) goalExecuteNode() graph.StreamingNodeFunc {
-	return func(ctx context.Context, state graph.State, emit func(any)) (any, error) {
+// pauses are surfaced to the harness through the outer graph's Interrupt
+// (same payload); the inner thread is stashed so a resume feeds the answer
+// into the inner graph's resume.
+func (a *Agent) goalExecuteNode() lggraph.NodeFunc {
+	return func(rt lgruntime.Runtime, state map[string]any) (any, error) {
+		ctx := rt
+		emit := streamWriter(rt)
 		a.goal.mu.Lock()
 		goal := a.goal.goal.clone()
 		pending := a.goal.pending
+		pendingThread := a.goal.innerThread
 		pendingTurns := a.goal.pendingTurns
 		pendingPrefix := a.goal.pendingPrefix
 		a.goal.mu.Unlock()
 		if goal == nil || goal.Status != GoalActive {
-			return graph.Command{Goto: graph.END}, nil
+			return &lgtypes.Command{Goto: []any{lgtypes.END}}, nil
 		}
 		assessment, _ := state["assessment"].(string)
 
@@ -347,91 +404,106 @@ func (a *Agent) goalExecuteNode() graph.StreamingNodeFunc {
 			hist = hist[1:]
 		}
 
-		var stream graph.Stream[graph.Step]
+		var stream iter.Seq2[lggraph.StreamChunk, error]
 		var prefix int
 		var turnsBefore int
 		if pending != nil {
-			// Resume path: re-surface the stashed interrupt; on the resumed
-			// pass graph.Interrupt returns the harness's answer, which feeds
-			// the inner graph's StreamResume. The cycle prompt and prefix are
-			// taken from the stash — they must not be rebuilt (compaction
-			// could re-summarize differently).
-			answer, err := graph.Interrupt(ctx, pending.Value)
-			if err != nil {
-				return nil, err
-			}
-			s, err := a.graph.StreamResume(ctx, pending, answer)
-			if err != nil {
-				return nil, err
-			}
-			stream = s
+			// Resume path: Interrupt returns the harness's answer on this
+			// re-entry (it paused the outer graph on the previous pass),
+			// which feeds the inner graph's resume. The cycle prompt and
+			// prefix are taken from the stash — they must not be rebuilt
+			// (compaction could re-summarize differently).
+			answer := lggraph.Interrupt(ctx, pending.Value)
+			stream = a.ResumeStream(ctx, pendingThread, answer)
 			prefix = pendingPrefix
 			turnsBefore = pendingTurns
-			a.goal.setPending(nil, 0, 0)
+			a.goal.setPending(nil, "", 0, 0)
 		} else {
 			hist = a.CompactHistory(ctx, hist)
 			cycleMsg := goalCycleMsg(goal.Cycles, goal.MaxCycles, goal.Objective, assessment, goal.TokensUsed, goal.MaxTokens)
 			prefix = len(hist)
-			s, err := a.graph.Stream(ctx, a.NewState(ctx, append(hist, cycleMsg)))
-			if err != nil {
-				return nil, err
-			}
-			stream = s
+			pendingThread = newThreadID()
+			stream = a.Stream(ctx, append(hist, cycleMsg), pendingThread)
 			a.ResetTurnCounter()
 			turnsBefore = 0
 		}
 
 		var newMsgs []messages.Message
+		var lastValues map[string]any
+		limitHit := false
 		pump := func() error {
-			for {
-				step, ok, err := stream.Next(ctx)
+			for chunk, err := range stream {
 				if err != nil {
+					if isRecursionLimit(err) {
+						// The cycle outgrew the inner graph's dispatch budget
+						// (long autonomous cycles legitimately run dozens of
+						// model⇄tools rounds). Salvage the work completed so
+						// far, mark the cut, and hand the cycle to the
+						// evaluator instead of killing the whole goal loop —
+						// the next cycle starts with a fresh budget.
+						limitHit = true
+						return nil
+					}
 					return err
 				}
-				if !ok {
-					return fmt.Errorf("agent: goal execute stream ended without a terminal step")
+				if intrs := goalInterrupts(chunk.Mode, chunk.Payload); len(intrs) > 0 {
+					// Stash the inner pause and surface it on the outer
+					// graph: Interrupt panics GraphInterrupt on this pass
+					// (pausing the goal loop) and returns the harness's
+					// answer on the resumed pass.
+					inner := intrs[0]
+					a.goal.setPending(&inner, pendingThread, turnsBefore, prefix)
+					lggraph.Interrupt(ctx, inner.Value)
+					return nil // unreachable: Interrupt panics
 				}
-				if step.Done {
-					final := MessagesFrom(step.Values)
-					// final = [system] + prefix history + this cycle's messages.
-					if len(final) > prefix+1 {
-						newMsgs = final[prefix+1:]
+				switch chunk.Mode {
+				case lggraph.StreamCustom:
+					if s, ok := chunk.Payload.(string); ok && s != "" {
+						emit(s)
+						continue
 					}
-					return nil
-				}
-				if step.Err != nil {
-					if ie, isInterrupt := graph.AsInterrupt(step.Err); isInterrupt {
-						a.goal.setPending(ie, turnsBefore, prefix)
-						// A fresh interrupt carries the same payload; the
-						// outer runtime will attach ITS checkpoint to it, so
-						// the inner one stays resumable.
-						return &graph.InterruptError{Value: ie.Value}
+					if rd, ok := chunk.Payload.(ReasoningDelta); ok && rd.Text != "" {
+						emit(rd)
 					}
-					return step.Err
-				}
-				if emit == nil {
-					continue
-				}
-				if s, ok := step.Delta.(string); ok && s != "" {
-					emit(s)
-					continue
-				}
-				if rd, ok := step.Delta.(ReasoningDelta); ok && rd.Text != "" {
-					emit(rd)
-					continue
-				}
-				for _, m := range MessagesFrom(step.Update) {
-					if m.Role == messages.RoleAI && len(m.ToolCalls) > 0 || m.Role == messages.RoleTool {
-						emit(GoalDelta{Message: m})
+				case lggraph.StreamUpdates:
+					updates, _ := chunk.Payload.(map[string]any)
+					for _, v := range updates {
+						nodeUpdate, _ := v.(map[string]any)
+						for _, m := range MessagesFrom(nodeUpdate) {
+							if m.Role == messages.RoleAI && len(m.ToolCalls) > 0 || m.Role == messages.RoleTool {
+								emit(GoalDelta{Message: m})
+							}
+						}
 					}
+				case lggraph.StreamValues:
+					lastValues = valuesState(chunk.Payload)
 				}
 			}
+			// A clean end-of-stream with a values snapshot is a completed
+			// run; without one the run ended abnormally.
+			if lastValues == nil && !limitHit {
+				return fmt.Errorf("agent: goal execute stream ended without a terminal state")
+			}
+			return nil
 		}
 		if err := pump(); err != nil {
 			return nil, err
 		}
+		if lastValues != nil {
+			final := MessagesFrom(lastValues)
+			// final = [system] + prefix history + this cycle's messages.
+			if len(final) > prefix+1 {
+				newMsgs = final[prefix+1:]
+			}
+		}
+		if limitHit {
+			newMsgs = answerDanglingToolCalls(newMsgs)
+			cutNotice := "\n[goal cycle cut short: agent-graph recursion limit reached — salvaging this cycle's work for evaluation]\n"
+			emit(cutNotice)
+			newMsgs = append(newMsgs, messages.AI(strings.TrimSpace(cutNotice)))
+		}
 		cycleTurns := a.TurnsDone() - turnsBefore
-		return graph.State{
+		return map[string]any{
 			"messages":    newMsgs,
 			"cycle_turns": cycleTurns,
 		}, nil
@@ -441,13 +513,15 @@ func (a *Agent) goalExecuteNode() graph.StreamingNodeFunc {
 // goalEvaluateNode is the verification gate: a skeptical evaluator reviews the
 // cycle's evidence and moves the goal state machine. Only a verified verdict
 // completes the goal; claims alone never do.
-func (a *Agent) goalEvaluateNode() graph.StreamingNodeFunc {
-	return func(ctx context.Context, state graph.State, emit func(any)) (any, error) {
+func (a *Agent) goalEvaluateNode() lggraph.NodeFunc {
+	return func(rt lgruntime.Runtime, state map[string]any) (any, error) {
+		ctx := rt
+		emit := streamWriter(rt)
 		a.goal.mu.Lock()
 		goal := a.goal.goal.clone()
 		a.goal.mu.Unlock()
 		if goal == nil {
-			return graph.Command{Goto: graph.END}, nil
+			return &lgtypes.Command{Goto: []any{lgtypes.END}}, nil
 		}
 		assessment, _ := state["assessment"].(string)
 		cycleTurns, _ := state["cycle_turns"].(int)
@@ -475,15 +549,13 @@ Rules: "complete" ONLY if the evidence concretely shows every done-criterion met
 		}
 		a.usage.recordUsage(resp.UsageMetadata)
 		v := parseGoalVerdict(resp.Content)
-		if emit != nil {
-			emit(fmt.Sprintf("\n[goal verdict: %s] %s\n", v.Verdict, goalTruncate(orString(v.Evidence, v.Gaps), 200)))
-		}
+		emit(fmt.Sprintf("\n[goal verdict: %s] %s\n", v.Verdict, goalTruncate(orString(v.Evidence, v.Gaps), 200)))
 
 		a.goal.mu.Lock()
 		g := a.goal.goal
 		if g == nil {
 			a.goal.mu.Unlock()
-			return graph.Command{Goto: graph.END}, nil
+			return &lgtypes.Command{Goto: []any{lgtypes.END}}, nil
 		}
 		g.Progress = append(g.Progress, GoalProgressEntry{
 			Cycle:   g.Cycles,
@@ -541,13 +613,13 @@ Rules: "complete" ONLY if the evidence concretely shows every done-criterion met
 		a.goal.mu.Unlock()
 		if finalStatus == "" {
 			// Cleared while evaluating: nothing to report against.
-			return graph.State{"verdict": v.Verdict}, nil
+			return map[string]any{"verdict": v.Verdict}, nil
 		}
 		if finalStatus != GoalActive {
 			report := goalReport(finalStatus, v, goal.Cycles)
-			return graph.State{"messages": []messages.Message{messages.AI(report)}, "verdict": v.Verdict}, nil
+			return map[string]any{"messages": []messages.Message{messages.AI(report)}, "verdict": v.Verdict}, nil
 		}
-		return graph.State{"verdict": v.Verdict}, nil
+		return map[string]any{"verdict": v.Verdict}, nil
 	}
 }
 
@@ -596,9 +668,10 @@ func (a *Agent) goalRefreshTokens(base int64) {
 	a.goal.mu.Unlock()
 }
 
-func (m *goalManager) setPending(ie *graph.InterruptError, turns, prefix int) {
+func (m *goalManager) setPending(ie *lgtypes.Interrupt, innerThread string, turns, prefix int) {
 	m.mu.Lock()
 	m.pending = ie
+	m.innerThread = innerThread
 	m.pendingTurns = turns
 	m.pendingPrefix = prefix
 	m.mu.Unlock()

@@ -16,7 +16,6 @@ import (
 	"time"
 
 	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
-	"github.com/projanvil/langchain-golang/langgraph/checkpoint/serde"
 )
 
 // store is the persistence primitive both backends implement: flat,
@@ -80,7 +79,7 @@ func newSaver(back store, ser lgcheckpoint.Serializer) *saver {
 	return &saver{back: back, serde: ser}
 }
 
-func newSerializer() lgcheckpoint.Serializer { return serde.NewJSONSerializer() }
+// newSerializer is defined in serializer.go (woca-aware wrapper).
 
 // GetTuple implements lgcheckpoint.Saver.
 func (s *saver) GetTuple(ctx context.Context, cfg lgcheckpoint.Config) (*lgcheckpoint.Tuple, error) {

@@ -11,8 +11,8 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 )
 
-// Worktree isolation (a port of Claude Code's EnterWorktree/ExitWorktree):
-// EnterWorktree creates a git worktree under <base>/.woca-worktrees/<name>
+// Worktree isolation: EnterWorktree creates a git worktree under
+// <base>/.woca-worktrees/<name>
 // and switches the tool registry's working directory into it, so every
 // file/shell tool operates on the isolated copy without disturbing the main
 // checkout. ExitWorktree returns to the original directory and can remove

@@ -6,25 +6,23 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 )
 
-// Max-output-tokens recovery, a port of Claude Code's query.ts handling of a
-// truncated response (the withheld max_output_tokens error): when the final
-// assistant message was cut off by the output-token cap, the turn is retried
+// Max-output-tokens recovery for a truncated response (the withheld
+// max_output_tokens error): when the final assistant message was cut off by
+// the output-token cap, the turn is retried
 // — first once at an escalated cap when an escalator is configured (the 8k
-// →64k retry; Claude Code escalates only when the user did not set an
-// explicit cap), then up to MaxOutputTokensRecoveries times by injecting a
+// →64k retry; escalate only when the user did not set an explicit cap),
+// then up to MaxOutputTokensRecoveries times by injecting a
 // continuation message that asks the model to resume mid-thought. Recovery
 // exhausted, the truncated output is surfaced as-is.
 
 const (
-	// MaxOutputTokensRecoveries bounds the continuation-message retries
-	// (Claude Code's MAX_OUTPUT_TOKENS_RECOVERY_LIMIT).
+	// MaxOutputTokensRecoveries bounds the continuation-message retries.
 	MaxOutputTokensRecoveries = 3
-	// EscalatedMaxTokens is the raised output cap for the escalation retry
-	// (Claude Code's ESCALATED_MAX_TOKENS).
+	// EscalatedMaxTokens is the raised output cap for the escalation retry.
 	EscalatedMaxTokens = 64_000
 )
 
-// OutputLimitRecoveryPrompt mirrors Claude Code's recovery message.
+// OutputLimitRecoveryPrompt is the continuation prompt injected on recovery.
 const OutputLimitRecoveryPrompt = "Output token limit hit. Resume directly — no apology, no recap of what you were doing. Pick up mid-thought if that is where the cut happened. Break remaining work into smaller pieces."
 
 // IsMaxOutputTokensTruncated reports whether an AI message was cut off by

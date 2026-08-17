@@ -8,14 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/projanvil/woca/internal/graph"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
+	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 )
 
-// Goal mode, a graph-based port of the persistent-objective loop shared by
-// modern coding harnesses (Claude Code's /goal autonomous loop, Codex's goal
-// state machine): the user declares an objective and the harness runs an
-// autonomous assess → execute → evaluate cycle over the real agent graph
-// until the goal is verified complete, blocked, paused, or out of budget.
+// Goal mode, a graph-based persistent-objective loop: the user declares an
+// objective and the harness runs an autonomous assess → execute → evaluate
+// cycle over the real agent graph until the goal is verified complete,
+// blocked, paused, or out of budget.
 // The loop itself is a compiled StateGraph (goalgraph.go); this file holds
 // the state machine, its manager, and the /goal command parser.
 //
@@ -90,14 +90,19 @@ func (g *Goal) clone() *Goal {
 
 // goalManager is the agent's goal state. running/graph/pending belong to the
 // in-flight goal loop; pending stashes the inner agent-graph interrupt while
-// its fresh copy is surfaced to the harness (the inner checkpoint must stay
-// unmutated so the execute node can resume the inner graph on the answer).
+// its fresh copy is surfaced to the harness (the inner thread's checkpoint
+// must stay unmutated so the execute node can resume the inner graph on the
+// answer).
 type goalManager struct {
 	mu            sync.Mutex
 	goal          *Goal
 	running       bool
-	graph         *graph.CompiledGraph
-	pending       *graph.InterruptError
+	graph         *lggraph.CompiledGraph
+	// thread is the outer goal graph's checkpoint thread; innerThread is
+	// the inner agent-graph thread of the paused execute cycle.
+	thread        string
+	innerThread   string
+	pending       *lgtypes.Interrupt
 	pendingTurns  int
 	pendingPrefix int
 	subs          []func(*Goal)

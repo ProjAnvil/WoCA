@@ -310,15 +310,20 @@ func TestAbandonGoalRunReleasesStuckRun(t *testing.T) {
 	if run1 == 0 {
 		t.Fatal("expected a run id in flight")
 	}
-	// Simulate the runner exiting without draining to a terminal step.
+	// Simulate the runner exiting without draining to a terminal state
+	// (breaking out of the chunk iterator abandons the run).
+	for c := range s1 {
+		_ = c
+		break
+	}
 	lead.AbandonGoalRun(run1)
 	if lead.GoalRunning() {
 		t.Fatal("abandoned run still marked running")
 	}
-	_ = s1.Close()
 
 	// A newer run must ignore the stale abandon.
 	s2, err := lead.GoalStream(ctx, nil)
+	_ = s2
 	if err != nil {
 		t.Fatalf("re-stream after abandon: %v", err)
 	}
@@ -328,5 +333,4 @@ func TestAbandonGoalRunReleasesStuckRun(t *testing.T) {
 		t.Fatal("stale abandon killed the newer run")
 	}
 	lead.AbandonGoalRun(run2)
-	_ = s2.Close()
 }
