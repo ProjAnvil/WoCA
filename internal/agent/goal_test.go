@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"iter"
 	"strings"
 	"testing"
@@ -125,8 +127,11 @@ func TestGoalCycleSurvivesInnerRecursionLimit(t *testing.T) {
 	model := language.NewFakeChatModel(
 		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
 		language.WithResponses(
-			messages.AI("assess 1"),   // cycle 1 assess
-			tc("1"), tc("2"), tc("3"), // cycle 1 execute: 3rd tool round is cut
+			messages.AI("assess 1"), // cycle 1 assess
+			// cycle 1 execute: with the doubled cycle budget (2×5=10
+			// supersteps) five tool rounds complete; the sixth model
+			// dispatch is refused and the cycle is salvaged.
+			tc("1"), tc("2"), tc("3"), tc("4"), tc("5"),
 			messages.AI(`{"verdict":"continue","gaps":"more to do"}`), // cycle 1 evaluate
 		),
 	)
@@ -135,7 +140,7 @@ func TestGoalCycleSurvivesInnerRecursionLimit(t *testing.T) {
 		Registry:       tools.NewRegistry(t.TempDir()),
 		SystemPrompt:   "test",
 		PermissionMode: config.ModeBypass,
-		RecursionLimit: 5, // model,tools,model,tools,model — the next tools dispatch is refused
+		RecursionLimit: 5, // turn budget 5 → goal-cycle budget 10
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -176,15 +181,123 @@ func TestGoalCycleSurvivesInnerRecursionLimit(t *testing.T) {
 	if markers == 0 {
 		t.Fatal("salvaged transcript misses the cut-short marker")
 	}
-	// Every tool call in the salvaged transcript — including the one cut off
-	// mid-flight ("3") — must have a tool result, or the next cycle would feed
-	// an invalid history to the provider.
+	// Every tool call in the salvaged transcript must have a tool result, or
+	// the next cycle would feed an invalid history to the provider.
 	for _, m := range msgs {
 		for _, call := range m.ToolCalls {
 			if !answered[call.ID] {
 				t.Fatalf("tool call %q has no result: transcript would be rejected by the provider", call.ID)
 			}
 		}
+	}
+}
+
+// TestGoalCycleStepBudgetAndLimitDetection pins the cycle-budget formula and
+// the typed detection of the runtime's recursion-limit error.
+func TestGoalCycleStepBudgetAndLimitDetection(t *testing.T) {
+	cases := []struct{ turnLimit, want int }{
+		{0, 100},   // unset → default turn limit 50, doubled
+		{-3, 100},  // negative → same as unset
+		{5, 10},    // the integration test's configuration
+		{50, 100},  // the default configuration
+		{100, 200}, // scales with a user-raised turn limit
+	}
+	for _, tc := range cases {
+		if got := goalCycleStepBudget(tc.turnLimit); got != tc.want {
+			t.Errorf("goalCycleStepBudget(%d) = %d, want %d", tc.turnLimit, got, tc.want)
+		}
+	}
+
+	typed := &lgtypes.GraphRecursionError{Limit: 10, Node: "model"}
+	if !isRecursionLimit(typed) {
+		t.Fatal("typed GraphRecursionError not detected")
+	}
+	if !isRecursionLimit(fmt.Errorf("wrapped: %w", typed)) {
+		t.Fatal("wrapped GraphRecursionError not detected")
+	}
+	if isRecursionLimit(errors.New("graph: recursion limit (10) exceeded")) {
+		t.Fatal("a lookalike plain error must not be detected — detection is typed, not string-based")
+	}
+	if isRecursionLimit(nil) || isRecursionLimit(errors.New("boom")) {
+		t.Fatal("unrelated errors must not be detected")
+	}
+}
+
+// TestAnswerDanglingToolCalls covers the salvage path where the cut lands
+// between the model and tools nodes: the trailing unanswered tool-call
+// message gets synthetic results so the transcript stays provider-valid.
+func TestAnswerDanglingToolCalls(t *testing.T) {
+	call := func(id string) messages.ToolCall {
+		return messages.ToolCall{ID: id, Name: "Read", Args: map[string]any{"file_path": "x"}}
+	}
+	dangling := []messages.Message{
+		messages.Human("<goal-cycle 1>"),
+		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{call("1"), call("2")}},
+	}
+	out := answerDanglingToolCalls(dangling)
+	if len(out) != len(dangling)+2 {
+		t.Fatalf("len = %d, want synthetic results for both calls", len(out))
+	}
+	for i, want := range []string{"1", "2"} {
+		m := out[len(dangling)+i]
+		if m.Role != messages.RoleTool || m.ToolCallID != want {
+			t.Fatalf("synthetic result %d = %+v, want tool result for call %q", i, m, want)
+		}
+		if !strings.Contains(m.Content, "never ran") {
+			t.Fatalf("synthetic result %d content = %q", i, m.Content)
+		}
+	}
+	// No dangling tail: the input is returned as-is (no copies, no additions).
+	clean := []messages.Message{messages.Human("hi"), messages.AI("done")}
+	if got := answerDanglingToolCalls(clean); len(got) != 2 {
+		t.Fatalf("clean input altered: %+v", got)
+	}
+	if got := answerDanglingToolCalls(nil); got != nil {
+		t.Fatalf("nil input altered: %+v", got)
+	}
+	// Already-answered tail: nothing to add.
+	answered := append(append([]messages.Message(nil), dangling...), messages.Tool("1", "ok"), messages.Tool("2", "ok"))
+	if got := answerDanglingToolCalls(answered); len(got) != len(answered) {
+		t.Fatalf("answered input altered: %+v", got)
+	}
+}
+
+// TestStreamWithBudgetAppliesRecursionLimit proves the per-invocation budget
+// actually reaches the runtime: a looping model trips the limit and the typed
+// error reports the OVERRIDDEN limit, not the compiled one.
+func TestStreamWithBudgetAppliesRecursionLimit(t *testing.T) {
+	loop := messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+		ID: "1", Name: "Read", Args: map[string]any{"file_path": "x"},
+	}}}
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(loop), // every model call requests another tool round
+	)
+	a, err := New(Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+		RecursionLimit: 50, // compiled default the override must beat
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hit *lgtypes.GraphRecursionError
+	for _, err := range a.streamWithBudget(context.Background(), nil, "budget-test", 7) {
+		if err == nil {
+			continue
+		}
+		if !errors.As(err, &hit) {
+			t.Fatalf("unexpected stream error: %v", err)
+		}
+		break
+	}
+	if hit == nil {
+		t.Fatal("stream ended without tripping the recursion limit")
+	}
+	if hit.Limit != 7 {
+		t.Fatalf("error reports limit %d, want the overridden 7 (compiled is 50)", hit.Limit)
 	}
 }
 

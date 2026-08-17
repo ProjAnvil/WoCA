@@ -973,19 +973,32 @@ var streamModes = []lggraph.StreamMode{lggraph.StreamUpdates, lggraph.StreamCust
 
 // Stream runs the agent on threadID and streams graph progress chunks.
 func (a *Agent) Stream(ctx context.Context, history []messages.Message, threadID string) iter.Seq2[lggraph.StreamChunk, error] {
-	history = a.CompactHistory(ctx, history)
-	a.resetThread(ctx, threadID)
-	return a.graph.Stream(ctx, a.NewState(ctx, history), lggraph.StreamOptions{
-		Options: lggraph.Options{ThreadID: threadID},
-		Modes:   streamModes,
-	})
+	return a.streamWithBudget(ctx, history, threadID, 0)
 }
 
 // ResumeStream answers a pending interrupt on threadID and continues the run
 // as a chunk stream (the streaming counterpart of Resume).
 func (a *Agent) ResumeStream(ctx context.Context, threadID string, resumeValue any) iter.Seq2[lggraph.StreamChunk, error] {
+	return a.resumeStreamWithBudget(ctx, threadID, resumeValue, 0)
+}
+
+// streamWithBudget runs the agent with an explicit recursion (superstep)
+// budget for this invocation; 0 uses the compiled default. Goal execute
+// cycles run with the doubled goalCycleStepBudget.
+func (a *Agent) streamWithBudget(ctx context.Context, history []messages.Message, threadID string, budget int) iter.Seq2[lggraph.StreamChunk, error] {
+	history = a.CompactHistory(ctx, history)
+	a.resetThread(ctx, threadID)
+	return a.graph.Stream(ctx, a.NewState(ctx, history), lggraph.StreamOptions{
+		Options: lggraph.Options{ThreadID: threadID, RecursionLimit: budget},
+		Modes:   streamModes,
+	})
+}
+
+// resumeStreamWithBudget is the interrupt-resume counterpart of
+// streamWithBudget, keeping the cycle's budget across a pause.
+func (a *Agent) resumeStreamWithBudget(ctx context.Context, threadID string, resumeValue any, budget int) iter.Seq2[lggraph.StreamChunk, error] {
 	return a.graph.Stream(ctx, nil, lggraph.StreamOptions{
-		Options: lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue)},
+		Options: lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue), RecursionLimit: budget},
 		Modes:   streamModes,
 	})
 }

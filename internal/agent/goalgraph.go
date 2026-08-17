@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"strings"
@@ -239,11 +240,28 @@ func answerDanglingToolCalls(msgs []messages.Message) []messages.Message {
 	return out
 }
 
-// isRecursionLimit reports whether err is the graph runtime's recursion
-// (superstep) limit error. The fork returns it as a plain error, so the match
-// is on the stable message prefix.
+// isRecursionLimit reports whether err is the graph runtime's typed
+// recursion (superstep) limit error (the fork's GraphRecursionError). A
+// limit hit is a soft cycle boundary — the work done so far is salvaged and
+// evaluated — never a hard failure of the goal loop.
 func isRecursionLimit(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "graph: recursion limit")
+	var rle *lgtypes.GraphRecursionError
+	return errors.As(err, &rle)
+}
+
+// goalCycleStepBudget is the recursion (superstep) budget one goal execute
+// cycle runs the inner agent graph with: double the interactive turn limit.
+// Goal cycles are long autonomous runs and get a longer leash than a chat
+// turn; hitting the budget is a soft cut (salvage + evaluate), so any finite
+// value is safe. The per-invocation override (lggraph.Options.RecursionLimit)
+// lets the one compiled agent graph serve turns and cycles at different
+// budgets — with the default turn limit of 50, a cycle gets 100 supersteps
+// (≈ 50 model⇄tools rounds).
+func goalCycleStepBudget(turnLimit int) int {
+	if turnLimit <= 0 {
+		turnLimit = 50 // agent.New's default turn limit
+	}
+	return 2 * turnLimit
 }
 
 // goalRoute ends the loop unless the goal is still active (the evaluate node
@@ -407,6 +425,7 @@ func (a *Agent) goalExecuteNode() lggraph.NodeFunc {
 		var stream iter.Seq2[lggraph.StreamChunk, error]
 		var prefix int
 		var turnsBefore int
+		budget := goalCycleStepBudget(a.recursionLimit)
 		if pending != nil {
 			// Resume path: Interrupt returns the harness's answer on this
 			// re-entry (it paused the outer graph on the previous pass),
@@ -414,7 +433,7 @@ func (a *Agent) goalExecuteNode() lggraph.NodeFunc {
 			// prefix are taken from the stash — they must not be rebuilt
 			// (compaction could re-summarize differently).
 			answer := lggraph.Interrupt(ctx, pending.Value)
-			stream = a.ResumeStream(ctx, pendingThread, answer)
+			stream = a.resumeStreamWithBudget(ctx, pendingThread, answer, budget)
 			prefix = pendingPrefix
 			turnsBefore = pendingTurns
 			a.goal.setPending(nil, "", 0, 0)
@@ -423,7 +442,7 @@ func (a *Agent) goalExecuteNode() lggraph.NodeFunc {
 			cycleMsg := goalCycleMsg(goal.Cycles, goal.MaxCycles, goal.Objective, assessment, goal.TokensUsed, goal.MaxTokens)
 			prefix = len(hist)
 			pendingThread = NewThreadID()
-			stream = a.Stream(ctx, append(hist, cycleMsg), pendingThread)
+			stream = a.streamWithBudget(ctx, append(hist, cycleMsg), pendingThread, budget)
 			a.ResetTurnCounter()
 			turnsBefore = 0
 		}

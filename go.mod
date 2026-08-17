@@ -9,7 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/muesli/termenv v0.16.0
-	github.com/projanvil/langchain-golang v0.5.1
+	github.com/projanvil/langchain-golang v0.5.4
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/image v0.45.0
@@ -56,7 +56,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-// Local fork with reasoning_effort + reasoning_content streaming (unreleased
-// after v0.5.1). Tag the fork v0.5.2 and drop this replace to publish.
-replace github.com/projanvil/langchain-golang => ../langchain_port/langchain_golang
