@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -1147,6 +1148,15 @@ func (a *Agent) toolsNode() graph.NodeFunc {
 			wg.Add(1)
 			go func(i int, call messages.ToolCall) {
 				defer wg.Done()
+				defer func() {
+					if rec := recover(); rec != nil {
+						stack := debug.Stack()
+						if len(stack) > 2048 {
+							stack = stack[:2048]
+						}
+						results[i] = messages.Tool(call.ID, fmt.Sprintf("Error: tool %q panicked: %v\n%s", call.Name, rec, stack))
+					}
+				}()
 				res := a.execute(ctx, call.Name, call.Args)
 				content := res.Content
 				if preFeedback[i] != "" {

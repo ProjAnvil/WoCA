@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
 	"sync"
 
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -154,6 +156,15 @@ func (a *Agent) dispatchSpeculative(ctx context.Context, call messages.ToolCall)
 	go func() {
 		defer cancel()
 		defer close(f.done)
+		defer func() {
+			if rec := recover(); rec != nil {
+				stack := debug.Stack()
+				if len(stack) > 2048 {
+					stack = stack[:2048]
+				}
+				f.msg = messages.Tool(call.ID, fmt.Sprintf("Error: tool %q panicked: %v\n%s", call.Name, rec, stack))
+			}
+		}()
 		f.msg = a.runToolCall(fctx, call)
 	}()
 	return true

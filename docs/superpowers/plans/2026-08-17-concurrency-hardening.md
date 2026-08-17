@@ -2513,7 +2513,7 @@ git commit -m "fix(agent): speculative dispatch limited to read-only tools"
 **Interfaces:**
 - Produces: 工具 panic → 结构化 ERROR 工具结果 `"Error: tool %q panicked: %v"` + 截断堆栈（≤2KB），进程不死。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```go
 package agent
@@ -2617,12 +2617,12 @@ func TestToolPanicBecomesErrorResult(t *testing.T) {
 
 注意：`language.FakeChatModel` 是否满足直接嵌入覆盖 `Stream`（agentapi_test.go:582-584 的 `namedModel2` 已有嵌入先例）；若编译期接口不合，仿照 `streamingexec_test.go:55` 的 `scriptedModel` 手写完整接口。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/agent/ -run TestToolPanicBecomesErrorResult -v`
 Expected: 测试进程 panic 崩溃（证明现状无 recover）。
 
-- [ ] **Step 3: 补 recover**
+- [x] **Step 3: 补 recover**
 
 toolsNode goroutine（agent.go:1133-1153）：
 
@@ -2646,12 +2646,12 @@ toolsNode goroutine（agent.go:1133-1153）：
 
 `dispatchSpeculative` goroutine（streamingexec.go:165-169）同样包一层 recover，panic 时往 future 写 `"Error: tool %q panicked: %v"` 结果。两文件按需补 `runtime/debug` import。
 
-- [ ] **Step 4: 运行测试**
+- [x] **Step 4: 运行测试**
 
 Run: `go test -race ./internal/agent/ -run TestToolPanicBecomesErrorResult -v && go test -race ./internal/agent/`
 Expected: 全 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/agent/agent.go internal/agent/streamingexec.go internal/agent/agent_test.go

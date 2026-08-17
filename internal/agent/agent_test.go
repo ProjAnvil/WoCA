@@ -3,10 +3,13 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/langchain-golang/core/runnables"
+	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/graph"
@@ -485,5 +488,90 @@ func TestAgentBashPolicyDeny(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected blocked-by-denylist tool result: %+v", out)
+	}
+}
+
+// recordingModel 记录每轮模型调用的输入（第二轮输入含 toolsNode 产出的工具结果）。
+type recordingModel struct {
+	*language.FakeChatModel
+	mu   sync.Mutex
+	seen [][]messages.Message
+}
+
+func (c *recordingModel) Stream(ctx context.Context, in []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	c.mu.Lock()
+	c.seen = append(c.seen, in)
+	c.mu.Unlock()
+	return c.FakeChatModel.Stream(ctx, in, opts...)
+}
+
+// BindTools 返回自身：嵌入的 FakeChatModel.BindTools 会返回裸拷贝，
+// agent 在 New 时绑定工具后记录器会被丢弃。
+func (c *recordingModel) BindTools([]coretools.Tool) (language.ChatModel, error) { return c, nil }
+
+func TestToolPanicBecomesErrorResult(t *testing.T) {
+	panicker, err := coretools.FromFunc("Panicker", "always panics",
+		func(ctx context.Context, a struct{}) (coretools.Result, error) {
+			panic("boom")
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(t.TempDir())
+	reg.Register(panicker)
+	fake := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+				{ID: "c1", Name: "Panicker", Args: map[string]any{}},
+			}},
+			messages.AI("recovered"),
+		),
+	)
+	model := &recordingModel{FakeChatModel: fake}
+	a, err := New(Config{
+		Model:          model,
+		Registry:       reg,
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+		RecursionLimit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// pump 模式见 agentapi_test.go:557-575
+	s, err := a.Stream(context.Background(), []messages.Message{messages.Human("go")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for {
+		step, ok, err := s.Next(context.Background())
+		if err != nil {
+			t.Fatalf("stream error: %v", err)
+		}
+		if !ok {
+			t.Fatal("stream ended without terminal step")
+		}
+		if step.Done {
+			break
+		}
+	}
+
+	// 进程活着走到这里即 recover 生效；再断言第二轮模型输入里的工具结果是结构化错误。
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if len(model.seen) < 2 {
+		t.Fatalf("model called %d times, want >= 2", len(model.seen))
+	}
+	found := false
+	for _, m := range model.seen[1] {
+		if m.Role == messages.RoleTool && strings.Contains(m.Content, `tool "Panicker" panicked: boom`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("want structured panic tool result in round-2 input: %+v", model.seen[1])
 	}
 }
