@@ -210,6 +210,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/settings", s.handleUpdateSettings)
 	mux.HandleFunc("GET /api/memory", s.handleListMemory)
 	mux.HandleFunc("GET /api/memory/stats", s.handleMemoryStats)
+	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("POST /api/memory", s.handleRememberMemory)
 	mux.HandleFunc("DELETE /api/memory/{id}", s.handleForgetMemory)
 	mux.Handle("/", s.staticHandler())
@@ -241,6 +242,35 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleStats reports runtime concurrency counters for threshold tuning.
+func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
+	s.mu.Lock()
+	notDone := 0
+	var dropped int64
+	for _, run := range s.runs {
+		if !run.isDone() {
+			notDone++
+		}
+		dropped += run.droppedCount()
+	}
+	s.mu.Unlock()
+	queued, depths := s.admission.stats()
+	active := notDone - queued // 排队中的 run 已注册未完成，从活跃里剔除
+	if active < 0 {
+		active = 0
+	}
+	lspActive, lspBroken := s.agent.LSPStats()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"active_runs":          active,
+		"queued_runs":          queued,
+		"session_queue_depths": depths,
+		"teammates":            s.agent.ActiveTeammateCount(),
+		"background_tasks":     s.agent.RunningTaskCount(),
+		"sse_dropped":          dropped,
+		"lsp":                  map[string]any{"active": lspActive, "broken": lspBroken},
+	})
 }
 
 // runAttachment is one image attached to a prompt (base64-encoded).

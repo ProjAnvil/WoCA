@@ -498,6 +498,31 @@ func (a *Agent) Graph() *graph.CompiledGraph { return a.graph }
 // Obs returns the observability store (nil when not wired).
 func (a *Agent) Obs() *obslog.Store { return a.obs }
 
+// ActiveTeammateCount reports live teammates across the agent's team (0 when
+// no team exists). For /api/stats.
+func (a *Agent) ActiveTeammateCount() int {
+	a.mu.Lock()
+	team := a.team
+	a.mu.Unlock()
+	if team == nil {
+		return 0
+	}
+	return team.ActiveCount()
+}
+
+// RunningTaskCount reports running background tasks. For /api/stats.
+func (a *Agent) RunningTaskCount() int {
+	return a.tasks.RunningCount()
+}
+
+// LSPStats reports pooled/broken LSP servers from the tool registry.
+func (a *Agent) LSPStats() (active, broken int) {
+	if a.registry == nil {
+		return 0, 0
+	}
+	return a.registry.LSPStats()
+}
+
 // SetObsRun scopes subsequent observability events to one workspace/session/
 // run. Harnesses call it at run start; recording itself is gated by the
 // store's enabled flag.

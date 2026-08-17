@@ -2785,7 +2785,7 @@ git commit -m "feat(server): cancel parked runs after a 2h TTL"
 }
 ```
 
-- [ ] **Step 1: 写失败测试** `internal/server/statsapi_test.go`
+- [x] **Step 1: 写失败测试** `internal/server/statsapi_test.go`
 
 ```go
 package server
@@ -2831,12 +2831,12 @@ func TestHandleStats(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `go test -race ./internal/server/ -run TestHandleStats -v`
 Expected: 404。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 路由表（server.go:179-214，`GET /api/memory/stats` 之后）加：
 
@@ -2910,12 +2910,12 @@ func (a *Agent) LSPStats() (active, broken int) {
 
 （`a.team`/`a.tasks`/`a.registry` 字段名与锁纪律以 agent.go 实际为准。）
 
-- [ ] **Step 4: 运行测试**
+- [x] **Step 4: 运行测试**
 
 Run: `go test -race ./internal/server/ ./internal/agent/ -v`
 Expected: 全 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/server/server.go internal/server/statsapi_test.go internal/agent/agent.go
