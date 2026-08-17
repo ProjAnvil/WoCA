@@ -606,7 +606,7 @@ git commit -m "feat(server): per-session run admission gate (FIFO, release after
 - Consumes: Task 1 的 `run_queued`/`queue_position`/`run_started` 事件与 POST 响应 `state`/`queue_position`。
 - Produces: `RunStatus` 含 `'queued'`；store 暴露 `queuePosition: Ref<Record<string, number>>`；`StreamHandlers.onRunQueued?/onQueuePosition?/onRunStarted?`。
 
-- [ ] **Step 1: 类型与 API 层**
+- [x] **Step 1: 类型与 API 层**
 
 `types.ts:73` 改：
 
@@ -648,7 +648,7 @@ case 'run_started':
   break
 ```
 
-- [ ] **Step 2: store 接线**（sessions.ts）
+- [x] **Step 2: store 接线**（sessions.ts）
 
 ```ts
 // :125 附近追加
@@ -682,7 +682,7 @@ attachStream(res.run_id, sid)
 
 删除会话守卫（:288）：拒绝条件加入 `=== 'queued'`。store return 导出 `queuePosition`。
 
-- [ ] **Step 3: UI 徽标**（ChatPanel.vue）
+- [x] **Step 3: UI 徽标**（ChatPanel.vue）
 
 `:21` busy 改为含 queued（停止按钮可用 → 复用现有 cancel API 取消排队中的 run）：
 
@@ -700,12 +700,12 @@ const busy = computed(() => ['running', 'awaiting', 'queued'].includes(store.act
 
 （`activeId` 用 store 现有的当前会话 id 访问器；`.run-badge` 样式复用 style.css:1355-1361。）
 
-- [ ] **Step 4: 验证**
+- [x] **Step 4: 验证**
 
 Run: `cd web && npm run build`
 Expected: `vue-tsc` 类型检查通过 + vite build 成功。手工冒烟（可选）：`npm run dev`，同一会话连发两条消息，第二条显示"排队中 #1"，第一条完成后第二条自动开始。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/types.ts web/src/api/client.ts web/src/stores/sessions.ts web/src/components/ChatPanel.vue

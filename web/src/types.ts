@@ -70,7 +70,15 @@ export interface CompletionEntry {
   description: string
 }
 
-export type RunStatus = 'idle' | 'running' | 'awaiting' | 'done' | 'error'
+export type RunStatus = 'idle' | 'queued' | 'running' | 'awaiting' | 'done' | 'error'
+
+/** POST /api/runs response — state is 'queued' when another run holds the session gate. */
+export interface CreateRunResponse {
+  run_id: string
+  session_id: string
+  state: 'queued' | 'running'
+  queue_position: number
+}
 
 // --- goal mode (mirror the Go agent's Goal JSON) ---
 

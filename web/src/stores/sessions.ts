@@ -123,6 +123,9 @@ export const useSessionStore = defineStore('sessions', () => {
 
   const items = ref<Record<string, ChatItem[]>>({})
   const status = ref<Record<string, RunStatus>>({})
+  // 1-based queue position while a run waits on the session gate (backend
+  // admission; absent = not queued).
+  const queuePosition = ref<Record<string, number>>({})
   const error = ref<Record<string, string>>({})
   const runId = ref<Record<string, string>>({})
   const interrupt = ref<Record<string, Interrupt | null>>({})
@@ -285,14 +288,14 @@ export const useSessionStore = defineStore('sessions', () => {
   // A session with a live run refuses — stop it first.
   async function removeSession(id: string) {
     const st = status.value[id] ?? 'idle'
-    if (st === 'running' || st === 'awaiting') {
+    if (st === 'running' || st === 'awaiting' || st === 'queued') {
       throw new Error('会话正在运行，请先停止再删除')
     }
     if (!demo.value) await api.deleteSession(id)
     const target = sessions.value.find((s) => s.id === id)
     const wsPath = target?.workspace ?? ''
     sessions.value = sessions.value.filter((s) => s.id !== id)
-    for (const m of [items, status, error, runId, interrupt, streamingId, reasoningId, goal, goalRunning]) {
+    for (const m of [items, status, queuePosition, error, runId, interrupt, streamingId, reasoningId, goal, goalRunning]) {
       delete m.value[id]
     }
     if (activeId.value === id) {
@@ -444,6 +447,17 @@ export const useSessionStore = defineStore('sessions', () => {
           goal.value[sid] = ev.goal
           goalRunning.value[sid] = ev.running
         },
+        onRunQueued(pos) {
+          status.value[sid] = 'queued'
+          queuePosition.value[sid] = pos
+        },
+        onQueuePosition(pos) {
+          queuePosition.value[sid] = pos
+        },
+        onRunStarted() {
+          status.value[sid] = 'running'
+          delete queuePosition.value[sid]
+        },
         onDone: () => {
           closeStreaming(sid)
           closeReasoning(sid)
@@ -496,7 +510,10 @@ export const useSessionStore = defineStore('sessions', () => {
     const prompt = text.trim()
     if ((!prompt && !attachments?.length) || !sid) return
     const st = status.value[sid] ?? 'idle'
-    if (st === 'running' || st === 'awaiting') return
+    // A run already in flight no longer blocks: the backend queues the new
+    // run behind it (per-session admission). Awaiting still drops — answer
+    // the interrupt first.
+    if (st === 'awaiting') return
 
     // /goal commands execute server-side without a model turn; set/resume
     // start the goal loop and stream it like a normal run. Match "/goal"
@@ -516,7 +533,6 @@ export const useSessionStore = defineStore('sessions', () => {
       content: prompt,
       attachments: attachments?.length ? attachments : undefined,
     })
-    status.value[sid] = 'running'
     error.value[sid] = ''
     interrupt.value[sid] = null
     streamingId.value[sid] = null
@@ -538,10 +554,14 @@ export const useSessionStore = defineStore('sessions', () => {
         mime_type: a.mimeType,
         data: a.base64,
       }))
-      const { run_id } = await api.createRun(sid, prompt, activeWorkspace.value.path, payload)
+      const res = await api.createRun(sid, prompt, activeWorkspace.value.path, payload)
+      // The response reports whether the run started or queued behind the
+      // session gate; run_started on the stream flips queued → running.
+      status.value[sid] = res.state === 'queued' ? 'queued' : 'running'
+      if (res.state === 'queued') queuePosition.value[sid] = res.queue_position
       // After an interjected user run finishes, an active goal keeps looping
       // (Codex's session-idle continuation scheduling).
-      await attachStream(sid, run_id, () => void continueGoalLoop(sid))
+      await attachStream(sid, res.run_id, () => void continueGoalLoop(sid))
     } catch (e) {
       closeStreaming(sid)
       error.value[sid] = e instanceof Error ? e.message : String(e)
@@ -688,6 +708,7 @@ export const useSessionStore = defineStore('sessions', () => {
     goalRunning,
     goalPanelOpen,
     runId,
+    queuePosition,
     workspaceGroups,
     activeWorkspace,
     activeWorkspaceKey,

@@ -18,7 +18,7 @@ const draft = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-const busy = computed(() => store.activeStatus === 'running' || store.activeStatus === 'awaiting')
+const busy = computed(() => ['running', 'awaiting', 'queued'].includes(store.activeStatus))
 const canSend = computed(
   () => (draft.value.trim().length > 0 || attachments.value.length > 0) && !busy.value,
 )
@@ -266,7 +266,10 @@ function send() {
     <header class="chat-header">
       <div class="chat-title-wrap">
         <span class="chat-title">{{ store.activeSession?.title ?? 'woca' }}</span>
-        <span v-if="store.activeStatus === 'running'" class="run-badge">运行中…</span>
+        <span v-if="store.activeStatus === 'queued'" class="run-badge">
+          排队中 #{{ store.queuePosition[store.activeId] ?? 1 }}…
+        </span>
+        <span v-else-if="store.activeStatus === 'running'" class="run-badge">运行中…</span>
         <span v-else-if="store.activeStatus === 'awaiting'" class="run-badge">等待你的确认…</span>
         <button
           v-if="store.activeGoal"

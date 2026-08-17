@@ -5,6 +5,7 @@ import type {
   AppSettingsUpdate,
   ClaudeEnvState,
   CompletionEntry,
+  CreateRunResponse,
   Goal,
   MemoryListResponse,
   MemoryStatsResponse,
@@ -24,6 +25,9 @@ export interface StreamHandlers {
   onToolResult: (tr: { tool_call_id: string; content: string }) => void
   onInterrupt: (ev: { kind: string; payload: unknown }) => void
   onGoal?: (ev: { goal: Goal | null; running: boolean }) => void
+  onRunQueued?: (position: number) => void
+  onQueuePosition?: (position: number) => void
+  onRunStarted?: () => void
   onDone: (cancelled: boolean) => void
   onError: (message: string) => void
 }
@@ -188,8 +192,8 @@ export function createRun(
   prompt: string,
   workspace?: string,
   attachments?: Array<{ name: string; mime_type: string; data: string }>,
-): Promise<{ run_id: string; session_id: string }> {
-  return postJSON<{ run_id: string; session_id: string }>('/api/runs', {
+): Promise<CreateRunResponse> {
+  return postJSON<CreateRunResponse>('/api/runs', {
     session_id: sessionId,
     prompt,
     workspace: workspace ?? '',
@@ -266,15 +270,18 @@ export function forgetMemory(id: string): Promise<void> {
 }
 
 /*
- * run-events protocol (SSE): the server emits eight event types —
+ * run-events protocol (SSE): the server emits eleven event types —
  * delta (answer text), reasoning (thinking text), tool_call, tool_result,
  * interrupt (permission/ask/plan prompts), goal (goal-chip snapshot),
- * done (terminal; carries cancelled), error (terminal, carries message).
- * After done/error the server closes the stream, so onclose needs no
- * handling of its own. onerror rethrows instead of letting fetch-event-source
- * retry: a failed stream means the run is gone or the terminal event was
- * already consumed, and reconnecting would just replay a dead run — the
- * session store already renders a terminal state from the thrown error.
+ * run_queued / queue_position / run_started (per-session admission gate:
+ * a run queued behind another reports its 1-based position, then its
+ * start once promoted), done (terminal; carries cancelled), error
+ * (terminal, carries message). After done/error the server closes the
+ * stream, so onclose needs no handling of its own. onerror rethrows
+ * instead of letting fetch-event-source retry: a failed stream means the
+ * run is gone or the terminal event was already consumed, and
+ * reconnecting would just replay a dead run — the session store already
+ * renders a terminal state from the thrown error.
  */
 export function streamRun(runId: string, handlers: StreamHandlers): Promise<void> {
   return fetchEventSource(`/api/runs/${runId}/events`, {
@@ -311,6 +318,16 @@ export function streamRun(runId: string, handlers: StreamHandlers): Promise<void
           break
         case 'goal':
           handlers.onGoal?.(data as { goal: Goal | null; running: boolean })
+          break
+        case 'run_queued':
+        case 'queue_position': {
+          const pos = (data as { position?: number }).position ?? 0
+          if (ev.event === 'run_queued') handlers.onRunQueued?.(pos)
+          else handlers.onQueuePosition?.(pos)
+          break
+        }
+        case 'run_started':
+          handlers.onRunStarted?.()
           break
         case 'done':
           handlers.onDone((data as { cancelled?: boolean }).cancelled ?? false)
