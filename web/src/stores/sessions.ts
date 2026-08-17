@@ -427,12 +427,20 @@ export const useSessionStore = defineStore('sessions', () => {
   // attachStream subscribes to a run's SSE stream, updating this session's
   // chat items and goal chip. afterDone runs once the stream ends (used for
   // the goal loop's idle auto-continue after an interjected user run).
+  //
+  // claimRunId=false keeps runId[sid] on the run that currently owns the
+  // session: a queued run must never steal the single answerInterrupt/cancel
+  // slot (its interrupt-free lifetime makes the slot belong to the active
+  // run by construction). The run_started handler claims the slot when a
+  // queued run is promoted — at that point the previous run is guaranteed
+  // terminal (the backend releases the gate only after persisting it).
   async function attachStream(
     sid: string,
     rid: string,
     afterDone?: () => void,
+    claimRunId = true,
   ) {
-    runId.value[sid] = rid
+    if (claimRunId) runId.value[sid] = rid
     try {
       await api.streamRun(rid, {
         onDelta: (t) => appendDelta(sid, t),
@@ -457,11 +465,13 @@ export const useSessionStore = defineStore('sessions', () => {
         onRunStarted() {
           status.value[sid] = 'running'
           delete queuePosition.value[sid]
+          runId.value[sid] = rid
         },
         onDone: () => {
           closeStreaming(sid)
           closeReasoning(sid)
           status.value[sid] = 'done'
+          delete queuePosition.value[sid]
           afterDone?.()
         },
         onError: (msg) => {
@@ -469,6 +479,7 @@ export const useSessionStore = defineStore('sessions', () => {
           closeReasoning(sid)
           error.value[sid] = msg
           status.value[sid] = 'error'
+          delete queuePosition.value[sid]
         },
       })
     } catch (e) {
@@ -476,6 +487,7 @@ export const useSessionStore = defineStore('sessions', () => {
       closeReasoning(sid)
       error.value[sid] = e instanceof Error ? e.message : String(e)
       status.value[sid] = 'error'
+      delete queuePosition.value[sid]
     }
   }
 
@@ -498,8 +510,10 @@ export const useSessionStore = defineStore('sessions', () => {
       const resp = await api.sendGoalCommand(sid, 'resume', s?.workspace ?? '')
       goal.value[sid] = resp.goal
       if (!resp.run_id) return
-      status.value[sid] = 'running'
-      await attachStream(sid, resp.run_id)
+      // No admission state on the goal response: claim runId only when the
+      // run actually starts, so a queued goal run cannot steal the active
+      // run's interrupt/cancel slot.
+      await attachStream(sid, resp.run_id, undefined, false)
     } catch {
       /* continuation is best-effort; the resume button remains available */
     }
@@ -556,12 +570,13 @@ export const useSessionStore = defineStore('sessions', () => {
       }))
       const res = await api.createRun(sid, prompt, activeWorkspace.value.path, payload)
       // The response reports whether the run started or queued behind the
-      // session gate; run_started on the stream flips queued → running.
+      // session gate; run_started on the stream flips queued → running. A
+      // queued run leaves runId on the active run (claim only on promotion).
       status.value[sid] = res.state === 'queued' ? 'queued' : 'running'
       if (res.state === 'queued') queuePosition.value[sid] = res.queue_position
       // After an interjected user run finishes, an active goal keeps looping
       // (Codex's session-idle continuation scheduling).
-      await attachStream(sid, res.run_id, () => void continueGoalLoop(sid))
+      await attachStream(sid, res.run_id, () => void continueGoalLoop(sid), res.state !== 'queued')
     } catch (e) {
       closeStreaming(sid)
       error.value[sid] = e instanceof Error ? e.message : String(e)
@@ -628,7 +643,6 @@ export const useSessionStore = defineStore('sessions', () => {
     if (demo.value) return
 
     push(sid, { id: nid(), kind: 'user', content: `/goal ${command}`.trim() })
-    status.value[sid] = 'running'
     error.value[sid] = ''
     streamingId.value[sid] = null
     try {
@@ -638,7 +652,11 @@ export const useSessionStore = defineStore('sessions', () => {
         push(sid, { id: nid(), kind: 'assistant', content: resp.output, streaming: false, ts: Date.now(), srcRun: resp.run_id || undefined })
       }
       if (resp.run_id) {
-        await attachStream(sid, resp.run_id)
+        // The goal response carries no admission state: no optimistic
+        // "running" — run_queued/run_started on the stream set the status,
+        // and runId is claimed only when the run actually starts (a queued
+        // goal run must not steal the active run's interrupt/cancel slot).
+        await attachStream(sid, resp.run_id, undefined, false)
       } else {
         status.value[sid] = 'done'
       }
