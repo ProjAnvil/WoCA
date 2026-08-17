@@ -1,4 +1,7 @@
-.PHONY: build test vet fmt run clean lint race check tui serve web install
+.PHONY: all build test vet fmt run clean lint race check tui serve web install
+
+# Default: build the web frontend, then the binary (frontend is embedded).
+all: web build
 
 # Build the web frontend into web/dist (required before the Go build embeds it).
 web:
