@@ -17,6 +17,13 @@ import (
 // the tools node skips re-collection entirely.
 var refreshTTL = 5 * time.Minute
 
+// refreshFlightTimeout bounds one background extra-tool refresh flight. The
+// flight outlives the tool round's ctx (WithoutCancel) and MCP clients carry
+// no internal timeout, so without this bound a hung MCP server would keep
+// the singleflight open forever — and the synchronous RefreshToolsNow, which
+// joins the same key, would block for good.
+var refreshFlightTimeout = 2 * time.Minute
+
 // maybeRefreshTools triggers a background extra-tool refresh when the TTL
 // has expired. The current round keeps the existing bindings — a slow MCP
 // re-list must never block the tools node (previously refreshMu covered the
@@ -32,8 +39,12 @@ func (a *Agent) maybeRefreshTools(ctx context.Context) {
 	// flight share the result (singleflight).
 	res := a.refreshSF.DoChan("extra-tools", func() (any, error) {
 		// Outlive the tool round's ctx so an end-of-run cancel doesn't abort
-		// a half-done re-list.
-		a.refreshExtraTools(context.WithoutCancel(ctx))
+		// a half-done re-list, but stay bounded (see refreshFlightTimeout) so
+		// a hung MCP server can't hold the flight — and RefreshToolsNow —
+		// open forever.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshFlightTimeout)
+		defer cancel()
+		a.refreshExtraTools(ctx)
 		return nil, nil
 	})
 	go func() {

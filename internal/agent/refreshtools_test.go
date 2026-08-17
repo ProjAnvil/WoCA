@@ -54,3 +54,34 @@ func TestRefreshToolsNowBypassesTTL(t *testing.T) {
 		t.Fatalf("RefreshToolsNow calls = %d, want 2 (TTL bypassed)", n)
 	}
 }
+
+// 后台 flight 必须有超时：挂死的 MCP client（无内部超时）不能让 flight 永不
+// 完成——否则同步的 RefreshToolsNow 加入同一 singleflight key 后永久阻塞。
+func TestMaybeRefreshToolsFlightTimeout(t *testing.T) {
+	old := refreshFlightTimeout
+	refreshFlightTimeout = 50 * time.Millisecond
+	defer func() { refreshFlightTimeout = old }()
+	a := newRunAgent(t, t.TempDir(), nil)
+	unblocked := make(chan struct{})
+	a.refreshTools = func(ctx context.Context) []coretools.Tool {
+		<-ctx.Done() // 挂死：只有 flight 超时能解开
+		close(unblocked)
+		return nil
+	}
+	a.maybeRefreshTools(context.Background())
+	// 同步路径加入在途的挂死 flight：必须随超时一起解开，而非永久阻塞。
+	nowDone := make(chan struct{})
+	go func() { a.RefreshToolsNow(context.Background()); close(nowDone) }()
+	select {
+	case <-unblocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("hung refresh hook was never released by the flight timeout")
+	}
+	select {
+	case <-nowDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RefreshToolsNow permanently blocked on the hung flight")
+	}
+	waitFor(t, 2*time.Second, func() bool { return a.refreshLast.Load() != 0 },
+		"flight completes after timeout")
+}
