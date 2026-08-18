@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Pause, Play, Target, Trash2, X } from 'lucide-vue-next'
 import { useSessionStore } from '../stores/sessions'
 import { fmtTokens } from '../lib/format'
 import type { GoalStatus } from '../types'
 
+const { t } = useI18n()
 const store = useSessionStore()
 
 const objective = ref('')
@@ -13,13 +15,13 @@ const tokens = ref<number | null>(null)
 
 const goal = computed(() => store.activeGoal)
 
-const statusLabels: Record<GoalStatus, string> = {
-  active: '进行中',
-  paused: '已暂停',
-  blocked: '受阻',
-  complete: '已完成',
-  budget_limited: '预算耗尽',
-}
+const statusLabels = computed<Record<GoalStatus, string>>(() => ({
+  active: t('goal.status.active'),
+  paused: t('goal.status.paused'),
+  blocked: t('goal.status.blocked'),
+  complete: t('goal.status.complete'),
+  budget_limited: t('goal.status.budgetLimited'),
+}))
 
 function pct(used: number, max: number): number {
   if (max <= 0) return 0
@@ -53,7 +55,7 @@ async function setGoal() {
       <div class="card-head">
         <span class="card-title goal-title">
           <Target :size="15" />
-          目标模式
+          {{ t('goal.title') }}
         </span>
         <button class="icon-btn" @click="close()">
           <X :size="16" />
@@ -64,28 +66,27 @@ async function setGoal() {
         <!-- No goal yet: the set form -->
         <div v-if="!goal" class="goal-empty">
           <p class="goal-hint">
-            设定一个持久目标，woca 会以「评估 → 执行 → 验证」循环自主推进，
-            直到目标被独立评估器验证完成、受阻或预算耗尽。对话里也可以直接输入
-            <code>/goal &lt;目标&gt;</code>。
+            {{ t('goal.hint') }}
+            <code>/goal {{ t('goal.hintObjective') }}</code>{{ t('goal.hintSuffix') }}
           </p>
           <textarea
             v-model="objective"
             class="goal-objective-input"
             rows="3"
-            placeholder="目标，例如：给 internal/server 补齐 goal API 的集成测试并全部跑绿"
+            :placeholder="t('goal.objectivePlaceholder')"
             @keydown.enter.exact.prevent="setGoal()"
           ></textarea>
           <div class="goal-budget-row">
             <label>
-              最大循环
+              {{ t('goal.maxCycles') }}
               <input v-model.number="cycles" type="number" min="1" placeholder="10" />
             </label>
             <label>
-              Token 预算
+              {{ t('goal.tokenBudget') }}
               <input v-model.number="tokens" type="number" min="1000" placeholder="2000000" />
             </label>
             <button class="goal-btn primary" :disabled="!objective.trim()" @click="setGoal()">
-              启动目标循环
+              {{ t('goal.start') }}
             </button>
           </div>
         </div>
@@ -95,14 +96,14 @@ async function setGoal() {
           <div class="goal-objective">{{ goal.objective }}</div>
           <div class="goal-meta">
             <span class="goal-status" :class="`s-${goal.status}`">{{ statusLabels[goal.status] }}</span>
-            <span v-if="goal.claimed" class="goal-claim">完成声明待验证</span>
-            <span v-if="store.goalRunning[store.activeId]" class="goal-live">循环运行中…</span>
+            <span v-if="goal.claimed" class="goal-claim">{{ t('goal.claimPending') }}</span>
+            <span v-if="store.goalRunning[store.activeId]" class="goal-live">{{ t('goal.running') }}</span>
           </div>
 
           <div class="goal-budgets">
             <div class="goal-meter">
               <div class="goal-meter-label">
-                <span>循环</span><span>{{ goal.cycles }} / {{ goal.max_cycles }}</span>
+                <span>{{ t('goal.cycles') }}</span><span>{{ goal.cycles }} / {{ goal.max_cycles }}</span>
               </div>
               <div class="goal-meter-bar">
                 <div class="goal-meter-fill" :style="{ width: pct(goal.cycles, goal.max_cycles) + '%' }"></div>
@@ -119,16 +120,16 @@ async function setGoal() {
           </div>
 
           <p v-if="goal.status === 'blocked' && goal.blocked_reason" class="goal-note danger">
-            受阻：{{ goal.blocked_reason }}
+            {{ t('goal.blocked', { reason: goal.blocked_reason }) }}
           </p>
           <p v-else-if="goal.status === 'complete' && goal.evidence" class="goal-note ok">
-            验证依据：{{ goal.evidence }}
+            {{ t('goal.evidence', { evidence: goal.evidence }) }}
           </p>
           <p v-if="goal.claimed && goal.claim_evidence" class="goal-note">
-            执行者声明：{{ goal.claim_evidence }}
+            {{ t('goal.claim', { evidence: goal.claim_evidence }) }}
           </p>
           <p v-if="goal.notes?.length" class="goal-note">
-            最近记录：{{ goal.notes[goal.notes.length - 1] }}
+            {{ t('goal.latestNote', { note: goal.notes[goal.notes.length - 1] }) }}
           </p>
 
           <div v-if="goal.progress?.length" class="goal-progress">
@@ -145,17 +146,17 @@ async function setGoal() {
               class="goal-btn"
               @click="run('pause')"
             >
-              <Pause :size="13" /> 暂停
+              <Pause :size="13" /> {{ t('goal.pause') }}
             </button>
             <button
               v-if="goal.status !== 'active' && goal.status !== 'complete'"
               class="goal-btn primary"
               @click="run('resume')"
             >
-              <Play :size="13" /> 继续
+              <Play :size="13" /> {{ t('goal.resume') }}
             </button>
             <button class="goal-btn danger" @click="run('clear')">
-              <Trash2 :size="13" /> 清除
+              <Trash2 :size="13" /> {{ t('common.clear') }}
             </button>
           </div>
         </div>

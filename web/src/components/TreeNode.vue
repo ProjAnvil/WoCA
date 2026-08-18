@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ChevronRight, FileText } from 'lucide-vue-next'
+import { ChevronRight } from 'lucide-vue-next'
 import type { WorkspaceFile } from '../types'
 import { useWorkspaceStore } from '../stores/workspace'
 import { isTextPreviewable } from '../lib/files'
+import FileIcon from './FileIcon.vue'
 
 defineOptions({ name: 'TreeNode' })
 
@@ -36,7 +37,7 @@ function onClick() {
       @click="onClick"
     >
       <ChevronRight v-if="isDir" :size="14" class="chevron" :class="{ open: expanded }" />
-      <FileText v-else :size="14" class="tree-icon" />
+      <FileIcon v-else :name="props.node.name" :size="14" class="tree-icon" />
       <span class="tree-label">{{ props.node.name }}</span>
     </button>
 

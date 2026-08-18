@@ -44,6 +44,13 @@ export type ChatItem =
     }
   | {
       id: string
+      kind: 'goal_note'
+      content: string
+      /** True while the goal loop is still appending to this block. */
+      streaming: boolean
+    }
+  | {
+      id: string
       kind: 'tool_call'
       toolCallId: string
       name: string
@@ -169,6 +176,10 @@ export interface SessionSummary {
   message_count: number
   workspace?: string
   workspace_name?: string
+  /** Durable run state: 'running' | 'awaiting' (absent = idle). */
+  run_status?: 'running' | 'awaiting' | ''
+  /** The run behind run_status (the reattach target after a page refresh). */
+  run_id?: string
 }
 
 // --- workspace (markdown preview) ---
@@ -348,6 +359,39 @@ export interface QuotaResponse {
     cost_known?: boolean
     model?: string
   }
+}
+
+// --- context usage (GET /api/sessions/{id}/context) ---
+
+/** One line of the context breakdown (heuristic estimate, not exact). */
+export interface ContextCategory {
+  /** system | memory | tools | tools_extra | history_summary | history_human | history_ai | history_tool */
+  key: string
+  label: string
+  tokens: number
+  /** Messages / files / tools in the category. */
+  count?: number
+  detail?: string
+}
+
+/** Provider-reported usage of the most recent model call (exact values). */
+export interface ContextLastUsage {
+  input_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  output_tokens: number
+}
+
+/** Context-usage snapshot for the chat input's context indicator. */
+export interface ContextInfo {
+  model: string
+  categories: ContextCategory[]
+  estimated_total: number
+  last_request?: ContextLastUsage
+  /** Auto-compact threshold in tokens (0/absent = disabled). */
+  compact_threshold?: number
+  /** Model context-window limit in tokens (0/absent = unknown). */
+  context_window?: number
 }
 
 // --- claude environment (mirror /api/claudeenv) ---

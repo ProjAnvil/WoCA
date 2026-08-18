@@ -44,6 +44,11 @@ func TestUsageAccumulatesAcrossCalls(t *testing.T) {
 	if u.CacheReadTokens != 50 || u.CacheWriteTokens != 10 {
 		t.Fatalf("cache detail lost: %+v", u)
 	}
+	// LastUsage mirrors the most recent call only (the context display's
+	// exact counterpart of the estimated breakdown).
+	if lu := a.LastUsage(); lu.InputTokens != 30 || lu.OutputTokens != 5 || lu.CacheReadTokens != 0 || lu.CacheWriteTokens != 0 {
+		t.Fatalf("last = %+v, want the second call only", lu)
+	}
 }
 
 // TestUsageZeroWhenProviderOmits ensures zero-usage responses are not counted

@@ -62,6 +62,39 @@ func ProviderDefaultModel(p Provider) string {
 	}
 }
 
+// ContextWindowFor returns the model's context-window limit in input tokens
+// (0 = unknown; the UI then hides the percentage bar). It matches on the
+// model name rather than the provider field — gateways commonly run one
+// vendor's models behind another's API (deepseek-* on an OpenAI-compatible
+// base URL), so the name is the reliable signal. Public vendor limits with
+// conservative prefix matching; an unknown model reports 0 rather than a
+// guess, since a wrong limit is worse than none for the usage display.
+func ContextWindowFor(model string) int {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "" {
+		return 0
+	}
+	switch {
+	case strings.HasPrefix(m, "claude"):
+		return 200_000
+	case strings.HasPrefix(m, "glm-4.5"):
+		return 128_000
+	case strings.HasPrefix(m, "glm-4.6"), strings.HasPrefix(m, "glm-4.7"), strings.HasPrefix(m, "glm-5"):
+		return 200_000
+	case strings.HasPrefix(m, "deepseek"):
+		return 128_000
+	case strings.HasPrefix(m, "gpt-5"):
+		return 400_000
+	case strings.HasPrefix(m, "gpt-4.1"):
+		return 1_000_000
+	case strings.HasPrefix(m, "gpt-4o"), strings.HasPrefix(m, "gpt-4-turbo"):
+		return 128_000
+	case strings.HasPrefix(m, "o1"), strings.HasPrefix(m, "o3"), strings.HasPrefix(m, "o4"):
+		return 200_000
+	}
+	return 0
+}
+
 // PermissionMode controls how tool calls are authorized.
 type PermissionMode string
 

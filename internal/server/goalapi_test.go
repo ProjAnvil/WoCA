@@ -173,6 +173,105 @@ func TestGoalAPIFullCycle(t *testing.T) {
 	}
 }
 
+// streamGoalEventsUntilDone subscribes to a run's SSE stream and collects
+// every event with its data payload until done/error.
+func streamGoalEventsUntilDone(t *testing.T, base, runID string) map[string][]string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/runs/"+runID+"/events", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	out := map[string][]string{}
+	for {
+		ev, ok := readSSEEvent(sc)
+		if !ok {
+			t.Fatalf("stream ended before done; saw %v", out)
+		}
+		out[ev.Type] = append(out[ev.Type], ev.Data)
+		if ev.Type == "done" {
+			return out
+		}
+		if ev.Type == "error" {
+			t.Fatalf("run error: %s", ev.Data)
+		}
+	}
+}
+
+func joinEventText(t *testing.T, events []string) string {
+	t.Helper()
+	var b strings.Builder
+	for _, d := range events {
+		var p struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(d), &p); err != nil {
+			t.Fatalf("bad event payload %q: %v", d, err)
+		}
+		b.WriteString(p.Text)
+	}
+	return b.String()
+}
+
+// TestGoalRunUnifiedReply is the regression test for goal-loop chatter
+// flooding the chat: intermediate cycle output (banners, the executor's
+// per-cycle answers) must stream as goal_note events — never as chat deltas —
+// and the run ends with ONE unified delta carrying the executor's final text
+// plus the terminal report. The report message persists wrapped in
+// <goal-report> markers so a transcript reload can tell it apart from
+// intermediate cycle chatter.
+func TestGoalRunUnifiedReply(t *testing.T) {
+	_, ts, _ := newGoalTestServer(t)
+	sid := "sess-goal-unified"
+
+	_, runID, _ := postGoal(t, ts.URL, sid, "set make the feature work")
+	events := streamGoalEventsUntilDone(t, ts.URL, runID)
+
+	deltaText := joinEventText(t, events["delta"])
+	noteText := joinEventText(t, events["goal_note"])
+
+	if strings.Contains(deltaText, "[goal cycle") || strings.Contains(deltaText, "[goal verdict") {
+		t.Fatalf("cycle banners leaked into chat deltas: %q", deltaText)
+	}
+	if !strings.Contains(noteText, "implemented") {
+		t.Fatalf("executor cycle text should stream as goal_note events: %q", noteText)
+	}
+	if !strings.Contains(deltaText, "implemented") || !strings.Contains(deltaText, "Goal complete") {
+		t.Fatalf("unified reply should carry the executor text and the report, got: %q", deltaText)
+	}
+
+	// The persisted report message is wrapped so reload rendering can
+	// distinguish it from intermediate cycle chatter.
+	resp, err := http.Get(ts.URL + "/api/sessions/" + sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var sess struct {
+		Messages []messages.Message `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&sess); err != nil {
+		t.Fatal(err)
+	}
+	foundWrapped := false
+	for _, m := range sess.Messages {
+		if m.Role == messages.RoleAI && strings.HasPrefix(m.Content, "<goal-report>") {
+			foundWrapped = true
+			if !strings.Contains(m.Content, "Goal complete") {
+				t.Fatalf("wrapped report = %q", m.Content)
+			}
+		}
+	}
+	if !foundWrapped {
+		t.Fatalf("no <goal-report>-wrapped AI message in transcript: %+v", sess.Messages)
+	}
+}
+
 func getGoal(t *testing.T, base, sid string) (*agent.Goal, bool, error) {
 	t.Helper()
 	resp, err := http.Get(base + "/api/sessions/" + sid + "/goal")

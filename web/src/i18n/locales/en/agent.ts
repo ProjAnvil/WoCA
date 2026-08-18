@@ -1,0 +1,37 @@
+export default {
+  modes: {
+    default: { label: 'Default', description: 'Confirm each write and command before it runs' },
+    acceptEdits: {
+      label: 'Accept edits',
+      description: 'File edits skip confirmation; commands still confirm',
+    },
+    bypassPermissions: { label: 'Bypass permissions', description: 'All tools run without prompts' },
+    readOnly: { label: 'Read only', description: 'No writes or command execution at all' },
+    plan: { label: 'Plan', description: 'Read-only research: plan first, then execute' },
+  },
+  thinking: {
+    levels: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
+    unknownLevel: 'Unknown thinking level {level}',
+    unsupportedLevel: 'The current model does not support thinking level {level}',
+  },
+  unknownMode: 'Unknown permission mode {mode}',
+  quota: {
+    windows: { fiveHour: '5-hour window', weekly: 'Weekly quota', mcp: 'MCP tools' },
+    weeklyShort: 'wk',
+    resetSuffix: ', resets at {time}',
+    shortNone: 'Quota —',
+    shortBalance: 'Balance {balance}',
+    shortWindow: '{kind} {percent}% left',
+    shortFallback: 'Plan quota',
+    notLoaded: 'Quota information not loaded.',
+    unknown: 'unknown',
+    balanceLine: 'Account balance: {balance}',
+    planRemaining: 'Plan remaining quota:',
+    planRemainingWithLevel: 'Plan ({level}) remaining quota:',
+    windowLine: '  {label}: {remaining}% left ({used}% used{reset})',
+    unavailable: 'Quota unavailable: {reason}',
+    unknownReason: 'unknown reason',
+    sessionUsage: 'Session usage: {requests} requests · input {input} / output {output} tokens',
+    sessionCostSuffix: ', est. ${usd}',
+  },
+}

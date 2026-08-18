@@ -2,18 +2,28 @@ import { defineStore } from 'pinia'
 import { useDark, useLocalStorage, useToggle } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { getSettings, updateSettings } from '../api/client'
+import i18n, { applyLocale, LOCALE_STORAGE_KEY, resolveLocale, type LocaleOption } from '../i18n'
 import type { AppSettings, AppSettingsUpdate } from '../types'
 import { useAgentStore } from './agent'
 
 // Settings + appearance state. Theme is a useDark singleton (persists to
 // localStorage under "woca-theme" and toggles the `.dark` class on <html>).
-// Provider/storage settings are persisted server-side via /api/settings
-// (sqlite under ~/.woca by default); API keys are stored encrypted.
+// UI locale follows the same pattern under woca.pref.locale ('auto' defers
+// to the browser language). Provider/storage settings are persisted
+// server-side via /api/settings (sqlite under ~/.woca by default); API keys
+// are stored encrypted.
 export const useSettingsStore = defineStore('settings', () => {
   const isDark = useDark({ storageKey: 'woca-theme' })
   const toggleDark = useToggle(isDark)
 
   const panelOpen = ref(false)
+
+  const localePref = useLocalStorage<LocaleOption>(LOCALE_STORAGE_KEY, 'auto')
+  const locale = computed(() => resolveLocale(localePref.value))
+  function setLocale(pref: LocaleOption) {
+    localePref.value = pref
+    applyLocale(pref)
+  }
 
   // Client-side preferences (cards in the settings panel). Persisted under
   // localStorage keys woca.pref.* so they survive reloads without a server
@@ -193,10 +203,10 @@ export const useSettingsStore = defineStore('settings', () => {
       const res = await updateSettings(patch)
       restartRequired.value = res.restart_required
       savedMessage.value = res.restart_required
-        ? '已保存；存储后端变更需重启 woca 生效'
+        ? i18n.global.t('settings.store.savedRestart')
         : res.apply_error
-          ? `已保存，但模型切换失败：${res.apply_error}`
-          : '已保存'
+          ? i18n.global.t('settings.store.savedApplyError', { error: res.apply_error })
+          : i18n.global.t('settings.store.saved')
       if (serverModel.value) model.value = serverModel.value
       await loadServer()
       // Provider/model changes may flip the thinking drawer's support state.
@@ -232,6 +242,9 @@ export const useSettingsStore = defineStore('settings', () => {
     isDark,
     toggleDark,
     panelOpen,
+    localePref,
+    locale,
+    setLocale,
     autoCollapseTools,
     markdownPreview,
     model,

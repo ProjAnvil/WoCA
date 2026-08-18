@@ -516,7 +516,7 @@ func TestGoalClearEndsLoopAtBoundary(t *testing.T) {
 			break
 		}
 		if c.Mode == lggraph.StreamCustom {
-			if s, ok := c.Payload.(string); ok && strings.Contains(s, "[goal cycle") {
+			if note, ok := c.Payload.(GoalNote); ok && strings.Contains(note.Text, "[goal cycle") {
 				cycles++
 				if cycles == 1 {
 					a.ClearGoal() // user clears mid-loop

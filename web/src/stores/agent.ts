@@ -2,30 +2,62 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { PermissionMode, QuotaResponse, ThinkingLevel } from '../types'
 import * as api from '../api/client'
+import i18n from '../i18n'
 import { fmtTokens } from '../lib/format'
 
+// The label maps below keep their Record<string, string> shape (components
+// index and Object.entries them) but expose getters, so every read resolves
+// through the global composer and stays in sync with locale switches.
 /** UI display labels: permission modes / thinking levels / quota windows. */
 export const MODE_LABELS: Record<string, string> = {
-  default: '默认',
-  acceptEdits: '自动接受编辑',
-  bypassPermissions: '跳过权限',
-  readOnly: '只读',
-  plan: '计划',
+  get default() {
+    return i18n.global.t('agent.modes.default.label')
+  },
+  get acceptEdits() {
+    return i18n.global.t('agent.modes.acceptEdits.label')
+  },
+  get bypassPermissions() {
+    return i18n.global.t('agent.modes.bypassPermissions.label')
+  },
+  get readOnly() {
+    return i18n.global.t('agent.modes.readOnly.label')
+  },
+  get plan() {
+    return i18n.global.t('agent.modes.plan.label')
+  },
 }
 
 export const MODE_DESCRIPTIONS: Record<string, string> = {
-  default: '写入与命令执行前逐个确认',
-  acceptEdits: '文件编辑免确认，命令仍确认',
-  bypassPermissions: '所有工具直接放行',
-  readOnly: '禁止一切写入与命令执行',
-  plan: '只读调研，先出计划再执行',
+  get default() {
+    return i18n.global.t('agent.modes.default.description')
+  },
+  get acceptEdits() {
+    return i18n.global.t('agent.modes.acceptEdits.description')
+  },
+  get bypassPermissions() {
+    return i18n.global.t('agent.modes.bypassPermissions.description')
+  },
+  get readOnly() {
+    return i18n.global.t('agent.modes.readOnly.description')
+  },
+  get plan() {
+    return i18n.global.t('agent.modes.plan.description')
+  },
 }
 
 export const THINKING_LABELS: Record<string, string> = {
-  off: '关',
-  low: '低',
-  medium: '中',
-  high: '高',
+  get off() {
+    return i18n.global.t('agent.thinking.levels.off')
+  },
+  get low() {
+    return i18n.global.t('agent.thinking.levels.low')
+  },
+  get medium() {
+    return i18n.global.t('agent.thinking.levels.medium')
+  },
+  get high() {
+    return i18n.global.t('agent.thinking.levels.high')
+  },
 }
 
 export const THINKING_LEVELS: ThinkingLevel[] = ['off', 'low', 'medium', 'high']
@@ -37,18 +69,25 @@ export const THINKING_BUDGETS: Record<string, number> = {
   high: 31999,
 }
 
-const WINDOW_LABELS: Record<string, string> = {
-  '5h': '5 小时窗口',
-  weekly: '每周额度',
-  mcp: 'MCP 工具',
+// Quota window kinds are runtime data ('5h' | 'weekly' | 'mcp'); map them to
+// message keys, keeping the raw kind as the display fallback.
+const WINDOW_LABEL_KEYS: Record<string, string> = {
+  '5h': 'fiveHour',
+  weekly: 'weekly',
+  mcp: 'mcp',
 }
 
-function resetTime(ms: number): string {
+function windowLabel(kind: string): string {
+  const key = WINDOW_LABEL_KEYS[kind]
+  return key ? i18n.global.t(`agent.quota.windows.${key}`) : kind
+}
+
+function resetSuffix(ms: number): string {
   if (!ms) return ''
   const d = new Date(ms)
   const hh = String(d.getHours()).padStart(2, '0')
   const mm = String(d.getMinutes()).padStart(2, '0')
-  return `${hh}:${mm} 重置`
+  return i18n.global.t('agent.quota.resetSuffix', { time: `${hh}:${mm}` })
 }
 
 /**
@@ -83,43 +122,64 @@ export const useAgentStore = defineStore('agent', () => {
   // directly; plan-type quotas prefer the remaining 5h window.
   const quotaShort = computed(() => {
     const q = quota.value?.quota
-    if (!q?.available) return '额度 —'
-    if (q.type === 'balance' && q.balance) return `余额 ${q.balance}`
+    if (!q?.available) return i18n.global.t('agent.quota.shortNone')
+    if (q.type === 'balance' && q.balance) return i18n.global.t('agent.quota.shortBalance', { balance: q.balance })
     const parts: string[] = []
     for (const kind of ['5h', 'weekly']) {
       const w = q.windows?.find((x) => x.kind === kind)
-      if (w) parts.push(`${kind === '5h' ? '5h' : '周'} 剩 ${Math.max(0, 100 - w.used_percent).toFixed(0)}%`)
+      if (w) {
+        parts.push(
+          i18n.global.t('agent.quota.shortWindow', {
+            kind: kind === '5h' ? '5h' : i18n.global.t('agent.quota.weeklyShort'),
+            percent: Math.max(0, 100 - w.used_percent).toFixed(0),
+          }),
+        )
+      }
     }
-    return parts.join(' · ') || '套餐额度'
+    return parts.join(' · ') || i18n.global.t('agent.quota.shortFallback')
   })
 
   // Multi-line text for the /quota command and the quota popover.
   const quotaText = computed(() => {
     const q = quota.value
-    if (!q) return '额度信息未加载。'
+    if (!q) return i18n.global.t('agent.quota.notLoaded')
     const lines: string[] = []
     if (q.quota.available) {
       if (q.quota.type === 'balance') {
-        lines.push(`账户余额：${q.quota.balance ?? '未知'}`)
+        lines.push(i18n.global.t('agent.quota.balanceLine', { balance: q.quota.balance ?? i18n.global.t('agent.quota.unknown') }))
       } else {
         lines.push(
-          q.quota.level ? `套餐（${q.quota.level}）剩余额度：` : '套餐剩余额度：',
+          q.quota.level
+            ? i18n.global.t('agent.quota.planRemainingWithLevel', { level: q.quota.level })
+            : i18n.global.t('agent.quota.planRemaining'),
         )
         for (const w of q.quota.windows ?? []) {
           const remaining = Math.max(0, 100 - w.used_percent)
-          const reset = w.next_reset_ms ? `，${resetTime(w.next_reset_ms)}` : ''
-          lines.push(`  ${WINDOW_LABELS[w.kind] ?? w.kind}：剩余 ${remaining.toFixed(1)}%（已用 ${w.used_percent.toFixed(1)}%${reset}）`)
+          lines.push(
+            i18n.global.t('agent.quota.windowLine', {
+              label: windowLabel(w.kind),
+              remaining: remaining.toFixed(1),
+              used: w.used_percent.toFixed(1),
+              reset: resetSuffix(w.next_reset_ms),
+            }),
+          )
         }
       }
     } else {
-      lines.push(`额度不可用：${q.quota.reason ?? '未知原因'}`)
+      lines.push(i18n.global.t('agent.quota.unavailable', { reason: q.quota.reason ?? i18n.global.t('agent.quota.unknownReason') }))
     }
     const s = q.session
     if (s?.requests) {
       const cost =
-        s.cost_usd != null && s.cost_known ? `，估算 $${s.cost_usd.toFixed(2)}` : ''
+        s.cost_usd != null && s.cost_known
+          ? i18n.global.t('agent.quota.sessionCostSuffix', { usd: s.cost_usd.toFixed(2) })
+          : ''
       lines.push(
-        `本会话用量：${s.requests} 次请求 · 输入 ${fmtTokens(s.input_tokens ?? 0)} / 输出 ${fmtTokens(s.output_tokens ?? 0)} tokens${cost}`,
+        i18n.global.t('agent.quota.sessionUsage', {
+          requests: s.requests,
+          input: fmtTokens(s.input_tokens ?? 0),
+          output: fmtTokens(s.output_tokens ?? 0),
+        }) + cost,
       )
     }
     return lines.join('\n')
@@ -134,15 +194,15 @@ export const useAgentStore = defineStore('agent', () => {
   }
 
   async function setMode(m: string) {
-    if (!MODE_LABELS[m]) throw new Error(`未知权限模式 ${m}`)
+    if (!MODE_LABELS[m]) throw new Error(i18n.global.t('agent.unknownMode', { mode: m }))
     await api.setPermissionMode(m)
     if (state.value) state.value.permission_mode = m
   }
 
   async function setThinking(level: string) {
-    if (!THINKING_LABELS[level]) throw new Error(`未知思考级别 ${level}`)
+    if (!THINKING_LABELS[level]) throw new Error(i18n.global.t('agent.thinking.unknownLevel', { level }))
     if (level !== 'off' && thinkingLevels.value.length && !thinkingLevels.value.includes(level)) {
-      throw new Error(`当前模型不支持思考级别 ${level}`)
+      throw new Error(i18n.global.t('agent.thinking.unsupportedLevel', { level }))
     }
     const resp = await api.setThinkingLevel(level)
     if (state.value) {

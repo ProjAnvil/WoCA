@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Bot, Brain, Gauge, Lightbulb, PanelRight, Paperclip, Send, ShieldCheck, Sparkles, Square, Target, X } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
+import { Bot, Brain, Gauge, Layers, Lightbulb, PanelRight, Paperclip, Send, ShieldCheck, Sparkles, Square, Target, X } from 'lucide-vue-next'
 import ChatItemView from './ChatItemView.vue'
 import { useSessionStore } from '../stores/sessions'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useCompletionsStore } from '../stores/completions'
 import { useMemoryStore } from '../stores/memory'
 import { useAgentStore, MODE_DESCRIPTIONS, MODE_LABELS, THINKING_BUDGETS, THINKING_LABELS } from '../stores/agent'
-import type { Attachment, CompletionEntry } from '../types'
+import { fmtTokens } from '../lib/format'
+import type { Attachment, CompletionEntry, ContextCategory } from '../types'
 
+const { t } = useI18n()
 const store = useSessionStore()
 const workspace = useWorkspaceStore()
 const completions = useCompletionsStore()
@@ -68,6 +71,57 @@ async function openQuota() {
   void agent.refreshQuota()
 }
 
+/* --------------------------- context indicator (hover) -------------------- */
+
+// The context chip is always visible; hovering opens the breakdown and fires
+// the on-demand /context request (VS Code Copilot's pattern: persistent bar +
+// hover for the categorized detail). An empty session (nothing sent yet) has
+// no usage to show — the chip stays disabled until the first message lands.
+const ctxOpen = ref(false)
+let ctxLeaveTimer: number | undefined
+
+const ctxAvailable = computed(() => store.activeItems.length > 0)
+
+function ctxEnter() {
+  if (!ctxAvailable.value) return
+  window.clearTimeout(ctxLeaveTimer)
+  ctxOpen.value = true
+  if (!store.contextLoading) void store.refreshContext()
+}
+function ctxLeave() {
+  window.clearTimeout(ctxLeaveTimer)
+  ctxLeaveTimer = window.setTimeout(() => (ctxOpen.value = false), 150)
+}
+
+// The provider-reported total of the most recent model call (input + cache
+// reads + cache writes) — the exact counterpart of the estimate.
+const ctxExact = computed(() => {
+  const lr = store.contextInfo?.last_request
+  return lr ? lr.input_tokens + lr.cache_read_tokens + lr.cache_write_tokens : 0
+})
+
+const ctxShort = computed(() => {
+  if (!store.contextInfo) return store.contextLoading ? '…' : '—'
+  return ctxExact.value ? fmtTokens(ctxExact.value) : `~${fmtTokens(store.contextInfo.estimated_total)}`
+})
+
+const ctxWindowPct = computed(() => {
+  const info = store.contextInfo
+  return info?.context_window ? Math.min(100, (info.estimated_total / info.context_window) * 100) : 0
+})
+
+const ctxCompactPct = computed(() => {
+  const info = store.contextInfo
+  return info?.context_window && info.compact_threshold
+    ? Math.min(100, (info.compact_threshold / info.context_window) * 100)
+    : 0
+})
+
+function ctxCatPct(c: ContextCategory): string {
+  const total = store.contextInfo?.estimated_total ?? 0
+  return total ? `${Math.max(2, (c.tokens / total) * 100).toFixed(1)}%` : '0%'
+}
+
 const modeList = Object.entries(MODE_LABELS)
 
 /* ---------------------------------- attachments --------------------------- */
@@ -86,13 +140,13 @@ function addFiles(files: File[] | FileList) {
   attachmentError.value = ''
   for (const f of Array.from(files)) {
     if (!f.type.startsWith('image/')) {
-      attachmentError.value = `仅支持图片附件：${f.name}`
+      attachmentError.value = t('chat.imageOnly', { name: f.name })
       continue
     }
     pendingCount++
     if (attachments.value.length + pendingCount > MAX_ATTACHMENTS) {
       pendingCount--
-      attachmentError.value = `最多 ${MAX_ATTACHMENTS} 张图片`
+      attachmentError.value = t('chat.maxImages', { count: MAX_ATTACHMENTS })
       break
     }
     const reader = new FileReader()
@@ -267,15 +321,15 @@ function send() {
       <div class="chat-title-wrap">
         <span class="chat-title">{{ store.activeSession?.title ?? 'woca' }}</span>
         <span v-if="store.activeStatus === 'queued'" class="run-badge">
-          排队中 #{{ store.queuePosition[store.activeId] ?? 1 }}…
+          {{ t('chat.queued', { position: store.queuePosition[store.activeId] ?? 1 }) }}
         </span>
-        <span v-else-if="store.activeStatus === 'running'" class="run-badge">运行中…</span>
-        <span v-else-if="store.activeStatus === 'awaiting'" class="run-badge">等待你的确认…</span>
+        <span v-else-if="store.activeStatus === 'running'" class="run-badge">{{ t('chat.running') }}</span>
+        <span v-else-if="store.activeStatus === 'awaiting'" class="run-badge">{{ t('chat.awaitingConfirm') }}</span>
         <button
           v-if="store.activeGoal"
           class="goal-chip"
           :class="`s-${store.activeGoal.status}`"
-          title="目标模式：点击查看详情"
+          :title="t('chat.goalChipTitle')"
           @click="store.goalPanelOpen = true"
         >
           <Target :size="13" />
@@ -285,16 +339,16 @@ function send() {
       </div>
       <button
         class="icon-btn mem-toggle"
-        title="查看这个工作区的记忆"
+        :title="t('chat.memoryTitle')"
         @click="memory.open(store.activeWorkspace?.path ?? '', store.activeWorkspace?.name)"
       >
         <Brain :size="15" />
-        <span class="mem-toggle-label">记忆</span>
+        <span class="mem-toggle-label">{{ t('chat.memory') }}</span>
       </button>
       <button
         class="icon-btn panel-toggle"
         :class="{ active: workspace.panelOpen }"
-        :title="workspace.panelOpen ? '收起工作区文件' : '展开工作区文件'"
+        :title="workspace.panelOpen ? t('chat.collapseWorkspace') : t('chat.expandWorkspace')"
         @click="workspace.togglePanel()"
       >
         <PanelRight :size="17" />
@@ -307,7 +361,7 @@ function send() {
         {{ store.activeError }}
       </div>
       <div v-if="store.activeItems.length === 0 && !busy" class="empty-hint">
-        开始一个新对话吧。
+        {{ t('chat.emptyHint') }}
       </div>
     </div>
 
@@ -321,14 +375,14 @@ function send() {
           <button
             class="ctl-chip"
             :class="{ open: pop === 'mode' }"
-            title="切换权限模式"
+            :title="t('chat.switchModeTitle')"
             @click="togglePop('mode')"
           >
             <ShieldCheck :size="13" />
             <span>{{ agent.modeLabel }}</span>
           </button>
           <div v-if="pop === 'mode'" class="ctl-pop">
-            <div class="ctl-pop-header">权限模式</div>
+            <div class="ctl-pop-header">{{ t('chat.permissionMode') }}</div>
             <button
               v-for="[m, label] in modeList"
               :key="m"
@@ -349,18 +403,18 @@ function send() {
             :class="{ open: pop === 'thinking', disabled: !agent.thinkingSupported }"
             :title="
               agent.thinkingSupported
-                ? '修改思考级别'
-                : `${agent.state?.model ?? '当前模型'} 不支持思考，选择器已关闭`
+                ? t('chat.thinkingChange')
+                : t('chat.thinkingUnsupported', { model: agent.state?.model ?? t('chat.currentModel') })
             "
             :disabled="!agent.thinkingSupported"
             @click="agent.thinkingSupported && togglePop('thinking')"
           >
             <Lightbulb :size="13" />
-            <span>思考·{{ agent.thinkingSupported ? agent.thinkingLabel : '不支持' }}</span>
+            <span>{{ t('chat.thinkingLabel') }}·{{ agent.thinkingSupported ? agent.thinkingLabel : t('chat.unsupported') }}</span>
           </button>
           <div v-if="pop === 'thinking'" class="ctl-pop">
             <div class="ctl-pop-header">
-              思考级别（下一轮生效）
+              {{ t('chat.thinkingLevel') }}
               <span v-if="agent.thinkingNote" class="ctl-pop-note">{{ agent.thinkingNote }}</span>
             </div>
             <button
@@ -374,10 +428,91 @@ function send() {
               <span class="ctl-opt-name"
                 >{{ THINKING_LABELS[level]
                 }}<span class="ctl-opt-key">{{
-                  THINKING_BUDGETS[level] ? `${THINKING_BUDGETS[level]} tokens` : '关闭'
+                  THINKING_BUDGETS[level] ? `${THINKING_BUDGETS[level]} tokens` : t('chat.off')
                 }}</span></span
               >
             </button>
+          </div>
+        </div>
+
+        <div
+          class="ctl-wrap"
+          @mouseenter="ctxEnter"
+          @mouseleave="ctxLeave"
+        >
+          <button
+            class="ctl-chip"
+            :class="{ open: ctxOpen, disabled: !ctxAvailable }"
+            type="button"
+            :title="ctxAvailable ? t('chat.ctxUsageTitle') : t('chat.ctxUsageUnavailable')"
+          >
+            <Layers :size="13" />
+            <span>{{ t('chat.context') }} {{ ctxAvailable ? ctxShort : '—' }}</span>
+          </button>
+          <div v-if="ctxOpen" class="ctl-pop ctx-pop" @mouseenter="ctxEnter" @mouseleave="ctxLeave">
+            <div class="ctl-pop-header">
+              {{ t('chat.ctxBreakdown') }}
+              <span v-if="store.contextInfo?.model" class="ctl-pop-note">{{ store.contextInfo.model }}</span>
+            </div>
+            <div class="ctx-body">
+              <div v-if="store.contextError" class="ctx-error">{{ store.contextError }}</div>
+              <template v-else-if="store.contextInfo">
+                <div v-if="ctxExact" class="ctx-exact">
+                  <span class="ctx-exact-num">{{ fmtTokens(ctxExact) }}</span>
+                  <span class="ctx-exact-detail">
+                    {{
+                      t('chat.ctxExactDetail', {
+                        input: fmtTokens(store.contextInfo.last_request!.input_tokens),
+                        cacheRead: fmtTokens(store.contextInfo.last_request!.cache_read_tokens),
+                        cacheWrite: fmtTokens(store.contextInfo.last_request!.cache_write_tokens),
+                      })
+                    }}
+                  </span>
+                </div>
+                <div v-else class="ctx-exact-detail">{{ t('chat.ctxNoExact') }}</div>
+                <div class="ctx-estimate">
+                  {{ t('chat.ctxEstimate') }} <b>~{{ fmtTokens(store.contextInfo.estimated_total) }}</b> tokens
+                </div>
+                <div v-if="store.contextInfo.context_window" class="ctx-window">
+                  <div class="ctx-bar">
+                    <div class="ctx-bar-fill" :style="{ width: ctxWindowPct + '%' }"></div>
+                    <div
+                      v-if="ctxCompactPct"
+                      class="ctx-bar-mark"
+                      :style="{ left: ctxCompactPct + '%' }"
+                      :title="t('chat.compactThreshold')"
+                    ></div>
+                  </div>
+                  <div class="ctx-bar-label">
+                    {{
+                      t('chat.ctxWindowLabel', {
+                        used: fmtTokens(store.contextInfo.estimated_total),
+                        total: fmtTokens(store.contextInfo.context_window),
+                        pct: ctxWindowPct.toFixed(0),
+                      })
+                    }}
+                  </div>
+                </div>
+                <div v-if="store.contextInfo.compact_threshold" class="ctx-compact">
+                  {{ t('chat.compactThreshold') }} {{ fmtTokens(store.contextInfo.compact_threshold) }} tokens
+                </div>
+                <div class="ctx-cats">
+                  <div v-for="c in store.contextInfo.categories" :key="c.key" class="ctx-cat">
+                    <div class="ctx-cat-head">
+                      <span class="ctx-cat-label">
+                        {{ c.label }}<span v-if="c.detail" class="ctx-cat-detail">{{ c.detail }}</span>
+                      </span>
+                      <span class="ctx-cat-tokens">
+                        ~{{ fmtTokens(c.tokens) }}<span v-if="c.count"> · {{ c.count }}</span>
+                      </span>
+                    </div>
+                    <div class="ctx-cat-bar"><div class="ctx-cat-fill" :style="{ width: ctxCatPct(c) }"></div></div>
+                  </div>
+                </div>
+                <div class="ctx-foot">{{ t('chat.ctxFoot') }}</div>
+              </template>
+              <div v-else class="ctx-foot">{{ t('common.loading') }}</div>
+            </div>
           </div>
         </div>
 
@@ -385,16 +520,16 @@ function send() {
           <button
             class="ctl-chip"
             :class="{ open: pop === 'quota' }"
-            :title="agent.quotaShort === '额度 —' ? '查看剩余额度' : agent.quotaShort"
+            :title="agent.quotaShort === t('agent.quota.shortNone') ? t('chat.viewQuota') : agent.quotaShort"
             @click="openQuota"
           >
             <Gauge :size="13" />
-            <span>{{ agent.quotaLoading ? '查询中…' : agent.quotaShort }}</span>
+            <span>{{ agent.quotaLoading ? t('chat.querying') : agent.quotaShort }}</span>
           </button>
           <div v-if="pop === 'quota'" class="ctl-pop quota-pop">
             <div class="ctl-pop-header">
-              剩余额度
-              <button class="ctl-refresh" type="button" @click="agent.refreshQuota()">刷新</button>
+              {{ t('chat.quota') }}
+              <button class="ctl-refresh" type="button" @click="agent.refreshQuota()">{{ t('common.refresh') }}</button>
             </div>
             <div class="quota-body">{{ agent.quotaError || agent.quotaText }}</div>
           </div>
@@ -404,7 +539,7 @@ function send() {
       <!-- autocomplete popup: / for skills, @ for subagents -->
       <div v-if="ac.open && acItems.length" class="ac-popup">
         <div class="ac-header">
-          {{ ac.kind === 'skill' ? '命令 / Skills' : '子代理 / Subagents' }}
+          {{ ac.kind === 'skill' ? t('chat.acSkills') : t('chat.acAgents') }}
         </div>
         <div class="ac-list">
           <button
@@ -430,7 +565,7 @@ function send() {
       <div v-if="attachments.length || attachmentError" class="attach-tray">
         <div v-for="a in attachments" :key="a.id" class="attach-chip">
           <img :src="a.dataUrl" :alt="a.name" class="attach-thumb" />
-          <button class="attach-remove" title="移除" @click="removeAttachment(a.id)">
+          <button class="attach-remove" :title="t('chat.remove')" @click="removeAttachment(a.id)">
             <X :size="10" />
           </button>
           <span class="attach-name">{{ a.name }}</span>
@@ -441,7 +576,7 @@ function send() {
       <div class="chat-input-inner">
         <button
           class="icon-btn attach-btn"
-          title="上传图片附件"
+          :title="t('chat.uploadImage')"
           @click="fileInput?.click()"
         >
           <Paperclip :size="16" />
@@ -458,7 +593,7 @@ function send() {
           ref="textarea"
           v-model="draft"
           rows="1"
-          placeholder="给 woca 发送消息…（/ 命令，@ 子代理，可粘贴截图）"
+          :placeholder="t('chat.placeholder')"
           @input="updateAc"
           @keydown="onKeydown"
           @paste="onPaste"
@@ -467,7 +602,7 @@ function send() {
         <button v-if="!busy" class="send-btn" :disabled="!canSend" @click="send">
           <Send :size="16" />
         </button>
-        <button v-else class="send-btn stop" title="停止" @click="store.cancel()">
+        <button v-else class="send-btn stop" :title="t('chat.stop')" @click="store.cancel()">
           <Square :size="14" />
         </button>
       </div>

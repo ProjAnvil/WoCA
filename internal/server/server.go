@@ -31,6 +31,7 @@ import (
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
+	"github.com/projanvil/woca/internal/wocadb"
 )
 
 // Config configures the web server.
@@ -87,6 +88,11 @@ type Config struct {
 	// variant deletes the environment first — the upgrade path). Nil
 	// disables the endpoints.
 	InstallPlugin func(ctx context.Context, name string, reinstall bool) error
+	// RunStateDB backs the durable per-session run-state records (woca.db
+	// session_state table). Nil falls back to Settings' database; when
+	// neither is present (database disabled, tests) an in-memory store
+	// keeps the state API functional for this process only.
+	RunStateDB *wocadb.DB
 }
 
 // Server serves the woca web UI and its HTTP API.
@@ -100,6 +106,9 @@ type Server struct {
 	runOrder       []string // registration order, backs finished-run pruning
 	sessions       *sessionStore
 	admission      *admission
+	state          sessionStateStore // durable per-session run state (running/awaiting)
+	owner          string            // "pid@host" stamped on state rows
+	hub            *eventHub         // global SSE broadcast (/api/events)
 	workdir        string
 	settings       *settings.Store
 	memory         *store.Store
@@ -136,6 +145,14 @@ func New(cfg Config) *Server {
 	}
 	store := newSessionStore(cfg.SessionDir)
 	store.defaultWorkspace = defaultWorkspace
+	stateDB := cfg.RunStateDB
+	if stateDB == nil && cfg.Settings != nil {
+		stateDB = cfg.Settings.DB()
+	}
+	var state sessionStateStore = newMemSessionState()
+	if stateDB != nil {
+		state = &dbSessionState{db: stateDB}
+	}
 	s := &Server{
 		agent:          cfg.Agent,
 		static:         cfg.Static,
@@ -143,6 +160,9 @@ func New(cfg Config) *Server {
 		runs:           map[string]*Run{},
 		sessions:       store,
 		admission:      newAdmission(),
+		state:          state,
+		owner:          newStateOwner(),
+		hub:            newEventHub(),
 		workdir:        cfg.WorkDir,
 		settings:       cfg.Settings,
 		memory:         cfg.Memory,
@@ -175,6 +195,9 @@ func New(cfg Config) *Server {
 			s.sessions.saveGoal(owner, g)
 		})
 	}
+	// Rows whose process died between mark and clear (a crash mid-run) must
+	// not pin sessions as running forever.
+	s.reconcileStaleSessionState()
 	return s
 }
 
@@ -189,10 +212,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/runs/{id}/input", s.handleQueueInput)
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
+	mux.HandleFunc("GET /api/events", s.handleGlobalEvents)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{id}/goal", s.handleGetGoal)
 	mux.HandleFunc("POST /api/sessions/{id}/goal", s.handleGoalCommand)
+	mux.HandleFunc("GET /api/sessions/{id}/context", s.handleSessionContext)
 	mux.HandleFunc("GET /api/workspace", s.handleWorkspace)
 	mux.HandleFunc("GET /api/workspace/file", s.handleWorkspaceFile)
 	mux.HandleFunc("GET /api/completions", s.handleCompletions)
@@ -398,13 +423,21 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		Workspace string `json:"workspace"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req) // body optional; empty workspace is fine
-	resp := map[string]any{"session_id": newSessionID()}
-	if req.Workspace != "" {
-		ws := expandHomePath(req.Workspace)
-		resp["workspace"] = ws
-		resp["workspace_name"] = workspaceDisplayName(ws)
+	ws := expandHomePath(req.Workspace)
+	if ws == "" {
+		ws = s.workdir
 	}
-	writeJSON(w, http.StatusOK, resp)
+	id := newSessionID()
+	// Persist immediately (empty transcript + index meta): the sidebar lists
+	// sessions from the persisted index, so an unpersisted session — and with
+	// it a freshly added workspace group — would vanish on page refresh.
+	// Before, the session first materialized when its initial run completed.
+	_ = s.sessions.save(id, nil, ws)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id":     id,
+		"workspace":      ws,
+		"workspace_name": workspaceDisplayName(ws),
+	})
 }
 
 // expandHomePath resolves a leading ~ or ~/ so workspaces typed as shorthand
@@ -427,6 +460,15 @@ func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
 	if list == nil {
 		list = []sessionSummary{}
 	}
+	// Decorate with the durable run state so a fresh page load (and other
+	// processes sharing the database) can see busy sessions.
+	states := s.state.Snapshot()
+	for i := range list {
+		if st, ok := states[list[i].ID]; ok {
+			list[i].RunStatus = st.Status
+			list[i].RunID = st.RunID
+		}
+	}
 	writeJSON(w, http.StatusOK, list)
 }
 
@@ -445,6 +487,7 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.sessions.delete(id)
+	s.forgetSessionState(id)
 	s.log.Info().Str("session", id).Msg("session deleted")
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
@@ -715,6 +758,12 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 	if pos > 0 {
 		run.emit(Event{Type: "run_queued", Data: map[string]any{"position": pos}})
 	}
+	// Session run-state tracking: mark on start, flip on interrupt parking,
+	// clear on the terminal event. clearSessionState is compare-and-clear, so
+	// a queued run promoted behind this one never loses its row.
+	run.onFinish = func() { s.clearSessionState(sid, run.id) }
+	run.onPark = func() { s.markSessionState(sid, wocadb.SessionAwaiting, run.id) }
+	run.onResume = func() { s.markSessionState(sid, wocadb.SessionRunning, run.id) }
 	go func() {
 		if w != nil && !s.admission.wait(run.ctx, sid, w) {
 			// Cancelled while queued (cancelRun cancelled run.ctx) or shutdown.
@@ -722,6 +771,7 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 			return
 		}
 		run.emit(Event{Type: "run_started", Data: map[string]any{}})
+		s.markSessionState(sid, wocadb.SessionRunning, run.id)
 		history := s.sessions.load(sid)
 		run.start(append(history, human), func(final []messages.Message) {
 			if final != nil {

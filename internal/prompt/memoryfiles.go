@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/projanvil/woca/internal/merge"
+	"github.com/projanvil/woca/internal/tokens"
 )
 
 // memoryFile is one instruction file to inject into the system prompt.
@@ -52,4 +53,27 @@ func collectMemoryFiles(workDir string) []memoryFile {
 func fileExists(path string) bool {
 	st, err := os.Stat(path)
 	return err == nil && !st.IsDir()
+}
+
+// MemoryFileStats is the token footprint of a workspace's memory files: the
+// memory-files slice of the system-prompt breakdown shown by /context.
+type MemoryFileStats struct {
+	TotalTokens int
+	Files       int
+}
+
+// MemoryFileStatsFor estimates the token size of the instruction files
+// injected into the system prompt for workDir (heuristic estimator, same one
+// the compaction threshold uses).
+func MemoryFileStatsFor(workDir string) MemoryFileStats {
+	var out MemoryFileStats
+	for _, mf := range collectMemoryFiles(workDir) {
+		b, err := os.ReadFile(mf.Path)
+		if err != nil {
+			continue
+		}
+		out.TotalTokens += tokens.EstimateText(string(b))
+		out.Files++
+	}
+	return out
 }

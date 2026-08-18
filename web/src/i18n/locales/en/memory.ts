@@ -1,0 +1,27 @@
+export default {
+  title: 'Workspace Memory',
+  defaultWorkspace: 'Default workspace',
+  tagline:
+    'woca remembers decisions, preferences and code knowledge for this workspace — the more you use it, the better it knows your project.',
+  searchPlaceholder: 'Search memories…',
+  engineDisabled: 'Memory engine is disabled (Settings → Memory).',
+  empty: 'No memories yet. Chat with woca for a bit and it will automatically remember the important things.',
+  insights: 'Insights & Predictions',
+  memories: 'Memories',
+  forget: 'Forget',
+  forgetConfirm: 'Forget this memory?',
+  loadMore: 'Load more',
+  addPlaceholder: 'Remember something manually, e.g. always build with make build',
+  tagsPlaceholder: 'Tags (optional, comma-separated)',
+  remember: 'Remember',
+  privacy: 'All memories are stored locally (~/.woca/ladym.db) and can be viewed or deleted at any time.',
+  layer: {
+    episodic: 'L1 Episodic',
+    semantic: 'L2 Facts',
+    procedural: 'L3 Procedures',
+    associative: 'L4 Associations',
+    mental: 'L5 Insights',
+    predictive: 'L6 Predictions',
+    code: 'L2 Code',
+  },
+}

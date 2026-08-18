@@ -484,10 +484,21 @@ func (m *Model) renderer(ch chan<- tea.Msg) runner.Renderer {
 				ch <- streamMsg(s)
 				return
 			}
+			switch p := chunk.Payload.(type) {
 			// Goal cycles stream their tool use through the custom channel.
-			if g, ok := chunk.Payload.(agent.GoalDelta); ok {
-				renderMsg(g.Message)
-				return
+			case agent.GoalDelta:
+				renderMsg(p.Message)
+			// Goal-loop narration renders dimmed: cycle banners and the
+			// executor's per-cycle chatter are progress, not the answer.
+			case agent.GoalNote:
+				if p.Text != "" {
+					ch <- streamMsg(dimStyle.Render(p.Text))
+				}
+			// The goal run's single unified reply renders as the answer.
+			case agent.GoalFinalReply:
+				if p.Text != "" {
+					ch <- streamMsg(p.Text)
+				}
 			}
 		case lggraph.StreamUpdates:
 			updates, _ := chunk.Payload.(map[string]any)

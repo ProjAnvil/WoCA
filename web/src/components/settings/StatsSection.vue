@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import * as api from '../../api/client'
 import type { StatsResponse } from '../../types'
 
+const { t } = useI18n()
 const data = ref<StatsResponse | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -21,16 +23,18 @@ onUnmounted(() => {
 
 <template>
   <section>
-    <h3>运行状态</h3>
+    <h3>{{ t('settings.stats.title') }}</h3>
     <div v-if="data" class="stats-grid">
-      <span class="stat-chip">活跃 run：{{ data.active_runs }}</span>
-      <span class="stat-chip">排队 run：{{ data.queued_runs }}</span>
-      <span class="stat-chip">teammate：{{ data.teammates }}</span>
-      <span class="stat-chip">后台 task：{{ data.background_tasks }}</span>
-      <span class="stat-chip">SSE 丢弃：{{ data.sse_dropped }}</span>
-      <span class="stat-chip">LSP：{{ data.lsp.active }} 活跃 / {{ data.lsp.broken }} 熔断</span>
+      <span class="stat-chip">{{ t('settings.stats.activeRuns', { count: data.active_runs }) }}</span>
+      <span class="stat-chip">{{ t('settings.stats.queuedRuns', { count: data.queued_runs }) }}</span>
+      <span class="stat-chip">{{ t('settings.stats.teammates', { count: data.teammates }) }}</span>
+      <span class="stat-chip">{{ t('settings.stats.backgroundTasks', { count: data.background_tasks }) }}</span>
+      <span class="stat-chip">{{ t('settings.stats.sseDropped', { count: data.sse_dropped }) }}</span>
+      <span class="stat-chip">
+        {{ t('settings.stats.lsp', { active: data.lsp.active, broken: data.lsp.broken }) }}
+      </span>
     </div>
-    <p v-else>加载中…</p>
+    <p v-else>{{ t('common.loading') }}</p>
   </section>
 </template>
 

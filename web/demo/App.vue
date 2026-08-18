@@ -3,6 +3,7 @@ import { onMounted } from 'vue'
 import Sidebar from '@/components/Sidebar.vue'
 import ChatPanel from '@/components/ChatPanel.vue'
 import WorkspaceSidebar from '@/components/WorkspaceSidebar.vue'
+import WorkspaceSplitHandle from '@/components/WorkspaceSplitHandle.vue'
 import SettingsPanel from '@/components/SettingsPanel.vue'
 import InterruptModal from '@/components/InterruptModal.vue'
 import { useSettingsStore } from '@/stores/settings'
@@ -44,6 +45,7 @@ onMounted(() => {
       </div>
       <ChatPanel />
     </main>
+    <WorkspaceSplitHandle v-if="workspace.panelOpen" />
     <WorkspaceSidebar />
     <SettingsPanel v-if="settings.panelOpen" />
     <InterruptModal v-if="sessions.activeInterrupt" />

@@ -11,6 +11,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/wocadb"
 )
 
 // The goal API: the web counterpart of the /goal console command. Commands
@@ -199,7 +200,10 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 	// The subscription is tied to the run's terminal event, which fires on
 	// success, error and cancellation alike — an error-exiting goal run must
 	// not leave its subscriber (and this Run closure) on the agent forever.
-	run.onFinish = unsub
+	// The same hook clears the session run-state row (compare-and-clear).
+	run.onFinish = func() { unsub(); s.clearSessionState(sessionID, id) }
+	run.onPark = func() { s.markSessionState(sessionID, wocadb.SessionAwaiting, id) }
+	run.onResume = func() { s.markSessionState(sessionID, wocadb.SessionRunning, id) }
 
 	w, pos, ok := s.admission.enter(sessionID, func(p int) {
 		run.emit(Event{Type: "queue_position", Data: map[string]any{"position": p}})
@@ -218,6 +222,7 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 			return
 		}
 		run.emit(Event{Type: "run_started", Data: map[string]any{}})
+		s.markSessionState(sessionID, wocadb.SessionRunning, id)
 		history := s.sessions.load(sessionID)
 		run.startGoal(history, func(final []messages.Message) {
 			if final != nil {

@@ -128,7 +128,8 @@ func summarizeDSN(dsn string) string {
 
 // migrate creates the woca schema. All tables are keyed simply: settings and
 // secrets are single-row-per-key; checkpoints store graph checkpoints;
-// memory is a namespace+key JSON document store.
+// memory is a namespace+key JSON document store; session_state records the
+// durable per-session run state (running / awaiting an interrupt answer).
 func (d *DB) migrate() error {
 	var stmts []string
 	switch d.Dialect {
@@ -157,6 +158,13 @@ func (d *DB) migrate() error {
 				updated_at BIGINT NOT NULL,
 				PRIMARY KEY (namespace, key)
 			)`,
+			`CREATE TABLE IF NOT EXISTS session_state (
+				session_id TEXT PRIMARY KEY,
+				status TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				owner TEXT NOT NULL,
+				updated_at BIGINT NOT NULL
+			)`,
 		}
 	default:
 		stmts = []string{
@@ -182,6 +190,13 @@ func (d *DB) migrate() error {
 				value BLOB NOT NULL,
 				updated_at INTEGER NOT NULL,
 				PRIMARY KEY (namespace, key)
+			)`,
+			`CREATE TABLE IF NOT EXISTS session_state (
+				session_id TEXT PRIMARY KEY,
+				status TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				owner TEXT NOT NULL,
+				updated_at INTEGER NOT NULL
 			)`,
 		}
 	}

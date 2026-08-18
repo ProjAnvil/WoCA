@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import type {
   Attachment,
   ChatItem,
+  ContextInfo,
   Goal,
   Interrupt,
   RunStatus,
@@ -11,6 +12,7 @@ import type {
   WorkspaceGroup,
 } from '../types'
 import * as api from '../api/client'
+import i18n from '../i18n'
 import { truncate, baseName } from '../lib/format'
 import { useAgentStore } from './agent'
 
@@ -21,20 +23,25 @@ const nid = () => `i${Date.now().toString(36)}${(seq++).toString(36)}`
 // (no backend), so the standalone demo remains interactive.
 function demoReply(prompt: string): string {
   return [
-    `（演示模式）这是对「${truncate(prompt, 24)}」的示例回复，当前未连接后端。`,
+    i18n.global.t('sessions.demo.reply', { prompt: truncate(prompt, 24) }),
     '',
     '```',
-    '这里会显示流式 token、工具调用与结果。',
+    i18n.global.t('sessions.demo.codeBody'),
     '```',
     '',
-    '- 真实模式通过 `POST /api/runs` + SSE 流式返回',
-    '- 工具调用与审批会以卡片/弹窗呈现',
+    i18n.global.t('sessions.demo.realMode'),
+    i18n.global.t('sessions.demo.toolCards'),
   ].join('\n')
 }
 
 // Rebuild the UI item list from the backend's transcript (messages.Message
 // JSON). Tool calls and results are preserved across turns this way. Human
 // multimodal blocks become attachment thumbnails.
+//
+// Goal-loop machinery renders as loop progress, not chat: <goal-cycle> human
+// messages are harness-injected continuation prompts (never user speech), and
+// AI text inside a goal segment is per-cycle chatter. The segment ends at the
+// <goal-report>-wrapped unified reply or the next real user message.
 function messagesToItems(msgs: TranscriptMessage[]): ChatItem[] {
   // Tool results land on their call's card (input + output in one card).
   // First-wins: a call id appears once per transcript.
@@ -46,17 +53,25 @@ function messagesToItems(msgs: TranscriptMessage[]): ChatItem[] {
   }
   const out: ChatItem[] = []
   const consumed = new Set<string>()
+  let inGoal = false
   for (const m of msgs) {
     switch (m.role) {
       case 'human':
-      case 'user':
+      case 'user': {
+        const content = m.content ?? ''
+        if (content.startsWith('<goal-cycle')) {
+          inGoal = true
+          break // harness-injected goal continuation prompt — not user speech
+        }
+        inGoal = false
         out.push({
           id: nid(),
           kind: 'user',
-          content: m.content ?? '',
+          content,
           attachments: imageAttachments(m),
         })
         break
+      }
       case 'ai':
       case 'assistant':
         // Rebuild the thinking block from the persisted reasoning content
@@ -68,8 +83,17 @@ function messagesToItems(msgs: TranscriptMessage[]): ChatItem[] {
         if (reasoning) {
           out.push({ id: nid(), kind: 'reasoning', content: reasoning, streaming: false })
         }
-        if (m.content) {
-          out.push({ id: nid(), kind: 'assistant', content: m.content, streaming: false })
+        const content = m.content ?? ''
+        if (inGoal && content.startsWith('<goal-report>')) {
+          // The run's single unified reply: the one goal text shown as an
+          // assistant bubble, with the persistence markers stripped.
+          out.push({ id: nid(), kind: 'assistant', content: stripGoalReport(content), streaming: false })
+        } else if (inGoal) {
+          if (content) {
+            out.push({ id: nid(), kind: 'goal_note', content, streaming: false })
+          }
+        } else if (content) {
+          out.push({ id: nid(), kind: 'assistant', content, streaming: false })
         }
         for (const tc of m.tool_calls ?? []) {
           const call: Extract<ChatItem, { kind: 'tool_call' }> = {
@@ -104,6 +128,12 @@ function messagesToItems(msgs: TranscriptMessage[]): ChatItem[] {
   return out
 }
 
+// stripGoalReport removes the <goal-report> persistence markers the backend
+// wraps the goal run's unified reply with (they identify it on reload).
+function stripGoalReport(content: string): string {
+  return content.replace(/^<goal-report>\n/, '').replace(/\n<\/goal-report>$/, '')
+}
+
 // imageAttachments extracts image content blocks from a human message.
 function imageAttachments(m: TranscriptMessage): Attachment[] | undefined {
   const imgs = (m.content_blocks ?? []).filter((b) => b.type === 'image' && b.base64)
@@ -132,10 +162,28 @@ export const useSessionStore = defineStore('sessions', () => {
   const streamingId = ref<Record<string, string | null>>({})
   // The reasoning (thinking) item currently streaming for a session.
   const reasoningId = ref<Record<string, string | null>>({})
+  // The goal-loop narration block currently streaming for a session (cycle
+  // banners + per-cycle chatter; never an answer bubble).
+  const goalNoteId = ref<Record<string, string | null>>({})
   // Goal mode: per-session goal snapshot + whether the goal loop is running.
   const goal = ref<Record<string, Goal | null>>({})
   const goalRunning = ref<Record<string, boolean>>({})
   const goalPanelOpen = ref(false)
+  // Context-usage snapshot for the chat input's context indicator. Hover
+  // refreshes it on demand; a run finishing refreshes it in the background so
+  // the always-visible chip number stays current.
+  const contextInfo = ref<ContextInfo | null>(null)
+  const contextLoading = ref(false)
+  const contextError = ref('')
+
+  // Server-truth run state per session (running / awaiting), seeded from the
+  // session list and kept live by the global /api/events stream. This is the
+  // authoritative signal for the sidebar badge — it survives page refreshes
+  // and reflects runs other tabs started, unlike the local status map which
+  // only covers streams this tab attached.
+  const serverRunState = ref<Record<string, { status: 'running' | 'awaiting'; runId: string }>>({})
+  let eventsSource: EventSource | null = null
+  const reattaching = new Set<string>()
 
   const activeSession = computed(() => sessions.value.find((s) => s.id === activeId.value))
   const activeItems = computed(() => items.value[activeId.value] ?? [])
@@ -151,7 +199,7 @@ export const useSessionStore = defineStore('sessions', () => {
     const byKey = new Map<string, WorkspaceGroup>()
     for (const s of sessions.value) {
       const path = s.workspace ?? ''
-      const name = s.workspaceName || (path ? baseName(path) : '') || '默认工作区'
+      const name = s.workspaceName || (path ? baseName(path) : '') || i18n.global.t('sessions.defaultWorkspace')
       const key = path || `name:${name}`
       let g = byKey.get(key)
       if (!g) {
@@ -167,10 +215,10 @@ export const useSessionStore = defineStore('sessions', () => {
   const activeWorkspace = computed(() => {
     const s = activeSession.value
     if (s) {
-      return { path: s.workspace ?? '', name: s.workspaceName || (s.workspace ? baseName(s.workspace) : '') || '默认工作区' }
+      return { path: s.workspace ?? '', name: s.workspaceName || (s.workspace ? baseName(s.workspace) : '') || i18n.global.t('sessions.defaultWorkspace') }
     }
     const g = workspaceGroups.value[0]
-    return g ? { path: g.path, name: g.name } : { path: '', name: '默认工作区' }
+    return g ? { path: g.path, name: g.name } : { path: '', name: i18n.global.t('sessions.defaultWorkspace') }
   })
 
   const activeWorkspaceKey = computed(() => {
@@ -185,6 +233,81 @@ export const useSessionStore = defineStore('sessions', () => {
     if (!streamingId.value[id]) streamingId.value[id] = null
     if (!(id in goal.value)) goal.value[id] = null
     if (!(id in goalRunning.value)) goalRunning.value[id] = false
+    if (!(id in goalNoteId.value)) goalNoteId.value[id] = null
+  }
+
+  // --- server-truth run state (sidebar badge + refresh reattach) ---
+
+  // runStateOf merges both signals: the local status map (instant, but only
+  // for streams this tab attached) and the server state (authoritative,
+  // survives refresh, covers other tabs). A dead local stream falls through
+  // to the server value, so a run that outlived the stream still shows busy.
+  function runStateOf(sid: string): 'running' | 'awaiting' | '' {
+    const local = status.value[sid] ?? 'idle'
+    if (local === 'awaiting') return 'awaiting'
+    if (local === 'running' || local === 'queued') return 'running'
+    return serverRunState.value[sid]?.status ?? ''
+  }
+
+  function seedRunState(list: { id: string; run_status?: string; run_id?: string }[]) {
+    const next: Record<string, { status: 'running' | 'awaiting'; runId: string }> = {}
+    for (const s of list) {
+      if (s.run_status === 'running' || s.run_status === 'awaiting') {
+        next[s.id] = { status: s.run_status, runId: s.run_id ?? '' }
+      }
+    }
+    serverRunState.value = next
+  }
+
+  // connectGlobalEvents subscribes to /api/events. Native EventSource
+  // reconnects on its own; every (re)connection is seeded with the current
+  // snapshot server-side, which keeps the map fresh without polling.
+  function connectGlobalEvents() {
+    if (demo.value || eventsSource) return
+    eventsSource = api.streamEvents((ev) => {
+      if (ev.status === 'running' || ev.status === 'awaiting') {
+        serverRunState.value = {
+          ...serverRunState.value,
+          [ev.session_id]: { status: ev.status, runId: ev.run_id ?? '' },
+        }
+        // A run started elsewhere (or before a refresh) in the visible
+        // session: reattach its stream so the chat streams live again.
+        if (ev.session_id === activeId.value) maybeReattach(ev.session_id)
+      } else if (serverRunState.value[ev.session_id]) {
+        const next = { ...serverRunState.value }
+        delete next[ev.session_id]
+        serverRunState.value = next
+      }
+    })
+  }
+
+  // maybeReattach resubscribes a session's live run after this tab lost its
+  // stream (page refresh, or the run started in another tab). The replay
+  // rebuilds the chat tail and restores a parked interrupt card.
+  async function maybeReattach(sid: string) {
+    const st = serverRunState.value[sid]
+    if (!st || !st.runId || demo.value) return
+    const local = status.value[sid] ?? 'idle'
+    if (local === 'running' || local === 'queued' || local === 'awaiting') return
+    if (reattaching.has(st.runId)) return
+    reattaching.add(st.runId)
+    try {
+      // Rebuild the item list from the on-disk transcript first. Runs
+      // persist only at completion, so disk is always the pre-run snapshot —
+      // replaying onto it appends exactly this run's events. This also
+      // prevents duplicates when a broken earlier stream already applied
+      // part of the run to the live items.
+      const s = sessions.value.find((x) => x.id === sid)
+      if (s) s.loaded = false
+      interrupt.value[sid] = null
+      await loadSession(sid)
+      streamingId.value[sid] = null
+      reasoningId.value[sid] = null
+      goalNoteId.value[sid] = null
+      await attachStream(sid, st.runId)
+    } finally {
+      reattaching.delete(st.runId)
+    }
   }
 
   // --- demo mode (the standalone demo app seeds this instead of the backend) ---
@@ -224,10 +347,14 @@ export const useSessionStore = defineStore('sessions', () => {
         updatedAt: s.updated_at,
         loaded: false,
         workspace: s.workspace ?? '',
-        workspaceName: s.workspace_name ?? (s.workspace ? baseName(s.workspace) : '默认工作区'),
+        workspaceName: s.workspace_name ?? (s.workspace ? baseName(s.workspace) : i18n.global.t('sessions.defaultWorkspace')),
       }))
       activeId.value = sessions.value[0].id
+      seedRunState(list)
+      connectGlobalEvents()
       await loadSession(sessions.value[0].id)
+      // A run still in flight from before the refresh: stream it again.
+      maybeReattach(activeId.value)
     } catch {
       await createSession()
     }
@@ -250,11 +377,15 @@ export const useSessionStore = defineStore('sessions', () => {
       id = `tmp-${nid()}`
     }
     sessions.value = [
-      { id, title: '新会话', updatedAt: '', loaded: true, workspace: path, workspaceName: name },
+      { id, title: i18n.global.t('sessions.newSession'), updatedAt: '', loaded: true, workspace: path, workspaceName: name },
       ...sessions.value,
     ]
     ensureMaps(id)
     activeId.value = id
+    // A fresh session starts empty: clear the previous session's snapshot so
+    // the context chip shows its disabled state, not stale numbers.
+    contextInfo.value = null
+    contextError.value = ''
   }
 
   async function loadSession(id: string) {
@@ -275,11 +406,40 @@ export const useSessionStore = defineStore('sessions', () => {
       goal.value[id] = g.goal
       goalRunning.value[id] = g.running
     }).catch(() => {})
+    // Context snapshot once this session's items are loaded (the empty-check
+    // inside needs the final transcript, not the pre-load state).
+    if (id === activeId.value) void refreshContext()
   }
 
   async function setActive(id: string) {
     activeId.value = id
     await loadSession(id)
+    // Switching onto a session whose run lives on the server (started in
+    // another tab / before a refresh): pick its stream back up.
+    maybeReattach(id)
+  }
+
+  // refreshContext reloads the active session's context-usage snapshot (the
+  // hover popover's payload and the chip number). An empty session (nothing
+  // sent yet) has no usage to report — the chip stays disabled until the
+  // first message lands. Local-only sessions (demo mode / failed create)
+  // have no server-side transcript either, so they keep the last snapshot.
+  async function refreshContext() {
+    const sid = activeId.value
+    if (!sid || sid.startsWith('tmp-') || demo.value) return
+    if ((items.value[sid] ?? []).length === 0) {
+      contextInfo.value = null
+      return
+    }
+    contextLoading.value = true
+    contextError.value = ''
+    try {
+      contextInfo.value = await api.getSessionContext(sid)
+    } catch (e) {
+      contextError.value = e instanceof Error ? e.message : String(e)
+    } finally {
+      contextLoading.value = false
+    }
   }
 
   // removeSession deletes a session server-side and drops all of its local
@@ -289,14 +449,19 @@ export const useSessionStore = defineStore('sessions', () => {
   async function removeSession(id: string) {
     const st = status.value[id] ?? 'idle'
     if (st === 'running' || st === 'awaiting' || st === 'queued') {
-      throw new Error('会话正在运行，请先停止再删除')
+      throw new Error(i18n.global.t('sessions.sessionBusyDeleteFirst'))
     }
     if (!demo.value) await api.deleteSession(id)
     const target = sessions.value.find((s) => s.id === id)
     const wsPath = target?.workspace ?? ''
     sessions.value = sessions.value.filter((s) => s.id !== id)
-    for (const m of [items, status, queuePosition, error, runId, interrupt, streamingId, reasoningId, goal, goalRunning]) {
+    for (const m of [items, status, queuePosition, error, runId, interrupt, streamingId, reasoningId, goalNoteId, goal, goalRunning]) {
       delete m.value[id]
+    }
+    if (serverRunState.value[id]) {
+      const next = { ...serverRunState.value }
+      delete next[id]
+      serverRunState.value = next
     }
     if (activeId.value === id) {
       const next =
@@ -351,8 +516,10 @@ export const useSessionStore = defineStore('sessions', () => {
    */
   function appendDelta(sid: string, text: string) {
     if (!text) return
-    // The answer's first token ends the thinking segment (it collapses).
+    // The answer's first token ends the thinking segment (it collapses) and
+    // the goal-loop narration block (the unified reply is arriving).
     closeReasoning(sid)
+    closeGoalNote(sid)
     const id = ensureStreaming(sid)
     const ls = list(sid)
     const idx = ls.findIndex((i) => i.id === id)
@@ -422,6 +589,43 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
 
+  // --- goal-loop narration (progress, never an answer bubble) ---
+
+  // appendGoalNote extends the session's live goal-loop narration block —
+  // cycle banners and the executor's per-cycle chatter — created lazily on
+  // the first fragment of a goal run.
+  function appendGoalNote(sid: string, text: string) {
+    if (!text) return
+    let id = goalNoteId.value[sid]
+    const ls = list(sid)
+    const idx = id ? ls.findIndex((i) => i.id === id) : -1
+    if (idx >= 0 && ls[idx].kind === 'goal_note') {
+      const cur = ls[idx] as Extract<ChatItem, { kind: 'goal_note' }>
+      const next = [...ls]
+      next[idx] = { ...cur, content: cur.content + text }
+      items.value[sid] = next
+      return
+    }
+    id = nid()
+    push(sid, { id, kind: 'goal_note', content: text, streaming: true })
+    goalNoteId.value[sid] = id
+  }
+
+  // closeGoalNote freezes the live narration block; the unified reply or the
+  // run's terminal event unfreezes it.
+  function closeGoalNote(sid: string) {
+    const id = goalNoteId.value[sid]
+    goalNoteId.value[sid] = null
+    if (!id) return
+    const ls = list(sid)
+    const idx = ls.findIndex((i) => i.id === id)
+    if (idx >= 0 && ls[idx].kind === 'goal_note') {
+      const next = [...ls]
+      next[idx] = { ...(next[idx] as Extract<ChatItem, { kind: 'goal_note' }>), streaming: false }
+      items.value[sid] = next
+    }
+  }
+
   // --- run lifecycle ---
 
   // attachStream subscribes to a run's SSE stream, updating this session's
@@ -445,11 +649,19 @@ export const useSessionStore = defineStore('sessions', () => {
       await api.streamRun(rid, {
         onDelta: (t) => appendDelta(sid, t),
         onReasoning: (t) => appendReasoning(sid, t),
+        onGoalNote: (t) => appendGoalNote(sid, t),
         onToolCall: (tc) => addToolCall(sid, tc),
         onToolResult: (tr) => addToolResult(sid, tr),
         onInterrupt: (ev) => {
           interrupt.value[sid] = { kind: ev.kind, payload: ev.payload } as unknown as Interrupt
           status.value[sid] = 'awaiting'
+        },
+        onInterruptResolved: () => {
+          // Fired live on answer and on replay: a satisfied interrupt must
+          // never linger as an unanswered card (the refresh-reattach path
+          // replays answered interrupts too).
+          interrupt.value[sid] = null
+          if (status.value[sid] === 'awaiting') status.value[sid] = 'running'
         },
         onGoal: (ev) => {
           goal.value[sid] = ev.goal
@@ -483,13 +695,22 @@ export const useSessionStore = defineStore('sessions', () => {
         onDone: () => {
           closeStreaming(sid)
           closeReasoning(sid)
+          closeGoalNote(sid)
+          // A terminal event ends any parked interrupt too (TTL-cancelled
+          // asks never get an interrupt_resolved of their own).
+          interrupt.value[sid] = null
           status.value[sid] = 'done'
           delete queuePosition.value[sid]
           afterDone?.()
+          // The terminal SSE event fires just before the server persists the
+          // final transcript, so let the save land before re-reading it.
+          if (sid === activeId.value) window.setTimeout(() => void refreshContext(), 500)
         },
         onError: (msg) => {
           closeStreaming(sid)
           closeReasoning(sid)
+          closeGoalNote(sid)
+          interrupt.value[sid] = null
           error.value[sid] = msg
           status.value[sid] = 'error'
           delete queuePosition.value[sid]
@@ -498,6 +719,7 @@ export const useSessionStore = defineStore('sessions', () => {
     } catch (e) {
       closeStreaming(sid)
       closeReasoning(sid)
+      closeGoalNote(sid)
       error.value[sid] = e instanceof Error ? e.message : String(e)
       status.value[sid] = 'error'
       delete queuePosition.value[sid]
@@ -565,8 +787,10 @@ export const useSessionStore = defineStore('sessions', () => {
     streamingId.value[sid] = null
 
     const s = sessions.value.find((x) => x.id === sid)
-    if (s && (s.title === '新会话' || !s.title)) {
-      s.title = truncate(prompt || attachments?.[0]?.name || '图片消息', 40)
+    // The zh literal also matches sessions created before the i18n switch or
+    // under the other locale, so the default title is still replaced.
+    if (s && (s.title === '新会话' || s.title === i18n.global.t('sessions.newSession') || !s.title)) {
+      s.title = truncate(prompt || attachments?.[0]?.name || i18n.global.t('sessions.imageMessage'), 40)
     }
 
     if (demo.value) {
@@ -619,18 +843,34 @@ export const useSessionStore = defineStore('sessions', () => {
       if (cmd === '/permissions') {
         if (arg) {
           await agentCtl.setMode(arg)
-          out = `权限模式已切换为 ${agentCtl.modeLabel}（${agentCtl.mode}），后续工具调用立即生效。\n`
+          out =
+            i18n.global.t('sessions.commands.permissionSwitched', {
+              label: agentCtl.modeLabel,
+              mode: agentCtl.mode,
+            }) + '\n'
         } else {
           await agentCtl.load()
-          out = `当前权限模式：${agentCtl.modeLabel}（${agentCtl.mode}）。\n用 /permissions <default | acceptEdits | bypassPermissions | readOnly | plan> 切换。\n`
+          out =
+            i18n.global.t('sessions.commands.permissionCurrent', {
+              label: agentCtl.modeLabel,
+              mode: agentCtl.mode,
+            }) + '\n'
         }
       } else if (cmd === '/thinking') {
         if (arg) {
           await agentCtl.setThinking(arg)
-          out = `思考级别已设为 ${agentCtl.thinkingLabel}（${agentCtl.thinkingBudget} tokens），下一轮对话生效。\n`
+          out =
+            i18n.global.t('sessions.commands.thinkingSet', {
+              label: agentCtl.thinkingLabel,
+              budget: agentCtl.thinkingBudget,
+            }) + '\n'
         } else {
           await agentCtl.load()
-          out = `当前思考级别：${agentCtl.thinkingLabel}（${agentCtl.thinkingBudget} tokens）。\n用 /thinking <off | low | medium | high> 切换。\n`
+          out =
+            i18n.global.t('sessions.commands.thinkingCurrent', {
+              label: agentCtl.thinkingLabel,
+              budget: agentCtl.thinkingBudget,
+            }) + '\n'
         }
       } else {
         await agentCtl.refreshQuota()
@@ -641,7 +881,13 @@ export const useSessionStore = defineStore('sessions', () => {
       // Failures must also leave feedback in the chat (a banner disappears
       // when the state flips again; a chat bubble does not).
       const msg = e instanceof Error ? e.message : String(e)
-      push(sid, { id: nid(), kind: 'assistant', content: `⚠ 命令执行失败：${msg}`, streaming: false, ts: Date.now() })
+      push(sid, {
+        id: nid(),
+        kind: 'assistant',
+        content: i18n.global.t('sessions.commands.failed', { message: msg }),
+        streaming: false,
+        ts: Date.now(),
+      })
     }
     status.value[sid] = 'done'
     return true
@@ -744,6 +990,12 @@ export const useSessionStore = defineStore('sessions', () => {
     workspaceGroups,
     activeWorkspace,
     activeWorkspaceKey,
+    serverRunState,
+    runStateOf,
+    contextInfo,
+    contextLoading,
+    contextError,
+    refreshContext,
     init,
     createSession,
     setActive,

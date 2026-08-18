@@ -1,26 +1,34 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Brain, Plus, Search, Trash2, X } from 'lucide-vue-next'
 import { useMemoryStore } from '../stores/memory'
 import type { MemoryItem } from '../types'
 
+const { t, locale } = useI18n()
 const memory = useMemoryStore()
 
 // Layer labels carry the L1~L6 number (e.g. "L2 facts") so the chip, the badge
 // and the layer ordering all read consistently.
-const layerLabels: Record<string, string> = {
-  L1_episodic: 'L1 经历',
-  L2_semantic: 'L2 事实',
-  L3_procedural: 'L3 剧本',
-  L4_associative: 'L4 关联',
-  L5_mental: 'L5 洞察',
-  L6_predictive: 'L6 预判',
+const layerLabelKeys: Record<string, string> = {
+  L1_episodic: 'episodic',
+  L2_semantic: 'semantic',
+  L3_procedural: 'procedural',
+  L4_associative: 'associative',
+  L5_mental: 'mental',
+  L6_predictive: 'predictive',
 }
+
+function layerLabel(layer: string): string {
+  const key = layerLabelKeys[layer]
+  return key ? t(`memory.layer.${key}`) : layer
+}
+
 const layerOrder = ['L5_mental', 'L6_predictive', 'L2_semantic', 'L3_procedural', 'L1_episodic']
 
 function label(m: MemoryItem): string {
-  if (m.layer === 'L2_semantic' && (m.type === 'code_symbol' || m.type === 'code_file')) return 'L2 代码'
-  return layerLabels[m.layer] ?? m.layer
+  if (m.layer === 'L2_semantic' && (m.type === 'code_symbol' || m.type === 'code_file')) return t('memory.layer.code')
+  return layerLabel(m.layer)
 }
 
 const statsChips = computed(() => {
@@ -28,7 +36,7 @@ const statsChips = computed(() => {
   if (!s) return []
   return layerOrder
     .filter((l) => (s.layers[l] ?? 0) > 0)
-    .map((l) => ({ layer: l, label: layerLabels[l] ?? l, count: s.layers[l] }))
+    .map((l) => ({ layer: l, label: layerLabel(l), count: s.layers[l] }))
 })
 
 // Insights & predictions render as their own group at the top.
@@ -45,13 +53,13 @@ const adding = ref(false)
 
 function fmtTime(ts: number): string {
   if (!ts) return ''
-  return new Date(ts * 1000).toLocaleString('zh-CN', {
+  return new Date(ts * 1000).toLocaleString(locale.value === 'en' ? 'en' : 'zh-CN', {
     month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
 }
 
 async function removeItem(m: MemoryItem) {
-  if (!window.confirm('忘记这条记忆？')) return
+  if (!window.confirm(t('memory.forgetConfirm'))) return
   // remove() catches errors internally and writes them to the store's error,
   // surfaced by the mem-error row.
   await memory.remove(m.id)
@@ -83,8 +91,8 @@ function toggleLayer(layer: string) {
       <div class="card-head">
         <span class="card-title">
           <Brain :size="15" />
-          工作区记忆
-          <span class="mem-ws">{{ memory.workspaceName || '默认工作区' }}</span>
+          {{ t('memory.title') }}
+          <span class="mem-ws">{{ memory.workspaceName || t('memory.defaultWorkspace') }}</span>
         </span>
         <button class="icon-btn" @click="memory.close()">
           <X :size="16" />
@@ -92,12 +100,12 @@ function toggleLayer(layer: string) {
       </div>
 
       <div class="card-body memory-body">
-        <p class="mem-tagline">woca 会记住这个工作区的决策、偏好与代码知识——越用越懂你的项目。</p>
+        <p class="mem-tagline">{{ t('memory.tagline') }}</p>
 
         <div class="mem-toolbar">
           <div class="mem-search">
             <Search :size="13" />
-            <input v-model="memory.query" placeholder="搜索记忆…" @input="memory.searchDebounced()" />
+            <input v-model="memory.query" :placeholder="t('memory.searchPlaceholder')" @input="memory.searchDebounced()" />
           </div>
           <div v-if="statsChips.length" class="mem-chips">
             <button
@@ -114,19 +122,19 @@ function toggleLayer(layer: string) {
 
         <p v-if="memory.error" class="mem-error">{{ memory.error }}</p>
         <p v-if="memory.notice" class="mem-notice">{{ memory.notice }}</p>
-        <p v-if="memory.engine === 'none'" class="mem-empty">记忆引擎未启用（设置 → 记忆）。</p>
+        <p v-if="memory.engine === 'none'" class="mem-empty">{{ t('memory.engineDisabled') }}</p>
         <p v-else-if="!memory.loading && memory.items.length === 0" class="mem-empty">
-          还没有记忆。和 woca 聊几句，它会自动记住重要的东西。
+          {{ t('memory.empty') }}
         </p>
-        <p v-if="memory.loading" class="mem-empty">加载中…</p>
+        <p v-if="memory.loading" class="mem-empty">{{ t('common.loading') }}</p>
 
         <div v-if="insightItems.length" class="mem-group">
-          <div class="mem-group-title">洞察与预判</div>
+          <div class="mem-group-title">{{ t('memory.insights') }}</div>
           <div v-for="m in insightItems" :key="m.id" class="mem-item insight" :class="m.layer">
             <div class="mem-item-head">
               <span class="mem-badge" :class="m.layer">{{ label(m) }}</span>
               <span class="mem-time">{{ fmtTime(m.updated_at) }}</span>
-              <button class="mem-del" title="忘记" @click="removeItem(m)">
+              <button class="mem-del" :title="t('memory.forget')" @click="removeItem(m)">
                 <Trash2 :size="12" />
               </button>
             </div>
@@ -136,12 +144,12 @@ function toggleLayer(layer: string) {
         </div>
 
         <div v-if="normalItems.length" class="mem-group">
-          <div class="mem-group-title">记忆</div>
+          <div class="mem-group-title">{{ t('memory.memories') }}</div>
           <div v-for="m in normalItems" :key="m.id" class="mem-item">
             <div class="mem-item-head">
               <span class="mem-badge" :class="m.layer">{{ label(m) }}</span>
               <span class="mem-time">{{ fmtTime(m.updated_at) }}</span>
-              <button class="mem-del" title="忘记" @click="removeItem(m)">
+              <button class="mem-del" :title="t('memory.forget')" @click="removeItem(m)">
                 <Trash2 :size="12" />
               </button>
             </div>
@@ -151,24 +159,24 @@ function toggleLayer(layer: string) {
         </div>
 
         <button v-if="memory.hasMore() && !memory.loading" class="mem-more" @click="memory.loadMore()">
-          加载更多
+          {{ t('memory.loadMore') }}
         </button>
 
         <div v-if="memory.engine !== 'none'" class="mem-add">
           <textarea
             v-model="newContent"
             rows="2"
-            placeholder="手动记住一件事，例如：构建统一走 make build"
+            :placeholder="t('memory.addPlaceholder')"
           ></textarea>
           <div class="mem-add-row">
-            <input v-model="newTags" class="mem-tags-input" placeholder="标签（可选，逗号分隔）" />
+            <input v-model="newTags" class="mem-tags-input" :placeholder="t('memory.tagsPlaceholder')" />
             <button class="mem-add-btn" :disabled="!newContent.trim() || adding" @click="addMemory()">
-              <Plus :size="13" /> 记住
+              <Plus :size="13" /> {{ t('memory.remember') }}
             </button>
           </div>
         </div>
 
-        <p class="mem-privacy">所有记忆只保存在本地（~/.woca/ladym.db），随时查看或删除。</p>
+        <p class="mem-privacy">{{ t('memory.privacy') }}</p>
       </div>
     </div>
   </div>

@@ -3,6 +3,7 @@ import { onMounted, watch } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import WorkspaceSidebar from './components/WorkspaceSidebar.vue'
+import WorkspaceSplitHandle from './components/WorkspaceSplitHandle.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import GoalPanel from './components/GoalPanel.vue'
 import MemoryPanel from './components/MemoryPanel.vue'
@@ -23,6 +24,11 @@ const completions = useCompletionsStore()
 onMounted(() => {
   void sessions.init()
   void workspace.load()
+  // Server-backed settings must load at startup too: chat features gated on
+  // them (the bubble debug-copy button needs debug_log) would otherwise stay
+  // hidden until the settings panel is opened — a reload regressed the debug
+  // button until the user re-toggled the switch.
+  void settings.loadServer()
 })
 
 // The file sidebar and the "/" "@" autocomplete follow the active session's
@@ -45,6 +51,7 @@ watch(
     <main class="main">
       <ChatPanel />
     </main>
+    <WorkspaceSplitHandle v-if="workspace.panelOpen" />
     <WorkspaceSidebar />
     <SettingsPanel v-if="settings.panelOpen" />
     <GoalPanel v-if="sessions.goalPanelOpen" />

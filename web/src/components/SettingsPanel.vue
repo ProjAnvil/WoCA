@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   Activity,
   Brain,
@@ -23,19 +24,20 @@ import MemorySection from './settings/MemorySection.vue'
 import ModelSection from './settings/ModelSection.vue'
 import StatsSection from './settings/StatsSection.vue'
 
+const { t } = useI18n()
 const settings = useSettingsStore()
 
 // Sidebar navigation: each entry maps to one section of the right pane.
 const sections = [
-  { id: 'appearance', label: '外观', icon: Palette },
-  { id: 'preferences', label: '偏好', icon: Settings2 },
-  { id: 'provider', label: '模型服务商', icon: Server },
-  { id: 'claudeenv', label: '技能与 MCP', icon: Plug },
-  { id: 'plugins', label: '插件', icon: Puzzle },
-  { id: 'storage', label: '存储', icon: Database },
-  { id: 'memory', label: '记忆', icon: Brain },
-  { id: 'model', label: '模型', icon: Cpu },
-  { id: 'stats', label: '运行状态', icon: Activity },
+  { id: 'appearance', label: 'settings.nav.appearance', icon: Palette },
+  { id: 'preferences', label: 'settings.nav.preferences', icon: Settings2 },
+  { id: 'provider', label: 'settings.nav.provider', icon: Server },
+  { id: 'claudeenv', label: 'settings.nav.claudeenv', icon: Plug },
+  { id: 'plugins', label: 'settings.nav.plugins', icon: Puzzle },
+  { id: 'storage', label: 'settings.nav.storage', icon: Database },
+  { id: 'memory', label: 'settings.nav.memory', icon: Brain },
+  { id: 'model', label: 'settings.nav.model', icon: Cpu },
+  { id: 'stats', label: 'settings.nav.stats', icon: Activity },
 ]
 
 const active = ref<string>('appearance')
@@ -67,7 +69,7 @@ onBeforeUnmount(() => {
   <div class="overlay" @click.self="settings.closePanel()">
     <div class="card settings-card">
       <div class="card-head">
-        <span class="card-title">设置</span>
+        <span class="card-title">{{ t('settings.title') }}</span>
         <button class="icon-btn" @click="settings.closePanel()">
           <X :size="16" />
         </button>
@@ -84,7 +86,7 @@ onBeforeUnmount(() => {
             @click="active = s.id"
           >
             <component :is="s.icon" :size="14" />
-            <span>{{ s.label }}</span>
+            <span>{{ t(s.label) }}</span>
           </button>
         </nav>
 
@@ -113,12 +115,12 @@ onBeforeUnmount(() => {
           {{ settings.serverError }}
         </span>
         <span v-else-if="settings.savedMessage" class="row-hint">{{ settings.savedMessage }}</span>
-        <span v-else class="row-hint">服务商/存储设置保存到数据库，密钥加密存储</span>
+        <span v-else class="row-hint">{{ t('settings.footer.hint') }}</span>
         <span v-if="settings.restartRequired" class="row-hint" style="color: var(--warn, #f5a524)">
-          后端变更将在重启 woca 后生效
+          {{ t('settings.footer.restart') }}
         </span>
         <button class="btn" :disabled="settings.saving" @click="settings.saveServer()">
-          {{ settings.saving ? '保存中…' : '保存到数据库' }}
+          {{ settings.saving ? t('settings.shared.saving') : t('settings.footer.save') }}
         </button>
       </div>
     </div>

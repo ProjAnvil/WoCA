@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import { ChevronRight, Folder, MessageSquare, Plus, Trash2 } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
+import { ChevronRight, Folder, Hand, Loader2, MessageSquare, Plus, Trash2 } from 'lucide-vue-next'
 import { useSessionStore } from '../stores/sessions'
 import type { Session } from '../types'
 
+const { t } = useI18n()
 const store = useSessionStore()
 
 // Collapsed groups (default: expanded); switching the active session's
@@ -26,24 +28,24 @@ watch(
 )
 
 function shortTime(iso: string): string {
-  if (!iso) return '刚刚'
+  if (!iso) return t('sidebar.justNow')
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
   const now = new Date()
   const diff = now.getTime() - d.getTime()
   const min = Math.floor(diff / 60000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟前`
+  if (min < 1) return t('sidebar.justNow')
+  if (min < 60) return t('sidebar.minutesAgo', { min })
   const hr = Math.floor(min / 60)
-  if (hr < 24) return `${hr} 小时前`
-  return `${Math.floor(hr / 24)} 天前`
+  if (hr < 24) return t('sidebar.hoursAgo', { hr })
+  return t('sidebar.daysAgo', { days: Math.floor(hr / 24) })
 }
 
 // Deleting a session removes its transcript server-side; a live run refuses
 // (removeSession throws — surfaced via alert).
 async function removeSession(s: Session) {
-  const title = s.title || '新会话'
-  if (!window.confirm(`删除会话「${title}」？聊天记录将被移除，不可恢复。`)) return
+  const title = s.title || t('sidebar.newSession')
+  if (!window.confirm(t('sidebar.deleteSessionConfirm', { title }))) return
   try {
     await store.removeSession(s.id)
   } catch (e) {
@@ -64,7 +66,7 @@ async function removeSession(s: Session) {
         </button>
         <button
           class="icon-btn ws-new-btn"
-          title="在此工作区新建会话"
+          :title="t('sidebar.newSessionHere')"
           @click="store.createSession({ path: g.path, name: g.name })"
         >
           <Plus :size="14" />
@@ -79,11 +81,23 @@ async function removeSession(s: Session) {
           :class="{ active: s.id === store.activeId }"
         >
           <button class="session-item" :class="{ active: s.id === store.activeId }" @click="store.setActive(s.id)">
-            <MessageSquare :size="15" class="session-icon" />
+            <Loader2
+              v-if="store.runStateOf(s.id) === 'running'"
+              :size="15"
+              class="session-icon spinning"
+              :title="t('sidebar.running')"
+            />
+            <Hand
+              v-else-if="store.runStateOf(s.id) === 'awaiting'"
+              :size="15"
+              class="session-icon awaiting"
+              :title="t('sidebar.awaitingDecision')"
+            />
+            <MessageSquare v-else :size="15" class="session-icon" />
             <span class="session-title">{{ s.title }}</span>
             <span class="session-time">{{ shortTime(s.updatedAt) }}</span>
           </button>
-          <button class="session-del" title="删除会话" @click="removeSession(s)">
+          <button class="session-del" :title="t('sidebar.deleteSession')" @click="removeSession(s)">
             <Trash2 :size="12" />
           </button>
         </div>

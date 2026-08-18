@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useSessionStore } from '../stores/sessions'
 import { renderMarkdown } from '../lib/markdown'
 
+const { t } = useI18n()
 const store = useSessionStore()
 const intr = computed(() => store.activeInterrupt)
 
@@ -48,9 +50,9 @@ function onFreeText(qi: number, e: Event) {
     <div class="card interrupt-card">
       <div class="card-head">
         <span class="card-title">
-          <template v-if="intr.kind === 'permission'">权限确认</template>
-          <template v-else-if="intr.kind === 'plan'">计划审批</template>
-          <template v-else>需要你的输入</template>
+          <template v-if="intr.kind === 'permission'">{{ t('chat.permissionTitle') }}</template>
+          <template v-else-if="intr.kind === 'plan'">{{ t('chat.planTitle') }}</template>
+          <template v-else>{{ t('chat.inputTitle') }}</template>
         </span>
       </div>
 
@@ -58,7 +60,7 @@ function onFreeText(qi: number, e: Event) {
         <!-- permission -->
         <template v-if="intr.kind === 'permission'">
           <p class="intr-reason">{{ intr.payload.reason }}</p>
-          <div class="field-label">工具参数</div>
+          <div class="field-label">{{ t('chat.toolArgs') }}</div>
           <pre class="tool-args">{{ JSON.stringify(intr.payload.tool_args, null, 2) }}</pre>
         </template>
 
@@ -70,7 +72,7 @@ function onFreeText(qi: number, e: Event) {
         <!-- ask -->
         <template v-else-if="intr.kind === 'ask'">
           <div v-for="(q, qi) in intr.payload.questions" :key="qi" class="question-block">
-            <div class="question-header">{{ q.header || `问题 ${qi + 1}` }}</div>
+            <div class="question-header">{{ q.header || t('chat.questionN', { index: qi + 1 }) }}</div>
             <div class="question-text">{{ q.question }}</div>
 
             <div v-if="q.options && q.options.length" class="option-list">
@@ -89,7 +91,7 @@ function onFreeText(qi: number, e: Event) {
               v-else
               class="field"
               :value="(selected[qi] ?? [])[0] ?? ''"
-              placeholder="输入答案…"
+              :placeholder="t('chat.answerPlaceholder')"
               @input="onFreeText(qi, $event)"
             />
           </div>
@@ -98,12 +100,12 @@ function onFreeText(qi: number, e: Event) {
 
       <div class="interrupt-actions">
         <template v-if="intr.kind === 'ask'">
-          <button class="btn" @click="skip">跳过</button>
-          <button class="btn btn-primary" @click="submitAnswers">提交</button>
+          <button class="btn" @click="skip">{{ t('chat.skip') }}</button>
+          <button class="btn btn-primary" @click="submitAnswers">{{ t('chat.submit') }}</button>
         </template>
         <template v-else>
-          <button class="btn" @click="deny">拒绝</button>
-          <button class="btn btn-primary" @click="approve">允许</button>
+          <button class="btn" @click="deny">{{ t('chat.deny') }}</button>
+          <button class="btn btn-primary" @click="approve">{{ t('chat.allow') }}</button>
         </template>
       </div>
     </div>

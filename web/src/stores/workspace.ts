@@ -2,6 +2,34 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { WorkspaceFile } from '../types'
 import { getWorkspace, getWorkspaceFile } from '../api/client'
+import i18n from '../i18n'
+
+// Split-layout constants (px). The chat column keeps a usable minimum —
+// bubbles, tool cards and the composer stay readable at 380px (mirrors the
+// .main min-width in style.css); the left session sidebar is fixed at 280px.
+export const CHAT_MIN_WIDTH = 380
+const LEFT_SIDEBAR_WIDTH = 280
+// The split handle is a flex sibling (7px wide, see .split-handle in
+// style.css); its width must be budgeted too or the row overflows and the
+// body becomes horizontally scrollable while dragging.
+const SPLIT_HANDLE_WIDTH = 7
+// The workspace panel hosts the file tree and the rendered file side by
+// side; below this the two panes crowd each other unreadably.
+const WORKSPACE_MIN_WIDTH = 420
+
+function viewportWidth(): number {
+  if (typeof window === 'undefined') return 0
+  return document.documentElement.clientWidth || window.innerWidth
+}
+
+// Most the workspace panel may take: every pixel not needed to keep the
+// chat at CHAT_MIN_WIDTH. Never negative.
+function workspaceMaxWidth(): number {
+  return Math.max(
+    0,
+    viewportWidth() - LEFT_SIDEBAR_WIDTH - SPLIT_HANDLE_WIDTH - CHAT_MIN_WIDTH,
+  )
+}
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   // Populated from GET /api/workspace; the standalone demo app sets it
@@ -14,6 +42,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   /** Whether the right-hand file browser sidebar is open. */
   const panelOpen = ref(false)
+  /** Workspace panel width in px; bound to the CSS var --ws-w. */
+  const width = ref(0)
+  /** True while the split handle is being dragged (disables the open/close transition). */
+  const dragging = ref(false)
   /** The file currently shown in the preview pane (null = tree view). */
   const preview = ref<WorkspaceFile | null>(null)
   const previewLoading = ref(false)
@@ -36,11 +68,24 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   function togglePanel() {
-    panelOpen.value = !panelOpen.value
+    if (panelOpen.value) closePanel()
+    else openPanel()
   }
 
+  // Opening defaults to the widest layout: the workspace takes everything
+  // except the chat's minimum width, and the user can then drag narrower.
   function openPanel() {
+    resizeTo(Infinity)
     panelOpen.value = true
+  }
+
+  // Clamp a candidate panel width into [min, max]. The lower bound also
+  // yields to the max on narrow viewports, where squeezing the chat below
+  // its minimum is worse than a cramped workspace.
+  function resizeTo(px: number) {
+    const max = workspaceMaxWidth()
+    const lo = Math.min(WORKSPACE_MIN_WIDTH, max)
+    width.value = Math.min(Math.max(px, lo), max)
   }
 
   function closePanel() {
@@ -58,7 +103,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
     if (demo.value) {
       preview.value = file
-      previewError.value = '演示模式未包含该文件的内容'
+      previewError.value = i18n.global.t('workspace.demoNoContent')
       return
     }
     previewLoading.value = true
@@ -84,6 +129,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     tree,
     root,
     panelOpen,
+    width,
+    dragging,
     preview,
     previewLoading,
     previewError,
@@ -91,6 +138,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     togglePanel,
     openPanel,
     closePanel,
+    resizeTo,
     openPreview,
     closePreview,
     setDemo,

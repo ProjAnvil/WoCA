@@ -29,8 +29,10 @@ export function resetClaudeEnv() {
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { Plug } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
 import { getClaudeEnv, putClaudeEnv } from '../../api/client'
 
+const { t } = useI18n()
 const claudeEnv = sharedClaudeEnv
 
 async function loadClaudeEnv() {
@@ -75,7 +77,7 @@ async function saveClaudeEnv() {
       skills: claudeEnv.state.selected.skills,
       mcp: claudeEnv.state.selected.mcp,
     })
-    claudeEnv.message = '已保存：选中的技能软链到 ~/.woca/skills 并立即生效；MCP 服务器将在下次启动时连接'
+    claudeEnv.message = t('settings.claudeenv.saved')
     await loadClaudeEnv()
   } catch (e) {
     claudeEnv.error = e instanceof Error ? e.message : String(e)
@@ -90,25 +92,28 @@ async function saveClaudeEnv() {
        checkbox-selected per agent start. -->
   <section class="setting-section">
     <div class="setting-section-title">
-      <Plug :size="13" style="vertical-align: -2px" /> 技能与 MCP（导入 Claude Code）
+      <Plug :size="13" style="vertical-align: -2px" /> {{ t('settings.claudeenv.title') }}
     </div>
-    <p class="mem-intro">
-      检测 ~/.claude/skills 与 ~/.claude.json 的全局 MCP 配置。勾选后技能软链到
-      ~/.woca/skills（立即生效），MCP 服务器写入 ~/.woca/mcp.json 并在 agent
-      启动时连接。
-    </p>
+    <p class="mem-intro">{{ t('settings.claudeenv.intro') }}</p>
 
-    <div v-if="claudeEnv.loading" class="row-hint">检测中…</div>
+    <div v-if="claudeEnv.loading" class="row-hint">{{ t('settings.claudeenv.detecting') }}</div>
     <div v-else-if="claudeEnv.error" class="row-hint" style="color: var(--danger, #e5484d)">
       {{ claudeEnv.error }}
     </div>
 
     <template v-if="claudeEnv.state">
       <div class="setting-subgroup">
-        <div class="row-label">Skill（{{ claudeEnv.state.selected.skills.length }}/{{ claudeEnv.state.skills.length }}）</div>
-        <div class="row-hint">勾选的技能通过 / 命令与补全列表提供给 agent</div>
+        <div class="row-label">
+          {{
+            t('settings.claudeenv.skillsLabel', {
+              selected: claudeEnv.state.selected.skills.length,
+              total: claudeEnv.state.skills.length,
+            })
+          }}
+        </div>
+        <div class="row-hint">{{ t('settings.claudeenv.skillsHint') }}</div>
         <div v-if="!claudeEnv.state.skills.length" class="row-hint">
-          未在 ~/.claude/skills 检测到技能
+          {{ t('settings.claudeenv.noSkills') }}
         </div>
         <div v-else class="env-check-list">
           <label v-for="s in claudeEnv.state.skills" :key="s.name" class="env-check">
@@ -124,10 +129,17 @@ async function saveClaudeEnv() {
       </div>
 
       <div class="setting-subgroup">
-        <div class="row-label">MCP（{{ claudeEnv.state.selected.mcp.length }}/{{ claudeEnv.state.mcp.length }}）</div>
-        <div class="row-hint">勾选的服务器在 agent 启动时作为工具连接（下次启动生效）</div>
+        <div class="row-label">
+          {{
+            t('settings.claudeenv.mcpLabel', {
+              selected: claudeEnv.state.selected.mcp.length,
+              total: claudeEnv.state.mcp.length,
+            })
+          }}
+        </div>
+        <div class="row-hint">{{ t('settings.claudeenv.mcpHint') }}</div>
         <div v-if="!claudeEnv.state.mcp.length" class="row-hint">
-          未在 ~/.claude.json 检测到全局 MCP 服务器
+          {{ t('settings.claudeenv.noMcp') }}
         </div>
         <div v-else class="env-check-list">
           <label v-for="m in claudeEnv.state.mcp" :key="m.name" class="env-check">
@@ -138,7 +150,7 @@ async function saveClaudeEnv() {
             />
             <span class="env-check-name">{{ m.name }}</span>
             <span class="env-check-desc" :title="m.url || m.command">
-              {{ m.type }} · {{ m.url || m.command }}{{ m.has_env ? ' · 含环境变量' : '' }}
+              {{ m.type }} · {{ m.url || m.command }}{{ m.has_env ? ' · ' + t('settings.claudeenv.hasEnv') : '' }}
             </span>
           </label>
         </div>
@@ -146,7 +158,7 @@ async function saveClaudeEnv() {
 
       <div class="setting-row">
         <button class="btn" :disabled="claudeEnv.saving" @click="saveClaudeEnv()">
-          {{ claudeEnv.saving ? '保存中…' : '保存选择' }}
+          {{ claudeEnv.saving ? t('settings.shared.saving') : t('settings.claudeenv.save') }}
         </button>
         <span v-if="claudeEnv.message" class="row-hint" style="margin-left: 10px">{{ claudeEnv.message }}</span>
       </div>

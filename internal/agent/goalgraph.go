@@ -47,6 +47,26 @@ type GoalDelta struct {
 	Message messages.Message
 }
 
+// GoalNote is one fragment of goal-loop narration: cycle banners, verdict
+// lines, cut notices, and the executor's streamed answer text inside a cycle.
+// It is deliberately NOT a chat delta — intermediate cycle chatter must not
+// read as assistant replies. Renderers surface it as loop progress (a dim
+// status line, a collapsed card), never as the run's answer; the unified
+// GoalFinalReply is the only goal text that reaches the chat.
+type GoalNote struct {
+	Text string
+}
+
+// GoalFinalReply is the single unified chat reply of a goal run: the
+// executor's last substantive answer of the final cycle (for research-style
+// goals that text is the actual deliverable) plus the terminal status report.
+// Emitted exactly once, when the loop reaches a terminal state — the
+// buffer-then-verify-then-answer shape Codex goal mode and Claude Code /goal
+// use for their autonomous loops.
+type GoalFinalReply struct {
+	Text string
+}
+
 // goalInterrupts extracts the pause interrupts from an updates- or
 // values-chunk payload, or nil when the chunk is not a pause.
 func goalInterrupts(mode lggraph.StreamMode, payload any) []lgtypes.Interrupt {
@@ -373,7 +393,7 @@ func (a *Agent) goalAssessNode() lggraph.NodeFunc {
 		if assessment == "" {
 			assessment = "(no assessment produced; proceeding to execution)"
 		}
-		emit(fmt.Sprintf("\n[goal cycle %d/%d] %s\n", goal.Cycles, goal.MaxCycles, goalTruncate(firstLine(assessment), 200)))
+		emit(GoalNote{Text: fmt.Sprintf("\n[goal cycle %d/%d] %s\n", goal.Cycles, goal.MaxCycles, goalTruncate(firstLine(assessment), 200))})
 		return map[string]any{"assessment": assessment}, nil
 	}
 }
@@ -478,7 +498,10 @@ func (a *Agent) goalExecuteNode() lggraph.NodeFunc {
 				switch chunk.Mode {
 				case lggraph.StreamCustom:
 					if s, ok := chunk.Payload.(string); ok && s != "" {
-						emit(s)
+						// The inner agent's answer text and restart markers are
+						// loop narration, not chat replies — re-emit typed so
+						// renderers can keep them out of the answer stream.
+						emit(GoalNote{Text: s})
 						continue
 					}
 					if rd, ok := chunk.Payload.(ReasoningDelta); ok && rd.Text != "" {
@@ -518,7 +541,7 @@ func (a *Agent) goalExecuteNode() lggraph.NodeFunc {
 		if limitHit {
 			newMsgs = answerDanglingToolCalls(newMsgs)
 			cutNotice := "\n[goal cycle cut short: agent-graph recursion limit reached — salvaging this cycle's work for evaluation]\n"
-			emit(cutNotice)
+			emit(GoalNote{Text: cutNotice})
 			newMsgs = append(newMsgs, messages.AI(strings.TrimSpace(cutNotice)))
 		}
 		cycleTurns := a.TurnsDone() - turnsBefore
@@ -568,7 +591,7 @@ Rules: "complete" ONLY if the evidence concretely shows every done-criterion met
 		}
 		a.usage.recordUsage(resp.UsageMetadata)
 		v := parseGoalVerdict(resp.Content)
-		emit(fmt.Sprintf("\n[goal verdict: %s] %s\n", v.Verdict, goalTruncate(orString(v.Evidence, v.Gaps), 200)))
+		emit(GoalNote{Text: fmt.Sprintf("\n[goal verdict: %s] %s\n", v.Verdict, goalTruncate(orString(v.Evidence, v.Gaps), 200))})
 
 		a.goal.mu.Lock()
 		g := a.goal.goal
@@ -636,10 +659,43 @@ Rules: "complete" ONLY if the evidence concretely shows every done-criterion met
 		}
 		if finalStatus != GoalActive {
 			report := goalReport(finalStatus, v, goal.Cycles)
-			return map[string]any{"messages": []messages.Message{messages.AI(report)}, "verdict": v.Verdict}, nil
+			unified := goalUnifiedReply(goalCycleMessages(MessagesFrom(state)), report)
+			// One unified chat reply for the whole run; the persisted twin is
+			// wrapped so transcript reloads can tell the report apart from
+			// intermediate cycle chatter (rendered as loop progress, not as
+			// chat bubbles).
+			emit(GoalFinalReply{Text: unified})
+			return map[string]any{
+				"messages": []messages.Message{messages.AI(GoalReportWrap(unified))},
+				"verdict":  v.Verdict,
+			}, nil
 		}
 		return map[string]any{"verdict": v.Verdict}, nil
 	}
+}
+
+// GoalReportWrap marks a persisted AI message as the goal run's unified final
+// reply. Display layers strip the markers and render the content as the
+// single assistant bubble of the run.
+func GoalReportWrap(text string) string {
+	return "<goal-report>\n" + text + "\n</goal-report>"
+}
+
+// goalUnifiedReply composes the run's single chat reply: the executor's last
+// substantive answer of the final cycle (for research-style goals it is the
+// actual deliverable, not the status footer) followed by the terminal report.
+func goalUnifiedReply(cycleMsgs []messages.Message, report string) string {
+	last := ""
+	for _, m := range cycleMsgs {
+		if m.Role == messages.RoleAI && strings.TrimSpace(m.Content) != "" {
+			last = m.Content
+		}
+	}
+	last = strings.TrimSpace(last)
+	if last == "" || strings.Contains(report, last) {
+		return report
+	}
+	return last + "\n\n---\n\n" + report
 }
 
 // goalResetClaim clears an unverified completion claim so the executor must

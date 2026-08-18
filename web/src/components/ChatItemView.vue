@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { Brain, Bug, Check, ChevronRight, Copy, Wrench } from 'lucide-vue-next'
+import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { Brain, Bug, Check, ChevronRight, Copy, Target, Wrench } from 'lucide-vue-next'
 import type { ChatItem } from '../types'
 import { renderMarkdown } from '../lib/markdown'
 import { useSessionStore } from '../stores/sessions'
@@ -8,6 +9,7 @@ import { useSettingsStore } from '../stores/settings'
 import Avatar from './Avatar.vue'
 
 const props = defineProps<{ item: ChatItem }>()
+const { t } = useI18n()
 const settings = useSettingsStore()
 const sessions = useSessionStore()
 
@@ -41,6 +43,22 @@ const reasoningStreaming = computed(() => {
 // Live thinking stays expanded so the user can watch it; once the answer
 // starts the block collapses to its header (click to expand again).
 const reasoningOpen = ref(reasoningStreaming.value)
+
+const goalNoteContent = computed(() => {
+  const it = props.item
+  return it.kind === 'goal_note' ? it.content : ''
+})
+const goalNoteStreaming = computed(() => {
+  const it = props.item
+  return it.kind === 'goal_note' ? it.streaming : false
+})
+// Goal-loop narration stays open while the loop runs (banners and per-cycle
+// chatter are watchable progress), then collapses to its header when the
+// unified reply arrives or the run ends.
+const goalNoteOpen = ref(goalNoteStreaming.value)
+watch(goalNoteStreaming, (live) => {
+  if (!live) goalNoteOpen.value = false
+})
 
 const toolName = computed(() => {
   const it = props.item
@@ -137,7 +155,7 @@ function copyDebugInfo() {
       <div v-if="!isUser && !streaming" class="bubble-actions">
         <button
           class="bubble-action"
-          title="复制为 Markdown"
+          :title="t('chat.copyMarkdown')"
           @click="copyMarkdown()"
         >
           <Check v-if="copied === 'md'" :size="12" />
@@ -146,7 +164,7 @@ function copyDebugInfo() {
         <button
           v-if="settings.debugLog"
           class="bubble-action debug"
-          title="复制调试信息（workspace / session / message 与日志位置）"
+          :title="t('chat.copyDebug')"
           @click="copyDebugInfo()"
         >
           <Check v-if="copied === 'debug'" :size="12" />
@@ -161,11 +179,24 @@ function copyDebugInfo() {
     <button class="tool-card-head tool-toggle" @click="reasoningOpen = !reasoningOpen">
       <Brain :size="13" class="reasoning-icon" />
       <ChevronRight :size="13" class="tool-chevron" :class="{ open: reasoningOpen }" />
-      <span class="tool-name">{{ reasoningStreaming ? '思考中…' : '思考过程' }}</span>
-      <span v-if="!reasoningStreaming" class="reasoning-size">{{ reasoningContent.length }} 字符</span>
+      <span class="tool-name">{{ reasoningStreaming ? t('chat.thinkingLive') : t('chat.thinkingDone') }}</span>
+      <span v-if="!reasoningStreaming" class="reasoning-size">{{ t('chat.charCount', { count: reasoningContent.length }) }}</span>
     </button>
     <pre v-if="reasoningOpen" class="tool-output reasoning-body">{{ reasoningContent }}</pre>
     <span v-else-if="reasoningStreaming" class="cursor reasoning-cursor"></span>
+  </div>
+
+  <!-- goal-loop narration: cycle banners + per-cycle chatter as collapsible
+       progress, never an answer bubble (the run ends with one unified reply) -->
+  <div v-else-if="item.kind === 'goal_note'" class="tool-card goal-note-card" :class="{ live: goalNoteStreaming }">
+    <button class="tool-card-head tool-toggle" @click="goalNoteOpen = !goalNoteOpen">
+      <Target :size="13" class="goal-note-icon" />
+      <ChevronRight :size="13" class="tool-chevron" :class="{ open: goalNoteOpen }" />
+      <span class="tool-name">{{ goalNoteStreaming ? t('chat.goalLoopLive') : t('chat.goalLoopDone') }}</span>
+      <span v-if="!goalNoteStreaming" class="reasoning-size">{{ t('chat.charCount', { count: goalNoteContent.length }) }}</span>
+    </button>
+    <pre v-if="goalNoteOpen" class="tool-output reasoning-body">{{ goalNoteContent }}</pre>
+    <span v-else-if="goalNoteStreaming" class="cursor reasoning-cursor"></span>
   </div>
 
   <!-- tool call: input and output share one card (result merges in when it
@@ -175,13 +206,13 @@ function copyDebugInfo() {
       <Wrench :size="13" />
       <ChevronRight :size="13" class="tool-chevron" :class="{ open: !collapsed }" />
       <span class="tool-name">{{ toolName }}</span>
-      <span v-if="!toolHasResult" class="tool-status">运行中…</span>
+      <span v-if="!toolHasResult" class="tool-status">{{ t('chat.running') }}</span>
     </button>
     <template v-if="!collapsed">
-      <div class="tool-section-label">输入</div>
+      <div class="tool-section-label">{{ t('chat.input') }}</div>
       <pre class="tool-args tool-io">{{ toolArgs }}</pre>
       <template v-if="toolHasResult">
-        <div class="tool-section-label">输出</div>
+        <div class="tool-section-label">{{ t('chat.output') }}</div>
         <pre class="tool-output tool-io">{{ toolResultContent }}</pre>
       </template>
     </template>
@@ -191,7 +222,7 @@ function copyDebugInfo() {
   <div v-else class="tool-card tool-result">
     <button class="tool-card-head tool-toggle" @click="collapsed = !collapsed">
       <ChevronRight :size="13" class="tool-chevron" :class="{ open: !collapsed }" />
-      <span class="tool-name">工具输出</span>
+      <span class="tool-name">{{ t('chat.toolOutput') }}</span>
     </button>
     <pre v-if="!collapsed" class="tool-output">{{ toolResultContent }}</pre>
   </div>

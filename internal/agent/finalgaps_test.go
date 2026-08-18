@@ -532,7 +532,7 @@ func TestGoalPauseMidLoopEndsAtBoundary(t *testing.T) {
 			break
 		}
 		if c.Mode == lggraph.StreamCustom {
-			if s, ok := c.Payload.(string); ok && strings.Contains(s, "[goal cycle") {
+			if note, ok := c.Payload.(GoalNote); ok && strings.Contains(note.Text, "[goal cycle") {
 				a.PauseGoal() // user pauses mid-loop
 			}
 		}

@@ -291,6 +291,10 @@ type sessionSummary struct {
 	MessageCount  int    `json:"message_count"`
 	Workspace     string `json:"workspace"`
 	WorkspaceName string `json:"workspace_name"`
+	// RunStatus is the durable run state ("running" | "awaiting"; empty =
+	// idle) and RunID the run behind it — set from the session_state store.
+	RunStatus string `json:"run_status,omitempty"`
+	RunID     string `json:"run_id,omitempty"`
 }
 
 // goalPath is the per-session goal sidecar (goal-mode persistence): the
@@ -375,6 +379,19 @@ func (s *sessionStore) workspaceOfMeta(m sessionMeta) (string, string) {
 		return s.defaultWorkspace, workspaceDisplayName(s.defaultWorkspace)
 	}
 	return "", "未分类工作区"
+}
+
+// workspaceOf resolves one session's absolute workspace path ("" when
+// unknown). The context-breakdown endpoint uses it to rebuild the per-run
+// workspace context the agent's prompt assembly keys off.
+func (s *sessionStore) workspaceOf(id string) string {
+	s.mu.Lock()
+	meta, ok := s.index[id]
+	s.mu.Unlock()
+	if ok && meta.Workspace != "" {
+		return meta.Workspace
+	}
+	return s.defaultWorkspace
 }
 
 func sessionTitle(msgs []messages.Message) string {

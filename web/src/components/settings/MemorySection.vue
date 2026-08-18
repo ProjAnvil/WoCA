@@ -1,32 +1,34 @@
 <script setup lang="ts">
 import { Brain } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '../../stores/settings'
 
+const { t } = useI18n()
 const settings = useSettingsStore()
 </script>
 
 <template>
   <!-- Memory (ladyM factual memory engine) -->
   <section class="setting-section">
-    <div class="setting-section-title"><Brain :size="13" style="vertical-align: -2px" /> 记忆</div>
-    <p class="mem-intro">woca 会记住这个工作区的决策、偏好与代码知识——越用越懂你的项目。</p>
+    <div class="setting-section-title"><Brain :size="13" style="vertical-align: -2px" /> {{ t('settings.memory.title') }}</div>
+    <p class="mem-intro">{{ t('settings.memory.intro') }}</p>
 
     <div class="setting-row">
       <div>
-        <div class="row-label">记忆引擎</div>
-        <div class="row-hint">关闭后不再读写记忆（实时生效）</div>
+        <div class="row-label">{{ t('settings.memory.engine') }}</div>
+        <div class="row-hint">{{ t('settings.memory.engineHint') }}</div>
       </div>
       <select v-model="settings.memoryEngine" class="field" style="max-width: 200px">
-        <option value="ladym">启用（默认）</option>
-        <option value="none">关闭</option>
+        <option value="ladym">{{ t('settings.memory.enabledOption') }}</option>
+        <option value="none">{{ t('settings.memory.offOption') }}</option>
       </select>
     </div>
 
     <template v-if="settings.memoryEngine === 'ladym'">
       <div class="setting-row">
         <div>
-          <div class="row-label">自动记忆</div>
-          <div class="row-hint">对话结束后自动沉淀值得记住的决策与偏好</div>
+          <div class="row-label">{{ t('settings.memory.autoRetain') }}</div>
+          <div class="row-hint">{{ t('settings.memory.autoRetainHint') }}</div>
         </div>
         <button
           class="switch"
@@ -37,8 +39,8 @@ const settings = useSettingsStore()
 
       <div class="setting-row">
         <div>
-          <div class="row-label">后台整理</div>
-          <div class="row-hint">定期把经历提炼为事实与洞察、预判下一步（消耗少量模型调用）</div>
+          <div class="row-label">{{ t('settings.memory.system2') }}</div>
+          <div class="row-hint">{{ t('settings.memory.system2Hint') }}</div>
         </div>
         <button
           class="switch"
@@ -49,8 +51,8 @@ const settings = useSettingsStore()
 
       <div class="setting-row">
         <div>
-          <div class="row-label">整理间隔（秒）</div>
-          <div class="row-hint">开启后台整理后，同一工作区两次整理的最小间隔（≥60，默认 300）</div>
+          <div class="row-label">{{ t('settings.memory.interval') }}</div>
+          <div class="row-hint">{{ t('settings.memory.intervalHint') }}</div>
         </div>
         <input
           v-model.number="settings.ladymSystem2Interval"
@@ -64,8 +66,8 @@ const settings = useSettingsStore()
 
       <div class="setting-row">
         <div>
-          <div class="row-label">召回条数</div>
-          <div class="row-hint">每轮对话注入的相关记忆条数（1–20）</div>
+          <div class="row-label">{{ t('settings.memory.topK') }}</div>
+          <div class="row-hint">{{ t('settings.memory.topKHint') }}</div>
         </div>
         <input
           v-model.number="settings.ladymTopK"
@@ -78,17 +80,17 @@ const settings = useSettingsStore()
       </div>
 
       <div class="setting-subgroup">
-        <div class="row-label">模型</div>
-        <div class="row-hint">默认继承上方模型配置；也可单独指定（如用便宜的 embedding 模型）</div>
+        <div class="row-label">{{ t('settings.memory.model') }}</div>
+        <div class="row-hint">{{ t('settings.memory.modelHint') }}</div>
 
         <div class="setting-row">
           <div>
             <div class="row-label">Embedding</div>
-            <div class="row-hint">向量检索使用的 embedding 提供方</div>
+            <div class="row-hint">{{ t('settings.memory.embeddingHint') }}</div>
           </div>
           <select v-model="settings.ladymEmbedding" class="field" style="max-width: 200px">
-            <option value="inherit">继承 woca</option>
-            <option value="hashing">hashing（离线）</option>
+            <option value="inherit">{{ t('settings.memory.inheritOption') }}</option>
+            <option value="hashing">{{ t('settings.memory.hashingOption') }}</option>
             <option value="openai">openai</option>
             <option value="ollama">ollama</option>
             <option value="http">http</option>
@@ -97,8 +99,8 @@ const settings = useSettingsStore()
 
         <div class="setting-row">
           <div>
-            <div class="row-label">Embedding 模型</div>
-            <div class="row-hint">留空使用所选提供方的默认模型</div>
+            <div class="row-label">{{ t('settings.memory.embeddingModel') }}</div>
+            <div class="row-hint">{{ t('settings.memory.embeddingModelHint') }}</div>
           </div>
           <input
             v-model="settings.ladymEmbeddingModel"
@@ -111,13 +113,13 @@ const settings = useSettingsStore()
         <div class="setting-row">
           <div>
             <div class="row-label">Embedding Base URL</div>
-            <div class="row-hint">openai / ollama / http 提供方的服务地址</div>
+            <div class="row-hint">{{ t('settings.memory.embeddingBaseHint') }}</div>
           </div>
           <input
             v-model="settings.ladymEmbeddingBaseURL"
             class="field"
             style="max-width: 260px"
-            placeholder="继承 OpenAI Base URL"
+            :placeholder="t('settings.memory.inheritOpenAIBase')"
           />
         </div>
 
@@ -125,7 +127,11 @@ const settings = useSettingsStore()
           <div>
             <div class="row-label">Embedding API Key</div>
             <div class="row-hint">
-              {{ settings.ladymEmbeddingKeySet ? '已设置（加密存储）' : '未设置（继承 OpenAI Key）' }}
+              {{
+                settings.ladymEmbeddingKeySet
+                  ? t('settings.shared.setEncrypted')
+                  : t('settings.memory.embeddingKeyNotSet')
+              }}
             </div>
           </div>
           <input
@@ -134,17 +140,17 @@ const settings = useSettingsStore()
             style="max-width: 260px"
             type="password"
             autocomplete="off"
-            placeholder="输入新值以更新"
+            :placeholder="t('settings.memory.enterNew')"
           />
         </div>
 
         <div class="setting-row">
           <div>
-            <div class="row-label">整理模型（LLM）</div>
-            <div class="row-hint">继承 = 用当前模型做离线整理；none = 纯本地启发式（洞察/预判停用）</div>
+            <div class="row-label">{{ t('settings.memory.llm') }}</div>
+            <div class="row-hint">{{ t('settings.memory.llmHint') }}</div>
           </div>
           <select v-model="settings.ladymLLM" class="field" style="max-width: 200px">
-            <option value="inherit">继承 woca</option>
+            <option value="inherit">{{ t('settings.memory.inheritOption') }}</option>
             <option value="none">none</option>
           </select>
         </div>
@@ -152,8 +158,8 @@ const settings = useSettingsStore()
 
       <div class="setting-row">
         <div>
-          <div class="row-label">数据库路径</div>
-          <div class="row-hint">留空使用 ~/.woca/ladym.db（实时生效）</div>
+          <div class="row-label">{{ t('settings.memory.dbPath') }}</div>
+          <div class="row-hint">{{ t('settings.memory.dbPathHint') }}</div>
         </div>
         <input
           v-model="settings.ladymDBPath"

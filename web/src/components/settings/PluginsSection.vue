@@ -34,10 +34,12 @@ export function resetPluginState() {
 </script>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { Puzzle } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
 import { getPlugins, installPlugin, putPlugins } from '../../api/client'
 
+const { t } = useI18n()
 const pluginState = sharedPluginState
 
 async function loadPlugins() {
@@ -96,8 +98,14 @@ async function togglePlugin(p: PluginStatus) {
     await putPlugins(names)
     p.enabled = enable
     pluginState.message = enable
-      ? `已启用 ${p.name}${p.state !== 'ready' ? '（运行时未安装，点击「安装」后工具才可用）' : '，工具立即生效'}`
-      : `已停用 ${p.name}，工具立即移除`
+      ? t('settings.plugins.enabled', {
+          name: p.name,
+          note:
+            p.state !== 'ready'
+              ? t('settings.plugins.enabledRuntimeMissing')
+              : t('settings.plugins.toolsInstant'),
+        })
+      : t('settings.plugins.disabled', { name: p.name })
   } catch (e) {
     pluginState.error = e instanceof Error ? e.message : String(e)
   } finally {
@@ -113,39 +121,36 @@ async function installOne(p: PluginStatus, reinstall = false) {
     p.state = 'installing'
     p.log = []
     pluginState.message = reinstall
-      ? `${p.name} 开始升级（删除旧环境后按当前固定版本重装，共享运行时保留）`
-      : `${p.name} 开始安装（下载运行时与依赖，可能需要几分钟）`
+      ? t('settings.plugins.upgradeStarted', { name: p.name })
+      : t('settings.plugins.installStarted', { name: p.name })
     scheduleInstallPolling()
   } catch (e) {
     pluginState.error = e instanceof Error ? e.message : String(e)
   }
 }
 
-const kindLabels: Record<string, string> = {
-  golang: 'Go 内置',
+const kindLabels = computed<Record<string, string>>(() => ({
+  golang: t('settings.plugins.kindGolang'),
   python: 'Python · uv',
-}
+}))
 
-const stateLabels: Record<string, string> = {
-  not_installed: '未安装',
-  installing: '安装中…',
-  ready: '已就绪',
-  error: '安装失败',
-}
+const stateLabels = computed<Record<string, string>>(() => ({
+  not_installed: t('settings.plugins.stateNotInstalled'),
+  installing: t('settings.plugins.stateInstalling'),
+  ready: t('settings.plugins.stateReady'),
+  error: t('settings.plugins.stateError'),
+}))
 </script>
 
 <template>
   <!-- Built-in capability plugins: enable toggles + runtime installs -->
   <section class="setting-section">
     <div class="setting-section-title">
-      <Puzzle :size="13" style="vertical-align: -2px" /> 插件
+      <Puzzle :size="13" style="vertical-align: -2px" /> {{ t('settings.plugins.title') }}
     </div>
-    <p class="mem-intro">
-      内置能力插件随 woca 二进制分发，运行时（pinchtab / uv+Python）按需下载到
-      ~/.woca/plugins 并校验 SHA-256。启用后工具立即注入 agent。
-    </p>
+    <p class="mem-intro">{{ t('settings.plugins.intro') }}</p>
 
-    <div v-if="pluginState.loading && !pluginState.loaded" class="row-hint">加载中…</div>
+    <div v-if="pluginState.loading && !pluginState.loaded" class="row-hint">{{ t('common.loading') }}</div>
     <div v-else-if="pluginState.error" class="row-hint" style="color: var(--danger, #e5484d)">
       {{ pluginState.error }}
     </div>
@@ -167,13 +172,13 @@ const stateLabels: Record<string, string> = {
           class="switch"
           :class="{ on: p.enabled }"
           :disabled="pluginState.toggling === p.name"
-          :title="p.enabled ? '点击停用（工具立即移除）' : '点击启用'"
+          :title="p.enabled ? t('settings.plugins.disableTip') : t('settings.plugins.enableTip')"
           @click="togglePlugin(p)"
         ></button>
       </div>
       <div class="row-hint">{{ p.description }}</div>
       <div class="row-hint">
-        工具：<code v-for="t in p.tools" :key="t" class="plugin-tool">{{ t }}</code>
+        {{ t('settings.plugins.tools') }}<code v-for="t in p.tools" :key="t" class="plugin-tool">{{ t }}</code>
       </div>
       <div v-if="p.state === 'ready' && p.detail" class="row-hint plugin-versions">
         {{ p.detail }}
@@ -188,10 +193,10 @@ const stateLabels: Record<string, string> = {
         <button
           v-if="p.state === 'ready' && p.runtime"
           class="btn"
-          title="删除环境后按当前固定版本重装（升级 / 修复）；共享运行时与缓存保留"
+          :title="t('settings.plugins.reinstallTip')"
           @click="installOne(p, true)"
         >
-          升级 / 重装
+          {{ t('settings.plugins.reinstall') }}
         </button>
         <button
           v-if="p.state !== 'ready' && p.runtime"
@@ -199,7 +204,7 @@ const stateLabels: Record<string, string> = {
           :disabled="p.state === 'installing'"
           @click="installOne(p)"
         >
-          {{ p.state === 'installing' ? '安装中…' : '下载并安装' }}
+          {{ p.state === 'installing' ? t('settings.plugins.stateInstalling') : t('settings.plugins.downloadInstall') }}
         </button>
       </div>
     </div>

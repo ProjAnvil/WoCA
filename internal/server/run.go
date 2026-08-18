@@ -54,6 +54,11 @@ type Run struct {
 	// onFinish, when set, fires exactly once when the terminal event is
 	// emitted — on error and cancellation too, before onDone runs.
 	onFinish func()
+	// onPark / onResume notify the owner of interrupt transitions so the
+	// session run state can flip to awaiting and back. Nil on runs that
+	// never record state (command runs, bare tests).
+	onPark   func()
+	onResume func()
 }
 
 func newRun(id string, a *agent.Agent, ctx context.Context, cancel context.CancelFunc) *Run {
@@ -134,6 +139,18 @@ func (r *Run) render(chunk lggraph.StreamChunk) {
 			if v.Text != "" {
 				r.emit(Event{Type: "reasoning", Data: map[string]any{"text": v.Text}})
 			}
+		case agent.GoalNote:
+			// Goal-loop narration (banners, per-cycle chatter) streams as its
+			// own event type so the chat never mistakes it for the answer.
+			if v.Text != "" {
+				r.emit(Event{Type: "goal_note", Data: map[string]any{"text": v.Text}})
+			}
+		case agent.GoalFinalReply:
+			// The goal run's single unified reply — the one goal text that
+			// reaches the chat as an answer.
+			if v.Text != "" {
+				r.emit(Event{Type: "delta", Data: map[string]any{"text": v.Text}})
+			}
 		case agent.GoalDelta:
 			// Messages produced inside a goal execute cycle stream through
 			// the custom channel; render them like normal-run messages.
@@ -199,6 +216,9 @@ func (r *Run) park(kind string, payload any) (any, error) {
 	r.mu.Unlock()
 
 	r.emit(Event{Type: "interrupt", Data: map[string]any{"kind": kind, "payload": payload}})
+	if r.onPark != nil {
+		r.onPark()
+	}
 
 	timer := time.AfterFunc(parkedRunTTL, func() {
 		r.emit(Event{Type: "timeout", Data: map[string]any{"kind": kind, "reason": "parked_ttl"}})
@@ -247,6 +267,14 @@ func (r *Run) answer(body []byte) error {
 		r.pending = nil
 	}
 	r.mu.Unlock()
+
+	// The resolution is part of the event history: a client replaying the
+	// stream (page refresh, /api/events-driven reattach) must not resurrect
+	// the interrupt card this answer just satisfied.
+	r.emit(Event{Type: "interrupt_resolved", Data: map[string]any{"kind": p.kind}})
+	if r.onResume != nil {
+		r.onResume()
+	}
 
 	select {
 	case p.reply <- resume:

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { forgetMemory, listMemory, memoryStats, rememberMemory } from '../api/client'
+import i18n from '../i18n'
 import type { MemoryItem, MemoryStats, RememberResponse } from '../types'
 
 // Workspace-scoped memory panel state. open(ws) fixes the workspace for the
@@ -112,14 +113,17 @@ export const useMemoryStore = defineStore('memory', () => {
     try {
       res = await rememberMemory({ workspace: workspace.value, content, tags })
     } catch (e) {
-      error.value = e instanceof Error ? `记住失败：${e.message}` : '记住失败，请稍后重试'
+      error.value =
+        e instanceof Error
+          ? i18n.global.t('memoryStore.remember.failed', { message: e.message })
+          : i18n.global.t('memoryStore.remember.failedRetry')
       return ''
     }
     await reload()
     // Write the notice AFTER reload(): reload() clears notice at its start,
     // so writing before the refresh would be silently wiped.
     if (res.dropped || !res.id) {
-      notice.value = '被注意力门丢弃（重复或噪音），未保存'
+      notice.value = i18n.global.t('memoryStore.remember.droppedByGate')
     } else {
       notice.value = ''
     }
@@ -130,7 +134,10 @@ export const useMemoryStore = defineStore('memory', () => {
     try {
       await forgetMemory(id)
     } catch (e) {
-      error.value = e instanceof Error ? `忘记失败：${e.message}` : '忘记失败，请稍后重试'
+      error.value =
+        e instanceof Error
+          ? i18n.global.t('memoryStore.forget.failed', { message: e.message })
+          : i18n.global.t('memoryStore.forget.failedRetry')
       return
     }
     items.value = items.value.filter((m) => m.id !== id)

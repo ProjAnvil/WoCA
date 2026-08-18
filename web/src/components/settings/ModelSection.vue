@@ -1,18 +1,20 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '../../stores/settings'
 
+const { t } = useI18n()
 const settings = useSettingsStore()
 </script>
 
 <template>
   <!-- Model (session preferences) -->
   <section class="setting-section">
-    <div class="setting-section-title">模型</div>
+    <div class="setting-section-title">{{ t('settings.model.title') }}</div>
 
     <div class="setting-row">
       <div>
-        <div class="row-label">会话默认模型</div>
-        <div class="row-hint">可自由输入任意模型名（支持自定义/中转模型）</div>
+        <div class="row-label">{{ t('settings.model.defaultModel') }}</div>
+        <div class="row-hint">{{ t('settings.shared.freeModelHint') }}</div>
       </div>
       <input
         v-model="settings.model"
@@ -24,7 +26,7 @@ const settings = useSettingsStore()
     </div>
 
     <div class="setting-row">
-      <div class="row-label">权限模式</div>
+      <div class="row-label">{{ t('settings.model.permissionMode') }}</div>
       <select v-model="settings.permissionMode" class="field" style="max-width: 200px">
         <option value="default">default</option>
         <option value="acceptEdits">acceptEdits</option>

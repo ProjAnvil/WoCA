@@ -18,9 +18,11 @@
     "marked": "^18.0.9",
     "pinia": "^4.0.3",
     "shiki": "^4.4.3",
-    "vue": "^3.5.41"
+    "vue": "^3.5.41",
+    "vue-i18n": "^11.4.8"
   },
   "devDependencies": {
+    "@iconify-json/vscode-icons": "^1.2.73",
     "@vitejs/plugin-vue": "^6.0.8",
     "typescript": "^5.9.3",
     "vite": "^8.2.1",
