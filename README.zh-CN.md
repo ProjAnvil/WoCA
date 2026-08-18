@@ -4,7 +4,7 @@
 
 **单二进制编码代理 harness —— CLI、TUI 与 Web，构建在显式代理图之上。**
 
-[![CI](https://github.com/projanvil/woca/actions/workflows/ci.yml/badge.svg)](https://github.com/projanvil/woca/actions/workflows/ci.yml)
+[![CI](https://github.com/ProjAnvil/WoCA/actions/workflows/ci.yml/badge.svg)](https://github.com/ProjAnvil/WoCA/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.26%2B-00ADD8)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -128,7 +128,7 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
 **从源码构建（当前推荐）：**
 
 ```bash
-git clone https://github.com/projanvil/woca
+git clone https://github.com/ProjAnvil/WoCA.git
 cd woca
 make            # 构建 web 前端 + 二进制，输出 build/woca
 ```
@@ -482,12 +482,12 @@ Web 服务器经 REST + SSE 暴露代理能力：
 
 | 端点 | 说明 |
 |------|------|
-| `POST /api/sessions` | 创建会话 → `{"session_id":"…"}` |
+| `POST /api/sessions` | 创建会话（立即持久化）→ `{"session_id":"…","workspace":"…"}` |
 | `GET /api/sessions` | 列出持久化会话 |
 | `GET /api/sessions/{id}` | 获取完整 transcript |
 | `DELETE /api/sessions/{id}` | 删除会话（墓碑标记防复活） |
 | `POST /api/runs` | 发起运行：`{"session_id":"…","prompt":"…"}` |
-| `GET /api/runs/{id}/events` | SSE：`delta` / `tool_call` / `tool_result` / `interrupt` / `done` / `error` |
+| `GET /api/runs/{id}/events` | SSE：`delta` / `reasoning` / `tool_call` / `tool_result` / `goal` / `goal_note` / `interrupt` / `done` / `error`（goal 运行的循环过程走 `goal_note`，结束时以一条统一 `delta` 回复收尾） |
 | `POST /api/runs/{id}/answer` | 响应中断：`{"approve":true}` 或 `{"answers":[…]}` |
 | `POST /api/runs/{id}/input` | 排队轮中输入 |
 | `POST /api/runs/{id}/cancel` | 取消运行 |

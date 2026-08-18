@@ -4,7 +4,7 @@
 
 **A single-binary coding-agent harness — CLI, TUI, and web — built on an explicit agent graph.**
 
-[![CI](https://github.com/projanvil/woca/actions/workflows/ci.yml/badge.svg)](https://github.com/projanvil/woca/actions/workflows/ci.yml)
+[![CI](https://github.com/ProjAnvil/WoCA/actions/workflows/ci.yml/badge.svg)](https://github.com/ProjAnvil/WoCA/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.26%2B-00ADD8)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -139,7 +139,7 @@ every conversation is persisted as a resumable transcript.
 **From source (recommended for now):**
 
 ```bash
-git clone https://github.com/projanvil/woca
+git clone https://github.com/ProjAnvil/WoCA.git
 cd woca
 make            # build web frontend + binary into build/woca
 ```
@@ -520,12 +520,12 @@ The web server exposes the agent over REST + SSE:
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /api/sessions` | create a session → `{"session_id":"…"}` |
+| `POST /api/sessions` | create a session (persisted immediately) → `{"session_id":"…","workspace":"…"}` |
 | `GET /api/sessions` | list persisted sessions |
 | `GET /api/sessions/{id}` | fetch a full transcript |
 | `DELETE /api/sessions/{id}` | delete a session (tombstoned against revival) |
 | `POST /api/runs` | start a run: `{"session_id":"…","prompt":"…"}` |
-| `GET /api/runs/{id}/events` | SSE: `delta` / `tool_call` / `tool_result` / `interrupt` / `done` / `error` |
+| `GET /api/runs/{id}/events` | SSE: `delta` / `reasoning` / `tool_call` / `tool_result` / `goal` / `goal_note` / `interrupt` / `done` / `error` (goal runs stream cycle narration as `goal_note` and end with one unified `delta` reply) |
 | `POST /api/runs/{id}/answer` | resolve an interrupt: `{"approve":true}` or `{"answers":[…]}` |
 | `POST /api/runs/{id}/input` | queue mid-turn input |
 | `POST /api/runs/{id}/cancel` | cancel a run |
@@ -574,6 +574,6 @@ please open an issue first to discuss the design. See
 ## License
 
 woca is released under the [MIT License](LICENSE). It is built on
-[langchain-golang](https://github.com/projanvil/langchain-golang),
+[langchain-golang](https://github.com/ProjAnvil/langchain-golang),
 [bubbletea](https://github.com/charmbracelet/bubbletea), and
 [cobra](https://github.com/spf13/cobra).

@@ -1,5 +1,6 @@
 node_modules
 dist/*
 !dist/index.html
+dist-demo
 *.local
 .DS_Store
