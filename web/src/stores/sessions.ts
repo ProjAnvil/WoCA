@@ -63,6 +63,11 @@ function messagesToItems(msgs: TranscriptMessage[]): ChatItem[] {
           inGoal = true
           break // harness-injected goal continuation prompt — not user speech
         }
+        if (content.startsWith('<relevant-memory')) {
+          // ladyM recall context injected after tool results — model input,
+          // never user speech (same class of harness message as goal-cycle).
+          break
+        }
         inGoal = false
         out.push({
           id: nid(),
@@ -184,6 +189,12 @@ export const useSessionStore = defineStore('sessions', () => {
   const serverRunState = ref<Record<string, { status: 'running' | 'awaiting'; runId: string }>>({})
   let eventsSource: EventSource | null = null
   const reattaching = new Set<string>()
+  // Sessions with a createRun POST in flight. The server's global `running`
+  // event races the POST response; without this marker maybeReattach would
+  // treat our own just-started run as a foreign one (local status is still
+  // the previous turn's) and rebuild items from the pre-run disk snapshot,
+  // wiping the optimistic user bubble send() just pushed.
+  const sending = new Set<string>()
 
   const activeSession = computed(() => sessions.value.find((s) => s.id === activeId.value))
   const activeItems = computed(() => items.value[activeId.value] ?? [])
@@ -289,6 +300,10 @@ export const useSessionStore = defineStore('sessions', () => {
     if (!st || !st.runId || demo.value) return
     const local = status.value[sid] ?? 'idle'
     if (local === 'running' || local === 'queued' || local === 'awaiting') return
+    // A send whose POST is still in flight owns the run it is about to
+    // attach to — reattaching here would reload the pre-run snapshot over
+    // its optimistic user bubble (see `sending` above).
+    if (sending.has(sid)) return
     if (reattaching.has(st.runId)) return
     reattaching.add(st.runId)
     try {
@@ -799,6 +814,10 @@ export const useSessionStore = defineStore('sessions', () => {
       return
     }
 
+    // Mark the send in flight for its whole POST window: the global events
+    // stream may deliver this run's `running` state before createRun
+    // resolves, and maybeReattach must not treat it as a foreign run.
+    sending.add(sid)
     try {
       const payload = (attachments ?? []).map((a) => ({
         name: a.name,
@@ -811,10 +830,15 @@ export const useSessionStore = defineStore('sessions', () => {
       // queued run leaves runId on the active run (claim only on promotion).
       status.value[sid] = res.state === 'queued' ? 'queued' : 'running'
       if (res.state === 'queued') queuePosition.value[sid] = res.queue_position
+      // The status assignment above re-enables the reattach guard; drop the
+      // marker before awaiting the stream so maybeReattach stays available
+      // if this stream later dies mid-run.
+      sending.delete(sid)
       // After an interjected user run finishes, an active goal keeps looping
       // (Codex's session-idle continuation scheduling).
       await attachStream(sid, res.run_id, () => void continueGoalLoop(sid), res.state !== 'queued')
     } catch (e) {
+      sending.delete(sid)
       closeStreaming(sid)
       error.value[sid] = e instanceof Error ? e.message : String(e)
       status.value[sid] = 'error'
