@@ -2,7 +2,7 @@
 
 # woca
 
-**单二进制编码代理 harness —— CLI、TUI 与 Web，构建在显式代理图之上。**
+**单二进制编码代理 harness —— 以 Web UI 为主，另有 TUI 与 CLI，构建在显式代理图之上。**
 
 [![CI](https://github.com/ProjAnvil/WoCA/actions/workflows/ci.yml/badge.svg)](https://github.com/ProjAnvil/WoCA/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.26%2B-00ADD8)](https://go.dev/)
@@ -35,9 +35,9 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
 - [环境要求](#环境要求)
 - [安装](#安装)
 - [快速上手](#快速上手)
-  - [单次执行](#单次执行)
+  - [Web UI（推荐）](#web-ui推荐)
   - [交互式 TUI / REPL](#交互式-tui--repl)
-  - [Web UI](#web-ui)
+  - [单次执行](#单次执行)
 - [供应商与模型](#供应商与模型)
 - [权限](#权限)
 - [架构](#架构)
@@ -96,11 +96,13 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
 
 **交互面**
 
-- **单次 CLI**：适合脚本与管道。
+- **内嵌 Web UI**（推荐的交互方式）：按工作区分组的会话、带工具卡的流
+  式气泡、语法高亮的文件侧栏、图片上传与截图粘贴、设置面板 —— 由同一
+  二进制经 SSE 提供，并通过 `woca web start | stop | restart | status`
+  以后台守护进程方式管理。
 - **交互式 TUI**（bubbletea）：实时流式输出、审批提示、图片附件、vim 输
   入模式、主题、可滚动 transcript。
-- **内嵌 Web UI**：按工作区分组的会话、带工具卡的流式气泡、语法高亮的文
-  件侧栏、图片上传与截图粘贴、设置面板 —— 由同一二进制经 SSE 提供。
+- **单次 CLI**：适合脚本与管道。
 
 **生态**
 
@@ -163,12 +165,23 @@ $ woca config set glm-api-key <key>
 
 或者直接导出 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`，跳过配置。
 
-### 单次执行
+### Web UI（推荐）
+
+Web UI 是使用 woca 的主要方式。以后台守护进程方式管理：
 
 ```bash
-woca -p "解释这个仓库的构建体系"
-woca -p "修复失败的测试" --dangerously-skip-permissions   # 谨慎使用
+woca web start          # 后台启动 Web UI → http://127.0.0.1:3484
+woca web status         # 查看是否在运行
+woca web restart        # 重启后台 Web UI
+woca web stop           # 停止
 ```
+
+服务器内嵌前端并通过 SSE API 暴露代理能力 —— 创建会话、发起运行、观看流
+式事件、处理权限审批、浏览工作区文件、管理设置。
+
+其他运行方式：`woca serve` 在前台运行服务器（`--addr`、
+`--no-browser`）；交互会话中 `/web` 按需启动（`/web <port>`、
+`/web off`、`/web status`）。
 
 ### 交互式 TUI / REPL
 
@@ -180,16 +193,12 @@ woca --resume last      # 继续最近一次会话
 `esc` 中断运行，`pgup`/`pgdown` 滚动，输入 `!cmd` 将 shell 命令输出纳入
 对话。见[斜杠命令](#斜杠命令)。
 
-### Web UI
+### 单次执行
 
 ```bash
-woca serve              # http://127.0.0.1:3484
+woca -p "解释这个仓库的构建体系"
+woca -p "修复失败的测试" --dangerously-skip-permissions   # 谨慎使用
 ```
-
-服务器内嵌前端并通过 SSE API 暴露代理能力 —— 创建会话、发起运行、观看流
-式事件、处理权限审批、浏览工作区文件、管理设置。交互会话中 `/web` 按需启
-动（`/web <port>`、`/web off`、`/web status`）；`woca web
-start/stop/restart/status` 以后台进程方式管理。
 
 ## 供应商与模型
 

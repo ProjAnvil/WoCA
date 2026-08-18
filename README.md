@@ -2,7 +2,7 @@
 
 # woca
 
-**A single-binary coding-agent harness — CLI, TUI, and web — built on an explicit agent graph.**
+**A single-binary coding-agent harness — web UI first, plus TUI and CLI — built on an explicit agent graph.**
 
 [![CI](https://github.com/ProjAnvil/WoCA/actions/workflows/ci.yml/badge.svg)](https://github.com/ProjAnvil/WoCA/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.26%2B-00ADD8)](https://go.dev/)
@@ -37,9 +37,9 @@ every conversation is persisted as a resumable transcript.
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quickstart](#quickstart)
-  - [One-shot](#one-shot)
+  - [Web UI (recommended)](#web-ui-recommended)
   - [Interactive TUI / REPL](#interactive-tui--repl)
-  - [Web UI](#web-ui)
+  - [One-shot](#one-shot)
 - [Providers & models](#providers--models)
 - [Permissions](#permissions)
 - [Architecture](#architecture)
@@ -103,13 +103,14 @@ every conversation is persisted as a resumable transcript.
 
 **Surfaces**
 
-- **One-shot CLI** for scripting and pipes.
+- **Embedded web UI** (the recommended surface): sessions grouped by
+  workspace, streaming assistant bubbles with tool cards, file sidebar with
+  syntax-highlighted previews, image uploads and screenshot paste, settings
+  panel — served from the same binary over SSE and managed as a background
+  daemon via `woca web start | stop | restart | status`.
 - **Interactive TUI** (bubbletea): live streaming, approval prompts, image
   attachments, vim-mode input, themes, scrollable transcript.
-- **Embedded web UI**: sessions grouped by workspace, streaming assistant
-  bubbles with tool cards, file sidebar with syntax-highlighted previews,
-  image uploads and screenshot paste, settings panel — served from the same
-  binary over SSE.
+- **One-shot CLI** for scripting and pipes.
 
 **Ecosystem**
 
@@ -175,12 +176,25 @@ $ woca config set glm-api-key <key>
 or export `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` and skip configuration
 entirely.
 
-### One-shot
+### Web UI (recommended)
+
+The web UI is the primary way to use woca. Manage it as a background
+daemon:
 
 ```bash
-woca -p "explain this repo's build system"
-woca -p "fix the failing test" --dangerously-skip-permissions   # use with care
+woca web start          # launch the web UI in the background → http://127.0.0.1:3484
+woca web status         # check whether it is running
+woca web restart        # restart the background web UI
+woca web stop           # stop it
 ```
+
+The server embeds the frontend and exposes the agent over an SSE API —
+create sessions, start runs, watch streaming events, resolve permission
+prompts, browse workspace files, and manage settings.
+
+Other ways to run it: `woca serve` keeps the server in the foreground
+(`--addr`, `--no-browser`), and from an interactive session `/web` starts
+it on demand (`/web <port>`, `/web off`, `/web status`).
 
 ### Interactive TUI / REPL
 
@@ -193,18 +207,12 @@ Press `esc` to interrupt a run, `pgup`/`pgdown` to scroll, type `!cmd` to
 run a shell command into the conversation. See
 [Slash commands](#slash-commands).
 
-### Web UI
+### One-shot
 
 ```bash
-woca serve              # http://127.0.0.1:3484
+woca -p "explain this repo's build system"
+woca -p "fix the failing test" --dangerously-skip-permissions   # use with care
 ```
-
-The server embeds the frontend and exposes the agent over an SSE API —
-create sessions, start runs, watch streaming events, resolve permission
-prompts, browse workspace files, and manage settings. From an interactive
-session, `/web` starts it on demand (`/web <port>`, `/web off`,
-`web status`); `woca web start/stop/restart/status` manages it as a
-background process.
 
 ## Providers & models
 
