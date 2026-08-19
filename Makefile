@@ -1,4 +1,4 @@
-.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web install deps-baseline check-deps
+.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web install deps-baseline check-deps ent-up ent-down ent-ps ent-logs
 
 # Default: build the web frontend, then the binary (frontend is embedded).
 all: web build
@@ -65,3 +65,25 @@ check-deps: build
 	@mkdir -p build
 	@go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca | sort -u > build/deps-personal.actual
 	@diff -u ci/deps-personal.txt build/deps-personal.actual && echo "personal-edition deps match baseline"
+
+# woca-enterprise: the microservice (enterprise) edition persistence layer —
+# PostgreSQL primary+replica and a 3-node NATS JetStream cluster, segmented
+# per component class and reachable only through the single gateway on high
+# ports. See deploy/enterprise/README.md.
+ENT_COMPOSE = docker compose -f deploy/enterprise/docker-compose.yml
+
+ent-up:
+	$(ENT_COMPOSE) up -d
+
+# compose down plus removing the inter-segment isolation rules from the
+# Docker VM's DOCKER-USER chain (installed by the firewall service).
+ent-down:
+	$(ENT_COMPOSE) down
+	docker run --rm --privileged --pid=host alpine:3.22 nsenter -t 1 -m -n -- \
+		sh -c 'iptables -D DOCKER-USER -j WOCA-ENT-ISOLATION 2>/dev/null; iptables -F WOCA-ENT-ISOLATION 2>/dev/null; iptables -X WOCA-ENT-ISOLATION 2>/dev/null; echo woca-enterprise: isolation rules removed' 
+
+ent-ps:
+	$(ENT_COMPOSE) ps
+
+ent-logs:
+	$(ENT_COMPOSE) logs -f

@@ -1,0 +1,310 @@
+# woca-enterprise — the persistence layer for the microservice (enterprise)
+# edition of woca, per the microservices design doc (§4 target architecture,
+# §5.2 wiring, §9 data model, §10 run state & events).
+#
+# Topology: every component class lives on its own subnet and is reachable
+# from the outside only through the single gateway, which straddles all
+# segments and is the only container publishing host ports (high ports).
+# Future woca microservice roles (woca-server / gateway / scheduler /
+# worker, Phase 2+) attach to the `edge` segment and reach the data plane
+# through the gateway — mirroring the K8s topology where only the control
+# plane talks to storage.
+#
+#   host (high ports)          edge 172.28.30.0/24        data segments
+#   ────────────────────►  gateway ─────────────►  pg   172.28.10.0/24
+#      35432 pg write                               pg-primary + pg-replica
+#      35433 pg read          (future woca          mq   172.28.20.0/24
+#      34222 nats              services hang         nats-js-1/2/3 (JetStream
+#      38222 nats monitor       here)                RAFT cluster, R3 streams)
+#
+# Multi-instance: NATS runs a 3-node JetStream cluster; PostgreSQL runs a
+# primary with a streaming-replication hot-standby replica.
+
+name: woca-enterprise
+
+services:
+  # ─────────────────────────── PostgreSQL (segment: pg) ───────────────────
+
+  pg-primary:
+    image: postgres:16-alpine
+    container_name: woca-enterprise-pg-primary
+    environment:
+      POSTGRES_USER: woca
+      POSTGRES_PASSWORD: ${WOCA_PG_PASSWORD:?set in deploy/enterprise/.env}
+      POSTGRES_DB: woca
+      WOCA_PG_REPL_PASSWORD: ${WOCA_PG_REPL_PASSWORD:?set in deploy/enterprise/.env}
+      # woca's PG backends auto-create their tables (wocadb.migrate,
+      # lgcp.ensureSchema, store.NewSQL — all CREATE TABLE IF NOT EXISTS);
+      # initdb/ only provisions the replication role + conventions.
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=16
+      - -c
+      - max_replication_slots=16
+      - -c
+      - listen_addresses=*
+    volumes:
+      - pg-primary-data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    networks:
+      - pg
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U woca -d woca"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  pg-replica:
+    image: postgres:16-alpine
+    container_name: woca-enterprise-pg-replica
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: woca
+      POSTGRES_PASSWORD: ${WOCA_PG_PASSWORD:?set in deploy/enterprise/.env}
+      POSTGRES_DB: woca
+      WOCA_PG_REPL_PASSWORD: ${WOCA_PG_REPL_PASSWORD:?set in deploy/enterprise/.env}
+      WOCA_PG_PRIMARY_HOST: pg-primary
+    entrypoint: /usr/local/bin/init-replica.sh
+    volumes:
+      - pg-replica-data:/var/lib/postgresql/data
+      - ./pg/init-replica.sh:/usr/local/bin/init-replica.sh:ro
+    networks:
+      - pg
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U woca -d woca"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  # ─────────────────────── NATS JetStream (segment: mq) ───────────────────
+
+  nats-js-1: &nats
+    image: nats:2.11-alpine
+    container_name: woca-enterprise-nats-js-1
+    command:
+      - nats-server
+      - -js
+      - --name
+      - nats-js-1
+      - --cluster_name
+      - WOCA_ENTERPRISE
+      - --cluster
+      - nats://0.0.0.0:6222
+      - --routes
+      - nats://nats-js-1:6222,nats://nats-js-2:6222,nats://nats-js-3:6222
+      - --http_port
+      - "8222"
+      - --store_dir
+      - /data
+    volumes:
+      - nats-js-1-data:/data
+    networks:
+      - mq
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8222/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  nats-js-2:
+    <<: *nats
+    container_name: woca-enterprise-nats-js-2
+    command:
+      - nats-server
+      - -js
+      - --name
+      - nats-js-2
+      - --cluster_name
+      - WOCA_ENTERPRISE
+      - --cluster
+      - nats://0.0.0.0:6222
+      - --routes
+      - nats://nats-js-1:6222,nats://nats-js-2:6222,nats://nats-js-3:6222
+      - --http_port
+      - "8222"
+      - --store_dir
+      - /data
+    volumes:
+      - nats-js-2-data:/data
+
+  nats-js-3:
+    <<: *nats
+    container_name: woca-enterprise-nats-js-3
+    command:
+      - nats-server
+      - -js
+      - --name
+      - nats-js-3
+      - --cluster_name
+      - WOCA_ENTERPRISE
+      - --cluster
+      - nats://0.0.0.0:6222
+      - --routes
+      - nats://nats-js-1:6222,nats://nats-js-2:6222,nats://nats-js-3:6222
+      - --http_port
+      - "8222"
+      - --store_dir
+      - /data
+    volumes:
+      - nats-js-3-data:/data
+
+  # One-shot: waits for a healthy JetStream meta-leader, then idempotently
+  # provisions the platform streams (run queue + run/event fanout, design
+  # doc §5.4/§10). Existing streams are left untouched so restarts keep data.
+  nats-init:
+    image: synadia/nats-box:latest
+    container_name: woca-enterprise-nats-init
+    depends_on:
+      nats-js-1:
+        condition: service_healthy
+      nats-js-2:
+        condition: service_started
+      nats-js-3:
+        condition: service_started
+    environment:
+      NATS_URL: nats://nats-js-1:4222
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        # Work-queue stream for runs: each run request is delivered to
+        # exactly one worker; ack removes it (RunQueue Enqueue/Claim/Ack).
+        nats stream info WOCA_RUNS >/dev/null 2>&1 || \
+        nats stream create WOCA_RUNS \
+          --subjects 'runs.>' \
+          --storage file --retention work --replicas 3 --discard new \
+          --max-msgs=-1 --max-msg-size=-1 \
+          --dupe-window 2m --max-age 168h --max-bytes 2147483648
+        # Limits-retention stream for the event fanout backing SSE
+        # (eventbus remote implementation, Last-Event-ID replay window).
+        nats stream info WOCA_EVENTS >/dev/null 2>&1 || \
+        nats stream create WOCA_EVENTS \
+          --subjects 'events.>' \
+          --storage file --retention limits --replicas 3 --discard old \
+          --max-msgs=-1 --max-msg-size=-1 \
+          --dupe-window 2m --max-age 24h --max-bytes 5368709120
+        echo "woca-enterprise JetStream streams ready"
+        nats stream report
+    networks:
+      - mq
+    restart: "no"
+
+  # ──────────────── cross-segment isolation (DOCKER-USER) ────────────────
+
+  # One-shot: installs DROP rules in the Docker VM's DOCKER-USER chain for
+  # every inter-segment route. Legitimate flows never cross segments at the
+  # IP layer (edge clients hit the gateway's edge-side address, the gateway
+  # reaches backends on its own segment-local address), so any forwarded
+  # packet between the three subnets is a bypass attempt and is dropped.
+  # Recent Docker networking stacks no longer install inter-network
+  # isolation themselves (DOCKER-USER accepts everything), hence this hook.
+  # `make ent-down` removes the rules again.
+  firewall:
+    image: alpine:3.22
+    container_name: woca-enterprise-firewall
+    pid: host
+    privileged: true
+    restart: "no"
+    command:
+      - nsenter
+      - -t
+      - "1"
+      - -m
+      - -n
+      - --
+      - sh
+      - -c
+      - |
+        set -e
+        iptables -N WOCA-ENT-ISOLATION 2>/dev/null || true
+        iptables -F WOCA-ENT-ISOLATION
+        for pair in \
+            "172.28.30.0/24 172.28.10.0/24" \
+            "172.28.30.0/24 172.28.20.0/24" \
+            "172.28.10.0/24 172.28.30.0/24" \
+            "172.28.20.0/24 172.28.30.0/24" \
+            "172.28.10.0/24 172.28.20.0/24" \
+            "172.28.20.0/24 172.28.10.0/24"; do
+          set -- $$pair
+          iptables -A WOCA-ENT-ISOLATION -s $$1 -d $$2 -j DROP
+        done
+        iptables -A WOCA-ENT-ISOLATION -j RETURN
+        iptables -C DOCKER-USER -j WOCA-ENT-ISOLATION 2>/dev/null || \
+          iptables -I DOCKER-USER 1 -j WOCA-ENT-ISOLATION
+        echo "woca-enterprise: inter-segment isolation installed"
+        iptables -S DOCKER-USER | head -3
+
+  # ─────────────────────────── gateway (all segments) ─────────────────────
+
+  gateway:
+    image: nginx:1.29-alpine
+    container_name: woca-enterprise-gateway
+    depends_on:
+      pg-primary:
+        condition: service_healthy
+      pg-replica:
+        condition: service_started
+      nats-js-1:
+        condition: service_started
+      nats-js-2:
+        condition: service_started
+      nats-js-3:
+        condition: service_started
+    volumes:
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      # The ONLY published ports in this deployment; everything else is
+      # reachable solely inside its segment. The container listens on the
+      # fixed high ports from gateway/nginx.conf; the host side is
+      # overridable via .env (ENT_*).
+      - "${ENT_PG_WRITE_PORT:-35432}:35432"
+      - "${ENT_PG_READ_PORT:-35433}:35433"
+      - "${ENT_NATS_PORT:-34222}:34222"
+      - "${ENT_NATS_MONITOR_PORT:-38222}:38222"
+    networks:
+      - pg
+      - mq
+      - edge
+    restart: unless-stopped
+
+networks:
+  # Data segments: isolated per component class; only the gateway is a
+  # member of more than one.
+  pg:
+    name: woca-enterprise-pg
+    ipam:
+      config:
+        - subnet: 172.28.10.0/24
+  mq:
+    name: woca-enterprise-mq
+    ipam:
+      config:
+        - subnet: 172.28.20.0/24
+  # Edge segment: where the future woca microservice roles (and anything
+  # else that needs the data plane) attach; they talk to pg/mq via
+  # `gateway:<port>` only.
+  edge:
+    name: woca-enterprise-edge
+    ipam:
+      config:
+        - subnet: 172.28.30.0/24
+
+volumes:
+  pg-primary-data:
+    name: woca-enterprise-pg-primary-data
+  pg-replica-data:
+    name: woca-enterprise-pg-replica-data
+  nats-js-1-data:
+    name: woca-enterprise-nats-js-1-data
+  nats-js-2-data:
+    name: woca-enterprise-nats-js-2-data
+  nats-js-3-data:
+    name: woca-enterprise-nats-js-3-data
