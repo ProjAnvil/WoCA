@@ -9,11 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 
 	"github.com/rs/zerolog"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 // Event is the JSON payload written to a hook's stdin.
@@ -158,25 +159,9 @@ type CommandResult struct {
 // CommandRunner executes a hook command with stdin. Injectable for tests.
 type CommandRunner func(ctx context.Context, command, stdin, cwd string) (CommandResult, error)
 
-// DefaultCommandRunner runs the command via sh -c.
+// DefaultCommandRunner runs the command via sh -c on the local executor.
 func DefaultCommandRunner(ctx context.Context, command, stdin, cwd string) (CommandResult, error) {
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	cmd.Dir = cwd
-	cmd.Stdin = strings.NewReader(stdin)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	res := CommandResult{Stdout: stdout.String(), Stderr: stderr.String()}
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			res.ExitCode = exitErr.ExitCode()
-			return res, nil
-		}
-		return res, err
-	}
-	return res, nil
+	return ExecutorCommandRunner(executor.NewLocal())(ctx, command, stdin, cwd)
 }
 
 // Decision is the outcome of a PreToolUse hook.

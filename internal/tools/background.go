@@ -2,14 +2,16 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 // BackgroundShells manages Bash commands started with run_in_background:
@@ -34,12 +36,13 @@ type BackgroundShells struct {
 	next   int
 	shells map[string]*backgroundShell
 	onDone func(notification string)
+	exec   executor.Executor
 }
 
 type backgroundShell struct {
 	id      string
 	command string
-	cmd     *exec.Cmd
+	proc    executor.Process
 	buf     strings.Builder
 	mu      sync.Mutex
 	done    chan struct{}
@@ -47,9 +50,19 @@ type backgroundShell struct {
 	exit    int
 }
 
-// NewBackgroundShells builds an empty shell manager.
+// NewBackgroundShells builds an empty shell manager running on the local
+// machine.
 func NewBackgroundShells() *BackgroundShells {
-	return &BackgroundShells{shells: map[string]*backgroundShell{}}
+	return NewBackgroundShellsWithExecutor(nil)
+}
+
+// NewBackgroundShellsWithExecutor is NewBackgroundShells with an explicit
+// execution backend; a nil executor falls back to the local machine.
+func NewBackgroundShellsWithExecutor(x executor.Executor) *BackgroundShells {
+	if x == nil {
+		x = executor.NewLocal()
+	}
+	return &BackgroundShells{shells: map[string]*backgroundShell{}, exec: x}
 }
 
 // SetNotify installs the completion callback (called in the shell's run
@@ -77,30 +90,33 @@ func (b *BackgroundShells) Start(command, workdir, baseWorkdir string) (string, 
 	sh := &backgroundShell{
 		id:      id,
 		command: command,
-		cmd:     exec.Command("bash", "-c", command),
 		done:    make(chan struct{}),
 		exit:    -1,
 	}
-	sh.cmd.Dir = wd
-	sh.cmd.Stdout = lineWriter{sh}
-	sh.cmd.Stderr = lineWriter{sh}
 	b.shells[id] = sh
 	onDone := b.onDone
+	x := b.exec
 	b.mu.Unlock()
 
-	if err := sh.cmd.Start(); err != nil {
+	// Background shells deliberately outlive the calling turn's context
+	// (that is their point), so they start under the background context.
+	proc, err := x.Start(context.Background(),
+		executor.ExecRequest{Name: "bash", Args: []string{"-c", command}, Dir: wd},
+		executor.StartOptions{Stdout: lineWriter{sh}, Stderr: lineWriter{sh}})
+	if err != nil {
 		b.mu.Lock()
 		delete(b.shells, id)
 		b.mu.Unlock()
 		return "", err
 	}
+	sh.proc = proc
 	go func() {
-		err := sh.cmd.Wait()
 		code := 0
-		if err != nil {
+		if err := proc.Wait(); err != nil {
 			code = -1
-			if ee, ok := err.(*exec.ExitError); ok {
-				code = ee.ExitCode()
+			var ee *executor.ExitError
+			if errors.As(err, &ee) {
+				code = ee.Code
 			}
 		}
 		sh.mu.Lock()
@@ -193,10 +209,10 @@ func (b *BackgroundShells) Kill(id string) (BackgroundShellStatus, error) {
 	}
 	sh.mu.Lock()
 	running := !sh.exited
-	cmd := sh.cmd
+	proc := sh.proc
 	sh.mu.Unlock()
-	if running && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+	if running && proc != nil {
+		_ = proc.Kill()
 	}
 	st, _ := b.Status(id)
 	return st, nil

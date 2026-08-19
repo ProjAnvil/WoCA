@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +8,6 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 // execCmd runs a root command with args, returning the combined failure (nil
@@ -217,51 +215,6 @@ func TestMcpAuthCmd(t *testing.T) {
 	}
 }
 
-func TestServeFunc(t *testing.T) {
-	isolateEnv(t)
-	seedSettings(t, [2]string{"memory-engine", "none"})
-	url := fakeOpenAI(t, "hi")
-	opts := baseOpts(t, url)
-	ctx, cancel := context.WithTimeout(t.Context(), 700*time.Millisecond)
-	defer cancel()
-	if err := serve(ctx, opts, "127.0.0.1:0", true); err != nil {
-		t.Fatalf("serve = %v", err)
-	}
-}
-
-func TestServeBadLogLevel(t *testing.T) {
-	opts := options{logLevel: "bogus"}
-	if err := serve(t.Context(), opts, "127.0.0.1:0", true); err == nil {
-		t.Fatal("expected log-level error")
-	}
-}
-
-func TestServeCmdNoBrowser(t *testing.T) {
-	// Cover the serveCmd RunE wiring (flag → serve) with an immediate cancel.
-	home := isolateEnv(t)
-	seedSettings(t, [2]string{"memory-engine", "none"})
-	url := fakeOpenAI(t, "hi")
-
-	root := newRootCmd()
-	root.SetArgs([]string{"serve", "--addr", "127.0.0.1:0", "--no-browser",
-		"--provider", "openai", "--model", "m", "--api-key", "k", "--base-url", url,
-		"--workdir", t.TempDir(), "--db", filepath.Join(home, "woca.db")})
-	// Cancel shortly after start via a timeout baked into the command's
-	// context through ExecuteContext.
-	ctx, cancel := context.WithTimeout(t.Context(), 700*time.Millisecond)
-	defer cancel()
-	root.SetContext(ctx)
-	if err := root.ExecuteContext(ctx); err != nil {
-		t.Fatalf("serve cmd = %v", err)
-	}
-}
-
-func TestOpenBrowserUnsupported(t *testing.T) {
-	// On darwin/linux the command starts; use a bad URL scheme-free value —
-	// cmd.Start itself rarely fails, so only assert no panic.
-	_ = openBrowser("http://127.0.0.1:1/x")
-}
-
 func TestNewRootCmdPersistentFlags(t *testing.T) {
 	root := newRootCmd()
 	if root.Name() != "woca" {
@@ -280,9 +233,42 @@ func TestNewRootCmdPersistentFlags(t *testing.T) {
 
 func TestTuiCmdBuildAgentError(t *testing.T) {
 	isolateEnv(t)
-	// Valid log level but an invalid provider: the command wires the
+	// Valid log level but an invalid Provider: the command wires the
 	// console, fails building the agent, and returns before the TUI runs.
 	if err := execCmd(t, "tui", "--provider", "nope"); err == nil {
 		t.Fatal("expected buildAgent error")
+	}
+}
+
+func TestPluginListWithContent(t *testing.T) {
+	home := isolateEnv(t)
+	root := filepath.Join(home, ".woca", "plugins")
+
+	// One broken plugin (invalid manifest) and one with skills and agents.
+	broken := filepath.Join(root, "broken")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, "plugin.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	good := filepath.Join(root, "good")
+	for _, d := range []string{filepath.Join(good, "skills", "s1"), filepath.Join(good, "agents")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(good, "plugin.json"), []byte(`{"name":"good","version":"2.0.0","description":"has things"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(good, "skills", "s1", "SKILL.md"), []byte("---\nname: s1\ndescription: skill\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(good, "agents", "a1.md"), []byte("---\nname: a1\ndescription: agent\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := execCmd(t, "plugin", "list"); err != nil {
+		t.Fatal(err)
 	}
 }

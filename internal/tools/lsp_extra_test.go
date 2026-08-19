@@ -395,7 +395,7 @@ func TestLSPTransportWriteAfterServerDeath(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Wait for the exited server so the stdin write deterministically EPIPEs.
-	_ = tr.cmd.Wait()
+	_ = tr.proc.Wait()
 	if err := tr.Call(context.Background(), "initialize", map[string]any{}, nil); err == nil {
 		t.Fatal("Call after server death = nil error, want write failure")
 	}

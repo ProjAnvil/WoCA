@@ -9,12 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 // pythonPin is the managed-CPython major.minor the venvs are built from. uv's
@@ -37,12 +38,24 @@ type PythonRuntime struct {
 	runtimes string // shared: <home>/runtimes/python (bin/, pythons/, cache/)
 	home     string // plugin home root: <home>/<plugin>/{venv,scripts,…}
 	log      zerolog.Logger
+	exec     executor.Executor
 }
 
 // NewPythonRuntime builds a runtime with runtimesDir for the shared uv
-// machinery and pluginHome for the per-plugin environments.
+// machinery and pluginHome for the per-plugin environments, running commands
+// on the local machine.
 func NewPythonRuntime(runtimesDir, pluginHome string, log zerolog.Logger) *PythonRuntime {
-	return &PythonRuntime{runtimes: runtimesDir, home: pluginHome, log: log}
+	return NewPythonRuntimeWithExecutor(runtimesDir, pluginHome, log, nil)
+}
+
+// NewPythonRuntimeWithExecutor is NewPythonRuntime with an explicit execution
+// backend for uv and the plugin scripts; a nil executor falls back to the
+// local machine.
+func NewPythonRuntimeWithExecutor(runtimesDir, pluginHome string, log zerolog.Logger, x executor.Executor) *PythonRuntime {
+	if x == nil {
+		x = executor.NewLocal()
+	}
+	return &PythonRuntime{runtimes: runtimesDir, home: pluginHome, log: log, exec: x}
 }
 
 func (p *PythonRuntime) uvBin() string {
@@ -137,8 +150,8 @@ func (p *PythonRuntime) Install(ctx context.Context, b Builtin, progress func(st
 	// 1. Shared uv binary (pinned release archive, checksum-verified).
 	needUV := true
 	if fi, err := os.Stat(p.uvBin()); err == nil && !fi.IsDir() {
-		out, err := exec.CommandContext(ctx, p.uvBin(), "--version").Output()
-		if err == nil && strings.Contains(string(out), uvVersion) {
+		res, err := p.exec.Exec(ctx, executor.ExecRequest{Name: p.uvBin(), Args: []string{"--version"}})
+		if err == nil && strings.Contains(string(res.Stdout), uvVersion) {
 			needUV = false
 		}
 	}
@@ -211,14 +224,21 @@ func (p *PythonRuntime) Install(ctx context.Context, b Builtin, progress func(st
 	return nil
 }
 
-// runUV executes the managed uv with the contained environment.
+// runUV executes the managed uv with the contained environment. A non-zero
+// exit is returned as an error, matching the previous cmd.Run semantics uv
+// callers rely on.
 func (p *PythonRuntime) runUV(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, p.uvBin(), args...)
-	cmd.Env = p.env()
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
-	err := cmd.Run()
-	return buf.String(), err
+	res, err := p.exec.Exec(ctx, executor.ExecRequest{Name: p.uvBin(), Args: args, Env: p.env()})
+	// Combined output preserves the previous single-buffer behavior (uv
+	// interleaves progress into both streams).
+	out := string(res.Stdout) + string(res.Stderr)
+	if err != nil {
+		return out, err
+	}
+	if res.ExitCode != 0 {
+		return out, &executor.ExitError{Code: res.ExitCode}
+	}
+	return out, nil
 }
 
 // materializePlugin writes the plugin's embedded scripts under
@@ -279,12 +299,21 @@ func (p *PythonRuntime) Run(ctx context.Context, plugin, script string, args []s
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, p.venvPython(plugin), append([]string{p.scriptPath(plugin, script)}, args...)...)
-	cmd.Env = p.env()
-	cmd.Dir = dir
 	var outBuf, errBuf limitWriter
-	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
-	runErr := cmd.Run()
+	// cctx bounds the script run: canceling it kills the process (Start
+	// ties the child to the context like Exec does).
+	proc, err := p.exec.Start(cctx,
+		executor.ExecRequest{
+			Name: p.venvPython(plugin),
+			Args: append([]string{p.scriptPath(plugin, script)}, args...),
+			Env:  p.env(),
+			Dir:  dir,
+		},
+		executor.StartOptions{Stdout: &outBuf, Stderr: &errBuf})
+	if err != nil {
+		return "", "", err
+	}
+	runErr := proc.Wait()
 	return outBuf.String(), errBuf.String(), runErr
 }
 

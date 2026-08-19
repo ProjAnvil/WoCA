@@ -5,15 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/projanvil/langchain-golang/core/language"
-	"github.com/projanvil/langchain-golang/core/messages"
-	"github.com/projanvil/woca/internal/agent"
-	"github.com/projanvil/woca/internal/config"
-	"github.com/projanvil/woca/internal/hooks"
-	"github.com/projanvil/woca/internal/settings"
-	"github.com/projanvil/woca/internal/skills"
-	"github.com/projanvil/woca/internal/tools"
-	"github.com/rs/zerolog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +13,15 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/projanvil/langchain-golang/core/language"
+	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/agentbuild"
+	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/hooks"
+	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // isolateEnv points HOME and the woca env overrides at a temp directory so
@@ -88,16 +88,16 @@ func fakeOpenAI(t *testing.T, content string) string {
 	return srv.URL
 }
 
-// baseOpts returns options wired to an isolated environment with the OpenAI
-// provider pointed at url and a temp workdir.
-func baseOpts(t *testing.T, url string) options {
+// baseOpts returns agentbuild.Options wired to an isolated environment with
+// the OpenAI provider pointed at url and a temp workdir.
+func baseOpts(t *testing.T, url string) agentbuild.Options {
 	t.Helper()
-	return options{
-		provider: "openai",
-		model:    "gpt-test",
-		apiKey:   "test-key",
-		baseURL:  url,
-		workdir:  t.TempDir(),
+	return agentbuild.Options{
+		Provider: "openai",
+		Model:    "gpt-test",
+		APIKey:   "test-key",
+		BaseURL:  url,
+		Workdir:  t.TempDir(),
 	}
 }
 
@@ -153,183 +153,6 @@ func TestMultiHint(t *testing.T) {
 	}
 }
 
-func TestSkillManifest(t *testing.T) {
-	got := skillManifest([]skills.Skill{{Name: "commit", Description: "commit stuff"}})
-	if got != "- commit: commit stuff\n" {
-		t.Fatalf("skillManifest = %q", got)
-	}
-}
-
-func TestWocaRoot(t *testing.T) {
-	home := isolateEnv(t)
-	if got := wocaRoot(); got != filepath.Join(home, ".woca") {
-		t.Fatalf("wocaRoot = %q", got)
-	}
-}
-
-func TestManagedSettingsPath(t *testing.T) {
-	if got := managedSettingsPath("/flag.json"); got != "/flag.json" {
-		t.Fatalf("flag = %q", got)
-	}
-	t.Setenv("WOCA_MANAGED_SETTINGS", "/env.json")
-	if got := managedSettingsPath(""); got != "/env.json" {
-		t.Fatalf("env = %q", got)
-	}
-	os.Unsetenv("WOCA_MANAGED_SETTINGS")
-	if got := managedSettingsPath(""); got != "" {
-		t.Fatalf("default (no /etc file on test hosts) = %q", got)
-	}
-}
-
-func TestLoadOAuthAccessToken(t *testing.T) {
-	home := isolateEnv(t)
-	if got := loadOAuthAccessToken(); got != "" {
-		t.Fatalf("missing file = %q", got)
-	}
-	dir := filepath.Join(home, ".woca")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "credentials.json"), []byte("not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got := loadOAuthAccessToken(); got != "" {
-		t.Fatalf("bad json = %q", got)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "credentials.json"), []byte(`{"access_token":"tok-1"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got := loadOAuthAccessToken(); got != "tok-1" {
-		t.Fatalf("token = %q", got)
-	}
-}
-
-func TestResolveKey(t *testing.T) {
-	home := isolateEnv(t)
-	st, err := settings.Open(filepath.Join(home, "woca.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-
-	if got := resolveKey("flag-key", "openai", st); got != "flag-key" {
-		t.Fatalf("flag wins: %q", got)
-	}
-
-	t.Setenv("OPENAI_API_KEY", "env-openai")
-	if got := resolveKey("", "openai", st); got != "env-openai" {
-		t.Fatalf("openai env: %q", got)
-	}
-	os.Unsetenv("OPENAI_API_KEY")
-	if err := st.SetSecret(settings.SecretOpenAIAPIKey, "db-openai"); err != nil {
-		t.Fatal(err)
-	}
-	if got := resolveKey("", "openai", st); got != "db-openai" {
-		t.Fatalf("openai db: %q", got)
-	}
-
-	t.Setenv("GLM_API_KEY", "env-glm")
-	if got := resolveKey("", "glm", st); got != "env-glm" {
-		t.Fatalf("glm env: %q", got)
-	}
-	os.Unsetenv("GLM_API_KEY")
-	if err := st.SetSecret(settings.SecretGLMAPIKey, "db-glm"); err != nil {
-		t.Fatal(err)
-	}
-	if got := resolveKey("", "glm", st); got != "db-glm" {
-		t.Fatalf("glm db: %q", got)
-	}
-
-	t.Setenv("DEEPSEEK_API_KEY", "env-deepseek")
-	if got := resolveKey("", "deepseek", st); got != "env-deepseek" {
-		t.Fatalf("deepseek env: %q", got)
-	}
-	os.Unsetenv("DEEPSEEK_API_KEY")
-	if err := st.SetSecret(settings.SecretDeepSeekAPIKey, "db-deepseek"); err != nil {
-		t.Fatal(err)
-	}
-	if got := resolveKey("", "deepseek", st); got != "db-deepseek" {
-		t.Fatalf("deepseek db: %q", got)
-	}
-
-	// Default provider (anthropic): env, then db secret, then OAuth token.
-	t.Setenv("ANTHROPIC_API_KEY", "env-anthropic")
-	if got := resolveKey("", "anthropic", st); got != "env-anthropic" {
-		t.Fatalf("anthropic env: %q", got)
-	}
-	os.Unsetenv("ANTHROPIC_API_KEY")
-	if err := st.SetSecret(settings.SecretAnthropicAPIKey, "db-anthropic"); err != nil {
-		t.Fatal(err)
-	}
-	if got := resolveKey("", "anthropic", st); got != "db-anthropic" {
-		t.Fatalf("anthropic db: %q", got)
-	}
-	if err := st.SetSecret(settings.SecretAnthropicAPIKey, ""); err != nil {
-		t.Fatal(err)
-	}
-	// Falls back to the OAuth token file.
-	dir := filepath.Join(home, ".woca")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "credentials.json"), []byte(`{"access_token":"oauth-tok"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got := resolveKey("", "anthropic", st); got != "oauth-tok" {
-		t.Fatalf("oauth fallback: %q", got)
-	}
-}
-
-func TestResolveBaseURL(t *testing.T) {
-	db := settings.Settings{}
-	if got := resolveBaseURL("http://flag", "openai", db); got != "http://flag" {
-		t.Fatalf("flag: %q", got)
-	}
-
-	t.Setenv("OPENAI_BASE_URL", "http://env-openai")
-	if got := resolveBaseURL("", "openai", db); got != "http://env-openai" {
-		t.Fatalf("openai env: %q", got)
-	}
-	os.Unsetenv("OPENAI_BASE_URL")
-	db.OpenAIBaseURL = "http://db-openai"
-	if got := resolveBaseURL("", "openai", db); got != "http://db-openai" {
-		t.Fatalf("openai db: %q", got)
-	}
-
-	t.Setenv("GLM_BASE_URL", "http://env-glm")
-	if got := resolveBaseURL("", "glm", db); got != "http://env-glm" {
-		t.Fatalf("glm env: %q", got)
-	}
-	os.Unsetenv("GLM_BASE_URL")
-	if got := resolveBaseURL("", "glm", settings.Settings{}); got != config.ProviderDefaultBaseURL(config.ProviderGLM) {
-		t.Fatalf("glm default: %q", got)
-	}
-
-	t.Setenv("DEEPSEEK_BASE_URL", "http://env-ds")
-	if got := resolveBaseURL("", "deepseek", db); got != "http://env-ds" {
-		t.Fatalf("deepseek env: %q", got)
-	}
-	os.Unsetenv("DEEPSEEK_BASE_URL")
-	if got := resolveBaseURL("", "deepseek", settings.Settings{}); got != config.ProviderDefaultBaseURL(config.ProviderDeepSeek) {
-		t.Fatalf("deepseek default: %q", got)
-	}
-
-	t.Setenv("ANTHROPIC_BASE_URL", "http://env-an")
-	if got := resolveBaseURL("", "anthropic", db); got != "http://env-an" {
-		t.Fatalf("anthropic env: %q", got)
-	}
-	os.Unsetenv("ANTHROPIC_BASE_URL")
-	t.Setenv("ANTHROPIC_API_URL", "http://apiurl-an")
-	if got := resolveBaseURL("", "anthropic", db); got != "http://apiurl-an" {
-		t.Fatalf("anthropic api url: %q", got)
-	}
-	os.Unsetenv("ANTHROPIC_API_URL")
-	db.AnthropicBaseURL = "http://db-an"
-	if got := resolveBaseURL("", "anthropic", db); got != "http://db-an" {
-		t.Fatalf("anthropic db: %q", got)
-	}
-}
-
 func TestIsTerminal(t *testing.T) {
 	if isTerminal(strings.NewReader("x")) {
 		t.Fatal("string reader is not a terminal")
@@ -343,23 +166,6 @@ func TestRunShellCommand(t *testing.T) {
 	out := runShellCommand("exit 3")
 	if !strings.Contains(out, "[exit:") {
 		t.Fatalf("failing out = %q", out)
-	}
-}
-
-func TestPluginListOrEmpty(t *testing.T) {
-	home := isolateEnv(t)
-	if got := pluginListOrEmpty(); len(got) != 0 {
-		t.Fatalf("empty root = %+v", got)
-	}
-	// A root that is a regular file makes Load fail; the list must stay empty
-	// (errors swallowed).
-	bad := filepath.Join(home, "plugins")
-	if err := os.WriteFile(bad, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("WOCA_PLUGIN_ROOT", bad)
-	if got := pluginListOrEmpty(); len(got) != 0 {
-		t.Fatalf("broken root = %+v", got)
 	}
 }
 
@@ -474,23 +280,6 @@ func TestInterruptHandler(t *testing.T) {
 	v, err = interactive(agent.PlanApprovalRequest{Plan: "the plan"})
 	if err != nil || v != "n" {
 		t.Fatalf("interactive plan EOF = %v %v", v, err)
-	}
-}
-
-func TestLoadAgents(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	dir := t.TempDir()
-	agentsDir := filepath.Join(dir, ".woca", "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	doc := "---\nname: reviewer\ndescription: reviews code\n---\nYou review code."
-	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.md"), []byte(doc), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	list := loadAgents(dir, zerolog.Nop())
-	if len(list) != 1 || list[0].Name != "reviewer" {
-		t.Fatalf("agents = %+v", list)
 	}
 }
 
@@ -632,31 +421,6 @@ func fakeOpenBinary(t *testing.T) {
 	t.Setenv("WOCA_NO_BROWSER", "")
 }
 
-// fakeAuthServerMux serves the MCP OAuth discovery/register/authorize/token
-// endpoints; the authorize step redirects straight to the callback.
-
-func TestHomeUnsetBranches(t *testing.T) {
-	t.Setenv("HOME", "")
-	if got := wocaRoot(); got != ".woca" {
-		t.Fatalf("wocaRoot = %q", got)
-	}
-	if got := loadOAuthAccessToken(); got != "" {
-		t.Fatalf("loadOAuthAccessToken = %q", got)
-	}
-	if cfg := loadHooksConfig(t.TempDir()); len(cfg.PreToolUse) != 0 {
-		t.Fatal("hooks should be empty without home")
-	}
-	if rules := loadPermissions(t.TempDir()); len(rules.Allow) != 0 {
-		t.Fatal("permissions should be empty without home")
-	}
-	if got := loadSkills(t.TempDir(), zerolog.Nop()); len(got) != 0 {
-		t.Fatal("skills should be empty without home")
-	}
-	if got := loadAgents(t.TempDir(), zerolog.Nop()); len(got) != 0 {
-		t.Fatal("agents should be empty without home")
-	}
-}
-
 func TestIsTerminalStdin(t *testing.T) {
 	// os.Stdin implements Fd(); under go test it is not a TTY.
 	if isTerminal(os.Stdin) {
@@ -696,69 +460,6 @@ func TestSaveLastSessionWriteError(t *testing.T) {
 		t.Fatal(err)
 	}
 	endSession(t.Context(), []messages.Message{messages.Human("x")}, nil)
-}
-
-func TestResolveBaseURLFromSettings(t *testing.T) {
-	db := settings.Settings{
-		GLMBaseURL:      "http://db-glm",
-		DeepSeekBaseURL: "http://db-deepseek",
-	}
-	if got := resolveBaseURL("", "glm", db); got != "http://db-glm" {
-		t.Fatalf("glm db = %q", got)
-	}
-	if got := resolveBaseURL("", "deepseek", db); got != "http://db-deepseek" {
-		t.Fatalf("deepseek db = %q", got)
-	}
-}
-
-func TestLoadHooksPermissionsInvalidJSON(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, ".woca", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, []byte("not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if cfg := loadHooksConfig(dir); len(cfg.PreToolUse) != 0 {
-		t.Fatal("invalid hooks json should be skipped")
-	}
-	if rules := loadPermissions(dir); rules == nil || len(rules.Allow) != 0 {
-		t.Fatal("invalid permissions json should be skipped")
-	}
-}
-
-func TestPluginListWithContent(t *testing.T) {
-	home := isolateEnv(t)
-	root := filepath.Join(home, ".woca", "plugins")
-
-	// One broken plugin (invalid manifest) and one with skills and agents.
-	broken := filepath.Join(root, "broken")
-	if err := os.MkdirAll(broken, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(broken, "plugin.json"), []byte("not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	good := filepath.Join(root, "good")
-	for _, d := range []string{filepath.Join(good, "skills", "s1"), filepath.Join(good, "agents")} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(good, "plugin.json"), []byte(`{"name":"good","version":"2.0.0","description":"has things"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(good, "skills", "s1", "SKILL.md"), []byte("---\nname: s1\ndescription: skill\n---\nbody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(good, "agents", "a1.md"), []byte("---\nname: a1\ndescription: agent\n---\nbody"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := execCmd(t, "plugin", "list"); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestConfigSecretRoundTripAndEnvDB(t *testing.T) {

@@ -1,14 +1,14 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"time"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 const bashDescription = `Run a shell command in the working directory. Returns combined stdout/stderr and the exit code. Use for inspecting the repo, running builds/tests, and any command the other tools cannot do.
@@ -22,7 +22,7 @@ type bashArgs struct {
 	RunInBackground bool   `json:"run_in_background,omitempty"`
 }
 
-func bashTool(d *Dir, bg *BackgroundShells) coretools.Tool {
+func bashTool(d *Dir, bg *BackgroundShells, x executor.Executor) coretools.Tool {
 	t, err := coretools.FromFunc("Bash", bashDescription,
 		func(ctx context.Context, a bashArgs) (coretools.Result, error) {
 			baseWorkdir := d.For(ctx)
@@ -49,30 +49,30 @@ func bashTool(d *Dir, bg *BackgroundShells) coretools.Tool {
 			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
-			cmd := exec.CommandContext(runCtx, "bash", "-c", a.Command)
-			cmd.Dir = wd
-			var stdout, stderr bytes.Buffer
-			cmd.Stdout = &stdout
-			cmd.Stderr = &stderr
-			runErr := cmd.Run()
+			res, runErr := x.Exec(runCtx, executor.ExecRequest{
+				Name: "bash",
+				Args: []string{"-c", a.Command},
+				Dir:  wd,
+			})
 
-			out := stdout.String()
-			if stderr.Len() > 0 {
+			out := string(res.Stdout)
+			if len(res.Stderr) > 0 {
 				if out != "" {
 					out += "\n"
 				}
-				out += stderr.String()
+				out += string(res.Stderr)
 			}
 
 			if runErr != nil {
 				if runCtx.Err() == context.DeadlineExceeded {
 					return coretools.Result{Content: fmt.Sprintf("Command timed out after %s.\n%s", timeout, out)}, nil
 				}
-				exit := -1
-				if ee, ok := runErr.(*exec.ExitError); ok {
-					exit = ee.ExitCode()
-				}
-				return coretools.Result{Content: fmt.Sprintf("Exit code %d.\n%s", exit, out)}, nil
+				// Executor errors mean startup failure or cancellation; the
+				// process never reported an exit code, so keep the -1 wording.
+				return coretools.Result{Content: fmt.Sprintf("Exit code -1.\n%s", out)}, nil
+			}
+			if res.ExitCode != 0 {
+				return coretools.Result{Content: fmt.Sprintf("Exit code %d.\n%s", res.ExitCode, out)}, nil
 			}
 			if out == "" {
 				out = "(no output)"

@@ -22,9 +22,9 @@ func newBreakdownAgent(t *testing.T) *Agent {
 		}}),
 	)
 	a, err := New(Config{
-		Model:         model,
-		Registry:      tools.NewRegistry(t.TempDir()),
-		SystemPrompt:  "You are a test agent with a decently long prompt so the system category is non-trivial.",
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "You are a test agent with a decently long prompt so the system category is non-trivial.",
 		PermissionMode: config.ModeBypass,
 	})
 	if err != nil {

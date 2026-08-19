@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -159,47 +160,11 @@ func processAlive(pid int) bool {
 	return p.Signal(syscall.Signal(0)) == nil
 }
 
-// eventHub fans out server-level events (session state changes) to all
-// connected global SSE clients. No history retention: state events are
-// idempotent snapshots, and a fresh connection is seeded with the current
-// state, so replay would only be redundant.
-type eventHub struct {
-	mu   sync.Mutex
-	subs map[*subscriber]struct{}
-}
-
-func newEventHub() *eventHub {
-	return &eventHub{subs: map[*subscriber]struct{}{}}
-}
-
-func (h *eventHub) subscribe() *subscriber {
-	sub := &subscriber{ch: make(chan Event, 256)}
-	h.mu.Lock()
-	h.subs[sub] = struct{}{}
-	h.mu.Unlock()
-	return sub
-}
-
-func (h *eventHub) unsubscribe(sub *subscriber) {
-	h.mu.Lock()
-	delete(h.subs, sub)
-	h.mu.Unlock()
-}
-
-// emit fans out non-blockingly: a slow global-events client must never stall
-// run machinery. A dropped state event leaves the client stale until its next
-// change or reconnect (EventSource auto-reconnects; the seeded snapshot
-// resyncs it).
-func (h *eventHub) emit(ev Event) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for sub := range h.subs {
-		select {
-		case sub.ch <- ev:
-		default:
-		}
-	}
-}
+// sessionStateTopic is the eventbus topic carrying session state changes to
+// the global SSE stream. The hub's subscriptions are all live-only; the
+// bounded history retention is only a truncation buffer against slow
+// consumers.
+const sessionStateTopic = "session-state"
 
 // markSessionState records a session's run state durably and broadcasts it.
 func (s *Server) markSessionState(sessionID, status, runID string) {
@@ -210,20 +175,22 @@ func (s *Server) markSessionState(sessionID, status, runID string) {
 		Owner:     s.owner,
 		UpdatedAt: wocadb.Now(),
 	})
-	s.hub.emit(s.sessionStateEvent(sessionID, status, runID))
+	// The local bus never fails; a dropped event on a slow client is
+	// recovered by the seeded snapshot on reconnect, as before.
+	_, _ = s.hub.Publish(context.Background(), sessionStateTopic, s.sessionStateEvent(sessionID, status, runID))
 }
 
 // clearSessionState removes the state row when it still belongs to runID.
 func (s *Server) clearSessionState(sessionID, runID string) {
 	if s.state.ClearIfRun(sessionID, runID) {
-		s.hub.emit(s.sessionStateEvent(sessionID, "", runID))
+		_, _ = s.hub.Publish(context.Background(), sessionStateTopic, s.sessionStateEvent(sessionID, "", runID))
 	}
 }
 
 // forgetSessionState drops the row unconditionally (session deleted).
 func (s *Server) forgetSessionState(sessionID string) {
 	s.state.Delete(sessionID)
-	s.hub.emit(s.sessionStateEvent(sessionID, "", ""))
+	_, _ = s.hub.Publish(context.Background(), sessionStateTopic, s.sessionStateEvent(sessionID, "", ""))
 }
 
 func (s *Server) sessionStateEvent(sessionID, status, runID string) Event {
@@ -249,8 +216,12 @@ func (s *Server) handleGlobalEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	sub := s.hub.subscribe()
-	defer s.hub.unsubscribe(sub)
+	sub, err := s.hub.Subscribe(r.Context(), sessionStateTopic, -1) // live-only
+	if err != nil {
+		http.Error(w, "event bus unavailable", http.StatusInternalServerError)
+		return
+	}
+	defer sub.Unsubscribe()
 
 	// Seed with the snapshot (oldest first for deterministic output).
 	states := s.state.Snapshot()
@@ -267,7 +238,10 @@ func (s *Server) handleGlobalEvents(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	for {
 		select {
-		case ev := <-sub.ch:
+		case ev, ok := <-sub.C():
+			if !ok {
+				return // bus closed; never write a zero-value event
+			}
 			writeSSE(w, ev)
 			flusher.Flush()
 		case <-ctx.Done():

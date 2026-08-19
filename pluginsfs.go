@@ -1,3 +1,7 @@
+// Package woca is the module root package. It embeds the built-in
+// capability-plugin tree so a single woca binary can provision plugins
+// without external files. (The web SPA embed lives in the separate
+// web/webdist package so entries without a UI do not link it.)
 package woca
 
 import (

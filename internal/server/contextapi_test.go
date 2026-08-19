@@ -7,8 +7,8 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/rs/zerolog"
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/rs/zerolog"
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"

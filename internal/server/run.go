@@ -13,17 +13,15 @@ import (
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/runner"
 )
 
 // Event is one SSE frame. Seq is a per-run monotonic sequence (from 1)
 // assigned by emit; it is written as the SSE id: line for Last-Event-ID
-// resume and never serialized into Data.
-type Event struct {
-	Type string
-	Data any
-	Seq  int64 `json:"-"`
-}
+// resume and never serialized into Data. It aliases the platform eventbus
+// event type so server events flow over the shared Bus interface.
+type Event = eventbus.Event
 
 // subscriber receives live events for a single SSE connection.
 type subscriber struct {

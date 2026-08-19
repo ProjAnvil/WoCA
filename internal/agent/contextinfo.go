@@ -10,8 +10,8 @@ import (
 	"context"
 	"encoding/json"
 
-	coretools "github.com/projanvil/langchain-golang/core/tools"
 	"github.com/projanvil/langchain-golang/core/messages"
+	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/prompt"
 	"github.com/projanvil/woca/internal/runws"
@@ -30,11 +30,11 @@ type ContextCategory struct {
 
 // ContextInfo is the context-usage snapshot for one session.
 type ContextInfo struct {
-	Model           string            `json:"model"`
-	Categories      []ContextCategory `json:"categories"`
-	EstimatedTotal  int               `json:"estimated_total"`
-	LastRequest     *LastUsage        `json:"last_request,omitempty"`
-	CompactThreshold int              `json:"compact_threshold,omitempty"`
+	Model            string            `json:"model"`
+	Categories       []ContextCategory `json:"categories"`
+	EstimatedTotal   int               `json:"estimated_total"`
+	LastRequest      *LastUsage        `json:"last_request,omitempty"`
+	CompactThreshold int               `json:"compact_threshold,omitempty"`
 	// ContextWindow is the model's context-window limit (0 = unknown). It is
 	// filled by the server layer, which knows the provider.
 	ContextWindow int `json:"context_window,omitempty"`

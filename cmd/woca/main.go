@@ -1,7 +1,13 @@
-// Command woca is a Go coding-agent harness: an explicit langgraph-style
-// graph (model -> tools loop), a coding-agent tool set, hooks, permissions
-// with human-in-the-loop approval, plan mode, subagents, skills,
-// auto-compaction, and MCP — with a cobra CLI and zerolog logging.
+// Command woca is the personal-edition entry point: a Go coding-agent
+// harness with an explicit langgraph-style graph (model -> tools loop), a
+// coding-agent tool set, hooks, permissions with human-in-the-loop
+// approval, plan mode, subagents, skills, auto-compaction, and MCP — with a
+// cobra CLI and zerolog logging.
+//
+// It bundles every frontend: the terminal UIs below plus the server roles
+// imported from internal/servefront. Future server-only entries
+// (woca-server, woca-gateway, ...) assemble from internal/agentbuild and
+// internal/servefront without linking this package's terminal frontends.
 package main
 
 import (
@@ -11,17 +17,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -31,82 +33,30 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
-	coretools "github.com/projanvil/langchain-golang/core/tools"
 
-	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
-	"github.com/projanvil/woca"
 	"github.com/projanvil/woca/internal/agent"
-	"github.com/projanvil/woca/internal/agents"
-	"github.com/projanvil/woca/internal/claudeenv"
+	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/console"
-	contextx "github.com/projanvil/woca/internal/context"
-
-	"github.com/projanvil/woca/internal/hooks"
-	"github.com/projanvil/woca/internal/lgcp"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/mcp"
-	"github.com/projanvil/woca/internal/memory"
-	"github.com/projanvil/woca/internal/merge"
 	"github.com/projanvil/woca/internal/oauth"
-	"github.com/projanvil/woca/internal/obslog"
-	"github.com/projanvil/woca/internal/permissions"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/plugins"
-	"github.com/projanvil/woca/internal/prompt"
-	"github.com/projanvil/woca/internal/quota"
 	"github.com/projanvil/woca/internal/repl"
 	"github.com/projanvil/woca/internal/runner"
 	"github.com/projanvil/woca/internal/sdkout"
-	"github.com/projanvil/woca/internal/searchapi"
+	"github.com/projanvil/woca/internal/servefront"
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
-	"github.com/projanvil/woca/internal/skills"
-	"github.com/projanvil/woca/internal/store"
 	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/tui"
-	"github.com/projanvil/woca/internal/webd"
 	"github.com/projanvil/woca/internal/webgui"
-	"github.com/projanvil/woca/internal/wocadb"
+	webdist "github.com/projanvil/woca/web"
 )
 
 const version = "0.3.0"
-
-type options struct {
-	prompt           string
-	model            string
-	provider         string
-	apiKey           string
-	baseURL          string
-	maxTokens        int
-	thinkingBudget   int
-	outputFormat     string
-	managedSettings  string
-	temperature      float64
-	mode             string
-	skipPerms        bool
-	acceptEdits      bool
-	readOnly         bool
-	plan             bool
-	workdir          string
-	extraPrompt      string
-	resume           string
-	logLevel         string
-	compactLimit     int
-	mcpServers       []string
-	fallbackModel    string
-	searchAPI        string
-	searchAPIKey     string
-	checkpointDir    string
-	resumeCheckpoint string
-	resumeValue      string
-	allowCommands    []string
-	denyCommands     []string
-	db               string
-	maxTurns         int
-	debugLog         bool
-}
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
@@ -115,7 +65,7 @@ func main() {
 }
 
 func newRootCmd() *cobra.Command {
-	opts := &options{}
+	opts := &agentbuild.Options{}
 	root := &cobra.Command{
 		Use:          "woca",
 		Short:        "woca is a langgraph-style coding-agent harness",
@@ -128,39 +78,7 @@ func newRootCmd() *cobra.Command {
 	}
 	// Persistent flags are inherited by subcommands (tui, serve, ...) so the
 	// agent configuration can be set after the subcommand name as well.
-	fl := root.PersistentFlags()
-	fl.StringVarP(&opts.prompt, "prompt", "p", "", "one-shot prompt; runs non-interactively and exits")
-	fl.StringVar(&opts.model, "model", "", "model name (e.g. claude-sonnet-4-5, gpt-4o)")
-	fl.StringVar(&opts.provider, "provider", "", "provider: anthropic or openai")
-	fl.StringVar(&opts.apiKey, "api-key", "", "API key (falls back to ANTHROPIC_API_KEY / OPENAI_API_KEY)")
-	fl.StringVar(&opts.baseURL, "base-url", "", "provider base URL")
-	fl.IntVar(&opts.maxTokens, "max-tokens", 0, "maximum output tokens")
-	fl.IntVar(&opts.thinkingBudget, "thinking-budget", 0, "extended-thinking budget in tokens (0 = off; anthropic provider only, minimum 1024)")
-	fl.StringVar(&opts.outputFormat, "output-format", "", "headless output format for --prompt runs: json or stream-json (default plain text)")
-	fl.StringVar(&opts.managedSettings, "managed-settings", "", "enterprise managed settings file (overrides and locks settings; env WOCA_MANAGED_SETTINGS)")
-	fl.Float64Var(&opts.temperature, "temperature", 0, "sampling temperature")
-	fl.StringVar(&opts.mode, "permission-mode", "", "default | acceptEdits | bypassPermissions | readOnly | plan")
-	fl.BoolVar(&opts.skipPerms, "dangerously-skip-permissions", false, "allow all tools without prompting")
-	fl.BoolVar(&opts.acceptEdits, "accept-edits", false, "auto-accept file edits; still prompt before shell commands")
-	fl.BoolVar(&opts.readOnly, "read-only", false, "deny write/shell tools")
-	fl.BoolVar(&opts.plan, "plan", false, "read-only planning mode")
-	fl.StringVar(&opts.workdir, "workdir", "", "working directory (default: current directory)")
-	fl.StringVar(&opts.extraPrompt, "system-prompt", "", "extra instructions appended to the system prompt")
-	fl.StringVar(&opts.resume, "resume", "", "resume from a session transcript file (or \"last\")")
-	fl.StringVar(&opts.logLevel, "log-level", "warn", "log level: trace | debug | info | warn | error | disabled")
-	fl.IntVar(&opts.compactLimit, "auto-compact", 0, "auto-compact the conversation above this token estimate (0 disables)")
-	fl.StringArrayVar(&opts.mcpServers, "mcp", nil, "MCP server as name=command or name=http(s)://endpoint (repeatable)")
-	fl.StringVar(&opts.fallbackModel, "fallback-model", "", "fallback model name used after transient retries fail")
-	fl.StringVar(&opts.searchAPI, "search-api", "", "JSON web-search API endpoint for WebSearch (with {q} placeholder)")
-	fl.StringVar(&opts.searchAPIKey, "search-api-key", "", "bearer key for --search-api")
-	fl.StringVar(&opts.checkpointDir, "checkpoint-dir", "", "directory to persist graph checkpoints (enables cross-process interrupt/resume)")
-	fl.StringVar(&opts.resumeCheckpoint, "resume-checkpoint", "", "resume a paused run by its checkpoint thread ID (durable saver required)")
-	fl.StringVar(&opts.resumeValue, "resume-value", "", "resume value for --resume-checkpoint (e.g. y/n)")
-	fl.StringArrayVar(&opts.allowCommands, "allow-command", nil, "Bash command prefix to allow (repeatable); when set, only these may run")
-	fl.StringArrayVar(&opts.denyCommands, "deny-command", nil, "Bash command substring to block (repeatable)")
-	fl.IntVar(&opts.maxTurns, "max-turns", 0, "cap the model rounds per turn (0 = unlimited)")
-	fl.StringVar(&opts.db, "db", "", "settings database: sqlite path, postgres:// DSN, or \"none\" (default ~/.woca/woca.db; env WOCA_DB)")
-	fl.BoolVar(&opts.debugLog, "debug-log", false, "enable the harness observability log (graph/state/session/message traces to ~/.woca/logs; also settable via settings debug-log)")
+	agentbuild.RegisterFlags(root.PersistentFlags(), opts)
 
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
@@ -173,20 +91,20 @@ func newRootCmd() *cobra.Command {
 		Use:   "tui",
 		Short: "Run the interactive terminal UI (bubbletea)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			level, err := logging.ParseLevel(opts.logLevel)
+			level, err := logging.ParseLevel(opts.LogLevel)
 			if err != nil {
 				return err
 			}
 			log := logging.NewConsole(os.Stderr, level)
-			ap, err := buildAgent(cmd.Context(), *opts, log)
+			ap, err := agentbuild.BuildAgent(cmd.Context(), *opts, log)
 			if err != nil {
 				return err
 			}
-			defer ap.pluginMgr.Close()
-			defer ap.a.Close()
+			defer ap.PluginMgr.Close()
+			defer ap.Agent.Close()
 			cons := newConsole(ap, log)
-			runErr := tui.Run(ap.a, nil, ap.cfg, version, tui.WithConsole(cons), tui.WithSettingsStore(ap.settings))
-			_ = ap.a.RunSessionEnd(cmd.Context(), "exit")
+			runErr := tui.Run(ap.Agent, nil, ap.Cfg, version, tui.WithConsole(cons), tui.WithSettingsStore(ap.Settings))
+			_ = ap.Agent.RunSessionEnd(cmd.Context(), "exit")
 			return runErr
 		},
 	})
@@ -198,108 +116,12 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 
-	serveCmd := &cobra.Command{
-		Use:   "serve",
-		Short: "Run the embedded web UI server (frontend + SSE API)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			addr, _ := cmd.Flags().GetString("addr")
-			noBrowser, _ := cmd.Flags().GetBool("no-browser")
-			return serve(cmd.Context(), *opts, addr, noBrowser)
-		},
-	}
-	serveCmd.Flags().String("addr", webgui.DefaultAddr, "listen address for the web server")
-	serveCmd.Flags().Bool("no-browser", false, "do not open the browser on startup")
-	root.AddCommand(serveCmd)
-
+	root.AddCommand(servefront.NewServeCmd(opts))
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newPluginCmd())
 	root.AddCommand(newMcpAuthCmd())
-	root.AddCommand(newWebCmd())
+	root.AddCommand(servefront.NewWebCmd())
 	return root
-}
-
-// newWebCmd builds `woca web start|stop|restart|status`: manage the web GUI
-// as a background daemon (detached `woca serve`, pid/addr in ~/.woca/web.json,
-// output in ~/.woca/web.log).
-func newWebCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "web",
-		Short: "Manage the background web GUI (start | stop | restart | status)",
-	}
-	addrFlag := func(sub *cobra.Command) *string {
-		return sub.Flags().String("addr", "", "listen address (default 127.0.0.1:3484; a bare port is accepted)")
-	}
-
-	start := &cobra.Command{
-		Use:   "start",
-		Short: "Start the web GUI in the background",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			m := webd.New()
-			addr, _ := cmd.Flags().GetString("addr")
-			rec, started, err := m.Start(webd.ParseAddr(addr))
-			if err != nil {
-				return err
-			}
-			if started {
-				fmt.Printf("web gui started in the background: http://%s (pid %d, log %s)\n", rec.Addr, rec.PID, m.LogPath())
-			} else {
-				fmt.Printf("web gui already running: http://%s (pid %d)\n", rec.Addr, rec.PID)
-			}
-			return nil
-		},
-	}
-	addrFlag(start)
-	cmd.AddCommand(start)
-
-	cmd.AddCommand(&cobra.Command{
-		Use:   "stop",
-		Short: "Stop the background web GUI",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			m := webd.New()
-			stopped, err := m.Stop()
-			if err != nil {
-				return err
-			}
-			if stopped {
-				fmt.Println("web gui stopped")
-			} else {
-				fmt.Println("web gui not running")
-			}
-			return nil
-		},
-	})
-
-	restart := &cobra.Command{
-		Use:   "restart",
-		Short: "Restart the background web GUI",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			m := webd.New()
-			addr, _ := cmd.Flags().GetString("addr")
-			rec, err := m.Restart(webd.ParseAddr(addr))
-			if err != nil {
-				return err
-			}
-			fmt.Printf("web gui restarted: http://%s (pid %d)\n", rec.Addr, rec.PID)
-			return nil
-		},
-	}
-	addrFlag(restart)
-	cmd.AddCommand(restart)
-
-	cmd.AddCommand(&cobra.Command{
-		Use:   "status",
-		Short: "Show whether the background web GUI is running",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			m := webd.New()
-			if rec := m.Status(); rec != nil {
-				fmt.Printf("running: http://%s (pid %d, started %s)\n", rec.Addr, rec.PID, rec.Started)
-				return nil
-			}
-			fmt.Println("not running (woca web start to launch)")
-			return nil
-		},
-	})
-	return cmd
 }
 
 // newMcpAuthCmd builds `woca mcp auth <name> <https-endpoint>`: run the MCP
@@ -330,9 +152,7 @@ func newMcpAuthCmd() *cobra.Command {
 				Endpoint:   args[1],
 				Client:     &http.Client{Timeout: 15 * time.Second},
 				OpenBrowser: func(u string) error {
-					if os.Getenv("WOCA_NO_BROWSER") == "" {
-						_ = openBrowser(u)
-					}
+					agentbuild.OpenBrowser(u)
 					return nil
 				},
 				SaveToken: func(token string) error {
@@ -537,22 +357,22 @@ func login(ctx context.Context) error {
 	return nil
 }
 
-func run(ctx context.Context, opts options, stdin io.Reader, stdout, stderr io.Writer) error {
-	level, err := logging.ParseLevel(opts.logLevel)
+func run(ctx context.Context, opts agentbuild.Options, stdin io.Reader, stdout, stderr io.Writer) error {
+	level, err := logging.ParseLevel(opts.LogLevel)
 	if err != nil {
 		return err
 	}
 	log := logging.NewConsole(stderr, level)
 
-	ap, err := buildAgent(ctx, opts, log)
+	ap, err := agentbuild.BuildAgent(ctx, opts, log)
 	if err != nil {
 		return err
 	}
-	defer ap.pluginMgr.Close()
-	defer ap.a.Close()
-	a, cfg := ap.a, ap.cfg
-	if opts.resumeCheckpoint != "" {
-		result, err := a.ResumeCheckpoint(ctx, opts.resumeCheckpoint, opts.resumeValue)
+	defer ap.PluginMgr.Close()
+	defer ap.Agent.Close()
+	a, cfg := ap.Agent, ap.Cfg
+	if opts.ResumeCheckpoint != "" {
+		result, err := a.ResumeCheckpoint(ctx, opts.ResumeCheckpoint, opts.ResumeValue)
 		if err != nil {
 			return err
 		}
@@ -569,14 +389,14 @@ func run(ctx context.Context, opts options, stdin io.Reader, stdout, stderr io.W
 	}
 
 	in := bufio.NewReader(stdin)
-	interactive := opts.prompt == ""
+	interactive := opts.Prompt == ""
 	handle := interruptHandler(in, interactive, stderr)
 
 	// SDK output (--output-format json | stream-json with --prompt): machine
 	// readable output instead of the human renderer.
 	var sdk *sdkout.Writer
-	if opts.prompt != "" && opts.outputFormat != "" {
-		w, err := sdkout.New(opts.outputFormat, stdout)
+	if opts.Prompt != "" && opts.OutputFormat != "" {
+		w, err := sdkout.New(opts.OutputFormat, stdout)
 		if err != nil {
 			return err
 		}
@@ -599,8 +419,8 @@ func run(ctx context.Context, opts options, stdin io.Reader, stdout, stderr io.W
 
 	// Load resume history if requested.
 	var history []messages.Message
-	if opts.resume != "" {
-		path := opts.resume
+	if opts.Resume != "" {
+		path := opts.Resume
 		if path == "last" {
 			path = filepath.Join(session.DefaultDir(), "last-session.jsonl")
 		}
@@ -622,8 +442,8 @@ func run(ctx context.Context, opts options, stdin io.Reader, stdout, stderr io.W
 		a.SetTasks(tasksFromSession(st.Tasks))
 	}
 
-	if opts.prompt != "" {
-		history = append(history, messages.Human(submitHooks(ctx, a, opts.prompt)))
+	if opts.Prompt != "" {
+		history = append(history, messages.Human(submitHooks(ctx, a, opts.Prompt)))
 		result, err := r.Run(ctx, history)
 		if sdk != nil {
 			turns := 1
@@ -646,7 +466,7 @@ func run(ctx context.Context, opts options, stdin io.Reader, stdout, stderr io.W
 	// Interactive: launch the TUI on a terminal, else fall back to the plain
 	// line-based REPL (piped input / tests).
 	if isTerminal(stdin) {
-		err := tui.Run(a, history, cfg, version, tui.WithConsole(cons), tui.WithSettingsStore(ap.settings))
+		err := tui.Run(a, history, cfg, version, tui.WithConsole(cons), tui.WithSettingsStore(ap.Settings))
 		_ = a.RunSessionEnd(context.Background(), "exit")
 		return err
 	}
@@ -656,60 +476,55 @@ func run(ctx context.Context, opts options, stdin io.Reader, stdout, stderr io.W
 
 // newConsole builds the shared slash-command layer used by both the TUI and
 // the line REPL, including the on-demand web GUI (/web) and settings (/settings).
-func newConsole(ap *app, log zerolog.Logger) *console.Console {
-	a, cfg := ap.a, ap.cfg
+func newConsole(ap *agentbuild.App, log zerolog.Logger) *console.Console {
+	a, cfg := ap.Agent, ap.Cfg
 	sessionDir := ""
 	if d := session.DefaultDir(); d != "" {
 		sessionDir = filepath.Join(d, "sessions")
 	}
 	web := webgui.New(server.Config{
 		Agent:        a,
-		Static:       woca.DistFS(),
+		Static:       webdist.DistFS(),
 		Logger:       log,
 		SessionDir:   sessionDir,
 		WorkDir:      cfg.WorkDir,
-		Settings:     ap.settings,
-		Memory:       ap.memory,
-		MemoryEngine: ap.memEngine,
+		Settings:     ap.Settings,
+		Memory:       ap.Memory,
+		MemoryEngine: ap.MemEngine,
 		RebuildMemory: func() error {
-			return ap.rebuildMemory()
+			return ap.RebuildMemory()
 		},
 		RebuildModel: func() error {
-			return ap.rebuildModel()
+			return ap.RebuildModel()
 		},
-		CfgLive:           func() config.Config { return ap.currentCfg() },
-		SetThinkingBudget: ap.setThinkingBudget,
-		Quota:             ap.fetchQuota,
-		ApplyClaudeEnv:    ap.applyClaudeEnv,
+		CfgLive:           func() config.Config { return ap.CurrentCfg() },
+		SetThinkingBudget: ap.SetThinkingBudget,
+		Quota:             ap.FetchQuota,
+		ApplyClaudeEnv:    ap.ApplyClaudeEnv,
 		Plugins: func(enabled []string) []pluginrt.Status {
-			return ap.pluginMgr.Statuses(enabled)
+			return ap.PluginMgr.Statuses(enabled)
 		},
 		InstallPlugin: func(ctx context.Context, name string, reinstall bool) error {
 			if reinstall {
-				return ap.pluginMgr.Reinstall(ctx, name)
+				return ap.PluginMgr.Reinstall(ctx, name)
 			}
-			return ap.pluginMgr.Install(ctx, name)
+			return ap.PluginMgr.Install(ctx, name)
 		},
 	})
 	factory := func(name string) (language.ChatModel, error) {
 		c := cfg
 		// Re-resolve credentials so a provider/baseURL/key change made via
 		// /settings applies to subsequent /model switches in the same session.
-		dbSettings := ap.settings.Load()
+		dbSettings := ap.Settings.Load()
 		provider := string(c.Provider)
-		if ap.opts.provider == "" {
+		if ap.Opts.Provider == "" {
 			provider = dbSettings.Provider
 		}
 		c.Provider = config.Provider(provider)
-		c.APIKey = resolveKey(ap.opts.apiKey, provider, ap.settings)
-		c.BaseURL = resolveBaseURL(ap.opts.baseURL, provider, dbSettings)
+		c.APIKey = agentbuild.ResolveKey(ap.Opts.APIKey, provider, ap.Settings)
+		c.BaseURL = agentbuild.ResolveBaseURL(ap.Opts.BaseURL, provider, dbSettings)
 		c.Model = name
 		return config.BuildModel(c)
-	}
-	open := func(url string) {
-		if os.Getenv("WOCA_NO_BROWSER") == "" {
-			_ = openBrowser(url)
-		}
 	}
 	return console.New(console.Deps{
 		Agent:        a,
@@ -717,734 +532,28 @@ func newConsole(ap *app, log zerolog.Logger) *console.Console {
 		Web:          web,
 		ModelFactory: factory,
 		Version:      version,
-		OpenBrowser:  open,
-		Settings:     ap.settings,
-		Memory:       ap.memory,
-		MemoryEngine: ap.memEngine,
+		OpenBrowser:  agentbuild.OpenBrowser,
+		Settings:     ap.Settings,
+		Memory:       ap.Memory,
+		MemoryEngine: ap.MemEngine,
 		MemoryWorkspace: func() string {
-			return ap.a.MemoryWorkspace()
+			return a.MemoryWorkspace()
 		},
 		RebuildMemory: func() error {
-			return ap.rebuildMemory()
+			return ap.RebuildMemory()
 		},
 		RebuildModel: func() error {
-			return ap.rebuildModel()
+			return ap.RebuildModel()
 		},
-		CfgLive:           func() config.Config { return ap.currentCfg() },
-		SetThinkingBudget: ap.setThinkingBudget,
-		Quota:             ap.fetchQuota,
+		CfgLive:           func() config.Config { return ap.CurrentCfg() },
+		SetThinkingBudget: ap.SetThinkingBudget,
+		Quota:             ap.FetchQuota,
 		ApplyTheme:        tui.SetTheme,
 		SetVimModeToggle: func() bool {
 			tui.SetVimMode(!tui.VimMode())
 			return tui.VimMode()
 		},
 	})
-}
-
-// serve runs the embedded web UI server.
-func serve(ctx context.Context, opts options, addr string, noBrowser bool) error {
-	level, err := logging.ParseLevel(opts.logLevel)
-	if err != nil {
-		return err
-	}
-	log := logging.NewConsole(os.Stderr, level)
-
-	// Bind and answer /api/health before the agent build: the build makes
-	// network calls (MCP connect, embedding probe) that can hang for many
-	// seconds under a VPN or a stalled endpoint, which used to leave the
-	// port unbound and the webd daemon timed out on its 5s readiness
-	// probe. Everything except health 503s until the real handler is
-	// swapped in below.
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return fmt.Errorf("listen %s: %w", addr, err)
-	}
-	// atomic.Pointer, not atomic.Value: the swapped-in concrete handler
-	// types differ (http.HandlerFunc vs *http.ServeMux) and atomic.Value
-	// panics on inconsistent types.
-	var handler atomic.Pointer[http.Handler]
-	starting := http.Handler(http.HandlerFunc(startingHandler))
-	handler.Store(&starting)
-	hs := &http.Server{Addr: addr, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		(*handler.Load()).ServeHTTP(w, r)
-	})}
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- hs.Serve(ln) }()
-
-	ap, err := buildAgent(ctx, opts, log)
-	if err != nil {
-		_ = hs.Close()
-		return err
-	}
-	defer ap.pluginMgr.Close()
-	defer ap.a.Close()
-
-	sessionDir := ""
-	if d := session.DefaultDir(); d != "" {
-		sessionDir = filepath.Join(d, "sessions")
-	}
-	srv := server.New(server.Config{
-		Agent:        ap.a,
-		Static:       woca.DistFS(),
-		Logger:       log,
-		SessionDir:   sessionDir,
-		WorkDir:      ap.cfg.WorkDir,
-		Settings:     ap.settings,
-		Memory:       ap.memory,
-		MemoryEngine: ap.memEngine,
-		RebuildMemory: func() error {
-			return ap.rebuildMemory()
-		},
-		RebuildModel: func() error {
-			return ap.rebuildModel()
-		},
-		CfgLive:           func() config.Config { return ap.currentCfg() },
-		SetThinkingBudget: ap.setThinkingBudget,
-		Quota:             ap.fetchQuota,
-		ApplyClaudeEnv:    ap.applyClaudeEnv,
-		Plugins: func(enabled []string) []pluginrt.Status {
-			return ap.pluginMgr.Statuses(enabled)
-		},
-		InstallPlugin: func(ctx context.Context, name string, reinstall bool) error {
-			if reinstall {
-				return ap.pluginMgr.Reinstall(ctx, name)
-			}
-			return ap.pluginMgr.Install(ctx, name)
-		},
-	})
-	real := http.Handler(srv.Handler())
-	handler.Store(&real)
-
-	url := "http://" + addr
-	if !noBrowser {
-		_ = openBrowser(url)
-	}
-	fmt.Fprintf(os.Stderr, "woca web: %s\n", url)
-
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	return srv.ServeStarted(ctx, hs, serveErr)
-}
-
-// startingHandler serves the window between the port bind and the agent
-// becoming ready: health keeps the webd readiness probe (and load
-// balancers) happy, other API routes report 503, and the UI reloads itself
-// until boot completes.
-func startingHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/api/health" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ok":true,"starting":true}`)
-		return
-	}
-	if strings.HasPrefix(r.URL.Path, "/api/") {
-		w.Header().Set("Content-Type", "application/json")
-		http.Error(w, `{"error":"starting"}`, http.StatusServiceUnavailable)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, `<!doctype html><meta http-equiv="refresh" content="1"><title>woca starting…</title><p>woca is starting…</p>`)
-}
-
-// openBrowser opens url in the default browser (best-effort).
-func openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		return fmt.Errorf("unsupported platform %q", runtime.GOOS)
-	}
-	return cmd.Start()
-}
-
-// app bundles the assembled runtime: the agent, its effective config, the
-// startup flags (for re-resolution), the persistent settings store, the
-// memoryStore, and the factual-memory engine (ladyM; nil when disabled or
-// unavailable). memMu guards the memEngine swap in rebuildMemory; the
-// agent's own engine pointer carries its own lock.
-type app struct {
-	a         *agent.Agent
-	cfg       config.Config
-	opts      options
-	settings  *settings.Store
-	memory    *store.Store
-	memMu     sync.Mutex
-	memEngine memory.Engine
-	// pluginMgr owns the built-in capability-plugin runtimes (downloads,
-	// pinchtab server process); Close stops spawned processes.
-	pluginMgr *pluginrt.Manager
-	// workdir is the resolved (absolute) working directory the agent runs
-	// in; skill reloads after a claude-env selection change re-read from it.
-	workdir string
-	// log is the process logger, used by post-build reloads
-	// (applyClaudeEnv) for merge-conflict lines.
-	log zerolog.Logger
-	// cfgMu guards the cfg copy against runtime mutations (thinking-level
-	// switches) racing snapshot readers (CfgLive, rebuildModel).
-	cfgMu sync.RWMutex
-}
-
-// currentCfg returns a copy of the effective configuration under the lock.
-func (ap *app) currentCfg() config.Config {
-	ap.cfgMu.RLock()
-	defer ap.cfgMu.RUnlock()
-	return ap.cfg
-}
-
-// effectiveProvider resolves the provider the same way rebuildModel does:
-// startup flag first, then the settings database.
-func (ap *app) effectiveProvider() string {
-	if ap.opts.provider != "" {
-		return ap.opts.provider
-	}
-	return ap.settings.Load().Provider
-}
-
-// setThinkingBudget persists the extended-thinking budget to the settings
-// database, updates the effective config, and rebuilds the chat model so the
-// change applies from the next model call. A --thinking-budget flag pins the
-// value; runtime switches are rejected in that case.
-func (ap *app) setThinkingBudget(budget int) error {
-	if ap.opts.thinkingBudget != 0 {
-		return fmt.Errorf("thinking budget is pinned by the --thinking-budget flag (restart without it to switch at runtime)")
-	}
-	cfg := ap.settings.Load()
-	if err := settings.Apply(&cfg, settings.KeyThinkingBudget, strconv.Itoa(budget)); err != nil {
-		return err
-	}
-	if err := ap.settings.Save(cfg); err != nil {
-		return err
-	}
-	ap.cfgMu.Lock()
-	ap.cfg.ThinkingBudget = budget
-	ap.cfgMu.Unlock()
-	return ap.rebuildModel()
-}
-
-// buildAgent constructs the configured agent (model, prompt, hooks, skills,
-// MCP tools, compaction, storage backends) shared by the REPL/one-shot, the
-// TUI, and the web server. Provider credentials resolve in order: CLI flag →
-// environment variable → settings database (API keys encrypted at rest) →
-// OAuth token.
-func buildAgent(ctx context.Context, opts options, log zerolog.Logger) (*app, error) {
-	workdir := opts.workdir
-	if workdir == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return nil, err
-		}
-		workdir = wd
-	}
-	workdir, _ = filepath.Abs(workdir)
-
-	mode := resolveMode(opts.mode, opts.skipPerms, opts.acceptEdits, opts.readOnly, opts.plan)
-
-	dbTarget := opts.db
-	if dbTarget == "" {
-		dbTarget = os.Getenv("WOCA_DB")
-	}
-	st, err := settings.Open(dbTarget)
-	if err != nil {
-		log.Warn().Err(err).Msg("settings database unavailable; continuing without persisted settings")
-		st = nil
-	}
-	// Enterprise managed settings: override and lock (highest precedence).
-	if managed := managedSettingsPath(opts.managedSettings); managed != "" {
-		if m, err := settings.LoadManaged(managed); err != nil {
-			log.Warn().Err(err).Msg("managed settings file unreadable; ignoring")
-		} else {
-			st.SetManaged(m)
-			log.Info().Str("path", managed).Msg("managed settings applied")
-		}
-	}
-	dbSettings := st.Load()
-
-	provider := opts.provider
-	if provider == "" {
-		provider = dbSettings.Provider
-	}
-	modelName := opts.model
-	if modelName == "" {
-		modelName = dbSettings.Model
-	}
-	maxTokens := opts.maxTokens
-	if maxTokens == 0 {
-		maxTokens = dbSettings.MaxTokens
-	}
-	temperature := opts.temperature
-	if temperature == 0 {
-		temperature = dbSettings.Temperature
-	}
-	// Runtime-switchable thinking budget (chat UI /thinking): the startup
-	// flag wins when pinned, otherwise the persisted setting applies.
-	thinkingBudget := opts.thinkingBudget
-	if thinkingBudget == 0 {
-		thinkingBudget = dbSettings.ThinkingBudget
-	}
-
-	cfg := config.Config{
-		Provider:          config.Provider(provider),
-		Model:             modelName,
-		APIKey:            resolveKey(opts.apiKey, provider, st),
-		BaseURL:           resolveBaseURL(opts.baseURL, provider, dbSettings),
-		MaxTokens:         maxTokens,
-		Temperature:       temperature,
-		PermissionMode:    mode,
-		WorkDir:           workdir,
-		ExtraSystemPrompt: opts.extraPrompt,
-		ThinkingBudget:    thinkingBudget,
-	}
-	cfg, err = cfg.Normalize()
-	if err != nil {
-		return nil, err
-	}
-
-	model, err := config.BuildModel(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	// Optional fallback model for the retry/fallback router.
-	var fallbackModel language.ChatModel
-	if opts.fallbackModel != "" {
-		fbCfg := cfg
-		fbCfg.Model = opts.fallbackModel
-		fbModel, err := config.BuildModel(fbCfg)
-		if err != nil {
-			return nil, err
-		}
-		fallbackModel = fbModel
-	}
-
-	// Assemble the system prompt with collected context. The same builder
-	// runs for every run workspace and the active model name (the agent
-	// caches per workspace+model), so serve-mode sessions in other projects
-	// get the environment section, git status and project memory files of
-	// the directory they operate in, and swapping the model refreshes the
-	// name in the prompt. Live settings are re-read per build so cache
-	// invalidation (style change) picks them up.
-	sysFor := func(ws, model string) string {
-		sys := prompt.BuildWithStyle(ws, cfg.ExtraSystemPrompt, model, st.Load().OutputStyle)
-		if c := contextx.Collect(ws); c != "" {
-			sys += "\n\n" + c
-		}
-		if list := loadSkills(ws, log); len(list) > 0 {
-			sys += "\n\n# Available skills\n\nInvoke with the Skill tool; the list is scoped to this workspace.\n" + skillManifest(list)
-		}
-		return sys
-	}
-	sysPrompt := sysFor(cfg.WorkDir, cfg.Model)
-
-	hookRunner := hooks.NewRunner(loadHooksConfig(workdir), workdir, "woca", hooks.WithLogger(log))
-	// Claude environment import (settings claude-skills / claude-mcp):
-	// selected ~/.claude skills are symlinked into ~/.woca/skills (loadSkills
-	// picks them up from there) and the selected global MCP servers are
-	// materialized as ~/.woca/mcp.json specs connected below.
-	if linked, err := claudeenv.SyncSkills(wocaRoot(), dbSettings.ClaudeSkills); err != nil {
-		log.Warn().Err(err).Msg("claude skill import failed")
-	} else if len(linked) > 0 {
-		log.Info().Strs("skills", linked).Msg("imported claude skills via ~/.woca/skills")
-	}
-	skillList := loadSkills(workdir, log)
-	agentDefs := loadAgents(workdir, log)
-	// Plugins (marketplace-level units under ~/.woca/plugins) contribute
-	// namespaced skills and subagent definitions.
-	pluginList, pluginErrs := plugins.Load(plugins.DefaultRoot())
-	for _, perr := range pluginErrs {
-		log.Warn().Err(perr).Msg("plugin skipped")
-	}
-	for _, pl := range pluginList {
-		skillList = append(skillList, pl.Skills...)
-		agentDefs = append(agentDefs, pl.Agents...)
-	}
-	// MCP servers resolve as three layers: --mcp flags (highest), the
-	// workspace file workDir/.woca/mcp.json (no upward walk, D5), and the
-	// user ~/.woca/mcp.json kept in sync with the ~/.claude import
-	// selection. Same-name servers connect once, from the winning layer.
-	var userSpecs []string
-	if specs, err := claudeMCPStartupSpecs(wocaRoot(), dbSettings.ClaudeMCP); err != nil {
-		log.Warn().Err(err).Msg("claude mcp import failed")
-	} else if len(specs) > 0 {
-		log.Info().Strs("servers", specs).Msg("imported claude mcp servers via ~/.woca/mcp.json")
-		userSpecs = specs
-	}
-	wsSpecs, err := claudeenv.LoadMCPConfig(filepath.Join(workdir, ".woca"))
-	if err != nil {
-		log.Warn().Err(err).Msg("workspace mcp.json unreadable")
-	}
-	extraTools, mcpClients := connectMCP(ctx, log, mergeMCPSpecs(opts.mcpServers, wsSpecs, userSpecs, log), st)
-
-	// Built-in capability plugins (browser via pinchtab, python/pdf via uv):
-	// tools register when enabled in settings; runtimes install on demand
-	// from the web settings UI. They share the plugin root (~/.woca/plugins)
-	// with marketplace skills/agents plugins: shared runtimes live under
-	// runtimes/, per-plugin python envs under <name>/ (WOCA_PLUGIN_ROOT
-	// overrides for testing).
-	pluginHome := plugins.DefaultRoot()
-	if env := os.Getenv("WOCA_PLUGIN_ROOT"); env != "" {
-		pluginHome = env
-	}
-	pluginMgr := pluginrt.NewManager(pluginHome, cfg.WorkDir, log)
-	extraTools = append(extraTools, pluginMgr.Tools(dbSettings.BuiltinPlugins)...)
-
-	reg := tools.NewRegistry(cfg.WorkDir)
-	if opts.searchAPI != "" {
-		sc := searchapi.New(searchapi.Config{Endpoint: opts.searchAPI, APIKey: opts.searchAPIKey})
-		reg.Register(tools.WebSearchToolWithBackend(func(ctx context.Context, q string) (string, error) {
-			results, err := sc.Search(ctx, q)
-			if err != nil {
-				return "", err
-			}
-			return searchapi.Format(results), nil
-		}))
-	}
-
-	// Storage backends: checkpoint persistence and the memoryStore, selected
-	// from settings (sqlite under ~/.woca is the default). The --checkpoint-dir
-	// flag keeps precedence for the file backend.
-	var pgDB *wocadb.DB
-	openPostgres := func() *wocadb.DB {
-		if pgDB != nil {
-			return pgDB
-		}
-		if st == nil {
-			return nil
-		}
-		dsn := st.GetSecret(settings.SecretPostgresURL)
-		if dsn == "" {
-			log.Warn().Msg("postgres backend selected but no postgres_url secret is set")
-			return nil
-		}
-		db, err := wocadb.Open("pg:" + dsn)
-		if err != nil {
-			log.Warn().Err(err).Msg("postgres backend unavailable")
-			return nil
-		}
-		pgDB = db
-		return pgDB
-	}
-	localDB := func() *wocadb.DB {
-		if st == nil {
-			return nil
-		}
-		return st.DB()
-	}
-
-	var checkpointer lgcheckpoint.Saver
-	backend := dbSettings.CheckpointBackend
-	if backend == "" {
-		backend = settings.CheckpointSQLite
-	}
-	switch {
-	case opts.checkpointDir != "":
-		checkpointer = lgcp.NewFileSaver(opts.checkpointDir)
-	case backend == settings.CheckpointFile:
-		if dir := dbSettings.CheckpointDir; dir != "" {
-			checkpointer = lgcp.NewFileSaver(dir)
-		}
-	case backend == settings.CheckpointPostgres:
-		if db := openPostgres(); db != nil {
-			checkpointer = lgcp.NewSQLSaver(db.DB, string(db.Dialect))
-		}
-	case backend == settings.CheckpointSQLite:
-		if db := localDB(); db != nil {
-			checkpointer = lgcp.NewSQLSaver(db.DB, string(db.Dialect))
-		}
-	}
-
-	var memory *store.Store
-	switch dbSettings.MemoryBackend {
-	case settings.MemoryInMem:
-		memory = store.NewMemory()
-	case settings.MemoryPostgres:
-		if db := openPostgres(); db != nil {
-			memory = store.NewSQL(db.DB, string(db.Dialect), db.Path)
-		}
-	case settings.MemorySQLite:
-		if db := localDB(); db != nil {
-			memory = store.NewSQL(db.DB, string(db.Dialect), db.Path)
-		}
-	}
-
-	// Factual-memory engine (ladyM): startup build degrades to nil on
-	// failure so the harness always comes up; settings changes rebuild it
-	// live via app.rebuildMemory.
-	memEngine, memErr := buildMemoryEngine(&app{cfg: cfg, settings: st}, dbSettings, model)
-	if memErr != nil {
-		log.Warn().Err(memErr).Msg("memory engine unavailable; continuing without memory")
-		memEngine = nil
-	}
-
-	// Max-output-tokens escalation for the recovery path (an 8k→64k retry):
-	// wire the escalator only when the user did not set an explicit cap, i.e.
-	// only under the default-cap condition. BuildModel keeps the thinking
-	// budget enabled and the cap above it when linked.
-	var escalator func() (language.ChatModel, error)
-	if opts.maxTokens == 0 && dbSettings.MaxTokens == 0 {
-		escCfg := cfg
-		escCfg.MaxTokens = agent.EscalatedMaxTokens
-		escalator = func() (language.ChatModel, error) {
-			return config.BuildModel(escCfg)
-		}
-	}
-
-	// Observability log (default off): the flag forces it on; otherwise the
-	// persisted debug-log setting decides. The store itself gates writes, so
-	// it can be toggled live from the web settings UI or /debug-log.
-	obsRoot := ""
-	if home, err := os.UserHomeDir(); err == nil {
-		obsRoot = filepath.Join(home, ".woca", "logs")
-	}
-	obs := obslog.New(obsRoot, opts.debugLog || dbSettings.DebugLog)
-	if opts.debugLog {
-		// The flag forces the log on for the whole process: dynamic refreshes
-		// from the settings database cannot turn it back off.
-		obs.LockOpen()
-	}
-
-	a, err := agent.New(agent.Config{
-		Model:           model,
-		FallbackModel:   fallbackModel,
-		ModelMaxRetries: 2,
-		Registry:        reg,
-		SystemPrompt:    sysPrompt,
-		SystemPromptFor: sysFor,
-		PermissionMode:  cfg.PermissionMode,
-		RecursionLimit:  cfg.RecursionLimit,
-		WorkDir:         cfg.WorkDir,
-		Hooks:           hookRunner,
-		HooksFor: func(ws string) *hooks.Runner {
-			return hooks.NewRunner(loadHooksConfig(ws), ws, "woca", hooks.WithLogger(log))
-		},
-		Skills:             skillList,
-		SkillsFor:          func(ws string) []skills.Skill { return loadSkills(ws, log) },
-		ExtraTools:         extraTools,
-		CompactThreshold:   opts.compactLimit,
-		Summarizer:         model,
-		Permissions:        loadPermissions(workdir),
-		Agents:             agentDefs,
-		AgentsFor:          func(ws string) []agents.Definition { return loadAgents(ws, log) },
-		CheckpointDir:      opts.checkpointDir,
-		Checkpointer:       checkpointer,
-		BashPolicy:         tools.NewCommandPolicy(opts.allowCommands, opts.denyCommands),
-		MaxTokensEscalator: escalator,
-		// Tool-use summaries are a UI feature: emit them for interactive
-		// sessions (REPL/TUI/serve), not for one-shot --prompt runs —
-		// the non-interactive-session gate.
-		EmitToolUseSummaries: opts.prompt == "",
-		// Between-turn tool refresh (stage 28): re-list MCP tools so
-		// hot-added ones are usable in the next round, plus re-evaluate the
-		// enabled built-in plugins (settings toggles apply live).
-		RefreshTools: func(ctx context.Context) []coretools.Tool {
-			fresh := refreshMCPTools(ctx, log, mcpClients)
-			return append(fresh, pluginMgr.Tools(st.Load().BuiltinPlugins)...)
-		},
-		// Long-term memory attachments: prefetch relevant entries per turn.
-		Memory:       memory,
-		MemoryEngine: memEngine,
-		// Live settings for the memory-engine paths (top-k, autoretain…);
-		// Store.Load is nil-safe so a failed settings open keeps working.
-		LoadSettings: st.Load,
-		MaxTurns:     opts.maxTurns,
-		Obs:          obs,
-	})
-	if err != nil {
-		return nil, err
-	}
-	a.SetMemoryWorkspace(cfg.WorkDir)
-	return &app{a: a, cfg: cfg, opts: opts, settings: st, memory: memory, memEngine: memEngine, workdir: workdir, pluginMgr: pluginMgr, log: log}, nil
-}
-
-// buildMemoryEngine constructs the memory engine from current settings.
-// engine=none returns (nil, nil); build failures degrade to nil (logged by
-// the caller) so woca always starts.
-func buildMemoryEngine(ap *app, dbSettings settings.Settings, chatModel language.ChatModel) (memory.Engine, error) {
-	if dbSettings.MemoryEngine == settings.MemoryEngineNone {
-		return nil, nil
-	}
-	dbPath := memory.ExpandHome(dbSettings.LadyMDBPath)
-	if dbPath == "" {
-		dbPath = memory.DefaultDBPath()
-	}
-	in := memory.BuildInput{
-		EngineEnabled:    true,
-		DBPath:           dbPath,
-		DefaultWorkspace: ap.cfg.WorkDir,
-		Embedding:        dbSettings.LadyMEmbedding,
-		EmbeddingModel:   dbSettings.LadyMEmbeddingModel,
-		EmbeddingBaseURL: dbSettings.LadyMEmbeddingBaseURL,
-		EmbeddingAPIKey:  ap.settings.GetSecret(settings.SecretLadyMEmbeddingAPIKey),
-		LLM:              dbSettings.LadyMLLM,
-		ChatModel:        chatModel,
-		OpenAIKey:        ap.settings.GetSecret(settings.SecretOpenAIAPIKey),
-		OpenAIBaseURL:    dbSettings.OpenAIBaseURL,
-	}
-	eng, err := memory.Build(in)
-	if err != nil {
-		return nil, err
-	}
-	return eng, nil
-}
-
-// rebuildModel reconstructs the chat model from the current effective
-// configuration (startup flags + live settings from the database) and swaps
-// it into the agent. Used by the settings UIs after provider, model, base
-// URL, or API key changes. The model id is re-resolved from settings (a
-// startup --model flag still wins), so the settings UI's model switch takes
-// effect live — and, through the name-keyed prompt cache, refreshes the
-// model named in the system prompt.
-func (ap *app) rebuildModel() error {
-	dbSettings := ap.settings.Load()
-	provider := ap.effectiveProvider()
-	cfg := ap.currentCfg()
-	cfg.Provider = config.Provider(provider)
-	cfg.APIKey = resolveKey(ap.opts.apiKey, provider, ap.settings)
-	cfg.BaseURL = resolveBaseURL(ap.opts.baseURL, provider, dbSettings)
-	if v := dbSettings.Model; v != "" && ap.opts.model == "" {
-		cfg.Model = v
-	}
-	if v := dbSettings.MaxTokens; v != 0 && ap.opts.maxTokens == 0 {
-		cfg.MaxTokens = v
-	}
-	if v := dbSettings.Temperature; v != 0 && ap.opts.temperature == 0 {
-		cfg.Temperature = v
-	}
-	m, err := config.BuildModel(cfg)
-	if err != nil {
-		return err
-	}
-	return ap.a.SetModel(m)
-}
-
-// memoryCloseGrace is how long a superseded memory engine stays open after a
-// rebuild so in-flight prefetch/tool calls on it degrade to a logged error
-// instead of racing a Close.
-const memoryCloseGrace = 60 * time.Second
-
-// rebuildMemory reconstructs the memory engine from live settings and swaps
-// it into the agent. The old engine closes after a grace period so
-// in-flight prefetch/tool calls on it degrade to a logged error instead of
-// racing a Close.
-func (ap *app) rebuildMemory() error {
-	dbSettings := ap.settings.Load()
-	eng, err := buildMemoryEngine(ap, dbSettings, ap.a.CurrentModel())
-	if err != nil {
-		return err
-	}
-	ap.memMu.Lock()
-	old := ap.memEngine
-	ap.memEngine = eng
-	ap.memMu.Unlock()
-	ap.a.SetMemoryEngine(eng)
-	if old != nil {
-		go func() {
-			time.Sleep(memoryCloseGrace)
-			_ = old.Close()
-		}()
-	}
-	return nil
-}
-
-// fetchQuota queries the provider's account usage (the provider-template
-// dispatch: GLM Coding Plan monitor, DeepSeek balance, official OAuth
-// subscriptions) with the credentials the chat model uses.
-func (ap *app) fetchQuota(ctx context.Context) (quota.Info, error) {
-	dbSettings := ap.settings.Load()
-	provider := ap.effectiveProvider()
-	return quota.Fetch(ctx, provider,
-		resolveBaseURL(ap.opts.baseURL, provider, dbSettings),
-		resolveKey(ap.opts.apiKey, provider, ap.settings),
-		nil)
-}
-
-// wocaRoot returns ~/.woca (best-effort; ".woca" relative when the home
-// directory can't be resolved).
-func wocaRoot() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".woca"
-	}
-	return filepath.Join(home, ".woca")
-}
-
-// claudeMCPStartupSpecs returns the MCP specs to connect at agent start: a
-// non-empty selection re-materializes ~/.woca/mcp.json from ~/.claude.json;
-// an empty selection keeps the previously materialized file (if any), so
-// agent start is always driven by the local copy under ~/.woca.
-func claudeMCPStartupSpecs(root string, selected []string) ([]string, error) {
-	if len(selected) > 0 {
-		return syncMCPConfig(root, selected)
-	}
-	return claudeenv.LoadMCPConfig(root)
-}
-
-// syncMCPConfig filters ~/.claude.json's global servers down to the selection
-// and always rewrites ~/.woca/mcp.json — unchecking everything clears it.
-func syncMCPConfig(root string, selected []string) ([]string, error) {
-	all, err := claudeenv.Servers()
-	if err != nil {
-		return nil, err
-	}
-	keep := make([]claudeenv.MCPServer, 0, len(selected))
-	for _, s := range all {
-		for _, name := range selected {
-			if s.Name == name {
-				keep = append(keep, s)
-				break
-			}
-		}
-	}
-	if err := claudeenv.WriteMCPConfig(root, keep); err != nil {
-		return nil, err
-	}
-	return claudeenv.LoadMCPConfig(root)
-}
-
-// applyClaudeEnv persists a claude-skills / claude-mcp checkbox selection,
-// syncs the ~/.woca skill symlinks and mcp.json, and live-applies the skill
-// set. MCP servers (re)connect at the next agent start.
-func (ap *app) applyClaudeEnv(skills, mcp []string) error {
-	if ap.settings == nil {
-		return fmt.Errorf("settings store unavailable")
-	}
-	cfg := ap.settings.Load()
-	if err := settings.Apply(&cfg, settings.KeyClaudeSkills, settings.FormatNameList(skills)); err != nil {
-		return err
-	}
-	if err := settings.Apply(&cfg, settings.KeyClaudeMCP, settings.FormatNameList(mcp)); err != nil {
-		return err
-	}
-	if err := ap.settings.Save(cfg); err != nil {
-		return err
-	}
-	root := wocaRoot()
-	if _, err := claudeenv.SyncSkills(root, skills); err != nil {
-		return err
-	}
-	// Always rewrite mcp.json so unchecking everything disconnects the servers
-	// at the next start.
-	if _, err := syncMCPConfig(root, mcp); err != nil {
-		return err
-	}
-	// Live skill reload (mirrors buildAgent's load + plugin merge).
-	list := loadSkills(ap.workdir, ap.log)
-	for _, pl := range pluginListOrEmpty() {
-		list = append(list, pl.Skills...)
-	}
-	ap.a.SetSkills(list)
-	return nil
-}
-
-// pluginListOrEmpty loads marketplace plugins, swallowing errors (a broken
-// plugin tree must not break a skill reload).
-func pluginListOrEmpty() []plugins.Plugin {
-	list, _ := plugins.Load(plugins.DefaultRoot())
-	return list
 }
 
 // submitHooks runs UserPromptSubmit hooks and prepends their feedback.
@@ -1542,6 +651,8 @@ func (r *replLoop) submit(ctx context.Context, text string) {
 }
 
 // runShellCommand executes a `!command` line and returns its combined output.
+// It stays on plain os/exec: the shell escape is a terminal-frontend
+// convenience that always runs on the machine woca was started from.
 func runShellCommand(command string) string {
 	cmd := exec.Command("bash", "-c", command)
 	var out bytes.Buffer
@@ -1551,368 +662,6 @@ func runShellCommand(command string) string {
 		fmt.Fprintf(&out, "\n[exit: %v]", err)
 	}
 	return out.String()
-}
-
-func resolveMode(mode string, skipPerms, acceptEdits, readOnly, plan bool) config.PermissionMode {
-	switch {
-	case skipPerms:
-		return config.ModeBypass
-	case acceptEdits:
-		return config.ModeAcceptEdits
-	case readOnly:
-		return config.ModeReadOnly
-	case plan:
-		return config.ModePlan
-	}
-	if mode != "" {
-		return config.PermissionMode(mode)
-	}
-	return config.ModeDefault
-}
-
-// resolveKey resolves the provider API key in order: CLI flag → environment
-// variable → settings database (encrypted) → OAuth token.
-func resolveKey(flagKey, provider string, st *settings.Store) string {
-	if flagKey != "" {
-		return flagKey
-	}
-	switch provider {
-	case "openai":
-		if v := os.Getenv("OPENAI_API_KEY"); v != "" {
-			return v
-		}
-		if v := st.GetSecret(settings.SecretOpenAIAPIKey); v != "" {
-			return v
-		}
-	case "glm":
-		if v := os.Getenv("GLM_API_KEY"); v != "" {
-			return v
-		}
-		if v := st.GetSecret(settings.SecretGLMAPIKey); v != "" {
-			return v
-		}
-	case "deepseek":
-		if v := os.Getenv("DEEPSEEK_API_KEY"); v != "" {
-			return v
-		}
-		if v := st.GetSecret(settings.SecretDeepSeekAPIKey); v != "" {
-			return v
-		}
-	default:
-		if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
-			return v
-		}
-		if v := st.GetSecret(settings.SecretAnthropicAPIKey); v != "" {
-			return v
-		}
-	}
-	// Fall back to the OAuth token saved by `woca login`.
-	return loadOAuthAccessToken()
-}
-
-// loadOAuthAccessToken reads the access_token from ~/.woca/credentials.json.
-func loadOAuthAccessToken() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".woca", "credentials.json"))
-	if err != nil {
-		return ""
-	}
-	var tok struct {
-		AccessToken string `json:"access_token"`
-	}
-	if err := json.Unmarshal(data, &tok); err != nil {
-		return ""
-	}
-	return tok.AccessToken
-}
-
-// resolveBaseURL resolves the provider base URL in order: CLI flag →
-// environment variable → settings database.
-func resolveBaseURL(flagBaseURL, provider string, dbSettings settings.Settings) string {
-	if flagBaseURL != "" {
-		return flagBaseURL
-	}
-	switch provider {
-	case "openai":
-		if v := os.Getenv("OPENAI_BASE_URL"); v != "" {
-			return v
-		}
-		return dbSettings.OpenAIBaseURL
-	case "glm":
-		if v := os.Getenv("GLM_BASE_URL"); v != "" {
-			return v
-		}
-		if v := dbSettings.GLMBaseURL; v != "" {
-			return v
-		}
-		return config.ProviderDefaultBaseURL(config.ProviderGLM)
-	case "deepseek":
-		if v := os.Getenv("DEEPSEEK_BASE_URL"); v != "" {
-			return v
-		}
-		if v := dbSettings.DeepSeekBaseURL; v != "" {
-			return v
-		}
-		return config.ProviderDefaultBaseURL(config.ProviderDeepSeek)
-	default:
-		if v := os.Getenv("ANTHROPIC_BASE_URL"); v != "" {
-			return v
-		}
-		if v := os.Getenv("ANTHROPIC_API_URL"); v != "" {
-			return v
-		}
-		return dbSettings.AnthropicBaseURL
-	}
-}
-
-// loadHooksConfig merges the user (~/.woca/settings.json) and project
-// (.woca/settings.json) hook configs.
-func loadHooksConfig(workdir string) hooks.Config {
-	paths := []string{}
-	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, ".woca", "settings.json"))
-	}
-	paths = append(paths, filepath.Join(workdir, ".woca", "settings.json"))
-
-	var merged hooks.Config
-	for _, p := range paths {
-		cfg, err := hooks.Load(p)
-		if err != nil {
-			continue
-		}
-		merged.PreToolUse = append(merged.PreToolUse, cfg.PreToolUse...)
-		merged.PostToolUse = append(merged.PostToolUse, cfg.PostToolUse...)
-		merged.UserPromptSubmit = append(merged.UserPromptSubmit, cfg.UserPromptSubmit...)
-		merged.Stop = append(merged.Stop, cfg.Stop...)
-		merged.SessionStart = append(merged.SessionStart, cfg.SessionStart...)
-		merged.SessionEnd = append(merged.SessionEnd, cfg.SessionEnd...)
-		merged.SubagentStop = append(merged.SubagentStop, cfg.SubagentStop...)
-		merged.Notification = append(merged.Notification, cfg.Notification...)
-		merged.PreCompact = append(merged.PreCompact, cfg.PreCompact...)
-		merged.PostCompact = append(merged.PostCompact, cfg.PostCompact...)
-		merged.PermissionRequest = append(merged.PermissionRequest, cfg.PermissionRequest...)
-		merged.PostSampling = append(merged.PostSampling, cfg.PostSampling...)
-	}
-	return merged
-}
-
-// loadPermissions loads permission rules from settings.json files (user and
-// project), merging them.
-func loadPermissions(workdir string) *permissions.Rules {
-	paths := []string{}
-	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, ".woca", "settings.json"))
-	}
-	paths = append(paths, filepath.Join(workdir, ".woca", "settings.json"))
-
-	var merged permissions.Rules
-	for _, p := range paths {
-		r, err := permissions.Load(p)
-		if err != nil {
-			continue
-		}
-		merged.Allow = append(merged.Allow, r.Allow...)
-		merged.Deny = append(merged.Deny, r.Deny...)
-		merged.Ask = append(merged.Ask, r.Ask...)
-	}
-	return &merged
-}
-
-// loadSkills loads skills from layered directories: workspace roots (workDir
-// up to the git root, .woca/skills before .claude/skills in each directory)
-// win over the user root ~/.woca/skills. Same-name skills resolve to the
-// higher layer — workspace beats user, which reverses the old first-hit
-// semantics where the user root (loaded first) silently won.
-func loadSkills(workdir string, log zerolog.Logger) []skills.Skill {
-	var es []merge.Entry[skills.Skill]
-	for i, dir := range merge.WorkspaceDirs(workdir) {
-		for j, sub := range []string{".woca", ".claude"} {
-			root := filepath.Join(dir, sub, "skills")
-			list, err := skills.Load(root)
-			if err != nil || len(list) == 0 {
-				continue
-			}
-			for _, s := range list {
-				es = append(es, merge.Entry[skills.Skill]{
-					Name: s.Name, Value: s, Level: merge.LevelWorkspace,
-					Order: i*2 + j, Source: s.Source,
-				})
-			}
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		if list, err := skills.Load(filepath.Join(home, ".woca", "skills")); err == nil {
-			for _, s := range list {
-				es = append(es, merge.Entry[skills.Skill]{
-					Name: s.Name, Value: s, Level: merge.LevelUser,
-					Order: 0, Source: s.Source,
-				})
-			}
-		}
-	}
-	merged, conflicts := merge.Entries(es)
-	logMergeConflicts(log, "skill", conflicts)
-	out := make([]skills.Skill, 0, len(merged))
-	for _, e := range merged {
-		out = append(out, e.Value)
-	}
-	return out
-}
-
-// logMergeConflicts emits one structured log line per layered-merge
-// conflict (D6: observability without a UI panel).
-func logMergeConflicts(log zerolog.Logger, kind string, conflicts []merge.Conflict) {
-	for _, c := range conflicts {
-		log.Info().Str("kind", kind).Str("name", c.Name).
-			Str("winner", c.Winner).Str("loser", c.Loser).
-			Msg("config merge conflict resolved")
-	}
-}
-
-// skillManifest renders the skill list injected into the system prompt (the
-// Skill tool's static description no longer carries it — the list is
-// workspace-scoped).
-func skillManifest(list []skills.Skill) string {
-	var b strings.Builder
-	for _, s := range list {
-		fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
-	}
-	return b.String()
-}
-
-// loadAgents loads custom subagent definitions from layered directories:
-// workDir/.woca/agents plus every ancestor's up to the git root, winning
-// over the user root ~/.woca/agents on name conflicts.
-func loadAgents(workdir string, log zerolog.Logger) []agents.Definition {
-	var es []merge.Entry[agents.Definition]
-	for i, dir := range merge.WorkspaceDirs(workdir) {
-		list, err := agents.Load(filepath.Join(dir, ".woca", "agents"))
-		if err != nil || len(list) == 0 {
-			continue
-		}
-		for _, d := range list {
-			es = append(es, merge.Entry[agents.Definition]{
-				Name: d.Name, Value: d, Level: merge.LevelWorkspace,
-				Order: i, Source: d.Source,
-			})
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		if list, err := agents.Load(filepath.Join(home, ".woca", "agents")); err == nil {
-			for _, d := range list {
-				es = append(es, merge.Entry[agents.Definition]{
-					Name: d.Name, Value: d, Level: merge.LevelUser,
-					Order: 0, Source: d.Source,
-				})
-			}
-		}
-	}
-	merged, conflicts := merge.Entries(es)
-	logMergeConflicts(log, "agent", conflicts)
-	out := make([]agents.Definition, 0, len(merged))
-	for _, e := range merged {
-		out = append(out, e.Value)
-	}
-	return out
-}
-
-// mergeMCPSpecs deduplicates name=command MCP specs across the three layers:
-// --mcp flags beat workDir/.woca/mcp.json beat ~/.woca/mcp.json (D5/D6).
-// Same-layer duplicates keep the first occurrence; invalid specs are warned
-// and dropped. Connecting the merged list fixes the same-name
-// double-connect bug.
-func mergeMCPSpecs(flag, workspace, user []string, log zerolog.Logger) []string {
-	layer := func(specs []string, lvl merge.Level) []merge.Entry[string] {
-		var es []merge.Entry[string]
-		for i, spec := range specs {
-			name, _, ok := strings.Cut(spec, "=")
-			if !ok || strings.TrimSpace(name) == "" {
-				log.Warn().Str("spec", spec).Str("layer", lvl.String()).Msg("invalid mcp spec, expected name=command")
-				continue
-			}
-			es = append(es, merge.Entry[string]{
-				Name: name, Value: spec, Level: lvl, Order: i,
-				Source: lvl.String(),
-			})
-		}
-		return es
-	}
-	es := append(append(layer(flag, merge.LevelFlag), layer(workspace, merge.LevelWorkspace)...), layer(user, merge.LevelUser)...)
-	merged, conflicts := merge.Entries(es)
-	logMergeConflicts(log, "mcp", conflicts)
-	out := make([]string, 0, len(merged))
-	for _, e := range merged {
-		out = append(out, e.Value)
-	}
-	return out
-}
-
-// connectMCP starts MCP servers and returns their tools plus the clients
-// (kept for between-turn tool refreshes).
-func connectMCP(ctx context.Context, log zerolog.Logger, servers []string, st *settings.Store) ([]coretools.Tool, []*mcp.Client) {
-	var out []coretools.Tool
-	var clients []*mcp.Client
-	for _, spec := range servers {
-		name, command, ok := strings.Cut(spec, "=")
-		if !ok || strings.TrimSpace(command) == "" {
-			log.Warn().Str("spec", spec).Msg("invalid --mcp value, expected name=command or name=http(s)://endpoint")
-			continue
-		}
-		var client *mcp.Client
-		if strings.HasPrefix(command, "http://") || strings.HasPrefix(command, "https://") {
-			// OAuth-authorized servers carry their stored token (encrypted
-			// in the secrets table by `woca mcp auth` / the McpAuth tool).
-			var token func() string
-			if st != nil {
-				secret := mcp.McpTokenSecretPrefix + name + "_token"
-				if st.HasSecret(secret) {
-					token = func() string { return st.GetSecret(secret) }
-				}
-			}
-			client = mcp.NewStreamableHTTPAuth(name, command, token)
-		} else {
-			client = mcp.NewStdio(name, "sh", "-c", command)
-		}
-		if client == nil {
-			log.Warn().Str("name", name).Msg("failed to start MCP server")
-			continue
-		}
-		if err := client.Initialize(ctx); err != nil {
-			log.Warn().Str("name", name).Err(err).Msg("MCP initialize failed")
-			continue
-		}
-		list, err := client.ListTools(ctx)
-		if err != nil {
-			log.Warn().Str("name", name).Err(err).Msg("MCP tools/list failed")
-			continue
-		}
-		clients = append(clients, client)
-		out = append(out, client.AsTools(name, list)...)
-		out = append(out, client.AsResourceTools(name)...)
-		out = append(out, client.AsPromptTools(name)...)
-		log.Info().Str("name", name).Int("tools", len(list)).Msg("connected MCP server")
-	}
-	return out, clients
-}
-
-// refreshMCPTools re-lists tools from connected MCP servers, for the
-// between-turn tool refresh (hot-added tools become usable next round).
-func refreshMCPTools(ctx context.Context, log zerolog.Logger, clients []*mcp.Client) []coretools.Tool {
-	var out []coretools.Tool
-	for _, client := range clients {
-		list, err := client.ListTools(ctx)
-		if err != nil {
-			continue
-		}
-		name := client.Name()
-		out = append(out, client.AsTools(name, list)...)
-		out = append(out, client.AsResourceTools(name)...)
-		out = append(out, client.AsPromptTools(name)...)
-	}
-	return out
 }
 
 // turnTokenBudgetFromEnv resolves WOCA_TURN_TOKEN_BUDGET: the per-turn
@@ -2067,57 +816,4 @@ func stripSystem(msgs []messages.Message) []messages.Message {
 		}
 	}
 	return out
-}
-
-// managedSettingsPath resolves the enterprise managed-settings file: flag →
-// env → /etc/woca/managed-settings.json when present.
-func managedSettingsPath(flagValue string) string {
-	if flagValue != "" {
-		return flagValue
-	}
-	if v := os.Getenv("WOCA_MANAGED_SETTINGS"); v != "" {
-		return v
-	}
-	if _, err := os.Stat("/etc/woca/managed-settings.json"); err == nil {
-		return "/etc/woca/managed-settings.json"
-	}
-	return ""
-}
-
-// newMcpAuthRunner builds the OAuth runner shared by the McpAuth tool and
-// `woca mcp auth`: tokens persist encrypted in the secrets table.
-func newMcpAuthRunner(st *settings.Store) func(ctx context.Context, server string) error {
-	return func(ctx context.Context, server string) error {
-		if st == nil {
-			return fmt.Errorf("settings store unavailable; run `woca mcp auth %s <endpoint>` with the database enabled", server)
-		}
-		for _, spec := range os.Args {
-			_, command, ok := strings.Cut(spec, "=")
-			if !ok {
-				continue
-			}
-			if name, _, found := strings.Cut(spec, "="); found && name != server {
-				continue
-			}
-			if !strings.HasPrefix(command, "http://") && !strings.HasPrefix(command, "https://") {
-				continue
-			}
-			flow := mcp.OAuthFlow{
-				ServerName: server,
-				Endpoint:   command,
-				Client:     &http.Client{Timeout: 15 * time.Second},
-				OpenBrowser: func(u string) error {
-					if os.Getenv("WOCA_NO_BROWSER") == "" {
-						_ = openBrowser(u)
-					}
-					return nil
-				},
-				SaveToken: func(token string) error {
-					return st.SetSecret(mcp.McpTokenSecretPrefix+server+"_token", token)
-				},
-			}
-			return mcp.RunOAuth(ctx, flow)
-		}
-		return fmt.Errorf("MCP server %q is not configured with an https endpoint (start woca with --mcp %s=https://…)", server, server)
-	}
 }
