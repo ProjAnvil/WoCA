@@ -13,13 +13,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 // ErrBrowserNotInstalled is returned when the pinchtab binary is missing.
@@ -36,9 +37,10 @@ var ErrBrowserStopped = errors.New("browser runtime is stopped")
 type BrowserRuntime struct {
 	root string
 	log  zerolog.Logger
+	exec executor.Executor
 
 	mu      sync.Mutex
-	proc    *os.Process // nil when we reused an already-running server
+	proc    executor.Process // nil when we reused an already-running server
 	client  *pinchClient
 	stopped bool // Stop was called; a spawn finishing after it is discarded
 	// startMu serializes the slow start path (health probe + spawn) so
@@ -47,9 +49,20 @@ type BrowserRuntime struct {
 	startMu sync.Mutex
 }
 
-// NewBrowserRuntime builds a runtime rooted at dir (~/.woca/plugins/runtimes/pinchtab).
+// NewBrowserRuntime builds a runtime rooted at dir (~/.woca/plugins/runtimes/pinchtab)
+// running the server on the local machine.
 func NewBrowserRuntime(dir string, log zerolog.Logger) *BrowserRuntime {
-	return &BrowserRuntime{root: dir, log: log}
+	return NewBrowserRuntimeWithExecutor(dir, log, nil)
+}
+
+// NewBrowserRuntimeWithExecutor is NewBrowserRuntime with an explicit
+// execution backend for the server process; a nil executor falls back to the
+// local machine.
+func NewBrowserRuntimeWithExecutor(dir string, log zerolog.Logger, x executor.Executor) *BrowserRuntime {
+	if x == nil {
+		x = executor.NewLocal()
+	}
+	return &BrowserRuntime{root: dir, log: log, exec: x}
 }
 
 func (b *BrowserRuntime) binaryPath() string {
@@ -230,7 +243,7 @@ func (b *BrowserRuntime) Client(ctx context.Context) (*pinchClient, error) {
 
 // setClient commits the client (and the spawned process) unless Stop already
 // ran; it reports whether the commit happened.
-func (b *BrowserRuntime) setClient(c *pinchClient, proc *os.Process) bool {
+func (b *BrowserRuntime) setClient(c *pinchClient, proc executor.Process) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.stopped {
@@ -275,16 +288,23 @@ func isTransportError(err error) bool {
 // spawn starts `pinchtab server` with the isolated config and waits for
 // /health. It runs without b.mu held and returns the spawned process for the
 // caller to commit.
-func (b *BrowserRuntime) spawn(ctx context.Context, cfg pinchConfig) (*os.Process, error) {
+func (b *BrowserRuntime) spawn(ctx context.Context, cfg pinchConfig) (executor.Process, error) {
 	_ = os.MkdirAll(filepath.Dir(b.serverLogPath()), 0o755)
 	logFH, err := os.OpenFile(b.serverLogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(b.binaryPath(), "server")
-	cmd.Env = append(os.Environ(), "PINCHTAB_CONFIG="+b.configPath())
-	cmd.Stdout, cmd.Stderr = logFH, logFH
-	if err := cmd.Start(); err != nil {
+	// The server outlives the request that started it (it is adopted by
+	// later runs when it survives), so it starts under the background
+	// context; ctx only bounds the health-poll below.
+	proc, err := b.exec.Start(context.Background(),
+		executor.ExecRequest{
+			Name: b.binaryPath(),
+			Args: []string{"server"},
+			Env:  append(os.Environ(), "PINCHTAB_CONFIG="+b.configPath()),
+		},
+		executor.StartOptions{Stdout: logFH, Stderr: logFH})
+	if err != nil {
 		_ = logFH.Close()
 		return nil, fmt.Errorf("start pinchtab: %w", err)
 	}
@@ -294,13 +314,13 @@ func (b *BrowserRuntime) spawn(ctx context.Context, cfg pinchConfig) (*os.Proces
 	// Reap the child when it exits so we do not leak zombies; exitErr is
 	// read after the health-poll failure path.
 	exitErr := make(chan error, 1)
-	go func() { exitErr <- cmd.Wait(); _ = logFH.Close() }()
+	go func() { exitErr <- proc.Wait(); _ = logFH.Close() }()
 
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			_ = cmd.Process.Kill()
+			_ = proc.Kill()
 			return nil, ctx.Err()
 		case err := <-exitErr:
 			return nil, fmt.Errorf("pinchtab exited during startup: %v\n%s", err, b.logTail())
@@ -308,11 +328,11 @@ func (b *BrowserRuntime) spawn(ctx context.Context, cfg pinchConfig) (*os.Proces
 		}
 		if err := c.health(ctx); err == nil {
 			b.log.Info().Str("base", base).Msg("pinchtab server started")
-			return cmd.Process, nil
+			return proc, nil
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	_ = cmd.Process.Kill()
+	_ = proc.Kill()
 	return nil, fmt.Errorf("pinchtab did not become healthy within 20s\n%s", b.logTail())
 }
 

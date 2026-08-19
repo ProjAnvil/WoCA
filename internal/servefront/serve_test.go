@@ -1,4 +1,4 @@
-package main
+package servefront
 
 import (
 	"context"
@@ -20,7 +20,7 @@ func TestServeAPIDrivesClosures(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Pick a free port, then hand it to serve().
+	// Pick a free port, then hand it to Serve().
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -32,10 +32,10 @@ func TestServeAPIDrivesClosures(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- serve(ctx, opts, addr, true) }()
+	go func() { serveDone <- Serve(ctx, opts, addr, true) }()
 
 	base := "http://" + addr
-	// serve() answers /api/health from the moment the port is bound; the
+	// Serve() answers /api/health from the moment the port is bound; the
 	// real handler (and the closures under test) only swaps in once the
 	// agent build finishes, so wait for an API route instead.
 	healthOK := false
@@ -84,7 +84,7 @@ func TestServeAPIDrivesClosures(t *testing.T) {
 		return resp
 	}
 
-	// Closures wired in serve()/newConsole: quota, thinking, claude-env,
+	// Closures wired in Serve()/newConsole: quota, thinking, claude-env,
 	// settings rebuilds, plugins.
 	if resp := get("/api/quota"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("quota = %d", resp.StatusCode)
@@ -130,8 +130,8 @@ func TestServeAPIDrivesClosures(t *testing.T) {
 func TestServeBuildAgentError(t *testing.T) {
 	isolateEnv(t)
 	opts := baseOpts(t, fakeOpenAI(t, "hi"))
-	opts.provider = "nope"
-	if err := serve(t.Context(), opts, "127.0.0.1:0", true); err == nil {
+	opts.Provider = "nope"
+	if err := Serve(t.Context(), opts, "127.0.0.1:0", true); err == nil {
 		t.Fatal("expected buildAgent error")
 	}
 }
@@ -143,7 +143,7 @@ func TestServeOpensBrowserWithFakeOpen(t *testing.T) {
 	opts := baseOpts(t, fakeOpenAI(t, "hi"))
 	ctx, cancel := context.WithTimeout(t.Context(), 700*time.Millisecond)
 	defer cancel()
-	if err := serve(ctx, opts, "127.0.0.1:0", false); err != nil {
+	if err := Serve(ctx, opts, "127.0.0.1:0", false); err != nil {
 		t.Fatal(err)
 	}
 }

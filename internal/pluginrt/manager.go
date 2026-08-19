@@ -12,6 +12,8 @@ import (
 	"github.com/rs/zerolog"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 // InstallState is a plugin runtime's provisioning state.
@@ -70,15 +72,23 @@ type Manager struct {
 }
 
 // NewManager builds a Manager (home is typically ~/.woca/plugins; workdir is
-// the agent's working directory for script execution).
+// the agent's working directory for script execution) running all plugin
+// processes on the local machine.
 func NewManager(home, workdir string, log zerolog.Logger) *Manager {
+	return NewManagerWithExecutor(home, workdir, log, nil)
+}
+
+// NewManagerWithExecutor is NewManager with an explicit execution backend for
+// every plugin process (pinchtab server, uv, venv scripts); a nil executor
+// falls back to the local machine.
+func NewManagerWithExecutor(home, workdir string, log zerolog.Logger, x executor.Executor) *Manager {
 	return &Manager{
 		home:    home,
 		workdir: workdir,
 		log:     log,
 		runs:    map[string]*installRun{},
-		py:      NewPythonRuntime(filepath.Join(home, "runtimes", "python"), home, log),
-		br:      NewBrowserRuntime(filepath.Join(home, "runtimes", "pinchtab"), log),
+		py:      NewPythonRuntimeWithExecutor(filepath.Join(home, "runtimes", "python"), home, log, x),
+		br:      NewBrowserRuntimeWithExecutor(filepath.Join(home, "runtimes", "pinchtab"), log, x),
 	}
 }
 

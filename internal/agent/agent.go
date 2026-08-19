@@ -39,6 +39,7 @@ import (
 	"github.com/projanvil/woca/internal/model"
 	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/permissions"
+	"github.com/projanvil/woca/internal/platform/executor"
 	"github.com/projanvil/woca/internal/prompt"
 	"github.com/projanvil/woca/internal/runws"
 	"github.com/projanvil/woca/internal/settings"
@@ -134,8 +135,12 @@ type PlanApprovalRequest struct {
 
 // Config configures an Agent.
 type Config struct {
-	Model          language.ChatModel
-	Registry       *tools.Registry
+	Model    language.ChatModel
+	Registry *tools.Registry
+	// Exec is the execution backend subagents build their tool registries
+	// on, so spawned subagents inherit the parent's executor (local or
+	// sandboxed). Nil falls back to the local machine.
+	Exec           executor.Executor
 	SystemPrompt   string
 	PermissionMode config.PermissionMode
 	RecursionLimit int
@@ -243,6 +248,7 @@ type Agent struct {
 	model          language.ChatModel
 	boundModel     language.ChatModel
 	registry       *tools.Registry
+	exec           executor.Executor
 	toolList       []coretools.Tool
 	toolByName     map[string]coretools.Tool
 	systemPrompt   string
@@ -391,6 +397,7 @@ func New(cfg Config) (*Agent, error) {
 	a := &Agent{
 		model:          cfg.Model,
 		registry:       cfg.Registry,
+		exec:           cfg.Exec,
 		systemPrompt:   cfg.SystemPrompt,
 		mode:           cfg.PermissionMode,
 		workdir:        cfg.WorkDir,
@@ -1559,7 +1566,7 @@ func (a *Agent) askPermission(ctx context.Context, call messages.ToolCall) (bool
 // prompt, tools and memory calls stay scoped to the same session).
 func (a *Agent) newSubagent(ctx context.Context, def *agents.Definition) (*Agent, error) {
 	ws := a.memoryWorkspaceCtx(ctx)
-	reg := tools.NewRegistry(ws)
+	reg := tools.NewRegistryWithExecutor(ws, a.exec)
 	sysPrompt := prompt.SubagentPrompt(ws)
 	if def != nil && def.Prompt != "" {
 		sysPrompt = def.Prompt
@@ -1570,6 +1577,7 @@ func (a *Agent) newSubagent(ctx context.Context, def *agents.Definition) (*Agent
 	sub, err := New(Config{
 		Model:          a.subagentModel,
 		Registry:       reg,
+		Exec:           a.exec,
 		SystemPrompt:   sysPrompt,
 		PermissionMode: mode,
 		RecursionLimit: a.recursionLimit,

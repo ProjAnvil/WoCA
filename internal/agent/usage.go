@@ -23,10 +23,10 @@ type UsageTotals struct {
 // context size (per the Messages API semantics), which the /context UI shows
 // as the exact counterpart of the estimated breakdown.
 type LastUsage struct {
-	InputTokens     int `json:"input_tokens"`
-	CacheReadTokens int `json:"cache_read_tokens"`
+	InputTokens      int `json:"input_tokens"`
+	CacheReadTokens  int `json:"cache_read_tokens"`
 	CacheWriteTokens int `json:"cache_write_tokens"`
-	OutputTokens    int `json:"output_tokens"`
+	OutputTokens     int `json:"output_tokens"`
 }
 
 // usageTracker is the thread-safe accumulator behind /cost.

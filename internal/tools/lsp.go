@@ -6,8 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -15,6 +15,8 @@ import (
 	"time"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 // LSP tool: pulls diagnostics for one file from a language server speaking
@@ -35,7 +37,7 @@ type lspTransport interface {
 // stdioTransport runs a language server subprocess and frames LSP JSON-RPC
 // messages over its stdin/stdout.
 type stdioTransport struct {
-	cmd    *exec.Cmd
+	proc   executor.Process
 	stdin  *jsonWriter
 	stdout *bufio.Reader
 
@@ -54,7 +56,7 @@ type lspResponse struct {
 
 // jsonWriter writes Content-Length framed messages to a pipe.
 type jsonWriter struct {
-	w  *os.File
+	w  io.WriteCloser
 	mu sync.Mutex
 }
 
@@ -79,36 +81,28 @@ func (j *jsonWriter) close() error {
 	return j.w.Close()
 }
 
-// startLSP spawns the language server command.
+// startLSP spawns the language server command on the local machine.
 func startLSP(command []string) (*stdioTransport, error) {
+	return startLSPWith(executor.NewLocal(), command)
+}
+
+// startLSPWith spawns the language server command through x.
+func startLSPWith(x executor.Executor, command []string) (*stdioTransport, error) {
 	if len(command) == 0 {
 		return nil, fmt.Errorf("no LSP server configured (set WOCA_LSP_SERVER)")
 	}
-	cmd := exec.Command(command[0], command[1:]...)
-	stdin, err := cmd.StdinPipe()
+	// The language server outlives individual tool calls, so it starts under
+	// the background context; Close terminates it explicitly.
+	proc, err := x.Start(context.Background(),
+		executor.ExecRequest{Name: command[0], Args: command[1:]},
+		executor.StartOptions{})
 	if err != nil {
 		return nil, err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	fstdin, ok := stdin.(*os.File)
-	if !ok {
-		return nil, fmt.Errorf("lsp: unexpected stdin pipe type")
-	}
-	fstdout, ok := stdout.(*os.File)
-	if !ok {
-		return nil, fmt.Errorf("lsp: unexpected stdout pipe type")
 	}
 	t := &stdioTransport{
-		cmd:     cmd,
-		stdin:   &jsonWriter{w: fstdin},
-		stdout:  bufio.NewReader(fstdout),
+		proc:    proc,
+		stdin:   &jsonWriter{w: proc.Stdin()},
+		stdout:  bufio.NewReader(proc.Stdout()),
 		pending: map[int64]chan lspResponse{},
 	}
 	go t.readLoop()
@@ -233,7 +227,7 @@ func (t *stdioTransport) Close() error {
 	_ = t.Notify(context.Background(), "shutdown", nil)
 	_ = t.Notify(context.Background(), "exit", nil)
 	_ = t.stdin.close()
-	return t.cmd.Wait()
+	return t.proc.Wait()
 }
 
 // lspInitialize performs the one-time LSP handshake on a fresh transport:

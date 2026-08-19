@@ -10,6 +10,8 @@ import (
 	"sort"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 // Category classifies a tool for the permission system.
@@ -110,26 +112,38 @@ type Registry struct {
 	bg      *BackgroundShells
 	history *FileHistory
 	lspPool *lspPool
+	exec    executor.Executor
 }
 
 // NewRegistry builds a registry populated with the default tool set, bound to
-// the given working directory.
+// the given working directory. Local side effects run on the current machine.
 func NewRegistry(workdir string) *Registry {
+	return NewRegistryWithExecutor(workdir, nil)
+}
+
+// NewRegistryWithExecutor is NewRegistry with an explicit execution backend:
+// the shell and file tools perform their side effects through x. A nil
+// executor falls back to the local machine.
+func NewRegistryWithExecutor(workdir string, x executor.Executor) *Registry {
 	if workdir == "" {
 		workdir = "."
+	}
+	if x == nil {
+		x = executor.NewLocal()
 	}
 	r := &Registry{
 		byName:  map[string]coretools.Tool{},
 		todos:   NewTodoStore(),
 		dir:     NewDir(workdir),
-		bg:      NewBackgroundShells(),
+		bg:      NewBackgroundShellsWithExecutor(x),
 		history: NewFileHistory(),
 		lspPool: newLSPPool(
-			func(cmd []string) (lspTransport, error) { return startLSP(cmd) },
+			func(cmd []string) (lspTransport, error) { return startLSPWith(x, cmd) },
 			lspInitialize, // one handshake per spawned server, owned by the pool
 		),
+		exec: x,
 	}
-	for _, t := range defaultTools(r.dir, r.todos, r.bg, r.history, r.lspPool) {
+	for _, t := range defaultTools(r.dir, r.todos, r.bg, r.history, r.lspPool, r.exec) {
 		r.Register(t)
 	}
 	return r

@@ -26,6 +26,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/memory"
+	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/quota"
 	"github.com/projanvil/woca/internal/settings"
@@ -108,7 +109,7 @@ type Server struct {
 	admission      *admission
 	state          sessionStateStore // durable per-session run state (running/awaiting)
 	owner          string            // "pid@host" stamped on state rows
-	hub            *eventHub         // global SSE broadcast (/api/events)
+	hub            eventbus.Bus      // global SSE broadcast (/api/events)
 	workdir        string
 	settings       *settings.Store
 	memory         *store.Store
@@ -162,7 +163,7 @@ func New(cfg Config) *Server {
 		admission:      newAdmission(),
 		state:          state,
 		owner:          newStateOwner(),
-		hub:            newEventHub(),
+		hub:            eventbus.NewLocalWithRetention(1024),
 		workdir:        cfg.WorkDir,
 		settings:       cfg.Settings,
 		memory:         cfg.Memory,

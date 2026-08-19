@@ -11,6 +11,8 @@ import (
 	"io"
 	"strings"
 	"sync"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 const protocolVersion = "2024-11-05"
@@ -69,9 +71,18 @@ func NewClient(name string, w io.Writer, r io.Reader, closer func() error) *Clie
 	return newClient(name, t)
 }
 
-// NewStdio builds a stdio client that spawns a process.
+// NewStdio builds a stdio client that spawns a process on the local machine.
 func NewStdio(name, command string, args ...string) *Client {
-	t := newStdioTransport(name, command, args...)
+	return NewStdioWithExecutor(nil, name, command, args...)
+}
+
+// NewStdioWithExecutor is NewStdio with an explicit execution backend for the
+// server process; a nil executor falls back to the local machine.
+func NewStdioWithExecutor(x executor.Executor, name, command string, args ...string) *Client {
+	if x == nil {
+		x = executor.NewLocal()
+	}
+	t := newStdioTransport(x, name, command, args...)
 	if t == nil {
 		return nil
 	}

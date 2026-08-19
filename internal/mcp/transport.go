@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"sync"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 // transport sends and receives JSON-RPC messages for a Client.
@@ -41,25 +42,22 @@ func newStdioTransportFromIO(w io.Writer, r io.Reader) *stdioTransport {
 	return &stdioTransport{w: w, r: bufio.NewReader(r)}
 }
 
-func newStdioTransport(name, command string, args ...string) *stdioTransport {
-	cmd := exec.Command(command, args...)
-	stdin, err := cmd.StdinPipe()
+func newStdioTransport(x executor.Executor, name, command string, args ...string) *stdioTransport {
+	// The MCP server outlives the request that connected it (clients are
+	// kept for between-turn tool refreshes), so it starts under the
+	// background context; close terminates it explicitly. Its stderr passes
+	// through to the parent's so server logs stay visible in the console.
+	proc, err := x.Start(context.Background(),
+		executor.ExecRequest{Name: command, Args: args},
+		executor.StartOptions{Stderr: os.Stderr})
 	if err != nil {
 		return nil
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil
-	}
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		return nil
-	}
-	t := &stdioTransport{w: stdin, r: bufio.NewReader(stdout)}
+	t := &stdioTransport{w: proc.Stdin(), r: bufio.NewReader(proc.Stdout())}
 	t.closer = func() error {
-		_ = stdin.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		_ = proc.Stdin().Close()
+		_ = proc.Kill()
+		_ = proc.Wait()
 		return nil
 	}
 	return t

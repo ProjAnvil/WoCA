@@ -1,4 +1,4 @@
-package main
+package servefront
 
 import (
 	"net/http"
