@@ -10,3 +10,4 @@ gui-test-screenshots/
 native-client/build/bin/
 web/package.json.md5
 web/wailsjs/
+native-client/build/darwin/Info.dev.plist
