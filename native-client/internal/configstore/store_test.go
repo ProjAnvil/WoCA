@@ -64,7 +64,7 @@ func TestStorePersistsPreference(t *testing.T) {
 	}
 }
 
-func TestOpenCreatesVersionTwoAndClaimsIncreasingEpochs(t *testing.T) {
+func TestOpenAndPreferenceReadsDoNotClaimPreferenceEpoch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "client.db")
 	first, err := Open(path)
 	if err != nil {
@@ -77,28 +77,156 @@ func TestOpenCreatesVersionTwoAndClaimsIncreasingEpochs(t *testing.T) {
 	if version != 2 {
 		t.Fatalf("schema version = %d, want 2", version)
 	}
-	var firstEpoch int64
-	if err := first.db.QueryRow(`SELECT epoch FROM preference_epoch WHERE singleton = 1`).Scan(&firstEpoch); err != nil {
-		t.Fatal(err)
+	if epoch := storedPreferenceEpoch(t, first); epoch != 0 {
+		t.Fatalf("epoch after first open = %d, want unclaimed 0", epoch)
 	}
-	if firstEpoch <= 0 {
-		t.Fatalf("first epoch = %d, want positive", firstEpoch)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
+	if value, found, err := first.Preference(t.Context(), "woca-theme"); err != nil || found || value != "" {
+		t.Fatalf("missing Preference() = %q, %v, %v", value, found, err)
 	}
 
 	second, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer first.Close()
 	defer second.Close()
-	var secondEpoch int64
-	if err := second.db.QueryRow(`SELECT epoch FROM preference_epoch WHERE singleton = 1`).Scan(&secondEpoch); err != nil {
+	if value, found, err := second.Preference(t.Context(), "woca.pref.model"); err != nil || found || value != "" {
+		t.Fatalf("second missing Preference() = %q, %v, %v", value, found, err)
+	}
+	if epoch := storedPreferenceEpoch(t, second); epoch != 0 {
+		t.Fatalf("epoch after second open/read = %d, want unclaimed 0", epoch)
+	}
+}
+
+func TestReadOnlyExtraStoreDoesNotFenceCurrentPreferenceWriter(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	storeA, err := Open(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if secondEpoch <= firstEpoch {
-		t.Fatalf("reopened epoch = %d, want greater than %d", secondEpoch, firstEpoch)
+	defer storeA.Close()
+	applied, err := storeA.PutPreferenceVersioned(t.Context(), "woca.pref.model", "a-one", 1)
+	if err != nil || !applied {
+		t.Fatalf("store A revision 1 applied = %v, err = %v", applied, err)
+	}
+	claimedEpoch := storedPreferenceEpoch(t, storeA)
+
+	for launch := 1; launch <= 3; launch++ {
+		readOnlyStore, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value, found, err := readOnlyStore.Preference(t.Context(), "woca.pref.model"); err != nil || !found || value != "a-one" {
+			t.Fatalf("read-only Store %d Preference() = %q, %v, %v; want a-one", launch, value, found, err)
+		}
+		if err := readOnlyStore.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if epoch := storedPreferenceEpoch(t, storeA); epoch != claimedEpoch {
+			t.Fatalf("read-only Store %d changed epoch from %d to %d", launch, claimedEpoch, epoch)
+		}
+	}
+
+	applied, err = storeA.PutPreferenceVersioned(t.Context(), "woca.pref.model", "a-two", 2)
+	if err != nil || !applied {
+		t.Fatalf("store A revision 2 after read-only launch applied = %v, err = %v", applied, err)
+	}
+}
+
+func TestConcurrentFirstWritesClaimOneEpoch(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "client.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	type outcome struct {
+		applied bool
+		err     error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, 2)
+	for key, value := range map[string]string{
+		"woca-theme":       "dark",
+		"woca.pref.locale": "en",
+	} {
+		go func() {
+			<-start
+			applied, err := store.PutPreferenceVersioned(t.Context(), key, value, 1)
+			results <- outcome{applied: applied, err: err}
+		}()
+	}
+	close(start)
+	for range 2 {
+		result := <-results
+		if result.err != nil || !result.applied {
+			t.Fatalf("concurrent first write applied = %v, err = %v", result.applied, result.err)
+		}
+	}
+	if epoch := storedPreferenceEpoch(t, store); epoch != 1 {
+		t.Fatalf("epoch after concurrent first writes = %d, want exactly 1", epoch)
+	}
+}
+
+func TestPreferenceWriteRetriesAfterPostClaimFailureWithoutNewEpoch(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "client.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.db.Exec(`
+		CREATE TRIGGER reject_test_preference
+		BEFORE INSERT ON preferences
+		BEGIN SELECT RAISE(ABORT, 'injected write failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, err := store.PutPreferenceVersioned(t.Context(), "woca-theme", "dark", 1)
+	if err == nil || applied {
+		t.Fatalf("injected write applied = %v, err = %v; want failure", applied, err)
+	}
+	claimedEpoch := storedPreferenceEpoch(t, store)
+	if claimedEpoch != 1 {
+		t.Fatalf("epoch after failed post-claim write = %d, want 1", claimedEpoch)
+	}
+	if _, err := store.db.Exec(`DROP TRIGGER reject_test_preference`); err != nil {
+		t.Fatal(err)
+	}
+	canceledCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	applied, err = store.PutPreferenceVersioned(canceledCtx, "woca-theme", "dark", 1)
+	if err == nil || applied {
+		t.Fatalf("canceled retry applied = %v, err = %v; want failure", applied, err)
+	}
+	if epoch := storedPreferenceEpoch(t, store); epoch != claimedEpoch {
+		t.Fatalf("canceled retry changed epoch from %d to %d", claimedEpoch, epoch)
+	}
+
+	applied, err = store.PutPreferenceVersioned(t.Context(), "woca-theme", "dark", 1)
+	if err != nil || !applied {
+		t.Fatalf("retry applied = %v, err = %v", applied, err)
+	}
+	if epoch := storedPreferenceEpoch(t, store); epoch != claimedEpoch {
+		t.Fatalf("retry changed epoch from %d to %d", claimedEpoch, epoch)
+	}
+}
+
+func TestPreferenceEpochOverflowFailsClosed(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "client.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.db.Exec(`UPDATE preference_epoch SET epoch = ? WHERE singleton = 1`, int64(9_223_372_036_854_775_807)); err != nil {
+		t.Fatal(err)
+	}
+
+	applied, err := store.PutPreferenceVersioned(t.Context(), "woca-theme", "dark", 1)
+	if err == nil || applied {
+		t.Fatalf("overflow write applied = %v, err = %v; want fail-closed error", applied, err)
+	}
+	if _, found, err := store.Preference(t.Context(), "woca-theme"); err != nil || found {
+		t.Fatalf("Preference() found = %v, err = %v after overflow", found, err)
 	}
 }
 
@@ -128,6 +256,9 @@ func TestOpenMigratesVersionOnePreferencesWithoutLoss(t *testing.T) {
 	if !tableExists(t, path, "preference_versions") {
 		t.Fatal("version-1 migration did not create preference_versions")
 	}
+	if epoch := storedPreferenceEpoch(t, store); epoch != 0 {
+		t.Fatalf("version-1 migration claimed epoch %d without a write", epoch)
+	}
 }
 
 func TestVersionedPreferenceWritesFenceOlderStoresAndOrderRevisions(t *testing.T) {
@@ -135,6 +266,10 @@ func TestVersionedPreferenceWritesFenceOlderStoresAndOrderRevisions(t *testing.T
 	storeA, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	applied, err := storeA.PutPreferenceVersioned(t.Context(), "woca-theme", "dark", 1)
+	if err != nil || !applied {
+		t.Fatalf("store A initial write applied = %v, err = %v", applied, err)
 	}
 
 	type writeOutcome struct {
@@ -155,16 +290,23 @@ func TestVersionedPreferenceWritesFenceOlderStoresAndOrderRevisions(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if storeB.epoch <= storeA.epoch {
-		t.Fatalf("store B epoch = %d, want greater than store A epoch %d", storeB.epoch, storeA.epoch)
+	if storeB.epoch != 0 {
+		t.Fatalf("store B epoch after open = %d, want unclaimed 0", storeB.epoch)
 	}
-	fenced, err := storeA.PutPreferenceVersioned(t.Context(), "woca-theme", "dark", 8_000)
-	if err != nil || fenced {
-		t.Fatalf("store A write after B opened applied = %v, err = %v; want epoch fence", fenced, err)
+	applied, err = storeA.PutPreferenceVersioned(t.Context(), "woca-theme", "light", 2)
+	if err != nil || !applied {
+		t.Fatalf("store A write after B open applied = %v, err = %v", applied, err)
 	}
-	applied, err := storeB.PutPreferenceVersioned(t.Context(), "woca.pref.model", "b-one", 1)
+	applied, err = storeB.PutPreferenceVersioned(t.Context(), "woca.pref.model", "b-one", 1)
 	if err != nil || !applied {
 		t.Fatalf("store B revision 1 applied = %v, err = %v", applied, err)
+	}
+	if storeB.epoch <= storeA.epoch {
+		t.Fatalf("store B epoch = %d, want greater than store A epoch %d after B write", storeB.epoch, storeA.epoch)
+	}
+	fenced, err := storeA.PutPreferenceVersioned(t.Context(), "woca-theme", "auto", 8_000)
+	if err != nil || fenced {
+		t.Fatalf("store A write after B write applied = %v, err = %v; want epoch fence", fenced, err)
 	}
 	close(releaseA)
 	staleA := <-aDone
@@ -230,12 +372,12 @@ func TestVersionedPreferenceWritesFenceOlderStoresAndOrderRevisions(t *testing.T
 		t.Fatal(err)
 	}
 	defer storeC.Close()
-	if storeC.epoch <= storeB.epoch {
-		t.Fatalf("store C epoch = %d, want greater than store B epoch %d", storeC.epoch, storeB.epoch)
-	}
 	applied, err = storeC.PutPreferenceVersioned(t.Context(), "woca.pref.model", "c-one", 1)
 	if err != nil || !applied {
 		t.Fatalf("store C revision 1 applied = %v, err = %v", applied, err)
+	}
+	if storeC.epoch <= storeB.epoch {
+		t.Fatalf("store C epoch = %d, want greater than store B epoch %d after C write", storeC.epoch, storeB.epoch)
 	}
 	value, found, err = storeC.Preference(t.Context(), "woca.pref.model")
 	if err != nil || !found || value != "c-one" {
@@ -525,6 +667,15 @@ func prepareDatabase(t *testing.T, path, statements string) {
 	if _, err := db.Exec(statements); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func storedPreferenceEpoch(t *testing.T, store *Store) int64 {
+	t.Helper()
+	var epoch int64
+	if err := store.db.QueryRow(`SELECT epoch FROM preference_epoch WHERE singleton = 1`).Scan(&epoch); err != nil {
+		t.Fatal(err)
+	}
+	return epoch
 }
 
 func countApplicationObjects(t *testing.T, path string) int {

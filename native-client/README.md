@@ -43,12 +43,14 @@ the Vue application or be persisted by this native client. See the approved
 
 Wails 2.14's single-instance lock is a best-effort desktop UX guard, not a data
 integrity mutex. SQLite is the preference-ordering authority. Schema version 2
-atomically claims a persistent epoch whenever a Store opens and records the
-applied `(epoch, revision)` for each key. Every preference write checks both in
-one immediate transaction, so a later Store epoch fences older processes and
-same-process revisions remain last-write-wins. Controlled shutdown still stops
-new preference calls and drains accepted calls before closing SQLite, but data
-safety does not depend on the Wails lock or graceful shutdown.
+maintains a persistent epoch counter and records the applied `(epoch, revision)`
+for each key. Opening, migrating, and reading a Store do not claim ownership;
+the Store atomically claims an epoch only on its first versioned preference
+write. Every write then checks both values in one immediate transaction, so an
+actual later writer fences older writers while a rejected/read-only launch does
+not. Controlled shutdown still stops new preference calls and drains accepted
+calls before closing SQLite, but data safety does not depend on the Wails lock
+or graceful shutdown.
 
 ## Loopback UI and transport development
 

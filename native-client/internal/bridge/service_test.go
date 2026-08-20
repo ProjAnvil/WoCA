@@ -257,6 +257,12 @@ func TestSetPreferenceReportsPersistentEpochAndRevisionDecisions(t *testing.T) {
 	}
 	defer storeA.Close()
 	serviceA := NewService(storeA, nil)
+	initialWriter, err := serviceA.SetPreference(t.Context(), PreferenceInput{
+		Key: "woca.pref.model", Value: "older-process", Revision: 1,
+	})
+	if err != nil || !initialWriter.Applied {
+		t.Fatalf("initial-writer SetPreference() = %#v, %v", initialWriter, err)
+	}
 
 	storeB, err := configstore.Open(path)
 	if err != nil {

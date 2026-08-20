@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -24,8 +25,9 @@ type Profile struct {
 }
 
 type Store struct {
-	db    *sql.DB
-	epoch int64
+	db                *sql.DB
+	preferenceWriteMu sync.Mutex
+	epoch             int64
 }
 
 const currentSchemaVersion = 2
@@ -106,12 +108,6 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	epoch, err := s.claimPreferenceEpoch(context.Background())
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	s.epoch = epoch
 	return s, nil
 }
 
@@ -182,16 +178,23 @@ func (s *Store) Preference(ctx context.Context, key string) (string, bool, error
 	return value, true, nil
 }
 
-// PutPreferenceVersioned atomically applies a preference only when this Store
-// still owns the latest persisted epoch and revision is newer for the key.
-// Epoch fencing makes ordering authoritative in SQLite even when another
-// process bypasses Wails' best-effort single-instance lock.
+// PutPreferenceVersioned claims this Store's epoch lazily, then atomically
+// applies a preference only while the Store still owns the latest persisted
+// epoch and revision is newer for the key. Epoch fencing makes ordering
+// authoritative in SQLite even when another process bypasses Wails'
+// best-effort single-instance lock.
 func (s *Store) PutPreferenceVersioned(ctx context.Context, key, value string, revision uint64) (bool, error) {
-	if s.epoch <= 0 {
-		return false, fmt.Errorf("preference epoch is unavailable")
-	}
 	if revision == 0 || revision > math.MaxInt64 {
 		return false, fmt.Errorf("preference revision is invalid")
+	}
+	s.preferenceWriteMu.Lock()
+	defer s.preferenceWriteMu.Unlock()
+	if s.epoch == 0 {
+		epoch, err := s.claimPreferenceEpoch(ctx)
+		if err != nil {
+			return false, err
+		}
+		s.epoch = epoch
 	}
 
 	conn, err := s.db.Conn(ctx)
