@@ -70,6 +70,10 @@ describe('ConnectView', () => {
     ['HTTPS decimal IPv4', 'https://2130706433'],
     ['HTTPS hexadecimal IPv4', 'https://0x7f000001'],
     ['HTTPS octal-like IPv4', 'https://0177.0.0.1'],
+    ['soft hyphen in hostname', 'https://exa\u00admple.com'],
+    ['zero-width space in hostname', 'https://exa\u200bmple.com'],
+    ['BOM in hostname', 'https://exa\ufeffmple.com'],
+    ['BOM inside authority port', 'https://enterprise.example.com:\ufeff8443'],
   ])('does not submit an invalid origin: %s', async (_name, origin) => {
     const { connect, wrapper } = mountConnect()
     await wrapper.get('[data-testid="url-input"]').setValue(origin)

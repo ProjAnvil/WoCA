@@ -5,6 +5,8 @@ interface RawOrigin {
   bracketedHost: boolean
 }
 
+const defaultIgnorableCodePoint = /\p{Default_Ignorable_Code_Point}/u
+
 function isValidPort(port: string | undefined): boolean {
   return port === undefined || (/^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535)
 }
@@ -27,6 +29,7 @@ function isAlternateIPv4(rawHost: string, parsedHost: string): boolean {
 }
 
 function parseRawOrigin(rawOrigin: string): RawOrigin | null {
+  if (defaultIgnorableCodePoint.test(rawOrigin)) return null
   const origin = rawOrigin.trim()
   if (/[\u0000-\u001F\u007F\\]/.test(origin)) return null
 
