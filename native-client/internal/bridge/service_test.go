@@ -96,6 +96,13 @@ func TestConnectReadyWhenActivatorReturnsReady(t *testing.T) {
 	if state.State != StateReady || state.ServerURL != "https://enterprise.example.com" {
 		t.Fatalf("Connect() = %#v, want ready normalized URL", state)
 	}
+	state, err = service.Bootstrap(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != StateReady || state.ServerURL != "https://enterprise.example.com" {
+		t.Fatalf("Bootstrap() = %#v, want ready normalized URL after Connect", state)
+	}
 }
 
 func TestConnectRetainsURLWhenActivationUnavailable(t *testing.T) {
@@ -153,6 +160,35 @@ func TestLogoutClearsOnlyInProcessReadiness(t *testing.T) {
 	}
 	if value, ok, err := store.Preference(t.Context(), "theme"); err != nil || !ok || value != "dark" {
 		t.Fatalf("Preference() = %q, %v, %v", value, ok, err)
+	}
+	state, err = service.Bootstrap(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != StateAuthorizationNeeded || state.ServerURL != "https://enterprise.example.com" {
+		t.Fatalf("Bootstrap() = %#v, want authorization required after Logout", state)
+	}
+}
+
+func TestBootstrapDoesNotCarryReadinessToDifferentActiveProfile(t *testing.T) {
+	store := openTestStore(t)
+	service := NewService(store, &recordingActivator{result: auth.ActivationResult{Ready: true}})
+	if _, err := service.Connect(t.Context(), ConnectionInput{
+		ServerURL: "https://enterprise-a.example.com",
+		APIKey:    "issued-bootstrap-key",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveProfile(t.Context(), "https://enterprise-b.example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := service.Bootstrap(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != StateAuthorizationNeeded || state.ServerURL != "https://enterprise-b.example.com" {
+		t.Fatalf("Bootstrap() = %#v, want authorization required for the new active profile", state)
 	}
 }
 
