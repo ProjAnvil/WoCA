@@ -119,6 +119,7 @@ github.com/projanvil/woca/internal/obslog
 github.com/projanvil/woca/internal/permissions
 github.com/projanvil/woca/internal/platform/authn
 github.com/projanvil/woca/internal/platform/authz
+github.com/projanvil/woca/internal/platform/blobstore
 github.com/projanvil/woca/internal/platform/dpop
 github.com/projanvil/woca/internal/platform/eventbus
 github.com/projanvil/woca/internal/platform/executor

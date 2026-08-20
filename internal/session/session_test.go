@@ -161,3 +161,20 @@ func TestSaveLoadStateRoundTrip(t *testing.T) {
 		t.Error("expected create failure")
 	}
 }
+
+// Encode/Decode is the single JSONL codec: bytes produced by the legacy
+// file path and the blobstore path are identical.
+func TestEncodeDecodeRoundTrip(t *testing.T) {
+	msgs := []messages.Message{messages.Human("a"), messages.AI("b")}
+	data, err := Encode(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data[len(data)-1] != '\n' {
+		t.Fatal("JSONL payload must end with a newline")
+	}
+	back, err := Decode(data)
+	if err != nil || len(back) != 2 || back[1].Content != "b" {
+		t.Fatalf("round trip = %+v err=%v", back, err)
+	}
+}

@@ -2,12 +2,15 @@
 package session
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/woca/internal/platform/blobstore"
 )
 
 // DefaultDir returns the harness data directory (~/.woca).
@@ -19,49 +22,75 @@ func DefaultDir() string {
 	return filepath.Join(home, ".woca")
 }
 
-// Save writes a transcript (one message per JSON line) to path, creating
-// parent directories as needed.
-func Save(path string, msgs []messages.Message) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	enc := json.NewEncoder(f)
+// Encode renders a transcript as JSON lines (one message per line) — the
+// single codec shared by the file helpers and the blobstore path, so
+// on-disk bytes are identical either way.
+func Encode(msgs []messages.Message) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
 	for _, m := range msgs {
 		if err := enc.Encode(m); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return buf.Bytes(), nil
 }
 
-// Load reads a transcript written by Save.
-func Load(path string) ([]messages.Message, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
+// Decode parses a JSON-lines transcript produced by Encode.
+func Decode(data []byte) ([]messages.Message, error) {
 	var out []messages.Message
-	dec := json.NewDecoder(f)
+	dec := json.NewDecoder(bytes.NewReader(data))
 	for {
 		var m messages.Message
-		err := dec.Decode(&m)
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
+		if err := dec.Decode(&m); err != nil {
+			if err == io.EOF {
+				return out, nil
+			}
 			return nil, err
 		}
 		out = append(out, m)
 	}
-	return out, nil
+}
+
+// Save writes a transcript (one message per JSON line) to path, creating
+// parent directories as needed.
+func Save(path string, msgs []messages.Message) error {
+	data, err := Encode(msgs)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+// SaveBlob stores a transcript under key in a blob store.
+func SaveBlob(ctx context.Context, store blobstore.Store, key string, msgs []messages.Message) error {
+	data, err := Encode(msgs)
+	if err != nil {
+		return err
+	}
+	return store.Put(ctx, key, data)
+}
+
+// LoadBlob reads a transcript written by SaveBlob (blobstore.ErrNotFound
+// when the key has no transcript).
+func LoadBlob(ctx context.Context, store blobstore.Store, key string) ([]messages.Message, error) {
+	data, err := store.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return Decode(data)
+}
+
+// Load reads a transcript written by Save.
+func Load(path string) ([]messages.Message, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return Decode(data)
 }
 
 // Todo and Task are plain persisted representations (no dependency on other
