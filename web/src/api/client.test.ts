@@ -52,9 +52,49 @@ describe('cancellable SSE transport', () => {
     expect(id).toMatch(/^[A-Za-z0-9_-]{43}$/)
     expect(options.signal).toBe(controller.signal)
     controller.abort()
-    await streaming
+    await expect(streaming).rejects.toMatchObject({ name: 'AbortError' })
 
     expect(cancelRequest).toHaveBeenCalledWith(id)
+  })
+
+  it('rejects a pre-aborted stream without starting fetch or native registration', async () => {
+    const cancelRequest = vi.fn<NativeAppBridge['CancelRequest']>().mockResolvedValue(true)
+    vi.stubGlobal('go', { main: { App: bridge(cancelRequest) } })
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(streamRun('run-pre-aborted', handlers(), controller.signal)).rejects.toMatchObject({
+      name: 'AbortError',
+    })
+
+    expect(fetchEventSource).not.toHaveBeenCalled()
+    expect(cancelRequest).not.toHaveBeenCalled()
+  })
+
+  it('lets a same-tick abort win over an already-fulfilled transport promise', async () => {
+    const cancelRequest = vi.fn<NativeAppBridge['CancelRequest']>().mockResolvedValue(true)
+    vi.stubGlobal('go', { main: { App: bridge(cancelRequest) } })
+    fetchEventSource.mockResolvedValue(undefined)
+    const controller = new AbortController()
+
+    const streaming = streamRun('run-race', handlers(), controller.signal)
+    controller.abort()
+
+    await expect(streaming).rejects.toMatchObject({ name: 'AbortError' })
+    expect(cancelRequest).toHaveBeenCalledOnce()
+  })
+
+  it('removes native abort listeners after a stream settles naturally', async () => {
+    const cancelRequest = vi.fn<NativeAppBridge['CancelRequest']>().mockResolvedValue(true)
+    vi.stubGlobal('go', { main: { App: bridge(cancelRequest) } })
+    fetchEventSource.mockResolvedValue(undefined)
+    const controller = new AbortController()
+
+    await streamRun('run-complete', handlers(), controller.signal)
+    controller.abort()
+    await Promise.resolve()
+
+    expect(cancelRequest).not.toHaveBeenCalled()
   })
 
   it('keeps browser streamRun free of native headers and bridge calls', async () => {

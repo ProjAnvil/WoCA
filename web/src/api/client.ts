@@ -307,6 +307,8 @@ export function streamRun(
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) return Promise.reject(streamAbortError())
+
   let lastSeq: number | null = null
   let attempts = 0
   const maxRetries = 5
@@ -407,7 +409,45 @@ export function streamRun(
       },
     })
 
-  return connect().finally(cancellation.release)
+  let onAbort: (() => void) | undefined
+  const streaming = new Promise<void>((resolve, reject) => {
+    let settled = false
+    onAbort = () => {
+      if (settled) return
+      settled = true
+      reject(streamAbortError())
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+
+    let transport: Promise<void>
+    try {
+      transport = connect()
+    } catch (error) {
+      settled = true
+      reject(error)
+      return
+    }
+    void transport.then(
+      () => {
+        if (settled) return
+        settled = true
+        resolve()
+      },
+      (error) => {
+        if (settled) return
+        settled = true
+        reject(error)
+      },
+    )
+  })
+  return streaming.finally(() => {
+    if (onAbort) signal?.removeEventListener('abort', onAbort)
+    cancellation.release()
+  })
+}
+
+function streamAbortError(): DOMException {
+  return new DOMException('The stream was aborted.', 'AbortError')
 }
 
 /*

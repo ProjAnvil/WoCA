@@ -292,6 +292,74 @@ func TestHandlerRejectsInvalidAndDuplicateNativeRequestIDsBeforeLookup(t *testin
 	}
 }
 
+func TestHandlerRejectsAllNativeRequestIDsDuringCancellationOverflowBeforeLookup(t *testing.T) {
+	registry := NewCancellationRegistry()
+	for index := 0; index < maxPendingCancellations; index++ {
+		if !registry.Cancel(indexedRequestID(index)) {
+			t.Fatalf("Cancel() rejected pending ID %d", index)
+		}
+	}
+	if !registry.Cancel(requestID("J")) {
+		t.Fatal("Cancel() did not enter fail-closed overflow state")
+	}
+	var targetCalls atomic.Int32
+	var credentialCalls atomic.Int32
+	var roundTrips atomic.Int32
+	handler := NewWithCancellation(
+		countingTarget{calls: &targetCalls, profile: configstore.Profile{BaseURL: "http://localhost"}, ok: true},
+		countingCredentials{calls: &credentialCalls},
+		&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			roundTrips.Add(1)
+			return nil, nil
+		})},
+		registry,
+	)
+	for _, id := range []string{indexedRequestID(0), requestID("J"), requestID("K")} {
+		request := httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil)
+		request.Header.Set(RequestIDHeader, id)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("request %q status = %d, body = %q", id, response.Code, response.Body.String())
+		}
+	}
+	if targetCalls.Load() != 0 || credentialCalls.Load() != 0 || roundTrips.Load() != 0 {
+		t.Fatalf("calls during overflow: target=%d credentials=%d upstream=%d", targetCalls.Load(), credentialCalls.Load(), roundTrips.Load())
+	}
+}
+
+func TestHandlerRejectsCancelBeforeRegisterWithoutLookup(t *testing.T) {
+	registry := NewCancellationRegistry()
+	id := requestID("L")
+	if !registry.Cancel(id) {
+		t.Fatal("Cancel() rejected a valid pre-registration cancellation")
+	}
+	var targetCalls atomic.Int32
+	var credentialCalls atomic.Int32
+	var roundTrips atomic.Int32
+	handler := NewWithCancellation(
+		countingTarget{calls: &targetCalls, profile: configstore.Profile{BaseURL: "http://localhost"}, ok: true},
+		countingCredentials{calls: &credentialCalls},
+		&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			roundTrips.Add(1)
+			return nil, nil
+		})},
+		registry,
+	)
+	request := httptest.NewRequest(http.MethodGet, "http://native.local/api/events", nil)
+	request.Header.Set(RequestIDHeader, id)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %q", response.Code, response.Body.String())
+	}
+	if targetCalls.Load() != 0 || credentialCalls.Load() != 0 || roundTrips.Load() != 0 {
+		t.Fatalf("calls after pre-cancel: target=%d credentials=%d upstream=%d", targetCalls.Load(), credentialCalls.Load(), roundTrips.Load())
+	}
+}
+
 func TestHandlerNativeCancellationBridgesBackgroundContext(t *testing.T) {
 	started := make(chan struct{})
 	cancelled := make(chan struct{})

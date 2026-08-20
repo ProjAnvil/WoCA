@@ -71,9 +71,12 @@ native SSE client therefore adds a fresh 32-byte random, process-local request
 ID and calls the typed `App.CancelRequest` binding when its `AbortSignal` fires.
 The Go handler derives a cancellable upstream context from that ID, removes the
 ID header before credential generation and network transport, and unregisters
-it when the request ends. Invalid IDs, duplicate active registrations, and
-excessive pending cancellations fail closed; shutdown cancels all registered
-requests before draining local preference writes and closing SQLite.
+it when the request ends. Invalid IDs and duplicate active registrations fail
+closed. Cancel-before-register entries are capped and expire after 30 seconds;
+capacity exhaustion starts a bounded 30-second fail-closed window for every
+request carrying a native ID, then automatically recovers. Shutdown cancels
+all registered requests before draining local preference writes and closing
+SQLite.
 Browser/personal requests retain their existing endpoints and do not add the
 native header or call the Wails bridge.
 

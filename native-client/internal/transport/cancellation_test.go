@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func requestID(fill string) string {
@@ -18,10 +19,10 @@ func TestCancellationRegistryCancelBeforeRegister(t *testing.T) {
 		t.Fatal("Cancel() did not retain a valid pre-registration cancellation")
 	}
 	ctx, unregister, ok := registry.register(context.Background(), id)
-	if !ok {
-		t.Fatal("register() rejected a valid pending request ID")
-	}
 	defer unregister()
+	if ok {
+		t.Fatal("register() admitted a request cancelled before registration")
+	}
 	select {
 	case <-ctx.Done():
 	default:
@@ -90,20 +91,67 @@ func TestCancellationRegistryUnregisterIsGenerationSafe(t *testing.T) {
 	}
 }
 
-func TestCancellationRegistryBoundsPendingAndCancelAllCloses(t *testing.T) {
-	registry := NewCancellationRegistry()
+func TestCancellationRegistryOverflowFailsClosedAndRecovers(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	registry := newCancellationRegistryWithClock(func() time.Time { return now })
 	for i := 0; i < maxPendingCancellations; i++ {
-		alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
-		id := strings.Repeat("A", 41) + string(alphabet[(i/64)%64]) + string(alphabet[i%64])
+		id := indexedRequestID(i)
 		if !registry.Cancel(id) {
 			t.Fatalf("Cancel() rejected pending ID %d before capacity", i)
 		}
 	}
-	if registry.Cancel(requestID("D")) {
-		t.Fatal("Cancel() admitted an unbounded pending cancellation")
+	if !registry.Cancel(requestID("D")) {
+		t.Fatal("Cancel() did not enter fail-closed overflow state")
+	}
+	for _, id := range []string{indexedRequestID(0), requestID("D"), requestID("E")} {
+		ctx, unregister, ok := registry.register(context.Background(), id)
+		unregister()
+		if ok {
+			t.Fatalf("register(%q) was admitted during overflow", id)
+		}
+		select {
+		case <-ctx.Done():
+		default:
+			t.Fatalf("register(%q) did not fail with a cancelled context", id)
+		}
 	}
 
-	activeID := requestID("E")
+	now = now.Add(pendingCancellationTTL + time.Nanosecond)
+	ctx, unregister, ok := registry.register(context.Background(), requestID("E"))
+	defer unregister()
+	if !ok {
+		t.Fatal("registry did not recover after the bounded overflow window")
+	}
+	select {
+	case <-ctx.Done():
+		t.Fatal("recovered registration inherited an expired cancellation")
+	default:
+	}
+}
+
+func TestCancellationRegistryExpiresUnmatchedPendingCancellation(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	registry := newCancellationRegistryWithClock(func() time.Time { return now })
+	id := requestID("F")
+	if !registry.Cancel(id) {
+		t.Fatal("Cancel() rejected pending ID")
+	}
+	now = now.Add(pendingCancellationTTL + time.Nanosecond)
+	ctx, unregister, ok := registry.register(context.Background(), id)
+	defer unregister()
+	if !ok {
+		t.Fatal("expired pending cancellation permanently poisoned the ID")
+	}
+	select {
+	case <-ctx.Done():
+		t.Fatal("expired pending cancellation cancelled a later request")
+	default:
+	}
+}
+
+func TestCancellationRegistryCancelAllCloses(t *testing.T) {
+	registry := NewCancellationRegistry()
+	activeID := requestID("G")
 	ctx, unregister, ok := registry.register(context.Background(), activeID)
 	if !ok {
 		t.Fatal("active registration failed")
@@ -115,10 +163,15 @@ func TestCancellationRegistryBoundsPendingAndCancelAllCloses(t *testing.T) {
 	default:
 		t.Fatal("CancelAll() did not cancel an active request")
 	}
-	if registry.Cancel(requestID("F")) {
+	if registry.Cancel(requestID("H")) {
 		t.Fatal("Cancel() accepted work after CancelAll()")
 	}
-	if _, _, ok := registry.register(context.Background(), requestID("G")); ok {
+	if _, _, ok := registry.register(context.Background(), requestID("I")); ok {
 		t.Fatal("register() accepted work after CancelAll()")
 	}
+}
+
+func indexedRequestID(index int) string {
+	alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	return strings.Repeat("A", 41) + string(alphabet[(index/64)%64]) + string(alphabet[index%64])
 }

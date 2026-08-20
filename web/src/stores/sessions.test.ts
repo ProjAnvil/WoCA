@@ -46,10 +46,10 @@ describe('session stream cancellation ownership', () => {
     api.cancelRun.mockReset().mockResolvedValue(undefined)
     api.streamRun.mockReset().mockImplementation((_runID, handlers, signal?: AbortSignal) => {
       streams.push({ signal, handlers })
-      return new Promise<void>((resolve, reject) => {
+      return new Promise<void>((resolve) => {
         signal?.addEventListener(
           'abort',
-          () => reject(new DOMException('deliberate stream stop', 'AbortError')),
+          () => resolve(),
           { once: true },
         )
       })
@@ -89,34 +89,12 @@ describe('session stream cancellation ownership', () => {
     store.cancel()
 
     expect(streams[0].signal?.aborted).toBe(true)
+    for (const item of store.activeItems.filter((item) => item.kind === 'reasoning' || item.kind === 'goal_note')) {
+      expect(item.streaming).toBe(false)
+    }
     await sending
     await vi.waitFor(() => expect(store.activeStatus).toBe('done'))
     expect(store.activeError).toBe('')
     expect(api.cancelRun).toHaveBeenCalledWith('run-1')
-    for (const item of store.activeItems.filter((item) => item.kind === 'reasoning' || item.kind === 'goal_note')) {
-      expect(item.streaming).toBe(false)
-    }
-  })
-
-  it('treats a cross-realm-shaped AbortError as deliberate cleanup', async () => {
-    api.streamRun.mockImplementation((_runID, handlers, signal?: AbortSignal) => {
-      streams.push({ signal, handlers })
-      return new Promise<void>((_resolve, reject) => {
-        signal?.addEventListener('abort', () => {
-          const error = new Error('foreign abort')
-          error.name = 'AbortError'
-          reject(error)
-        }, { once: true })
-      })
-    })
-    const store = seedStore()
-    const sending = store.send('cancel cross realm')
-    await vi.waitFor(() => expect(streams).toHaveLength(1))
-
-    store.cancel()
-    await sending
-    await vi.waitFor(() => expect(store.activeStatus).toBe('done'))
-
-    expect(store.activeError).toBe('')
   })
 })

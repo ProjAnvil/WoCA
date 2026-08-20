@@ -997,6 +997,8 @@ export const useSessionStore = defineStore('sessions', () => {
     const rid = runId.value[sid]
     if (rid) runStreamControllers.get(rid)?.abort()
     closeStreaming(sid)
+    closeReasoning(sid)
+    closeGoalNote(sid)
     interrupt.value[sid] = null
     if (!rid) {
       status.value[sid] = 'done'
