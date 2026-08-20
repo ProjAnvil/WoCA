@@ -140,6 +140,7 @@ github.com/projanvil/woca/internal/settings
 github.com/projanvil/woca/internal/skills
 github.com/projanvil/woca/internal/slashcmds
 github.com/projanvil/woca/internal/store
+github.com/projanvil/woca/internal/telemetry
 github.com/projanvil/woca/internal/tenant
 github.com/projanvil/woca/internal/tokens
 github.com/projanvil/woca/internal/tools
