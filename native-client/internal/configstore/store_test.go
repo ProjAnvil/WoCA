@@ -160,10 +160,30 @@ func TestNormalizeBaseURLCanonicalizesAuthorityAndPorts(t *testing.T) {
 		"https://example.com:0",
 		"https://example.com:65536",
 		"https://example.com:not-a-port",
+		"http://[localhost]:8080",
+		"http://[127.0.0.1]:8080",
+		"http://[fe80::1%25en0]:8080",
+		"http://[fe80::1%en0]:8080",
 	} {
 		if _, err := NormalizeBaseURL(rawURL); err == nil {
 			t.Fatalf("NormalizeBaseURL(%q) error = nil", rawURL)
 		}
+	}
+}
+
+func TestOpenRejectsUnversionedMixedCaseApplicationObjects(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	prepareDatabase(t, path, `CREATE TABLE CONNECTION_PROFILES (id INTEGER PRIMARY KEY)`)
+
+	if store, err := Open(path); err == nil {
+		store.Close()
+		t.Fatal("Open() error = nil for unversioned mixed-case application object")
+	}
+	if tableExists(t, path, "schema_migrations") {
+		t.Fatal("Open() adopted a schema version for unversioned application objects")
+	}
+	if countApplicationObjects(t, path) != 1 {
+		t.Fatal("Open() changed unversioned application objects")
 	}
 }
 
@@ -244,6 +264,15 @@ func TestOpenRejectsAlteredVersionOneSchemaSemantics(t *testing.T) {
 		{"active predicate", func(schema string) string {
 			return strings.Replace(schema, "WHERE active = 1", "WHERE active IN (0, 1)", 1)
 		}},
+		{"comment spoof", func(schema string) string {
+			return strings.Replace(schema, "DEFAULT 0 CHECK", "DEFAULT 0 /* spoof */ CHECK", 1)
+		}},
+		{"foreign key update", func(schema string) string {
+			return strings.Replace(schema, "ON DELETE CASCADE", "ON UPDATE CASCADE ON DELETE CASCADE", 1)
+		}},
+		{"extra foreign key", func(schema string) string {
+			return strings.Replace(schema, "last_validated_at INTEGER NOT NULL\n);", "last_validated_at INTEGER NOT NULL,\n    FOREIGN KEY (device_id) REFERENCES connection_profiles(id)\n);", 1)
+		}},
 	}
 
 	for _, tt := range tests {
@@ -278,7 +307,7 @@ func countApplicationObjects(t *testing.T, path string) int {
 	}
 	defer db.Close()
 	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile')`).Scan(&count); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE lower(name) IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile')`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	return count

@@ -28,6 +28,36 @@ type Store struct {
 
 const currentSchemaVersion = 1
 
+const schemaMigrationsDDL = `CREATE TABLE schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at INTEGER NOT NULL
+)`
+
+const connectionProfilesDDL = `CREATE TABLE connection_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    base_url TEXT NOT NULL UNIQUE,
+    active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+)`
+
+const oneActiveProfileDDL = `CREATE UNIQUE INDEX one_active_profile
+    ON connection_profiles(active) WHERE active = 1`
+
+const preferencesDDL = `CREATE TABLE preferences (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+)`
+
+const nativeSessionsDDL = `CREATE TABLE native_sessions (
+    profile_id INTEGER PRIMARY KEY REFERENCES connection_profiles(id) ON DELETE CASCADE,
+    device_id TEXT NOT NULL,
+    session_ciphertext BLOB NOT NULL,
+    expires_at INTEGER NOT NULL,
+    last_validated_at INTEGER NOT NULL
+)`
+
 func OpenDefault() (*Store, error) {
 	path, err := DefaultPath()
 	if err != nil {
@@ -156,10 +186,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		if err := rejectApplicationObjects(ctx, tx); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `CREATE TABLE schema_migrations (
-	            version INTEGER PRIMARY KEY,
-	            applied_at INTEGER NOT NULL
-	        )`); err != nil {
+		if _, err := tx.ExecContext(ctx, schemaMigrationsDDL); err != nil {
 			return fmt.Errorf("create schema migrations table: %w", err)
 		}
 	}
@@ -167,6 +194,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		{name: "version", kind: "INTEGER", primaryKey: true},
 		{name: "applied_at", kind: "INTEGER", notNull: true},
 	}); err != nil {
+		return err
+	}
+	if err := validateCanonicalDDL(ctx, tx, "table", "schema_migrations", schemaMigrationsDDL); err != nil {
 		return err
 	}
 
@@ -191,27 +221,10 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	for _, statement := range []string{
-		`CREATE TABLE IF NOT EXISTS connection_profiles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            base_url TEXT NOT NULL UNIQUE,
-            active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-        )`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS one_active_profile
-            ON connection_profiles(active) WHERE active = 1`,
-		`CREATE TABLE IF NOT EXISTS preferences (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
-        )`,
-		`CREATE TABLE IF NOT EXISTS native_sessions (
-            profile_id INTEGER PRIMARY KEY REFERENCES connection_profiles(id) ON DELETE CASCADE,
-            device_id TEXT NOT NULL,
-            session_ciphertext BLOB NOT NULL,
-            expires_at INTEGER NOT NULL,
-            last_validated_at INTEGER NOT NULL
-        )`,
+		connectionProfilesDDL,
+		oneActiveProfileDDL,
+		preferencesDDL,
+		nativeSessionsDDL,
 	} {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("apply SQLite migration: %w", err)
@@ -238,7 +251,7 @@ func schemaVersion(ctx context.Context, tx *sql.Tx) (int, bool, error) {
 }
 
 func rejectApplicationObjects(ctx context.Context, tx *sql.Tx) error {
-	const query = `SELECT name FROM sqlite_master WHERE name IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile') LIMIT 1`
+	const query = `SELECT name FROM sqlite_master WHERE lower(name) IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile') LIMIT 1`
 	var name string
 	err := tx.QueryRowContext(ctx, query).Scan(&name)
 	if err == sql.ErrNoRows {
@@ -252,7 +265,7 @@ func rejectApplicationObjects(ctx context.Context, tx *sql.Tx) error {
 
 func sqliteObjectExists(ctx context.Context, tx *sql.Tx, objectType, name string) (bool, error) {
 	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?`, objectType, name).Scan(&count); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND lower(name) = lower(?)`, objectType, name).Scan(&count); err != nil {
 		return false, fmt.Errorf("inspect SQLite object %s: %w", name, err)
 	}
 	return count == 1, nil
@@ -272,6 +285,21 @@ type schemaColumnInfo struct {
 }
 
 func validateVersionOneSchema(ctx context.Context, tx *sql.Tx) error {
+	for _, object := range []struct {
+		objectType string
+		name       string
+		definition string
+	}{
+		{"table", "connection_profiles", connectionProfilesDDL},
+		{"index", "one_active_profile", oneActiveProfileDDL},
+		{"table", "preferences", preferencesDDL},
+		{"table", "native_sessions", nativeSessionsDDL},
+	} {
+		if err := validateCanonicalDDL(ctx, tx, object.objectType, object.name, object.definition); err != nil {
+			return err
+		}
+	}
+
 	for table, columns := range map[string][]schemaColumn{
 		"connection_profiles": {
 			{name: "id", kind: "INTEGER", primaryKey: true},
@@ -305,7 +333,7 @@ func validateVersionOneSchema(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	var indexSQL sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'one_active_profile'`).Scan(&indexSQL); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'index' AND lower(name) = 'one_active_profile'`).Scan(&indexSQL); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("incompatible schema: missing one_active_profile index")
 		}
@@ -316,7 +344,7 @@ func validateVersionOneSchema(ctx context.Context, tx *sql.Tx) error {
 		return fmt.Errorf("incompatible schema: invalid one_active_profile index")
 	}
 	var unique, partial int
-	if err := tx.QueryRowContext(ctx, `SELECT "unique", partial FROM pragma_index_list(?) WHERE name = ?`, "connection_profiles", "one_active_profile").Scan(&unique, &partial); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT "unique", partial FROM pragma_index_list(?) WHERE lower(name) = 'one_active_profile'`, "connection_profiles").Scan(&unique, &partial); err != nil {
 		return fmt.Errorf("inspect one_active_profile index: %w", err)
 	}
 	if unique != 1 || partial != 1 {
@@ -324,6 +352,17 @@ func validateVersionOneSchema(ctx context.Context, tx *sql.Tx) error {
 	}
 	if err := validateIndexColumns(ctx, tx, "one_active_profile", []string{"active"}); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validateCanonicalDDL(ctx context.Context, tx *sql.Tx, objectType, name, want string) error {
+	got, err := sqliteObjectSQL(ctx, tx, objectType, name)
+	if err != nil {
+		return err
+	}
+	if normalizeSQLiteSQL(got) != normalizeSQLiteSQL(want) {
+		return fmt.Errorf("incompatible schema: %s %s does not match version %d", objectType, name, currentSchemaVersion)
 	}
 	return nil
 }
@@ -346,33 +385,34 @@ func validateConnectionProfileSemantics(ctx context.Context, tx *sql.Tx) error {
 }
 
 func validateNativeSessionForeignKey(ctx context.Context, tx *sql.Tx) error {
-	rows, err := tx.QueryContext(ctx, `SELECT "table", "from", "to", on_delete FROM pragma_foreign_key_list(?)`, "native_sessions")
+	rows, err := tx.QueryContext(ctx, `SELECT "table", "from", "to", on_update, on_delete, "match" FROM pragma_foreign_key_list(?)`, "native_sessions")
 	if err != nil {
 		return fmt.Errorf("inspect native_sessions foreign keys: %w", err)
 	}
 	defer rows.Close()
-	var matches int
+	var foreignKeys int
 	for rows.Next() {
-		var table, from, to, onDelete string
-		if err := rows.Scan(&table, &from, &to, &onDelete); err != nil {
+		var table, from, to, onUpdate, onDelete, match string
+		if err := rows.Scan(&table, &from, &to, &onUpdate, &onDelete, &match); err != nil {
 			return fmt.Errorf("read native_sessions foreign key: %w", err)
 		}
-		if table == "connection_profiles" && from == "profile_id" && to == "id" && strings.EqualFold(onDelete, "CASCADE") {
-			matches++
+		foreignKeys++
+		if !strings.EqualFold(table, "connection_profiles") || from != "profile_id" || to != "id" || !strings.EqualFold(onUpdate, "NO ACTION") || !strings.EqualFold(onDelete, "CASCADE") || !strings.EqualFold(match, "NONE") {
+			return fmt.Errorf("incompatible schema: native_sessions has an unexpected foreign key")
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read native_sessions foreign keys: %w", err)
 	}
-	if matches != 1 {
-		return fmt.Errorf("incompatible schema: native_sessions must cascade profile_id to connection_profiles.id")
+	if foreignKeys != 1 {
+		return fmt.Errorf("incompatible schema: native_sessions must have exactly one profile foreign key")
 	}
 	return nil
 }
 
 func sqliteObjectSQL(ctx context.Context, tx *sql.Tx, objectType, name string) (string, error) {
 	var definition sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = ? AND name = ?`, objectType, name).Scan(&definition); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = ? AND lower(name) = lower(?)`, objectType, name).Scan(&definition); err != nil {
 		if err == sql.ErrNoRows {
 			return "", fmt.Errorf("incompatible schema: missing %s %s", objectType, name)
 		}
@@ -547,11 +587,24 @@ func normalizeAuthority(parsed *url.URL) (string, int, bool, error) {
 		}
 	}
 
+	if strings.Contains(hostname, "%") || strings.Contains(authority, "%") {
+		return "", 0, false, fmt.Errorf("server URL must not include an IPv6 zone")
+	}
+	bracketed := strings.HasPrefix(authority, "[")
 	if address, err := netip.ParseAddr(hostname); err == nil {
 		if address.Is6() {
+			if !bracketed {
+				return "", 0, false, fmt.Errorf("IPv6 server URL hosts must be bracketed")
+			}
 			return "[" + address.String() + "]", port, hasPort, nil
 		}
+		if bracketed {
+			return "", 0, false, fmt.Errorf("only IPv6 server URL hosts may be bracketed")
+		}
 		return address.String(), port, hasPort, nil
+	}
+	if bracketed {
+		return "", 0, false, fmt.Errorf("only IPv6 server URL hosts may be bracketed")
 	}
 	if strings.ContainsAny(hostname, "[]") || strings.Contains(hostname, ":") {
 		return "", 0, false, fmt.Errorf("server URL host is malformed")
