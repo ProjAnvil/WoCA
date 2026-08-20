@@ -8,6 +8,7 @@ import commonEn from './en/common'
 import goalEn from './en/goal'
 import memoryEn from './en/memory'
 import memoryStoreEn from './en/memoryStore'
+import nativeEn from './en/native'
 import sessionsEn from './en/sessions'
 import settingsEn from './en/settings'
 import sidebarEn from './en/sidebar'
@@ -19,6 +20,7 @@ import commonZh from './zh-CN/common'
 import goalZh from './zh-CN/goal'
 import memoryZh from './zh-CN/memory'
 import memoryStoreZh from './zh-CN/memoryStore'
+import nativeZh from './zh-CN/native'
 import sessionsZh from './zh-CN/sessions'
 import settingsZh from './zh-CN/settings'
 import sidebarZh from './zh-CN/sidebar'
@@ -36,6 +38,7 @@ export const zhCN = {
   sessions: sessionsZh,
   workspace: workspaceZh,
   memoryStore: memoryStoreZh,
+  native: nativeZh,
 }
 
 export const en = {
@@ -50,4 +53,5 @@ export const en = {
   sessions: sessionsEn,
   workspace: workspaceEn,
   memoryStore: memoryStoreEn,
+  native: nativeEn,
 }
