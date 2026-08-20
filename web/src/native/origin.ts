@@ -9,6 +9,23 @@ function isValidPort(port: string | undefined): boolean {
   return port === undefined || (/^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535)
 }
 
+function isValidNonBracketedHost(host: string): boolean {
+  return !/[\x22\x3c\x3e\x5e\x60\x7b\x7d\x7c]/.test(host)
+}
+
+function isCanonicalIPv4(host: string): boolean {
+  const octets = host.split('.')
+  return (
+    octets.length === 4 &&
+    octets.every((octet) => /^\d+$/.test(octet) && Number(octet) >= 0 && Number(octet) <= 255)
+  )
+}
+
+function isAlternateIPv4(rawHost: string, parsedHost: string): boolean {
+  const canonicalHost = parsedHost.toLowerCase().replace(/^\[|\]$/g, '')
+  return rawHost.toLowerCase() !== canonicalHost && isCanonicalIPv4(canonicalHost)
+}
+
 function parseRawOrigin(rawOrigin: string): RawOrigin | null {
   const origin = rawOrigin.trim()
   if (/[\u0000-\u001F\u007F\\]/.test(origin)) return null
@@ -43,7 +60,7 @@ function parseRawOrigin(rawOrigin: string): RawOrigin | null {
 
   const host = firstColon < 0 ? authority : authority.slice(0, firstColon)
   const port = firstColon < 0 ? undefined : authority.slice(firstColon + 1)
-  if (!host || !isValidPort(port)) return null
+  if (!host || !isValidPort(port) || !isValidNonBracketedHost(host)) return null
   return { origin, scheme: match[1].toLowerCase(), host, bracketedHost: false }
 }
 
@@ -66,6 +83,7 @@ export function validateEnterpriseOrigin(rawOrigin: string): string | null {
     ) {
       return null
     }
+    if (!raw.bracketedHost && isAlternateIPv4(raw.host, parsed.hostname)) return null
 
     if (raw.scheme === 'https') return raw.origin
     const normalizedHost = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')

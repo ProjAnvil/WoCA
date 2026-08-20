@@ -26,6 +26,18 @@ describe('validateEnterpriseOrigin', () => {
     ['bracketed non-IPv6 host', 'http://[localhost]:8080'],
     ['IPv6 zone', 'http://[fe80::1%25en0]:8080'],
     ['ambiguous authority', 'https://enterprise.example.com::443'],
+    ['backtick host delimiter', 'https://exa`mple.com'],
+    ['left brace host delimiter', 'https://exa{mple.com'],
+    ['right brace host delimiter', 'https://exa}mple.com'],
+    ['quote host delimiter', 'https://exa"mple.com'],
+    ['left angle host delimiter', 'https://exa<mple.com'],
+    ['right angle host delimiter', 'https://exa>mple.com'],
+    ['caret host delimiter', 'https://exa^mple.com'],
+    ['pipe host delimiter', 'https://exa|mple.com'],
+    ['HTTPS abbreviated IPv4', 'https://127.1'],
+    ['HTTPS decimal IPv4', 'https://2130706433'],
+    ['HTTPS hexadecimal IPv4', 'https://0x7f000001'],
+    ['HTTPS octal-like IPv4', 'https://0177.0.0.1'],
   ])('rejects %s', (_name, rawOrigin) => {
     expect(validateEnterpriseOrigin(rawOrigin)).toBeNull()
   })
@@ -33,6 +45,11 @@ describe('validateEnterpriseOrigin', () => {
   it.each([
     ['HTTPS origin', '  https://enterprise.example.com:8443/  ', 'https://enterprise.example.com:8443/'],
     ['HTTPS default port and DNS case', 'HTTPS://EXAMPLE.COM:443/', 'HTTPS://EXAMPLE.COM:443/'],
+    ['HTTPS canonical dotted IPv4', 'https://127.0.0.1:8443', 'https://127.0.0.1:8443'],
+    ['HTTPS Unicode IDN', 'https://例子.测试', 'https://例子.测试'],
+    ['HTTPS punycode IDN', 'https://xn--fsqu00a.xn--0zwm56d', 'https://xn--fsqu00a.xn--0zwm56d'],
+    ['HTTPS trailing-dot DNS', 'https://enterprise.example.com.', 'https://enterprise.example.com.'],
+    ['HTTPS numeric DNS label', 'https://123.example.com', 'https://123.example.com'],
     ['localhost HTTP', 'http://localhost:8080', 'http://localhost:8080'],
     ['localhost HTTP case', 'http://LOCALHOST:8080', 'http://LOCALHOST:8080'],
     ['IPv4 loopback HTTP', 'http://127.0.0.1:8080', 'http://127.0.0.1:8080'],

@@ -58,6 +58,18 @@ describe('ConnectView', () => {
     ['bracketed non-IPv6 host', 'http://[localhost]:8080'],
     ['IPv6 zone', 'http://[fe80::1%25en0]:8080'],
     ['ambiguous authority', 'https://enterprise.example.com::443'],
+    ['backtick host delimiter', 'https://exa`mple.com'],
+    ['left brace host delimiter', 'https://exa{mple.com'],
+    ['right brace host delimiter', 'https://exa}mple.com'],
+    ['quote host delimiter', 'https://exa"mple.com'],
+    ['left angle host delimiter', 'https://exa<mple.com'],
+    ['right angle host delimiter', 'https://exa>mple.com'],
+    ['caret host delimiter', 'https://exa^mple.com'],
+    ['pipe host delimiter', 'https://exa|mple.com'],
+    ['HTTPS abbreviated IPv4', 'https://127.1'],
+    ['HTTPS decimal IPv4', 'https://2130706433'],
+    ['HTTPS hexadecimal IPv4', 'https://0x7f000001'],
+    ['HTTPS octal-like IPv4', 'https://0177.0.0.1'],
   ])('does not submit an invalid origin: %s', async (_name, origin) => {
     const { connect, wrapper } = mountConnect()
     await wrapper.get('[data-testid="url-input"]').setValue(origin)
