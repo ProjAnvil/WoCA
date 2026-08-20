@@ -100,7 +100,7 @@ ent-logs:
 	$(ENT_COMPOSE) logs -f
 
 # Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
-SERVER_ARTIFACTS := woca-server woca-tenant
+SERVER_ARTIFACTS := woca-server woca-tenant woca-worker
 
 .PHONY: build-server check-server-artifacts
 build-server:
