@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/projanvil/woca/native-client/internal/auth"
@@ -167,6 +168,69 @@ func TestLogoutClearsOnlyInProcessReadiness(t *testing.T) {
 	}
 	if state.State != StateAuthorizationNeeded || state.ServerURL != "https://enterprise.example.com" {
 		t.Fatalf("Bootstrap() = %#v, want authorization required after Logout", state)
+	}
+}
+
+func TestPreferenceRejectsUnknownAndSensitiveKeys(t *testing.T) {
+	service := NewService(openTestStore(t), nil)
+	for _, key := range []string{
+		"unknown",
+		"api_key",
+		"woca.accessToken",
+		"refresh_token",
+		"session",
+		"credentials",
+		"server_url",
+	} {
+		t.Run(key, func(t *testing.T) {
+			if err := service.PutPreference(t.Context(), PreferenceInput{Key: key, Value: "do-not-store"}); err == nil {
+				t.Fatalf("PutPreference(%q) error = nil", key)
+			}
+			if _, err := service.Preference(t.Context(), key); err == nil {
+				t.Fatalf("Preference(%q) error = nil", key)
+			}
+		})
+	}
+}
+
+func TestPreferenceRejectsInvalidAndOversizedValues(t *testing.T) {
+	service := NewService(openTestStore(t), nil)
+	for _, input := range []PreferenceInput{
+		{Key: "woca-theme", Value: "midnight"},
+		{Key: "woca.pref.locale", Value: "fr"},
+		{Key: "woca.pref.autoCollapseTools", Value: "1"},
+		{Key: "woca.pref.markdownPreview", Value: "yes"},
+		{Key: "woca.pref.model", Value: ""},
+		{Key: "woca.pref.model", Value: "https://secret.example.com"},
+		{Key: "woca.pref.model", Value: strings.Repeat("m", 257)},
+		{Key: "woca.pref.permissionMode", Value: "admin"},
+	} {
+		t.Run(input.Key+"/"+input.Value[:min(len(input.Value), 12)], func(t *testing.T) {
+			if err := service.PutPreference(t.Context(), input); err == nil {
+				t.Fatalf("PutPreference(%q) error = nil", input.Key)
+			}
+		})
+	}
+}
+
+func TestPreferenceAcceptsKnownTypedValues(t *testing.T) {
+	service := NewService(openTestStore(t), nil)
+	inputs := []PreferenceInput{
+		{Key: "woca-theme", Value: "dark"},
+		{Key: "woca.pref.locale", Value: "zh-CN"},
+		{Key: "woca.pref.autoCollapseTools", Value: "false"},
+		{Key: "woca.pref.markdownPreview", Value: "true"},
+		{Key: "woca.pref.model", Value: "claude-sonnet-4-5"},
+		{Key: "woca.pref.permissionMode", Value: "acceptEdits"},
+	}
+	for _, input := range inputs {
+		if err := service.PutPreference(t.Context(), input); err != nil {
+			t.Fatalf("PutPreference(%q) error = %v", input.Key, err)
+		}
+		got, err := service.Preference(t.Context(), input.Key)
+		if err != nil || !got.Found || got.Value != input.Value {
+			t.Fatalf("Preference(%q) = %#v, %v", input.Key, got, err)
+		}
 	}
 }
 

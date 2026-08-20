@@ -1,37 +1,35 @@
 import { defineStore } from 'pinia'
-import { useDark, useLocalStorage, useToggle } from '@vueuse/core'
+import { useToggle } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { getSettings, updateSettings } from '../api/client'
 import i18n, { applyLocale, LOCALE_STORAGE_KEY, resolveLocale, type LocaleOption } from '../i18n'
 import type { AppSettings, AppSettingsUpdate } from '../types'
 import { useAgentStore } from './agent'
+import { usePreference, useThemePreference } from '../native/preferences'
 
-// Settings + appearance state. Theme is a useDark singleton (persists to
-// localStorage under "woca-theme" and toggles the `.dark` class on <html>).
-// UI locale follows the same pattern under woca.pref.locale ('auto' defers
-// to the browser language). Provider/storage settings are persisted
-// server-side via /api/settings (sqlite under ~/.woca by default); API keys
-// are stored encrypted.
+// Settings + appearance state. Browser preferences retain their localStorage
+// keys; the native gate hydrates the same values from SQLite before this store
+// is created. Provider/storage settings remain server-backed via /api/settings.
 export const useSettingsStore = defineStore('settings', () => {
-  const isDark = useDark({ storageKey: 'woca-theme' })
+  const isDark = useThemePreference()
   const toggleDark = useToggle(isDark)
 
   const panelOpen = ref(false)
 
-  const localePref = useLocalStorage<LocaleOption>(LOCALE_STORAGE_KEY, 'auto')
+  const localePref = usePreference<LocaleOption>(LOCALE_STORAGE_KEY, 'auto')
   const locale = computed(() => resolveLocale(localePref.value))
   function setLocale(pref: LocaleOption) {
     localePref.value = pref
     applyLocale(pref)
   }
 
-  // Client-side preferences (cards in the settings panel). Persisted under
-  // localStorage keys woca.pref.* so they survive reloads without a server
-  // round-trip; the refs stay assignable through the store as before.
-  const autoCollapseTools = useLocalStorage('woca.pref.autoCollapseTools', true)
-  const markdownPreview = useLocalStorage('woca.pref.markdownPreview', true)
-  const model = useLocalStorage('woca.pref.model', 'claude-sonnet-4-5')
-  const permissionMode = useLocalStorage<'default' | 'acceptEdits' | 'bypassPermissions' | 'readOnly' | 'plan'>(
+  // Client-side preferences (cards in the settings panel). The refs stay
+  // assignable through the store while the adapter chooses browser or native
+  // persistence.
+  const autoCollapseTools = usePreference('woca.pref.autoCollapseTools', true)
+  const markdownPreview = usePreference('woca.pref.markdownPreview', true)
+  const model = usePreference('woca.pref.model', 'claude-sonnet-4-5')
+  const permissionMode = usePreference<'default' | 'acceptEdits' | 'bypassPermissions' | 'readOnly' | 'plan'>(
     'woca.pref.permissionMode',
     'default',
   )

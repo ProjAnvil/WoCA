@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/projanvil/woca/native-client/internal/bridge"
+	"github.com/projanvil/woca/native-client/internal/configstore"
 )
 
 type fakeBridgeAPI struct {
@@ -12,10 +14,13 @@ type fakeBridgeAPI struct {
 	connectState   bridge.BootstrapState
 	logoutState    bridge.BootstrapState
 
-	bootstrapCtx context.Context
-	connectCtx   context.Context
-	logoutCtx    context.Context
-	connectInput bridge.ConnectionInput
+	bootstrapCtx    context.Context
+	connectCtx      context.Context
+	logoutCtx       context.Context
+	connectInput    bridge.ConnectionInput
+	preferenceKey   string
+	preferenceInput bridge.PreferenceInput
+	preferenceValue bridge.PreferenceValue
 }
 
 func (f *fakeBridgeAPI) Bootstrap(ctx context.Context) (bridge.BootstrapState, error) {
@@ -32,6 +37,16 @@ func (f *fakeBridgeAPI) Connect(ctx context.Context, input bridge.ConnectionInpu
 func (f *fakeBridgeAPI) Logout(ctx context.Context) (bridge.BootstrapState, error) {
 	f.logoutCtx = ctx
 	return f.logoutState, nil
+}
+
+func (f *fakeBridgeAPI) Preference(ctx context.Context, key string) (bridge.PreferenceValue, error) {
+	f.preferenceKey = key
+	return f.preferenceValue, nil
+}
+
+func (f *fakeBridgeAPI) PutPreference(ctx context.Context, input bridge.PreferenceInput) error {
+	f.preferenceInput = input
+	return nil
 }
 
 func TestAppDelegatesWithStartupContext(t *testing.T) {
@@ -59,6 +74,44 @@ func TestAppDelegatesWithStartupContext(t *testing.T) {
 	}
 	if service.connectInput != input {
 		t.Fatalf("Connect input = %#v, want %#v", service.connectInput, input)
+	}
+}
+
+func TestAppPreferencesPersistAcrossSQLiteRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	store, err := configstore.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp(bridge.NewService(store, nil))
+	app.startup(t.Context())
+	if err := app.PutPreference(bridge.PreferenceInput{Key: "woca.pref.locale", Value: "en"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = configstore.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	restarted := NewApp(bridge.NewService(store, nil))
+	got, err := restarted.Preference("woca.pref.locale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Found || got.Value != "en" {
+		t.Fatalf("Preference() = %#v, want persisted locale", got)
+	}
+
+	missing, err := restarted.Preference("woca.pref.model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing.Found || missing.Value != "" {
+		t.Fatalf("missing Preference() = %#v, want distinguishable missing value", missing)
 	}
 }
 

@@ -19,10 +19,22 @@ declare global {
     api_key: string
   }
 
+  interface PreferenceInput {
+    key: string
+    value: string
+  }
+
+  interface PreferenceValue {
+    value: string
+    found: boolean
+  }
+
   interface NativeAppBridge {
     Bootstrap(): Promise<BootstrapState>
     Connect(input: ConnectionInput): Promise<BootstrapState>
     Logout(): Promise<BootstrapState>
+    Preference(key: string): Promise<PreferenceValue>
+    PutPreference(input: PreferenceInput): Promise<void>
   }
 
   interface Window {

@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/projanvil/woca/native-client/internal/auth"
 	"github.com/projanvil/woca/native-client/internal/configstore"
@@ -33,22 +35,34 @@ type ConnectionInput struct {
 	APIKey    string `json:"api_key"`
 }
 
-type profileStore interface {
+type PreferenceInput struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type PreferenceValue struct {
+	Value string `json:"value"`
+	Found bool   `json:"found"`
+}
+
+type nativeStore interface {
 	SaveProfile(context.Context, string) (configstore.Profile, error)
 	ActiveProfile(context.Context) (configstore.Profile, bool, error)
+	PutPreference(context.Context, string, string) error
+	Preference(context.Context, string) (string, bool, error)
 }
 
 // Service retains only the current process's ready marker. The future opaque,
 // device-bound session is intentionally not represented here yet.
 type Service struct {
-	store     profileStore
+	store     nativeStore
 	activator auth.Activator
 
 	mu           sync.RWMutex
 	readyBaseURL string
 }
 
-func NewService(store profileStore, activator auth.Activator) *Service {
+func NewService(store nativeStore, activator auth.Activator) *Service {
 	if activator == nil {
 		activator = auth.UnavailableActivator{}
 	}
@@ -112,6 +126,80 @@ func (s *Service) Logout(ctx context.Context) (BootstrapState, error) {
 		return BootstrapState{State: StateUnconfigured}, nil
 	}
 	return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, nil
+}
+
+func (s *Service) Preference(ctx context.Context, key string) (PreferenceValue, error) {
+	if !knownPreferenceKey(key) {
+		return PreferenceValue{}, errors.New("preference key is not allowed")
+	}
+	if s.store == nil {
+		return PreferenceValue{}, errors.New("preference store is required")
+	}
+	value, found, err := s.store.Preference(ctx, key)
+	if err != nil {
+		return PreferenceValue{}, err
+	}
+	if found && !validPreferenceValue(key, value) {
+		return PreferenceValue{}, errors.New("stored preference value is invalid")
+	}
+	return PreferenceValue{Value: value, Found: found}, nil
+}
+
+func (s *Service) PutPreference(ctx context.Context, input PreferenceInput) error {
+	if !knownPreferenceKey(input.Key) {
+		return errors.New("preference key is not allowed")
+	}
+	if !validPreferenceValue(input.Key, input.Value) {
+		return errors.New("preference value is invalid")
+	}
+	if s.store == nil {
+		return errors.New("preference store is required")
+	}
+	return s.store.PutPreference(ctx, input.Key, input.Value)
+}
+
+func knownPreferenceKey(key string) bool {
+	switch key {
+	case "woca-theme",
+		"woca.pref.locale",
+		"woca.pref.autoCollapseTools",
+		"woca.pref.markdownPreview",
+		"woca.pref.model",
+		"woca.pref.permissionMode":
+		return true
+	default:
+		return false
+	}
+}
+
+func validPreferenceValue(key, value string) bool {
+	if len(value) > 256 || !utf8.ValidString(value) {
+		return false
+	}
+	switch key {
+	case "woca-theme":
+		return value == "auto" || value == "dark" || value == "light"
+	case "woca.pref.locale":
+		return value == "auto" || value == "zh-CN" || value == "en"
+	case "woca.pref.autoCollapseTools", "woca.pref.markdownPreview":
+		return value == "true" || value == "false"
+	case "woca.pref.model":
+		if value == "" || strings.TrimSpace(value) != value || strings.Contains(value, "://") {
+			return false
+		}
+		for _, r := range value {
+			if unicode.IsControl(r) {
+				return false
+			}
+		}
+		return true
+	case "woca.pref.permissionMode":
+		switch value {
+		case "default", "acceptEdits", "bypassPermissions", "readOnly", "plan":
+			return true
+		}
+	}
+	return false
 }
 
 // ApplyDevelopmentOverride enables the unauthenticated development transport

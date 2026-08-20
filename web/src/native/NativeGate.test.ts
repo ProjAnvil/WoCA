@@ -12,7 +12,8 @@ vi.mock('./bridge', () => ({ getNativeBridge }))
 import NativeGate from './NativeGate.vue'
 
 const connectViewStub = {
-  props: ['serverUrl'],
+  name: 'ConnectView',
+  props: ['serverUrl', 'connect'],
   template: '<div data-testid="connect-view">{{ serverUrl }}</div>',
 }
 
@@ -28,6 +29,8 @@ function nativeBridge(bootstrap: NativeBridge['Bootstrap']): NativeBridge {
     Bootstrap: bootstrap,
     Connect: vi.fn(),
     Logout: vi.fn(),
+    Preference: vi.fn(async () => ({ value: '', found: false })),
+    PutPreference: vi.fn(async () => undefined),
   }
 }
 
@@ -74,14 +77,84 @@ describe('NativeGate', () => {
     expect(wrapper.find('[data-testid="app-marker"]').exists()).toBe(false)
   })
 
-  it('mounts the app after native state becomes ready', async () => {
-    getNativeBridge.mockReturnValue(nativeBridge(async () => ({ state: 'ready' })))
+  it('withholds the app until ready preferences finish hydrating', async () => {
+    let finishHydration!: (value: PreferenceValue) => void
+    const bridge = nativeBridge(async () => ({ state: 'ready' }))
+    const hydration = new Promise<PreferenceValue>((resolve) => (finishHydration = resolve))
+    bridge.Preference = vi.fn(() => hydration)
+    getNativeBridge.mockReturnValue(bridge)
 
     const wrapper = mountGate()
     await flushPromises()
 
+    expect(wrapper.find('[data-testid="app-marker"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="native-loading"]').exists()).toBe(true)
+
+    finishHydration({ value: '', found: false })
+    await flushPromises()
+
     expect(wrapper.get('[data-testid="app-marker"]').text()).toBe('Woca app')
     expect(wrapper.find('[data-testid="connect-view"]').exists()).toBe(false)
+  })
+
+  it('applies the hydrated locale before mounting the ready app', async () => {
+    const bridge = nativeBridge(async () => ({ state: 'ready' }))
+    bridge.Preference = vi.fn(async (key) =>
+      key === 'woca.pref.locale' ? { value: 'zh-CN', found: true } : { value: '', found: false },
+    )
+    getNativeBridge.mockReturnValue(bridge)
+
+    const wrapper = mountGate()
+    await flushPromises()
+
+    expect(i18n.global.locale.value).toBe('zh-CN')
+    expect(wrapper.get('[data-testid="app-marker"]').text()).toBe('Woca app')
+  })
+
+  it('withholds the app while preferences hydrate after Connect becomes ready', async () => {
+    let finishHydration!: (value: PreferenceValue) => void
+    const bridge = nativeBridge(async () => ({ state: 'unconfigured' }))
+    bridge.Connect = vi.fn<NativeBridge['Connect']>().mockResolvedValue({ state: 'ready' })
+    const hydration = new Promise<PreferenceValue>((resolve) => (finishHydration = resolve))
+    bridge.Preference = vi.fn(() => hydration)
+    getNativeBridge.mockReturnValue(bridge)
+
+    const wrapper = mountGate()
+    await flushPromises()
+    const connect = wrapper.findComponent(connectViewStub).props('connect') as (
+      input: ConnectionInput,
+    ) => Promise<void>
+    const connecting = connect({ server_url: 'https://enterprise.example.com', api_key: 'ephemeral' })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="app-marker"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="native-loading"]').exists()).toBe(true)
+
+    finishHydration({ value: '', found: false })
+    await connecting
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="app-marker"]').text()).toBe('Woca app')
+  })
+
+  it('keeps the app gated with a sanitized retry when preference hydration fails', async () => {
+    const bridge = nativeBridge(async () => ({ state: 'ready' }))
+    bridge.Preference = vi
+      .fn<NativeBridge['Preference']>()
+      .mockRejectedValueOnce(new Error('stored secret: woca_test_key'))
+      .mockResolvedValue({ value: '', found: false })
+    getNativeBridge.mockReturnValue(bridge)
+
+    const wrapper = mountGate()
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).not.toContain('woca_test_key')
+    expect(wrapper.find('[data-testid="app-marker"]').exists()).toBe(false)
+
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="app-marker"]').text()).toBe('Woca app')
   })
 
   it('keeps the server URL when authorization is required', async () => {

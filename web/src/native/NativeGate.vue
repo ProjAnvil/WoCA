@@ -3,6 +3,8 @@ import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ConnectView from './ConnectView.vue'
 import { getNativeBridge } from './bridge'
+import { hydrateNativePreferences } from './preferences'
+import { applyStoredLocalePreference } from '../i18n'
 
 type GateState = 'loading' | 'unconfigured' | 'authorization_required' | 'ready' | 'error'
 
@@ -12,9 +14,14 @@ const state = ref<GateState>(bridge ? 'loading' : 'ready')
 const serverUrl = ref('')
 const error = ref('')
 
-function useBootstrapState(next: BootstrapState) {
-  state.value = next.state
+async function useBootstrapState(next: BootstrapState) {
   serverUrl.value = next.server_url ?? ''
+  if (next.state === 'ready' && bridge) {
+    state.value = 'loading'
+    await hydrateNativePreferences(bridge)
+    applyStoredLocalePreference()
+  }
+  state.value = next.state
 }
 
 async function bootstrap() {
@@ -23,7 +30,7 @@ async function bootstrap() {
   state.value = 'loading'
   error.value = ''
   try {
-    useBootstrapState(await bridge.Bootstrap())
+    await useBootstrapState(await bridge.Bootstrap())
   } catch {
     state.value = 'error'
     error.value = t('native.connectionError')
@@ -34,7 +41,13 @@ async function connect(input: ConnectionInput) {
   if (!bridge) return
 
   const next = await bridge.Connect(input)
-  useBootstrapState(next)
+  try {
+    await useBootstrapState(next)
+  } catch {
+    state.value = 'error'
+    error.value = t('native.connectionError')
+    throw new Error('native preference hydration failed')
+  }
 }
 
 onMounted(() => {

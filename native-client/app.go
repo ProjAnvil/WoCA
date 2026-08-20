@@ -14,6 +14,8 @@ type bridgeAPI interface {
 	Bootstrap(context.Context) (bridge.BootstrapState, error)
 	Connect(context.Context, bridge.ConnectionInput) (bridge.BootstrapState, error)
 	Logout(context.Context) (bridge.BootstrapState, error)
+	Preference(context.Context, string) (bridge.PreferenceValue, error)
+	PutPreference(context.Context, bridge.PreferenceInput) error
 }
 
 type App struct {
@@ -62,6 +64,20 @@ func (a *App) Logout() (bridge.BootstrapState, error) {
 		return bridge.BootstrapState{}, errors.New("native bridge is required")
 	}
 	return a.bridge.Logout(a.context())
+}
+
+func (a *App) Preference(key string) (bridge.PreferenceValue, error) {
+	if a.bridge == nil {
+		return bridge.PreferenceValue{}, errors.New("native bridge is required")
+	}
+	return a.bridge.Preference(a.context(), key)
+}
+
+func (a *App) PutPreference(input bridge.PreferenceInput) error {
+	if a.bridge == nil {
+		return errors.New("native bridge is required")
+	}
+	return a.bridge.PutPreference(a.context(), input)
 }
 
 func (a *App) context() context.Context {
