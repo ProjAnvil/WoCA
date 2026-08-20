@@ -37,6 +37,7 @@ import (
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
+	"github.com/projanvil/woca/internal/telemetry"
 	"github.com/projanvil/woca/internal/tenant"
 	"github.com/projanvil/woca/internal/wocadb"
 )
@@ -796,6 +797,9 @@ func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, st
 	}
 	ctx, cancel := context.WithCancel(agent.WithRunWorkspace(context.Background(), workspace))
 	run := newRun(id, s.agent, ctx, cancel)
+	// Telemetry correlation: every span inside this run (tools, LLM calls,
+	// skill loads) carries the run/session identity.
+	run.ctx = telemetry.WithRun(run.ctx, id, sessionID)
 	s.registerRun(id, run)
 	sid := sessionID
 	if sid == "" {

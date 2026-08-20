@@ -28,6 +28,7 @@ import (
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/telemetry"
 	"github.com/projanvil/woca/internal/tenant"
 	"github.com/projanvil/woca/internal/webd"
 	"github.com/projanvil/woca/internal/webgui"
@@ -143,6 +144,9 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 		return err
 	}
 	log := logging.NewConsole(os.Stderr, level)
+	// Observability seam (Phase 2 §6.5): one structured line per tool/LLM/
+	// skill span, correlated by tenant/run/session.
+	telemetry.SetDefault(telemetry.NewLocalSink(log))
 
 	if authMode == "" {
 		authMode = os.Getenv("WOCA_AUTH")
