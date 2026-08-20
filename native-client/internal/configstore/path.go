@@ -35,11 +35,7 @@ func DataDir(goos, home string, getenv func(string) string) (string, error) {
 		if !windowsAbsolute(appData) {
 			return "", fmt.Errorf("APPDATA must be an absolute Windows path")
 		}
-		separator := `\`
-		if strings.Contains(appData, `\\`) {
-			separator = `\\`
-		}
-		return appData + separator + applicationName, nil
+		return windowsJoin(appData, applicationName), nil
 	default:
 		if xdgDataHome := getenv("XDG_DATA_HOME"); xdgDataHome != "" {
 			if !filepath.IsAbs(xdgDataHome) {
@@ -52,5 +48,22 @@ func DataDir(goos, home string, getenv func(string) string) (string, error) {
 }
 
 func windowsAbsolute(path string) bool {
-	return len(path) >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && strings.ContainsAny(path[2:3], `\\/`)
+	if len(path) >= 3 && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) && path[1] == ':' && isWindowsSeparator(path[2]) {
+		return true
+	}
+	if len(path) < 5 || !isWindowsSeparator(path[0]) || !isWindowsSeparator(path[1]) || isWindowsSeparator(path[2]) {
+		return false
+	}
+	parts := strings.FieldsFunc(path[2:], func(r rune) bool {
+		return r == '\\' || r == '/'
+	})
+	return len(parts) >= 2 && parts[0] != "" && parts[1] != ""
+}
+
+func windowsJoin(path, element string) string {
+	return strings.TrimRight(path, `\\/`) + `\` + element
+}
+
+func isWindowsSeparator(b byte) bool {
+	return b == '\\' || b == '/'
 }

@@ -14,7 +14,8 @@ func TestDataDir(t *testing.T) {
 		want string
 	}{
 		{"darwin", "darwin", "/Users/alice", nil, "/Users/alice/Library/Application Support/woca-native-client"},
-		{"windows", "windows", `C:\\Users\\alice`, map[string]string{"APPDATA": `C:\\Users\\alice\\AppData\\Roaming`}, `C:\\Users\\alice\\AppData\\Roaming\\woca-native-client`},
+		{"windows", "windows", `C:\Users\alice`, map[string]string{"APPDATA": `C:\Users\alice\AppData\Roaming`}, `C:\Users\alice\AppData\Roaming\woca-native-client`},
+		{"windows UNC", "windows", `C:\Users\alice`, map[string]string{"APPDATA": `\\server\share\Roaming`}, `\\server\share\Roaming\woca-native-client`},
 		{"linux xdg", "linux", "/home/alice", map[string]string{"XDG_DATA_HOME": "/data/alice"}, "/data/alice/woca-native-client"},
 		{"linux fallback", "linux", "/home/alice", nil, "/home/alice/.local/share/woca-native-client"},
 	}
