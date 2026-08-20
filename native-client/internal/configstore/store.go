@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"golang.org/x/net/idna"
 	_ "modernc.org/sqlite"
 )
 
@@ -780,6 +781,9 @@ func NormalizeBaseURL(rawURL string) (string, error) {
 	if containsDefaultIgnorable(rawURL) {
 		return "", fmt.Errorf("server URL contains forbidden characters")
 	}
+	if strings.Contains(rawAuthority(rawURL), "%") {
+		return "", fmt.Errorf("server URL contains forbidden characters")
+	}
 	if decoded, err := url.PathUnescape(rawURL); err == nil && containsDefaultIgnorable(decoded) {
 		return "", fmt.Errorf("server URL contains forbidden characters")
 	}
@@ -849,28 +853,35 @@ func normalizeAuthority(parsed *url.URL) (string, int, bool, error) {
 		return "", 0, false, fmt.Errorf("server URL must not include an IPv6 zone")
 	}
 	bracketed := strings.HasPrefix(authority, "[")
-	if address, err := netip.ParseAddr(hostname); err == nil {
-		if address.Is6() {
-			if !bracketed {
-				return "", 0, false, fmt.Errorf("IPv6 server URL hosts must be bracketed")
-			}
-			return "[" + address.String() + "]", port, hasPort, nil
-		}
-		if bracketed {
+	if bracketed {
+		address, err := netip.ParseAddr(hostname)
+		if err != nil || !address.Is6() {
 			return "", 0, false, fmt.Errorf("only IPv6 server URL hosts may be bracketed")
+		}
+		return "[" + address.String() + "]", port, hasPort, nil
+	}
+
+	mappedHostname, err := idna.Lookup.ToASCII(hostname)
+	if err != nil {
+		return "", 0, false, fmt.Errorf("server URL host is invalid")
+	}
+	mappedHostname = strings.ToLower(mappedHostname)
+	if address, err := netip.ParseAddr(mappedHostname); err == nil {
+		if address.Is6() {
+			return "", 0, false, fmt.Errorf("IPv6 server URL hosts must be bracketed")
+		}
+		if hostname != address.String() {
+			return "", 0, false, fmt.Errorf("server URL IPv4 address is not canonical")
 		}
 		return address.String(), port, hasPort, nil
 	}
-	if isAlternateIPv4(hostname) {
+	if isNumericLookingIPv4(mappedHostname) {
 		return "", 0, false, fmt.Errorf("server URL IPv4 address is not canonical")
 	}
-	if bracketed {
-		return "", 0, false, fmt.Errorf("only IPv6 server URL hosts may be bracketed")
-	}
-	if strings.ContainsAny(hostname, "[]") || strings.Contains(hostname, ":") {
+	if strings.ContainsAny(mappedHostname, "[]") || strings.Contains(mappedHostname, ":") {
 		return "", 0, false, fmt.Errorf("server URL host is malformed")
 	}
-	return strings.ToLower(hostname), port, hasPort, nil
+	return mappedHostname, port, hasPort, nil
 }
 
 func hasExplicitPort(authority string) bool {
@@ -894,15 +905,28 @@ func containsDefaultIgnorable(value string) bool {
 	return false
 }
 
-func isAlternateIPv4(host string) bool {
-	components := strings.Split(strings.ToLower(host), ".")
+func rawAuthority(rawURL string) string {
+	schemeEnd := strings.Index(rawURL, "://")
+	if schemeEnd < 0 {
+		return ""
+	}
+	authority := rawURL[schemeEnd+3:]
+	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
+		return authority[:end]
+	}
+	return authority
+}
+
+func isNumericLookingIPv4(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" {
+		return false
+	}
+	components := strings.Split(host, ".")
 	for _, component := range components {
 		if !isIPv4NumberComponent(component) {
 			return false
 		}
-	}
-	if address, err := netip.ParseAddr(host); err == nil && address.Is4() && address.String() == host {
-		return false
 	}
 	return true
 }
@@ -911,20 +935,17 @@ func isIPv4NumberComponent(component string) bool {
 	if component == "" {
 		return false
 	}
-	base := 10
 	digits := component
+	base := 10
 	if len(component) > 2 && strings.HasPrefix(component, "0x") {
 		base = 16
 		digits = component[2:]
-	} else if len(component) > 1 && component[0] == '0' {
-		base = 8
-		digits = component[1:]
 	}
 	if digits == "" {
 		return false
 	}
 	for _, r := range digits {
-		if r >= '0' && r <= '9' && int(r-'0') < base {
+		if r >= '0' && r <= '9' && (base == 10 || int(r-'0') < base) {
 			continue
 		}
 		if base == 16 && r >= 'a' && r <= 'f' {
@@ -932,6 +953,5 @@ func isIPv4NumberComponent(component string) bool {
 		}
 		return false
 	}
-	_, err := strconv.ParseUint(digits, base, 32)
-	return err == nil
+	return true
 }

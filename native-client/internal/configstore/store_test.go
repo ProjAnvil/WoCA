@@ -508,7 +508,7 @@ func TestNormalizeBaseURLRejectsDefaultIgnorableUnicode(t *testing.T) {
 	}
 
 	got, err := NormalizeBaseURL("https://例子.测试")
-	if err != nil || got != "https://例子.测试" {
+	if err != nil || got != "https://xn--fsqu00a.xn--0zwm56d" {
 		t.Fatalf("NormalizeBaseURL(visible IDN) = %q, %v", got, err)
 	}
 }
@@ -520,6 +520,11 @@ func TestNormalizeBaseURLRejectsAlternateIPv4Forms(t *testing.T) {
 		"https://2130706433",
 		"https://0x7f000001",
 		"https://0177.0.0.1",
+		"https://127.0.0.1.",
+		"https://4294967296",
+		"https://09.0.0.1",
+		"https://１２７.０.０.１",
+		"https://127。0。0。1",
 	} {
 		if _, err := NormalizeBaseURL(rawURL); err == nil {
 			t.Fatalf("NormalizeBaseURL(%q) error = nil", rawURL)
@@ -533,6 +538,17 @@ func TestNormalizeBaseURLRejectsAlternateIPv4Forms(t *testing.T) {
 		got, err := NormalizeBaseURL(rawURL)
 		if err != nil || got != want {
 			t.Fatalf("NormalizeBaseURL(%q) = %q, %v; want %q, nil", rawURL, got, err, want)
+		}
+	}
+}
+
+func TestNormalizeBaseURLRejectsRawPercentInAuthority(t *testing.T) {
+	for _, rawURL := range []string{
+		"https://exa%E4%BE%8Bmple.com",
+		"https://xn--fsqu00a.xn--0zwm56d%2e",
+	} {
+		if _, err := NormalizeBaseURL(rawURL); err == nil {
+			t.Fatalf("NormalizeBaseURL(%q) error = nil", rawURL)
 		}
 	}
 }

@@ -257,6 +257,9 @@ func TestHandlerRejectsInvalidOrTamperedProfileOriginBeforeCredentials(t *testin
 		"https://exa\u200bmple.com",
 		"https://127.1",
 		"https://0x7f000001",
+		"https://127.0.0.1.",
+		"https://１２７.０.０.１",
+		"https://127。0。0。1",
 	} {
 		t.Run(baseURL, func(t *testing.T) {
 			var credentialCalls atomic.Int32
