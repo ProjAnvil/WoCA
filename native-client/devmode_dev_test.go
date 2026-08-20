@@ -10,6 +10,7 @@ import (
 
 	"github.com/projanvil/woca/native-client/internal/bridge"
 	"github.com/projanvil/woca/native-client/internal/configstore"
+	"github.com/projanvil/woca/native-client/internal/transport"
 )
 
 func TestDevelopmentBuildReadsServerEnvironment(t *testing.T) {
@@ -49,7 +50,7 @@ func TestConfigureCredentialsEnablesLoopbackDevelopmentOnlyAfterReadiness(t *tes
 	t.Cleanup(func() { _ = store.Close() })
 	service := bridge.NewService(store, nil)
 
-	provider, err := configureCredentials(t.Context(), service, "http://127.0.0.1:9090")
+	provider, err := configureCredentials(t.Context(), service, "http://127.0.0.1:9090", func() transport.CredentialProvider { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}

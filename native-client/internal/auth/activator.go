@@ -18,7 +18,9 @@ type ActivationRequest struct {
 }
 
 type ActivationResult struct {
-	Ready bool
+	Ready     bool
+	SessionID string
+	ExpiresAt int64
 }
 
 type Activator interface {

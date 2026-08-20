@@ -7,13 +7,14 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/projanvil/woca/native-client/internal/auth"
 	"github.com/projanvil/woca/native-client/internal/bridge"
 	"github.com/projanvil/woca/native-client/internal/configstore"
+	"github.com/projanvil/woca/native-client/internal/devicekey"
 	"github.com/projanvil/woca/native-client/internal/transport"
 	"github.com/wailsapp/wails/v2"
 	wailslogger "github.com/wailsapp/wails/v2/pkg/logger"
@@ -27,13 +28,7 @@ type authorizationRequiredError struct {
 
 func (e authorizationRequiredError) Error() string { return e.Code }
 
-type productionCredentials struct{}
-
 const singleInstanceUniqueID = "com.projanvil.woca.enterprise.native-client"
-
-func (productionCredentials) Credentials(context.Context, string, *url.URL) (transport.Credentials, error) {
-	return transport.Credentials{}, authorizationRequiredError{Code: "authorization_required"}
-}
 
 func buildOptions(app *App, assets fs.FS, handler http.Handler) *options.App {
 	return &options.App{
@@ -76,8 +71,31 @@ func runWith(
 	closeStore := func() { closeOnce.Do(func() { _ = store.Close() }) }
 	defer closeStore()
 
-	service := bridge.NewService(store, auth.UnavailableActivator{})
-	credentials, err := configureCredentials(context.Background(), service, developmentURL)
+	// The device key is the client's cryptographic identity: its DPoP
+	// thumbprint is pinned at activation and its wrap key seals the session.
+	material, err := devicekey.LoadOrCreate(filepath.Join(filepath.Dir(databasePath), "device.key"))
+	if err != nil {
+		closeStore()
+		return runFatalLocalDataWindow(runApp, databasePath, err)
+	}
+	vault := bridge.NewDeviceSessionVault(store, material, nil)
+	service := bridge.NewService(
+		store,
+		auth.NewHTTPActivator(nil, material),
+		bridge.WithSessionVault(vault),
+	)
+	// The session source mirrors the bridge bootstrap decision: the active
+	// profile's stored session, if any.
+	sessionSource := func() (string, bool) {
+		profile, ok, err := store.ActiveProfile(context.Background())
+		if err != nil || !ok {
+			return "", false
+		}
+		return vault.Load(context.Background(), profile.ID)
+	}
+	credentials, err := configureCredentials(context.Background(), service, developmentURL, func() transport.CredentialProvider {
+		return transport.NewDPoPCredentials(material, sessionSource)
+	})
 	if err != nil {
 		return fmt.Errorf("configure development server: %w", err)
 	}

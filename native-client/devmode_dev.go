@@ -25,9 +25,9 @@ func (d developmentCredentials) Credentials(_ context.Context, _ string, target 
 	return transport.Credentials{}, nil
 }
 
-func configureCredentials(ctx context.Context, service *bridge.Service, developmentURL string) (transport.CredentialProvider, error) {
+func configureCredentials(ctx context.Context, service *bridge.Service, developmentURL string, production func() transport.CredentialProvider) (transport.CredentialProvider, error) {
 	if developmentURL == "" {
-		return productionCredentials{}, nil
+		return production(), nil
 	}
 	baseURL, err := service.ApplyDevelopmentOverride(ctx, developmentURL)
 	if err != nil {

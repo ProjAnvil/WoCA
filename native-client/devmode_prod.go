@@ -12,9 +12,9 @@ import (
 
 func developmentServerURL() string { return "" }
 
-func configureCredentials(_ context.Context, _ *bridge.Service, developmentURL string) (transport.CredentialProvider, error) {
+func configureCredentials(_ context.Context, _ *bridge.Service, developmentURL string, production func() transport.CredentialProvider) (transport.CredentialProvider, error) {
 	if developmentURL != "" {
 		return nil, errors.New("development server override is unavailable in production builds")
 	}
-	return productionCredentials{}, nil
+	return production(), nil
 }

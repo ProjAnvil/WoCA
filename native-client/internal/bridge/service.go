@@ -60,21 +60,49 @@ type nativeStore interface {
 	Preference(context.Context, string) (string, bool, error)
 }
 
+// SessionVault stores the opaque native session: sealed (AES-GCM) in SQLite,
+// opened only in memory. A nil vault keeps the M1 scaffold behavior where
+// readiness never survives a restart.
+type SessionVault interface {
+	// Load returns the stored session id when one exists and is unexpired.
+	Load(ctx context.Context, profileID int64) (string, bool)
+	// Save seals and persists a freshly activated session.
+	Save(ctx context.Context, profileID int64, sessionID string, expiresAt int64) error
+	// Delete removes the local session.
+	Delete(ctx context.Context, profileID int64) error
+	// Revoke performs the best-effort remote logout (the local session is
+	// deleted regardless of the outcome).
+	Revoke(ctx context.Context, baseURL, sessionID string) error
+}
+
 // Service retains only the current process's ready marker. The future opaque,
 // device-bound session is intentionally not represented here yet.
 type Service struct {
 	store     nativeStore
 	activator auth.Activator
+	vault     SessionVault
 
 	mu           sync.RWMutex
 	readyBaseURL string
 }
 
-func NewService(store nativeStore, activator auth.Activator) *Service {
+func NewService(store nativeStore, activator auth.Activator, opts ...ServiceOption) *Service {
 	if activator == nil {
 		activator = auth.UnavailableActivator{}
 	}
-	return &Service{store: store, activator: activator}
+	s := &Service{store: store, activator: activator}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// ServiceOption configures optional service capabilities.
+type ServiceOption func(*Service)
+
+// WithSessionVault enables persistent opaque sessions.
+func WithSessionVault(v SessionVault) ServiceOption {
+	return func(s *Service) { s.vault = v }
 }
 
 func (s *Service) Bootstrap(ctx context.Context) (BootstrapState, error) {
@@ -87,6 +115,13 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapState, error) {
 	}
 	if s.isReadyFor(profile.BaseURL) {
 		return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
+	}
+	// A stored, unexpired session re-opens the app without asking again.
+	if s.vault != nil {
+		if sessionID, ok := s.vault.Load(ctx, profile.ID); ok && sessionID != "" {
+			s.markReady(profile.BaseURL)
+			return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
+		}
 	}
 	return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, nil
 }
@@ -118,6 +153,11 @@ func (s *Service) Connect(ctx context.Context, input ConnectionInput) (state Boo
 		return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, err
 	}
 	if result.Ready {
+		if s.vault != nil && result.SessionID != "" {
+			if err := s.vault.Save(ctx, profile.ID, result.SessionID, result.ExpiresAt); err != nil {
+				return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, err
+			}
+		}
 		s.markReady(profile.BaseURL)
 		return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
 	}
@@ -132,6 +172,14 @@ func (s *Service) Logout(ctx context.Context) (BootstrapState, error) {
 	}
 	if !configured {
 		return BootstrapState{State: StateUnconfigured}, nil
+	}
+	// Logout always revokes remotely (best effort) and removes the local
+	// session; the profile and preferences survive (M1 contract).
+	if s.vault != nil {
+		if sessionID, ok := s.vault.Load(ctx, profile.ID); ok && sessionID != "" {
+			_ = s.vault.Revoke(ctx, profile.BaseURL, sessionID)
+		}
+		_ = s.vault.Delete(ctx, profile.ID)
 	}
 	return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, nil
 }

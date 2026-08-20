@@ -13,6 +13,8 @@ import (
 
 	"github.com/projanvil/woca/native-client/internal/bridge"
 	"github.com/projanvil/woca/native-client/internal/configstore"
+	"github.com/projanvil/woca/native-client/internal/devicekey"
+	"github.com/projanvil/woca/native-client/internal/transport"
 	"github.com/wailsapp/wails/v2/pkg/options"
 )
 
@@ -113,14 +115,20 @@ func TestBuildOptionsUsesStableSingleInstanceLock(t *testing.T) {
 }
 
 func TestProductionCredentialsFailClosed(t *testing.T) {
-	credentials, err := (productionCredentials{}).Credentials(
+	material, err := devicekey.LoadOrCreate(filepath.Join(t.TempDir(), "device.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without a stored session the production provider mints nothing: the
+	// transport maps the error to a sanitized 401.
+	p := transport.NewDPoPCredentials(material, func() (string, bool) { return "", false })
+	credentials, err := p.Credentials(
 		t.Context(),
 		http.MethodGet,
 		&url.URL{Scheme: "https", Host: "enterprise.example.com", Path: "/api/models"},
 	)
-	var authorizationError authorizationRequiredError
-	if !errors.As(err, &authorizationError) {
-		t.Fatalf("Credentials() error = %v, want structured authorization error", err)
+	if !errors.Is(err, transport.ErrNoNativeSession) {
+		t.Fatalf("Credentials() error = %v, want ErrNoNativeSession", err)
 	}
 	if credentials.Scheme != "" || credentials.Session != "" || credentials.Proof != "" {
 		t.Fatalf("Credentials() = %#v, want no production credentials", credentials)
