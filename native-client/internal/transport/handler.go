@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -98,7 +99,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Transport:     h.transport,
 		FlushInterval: -1,
 		ModifyResponse: func(response *http.Response) error {
-			response.Header.Del("Set-Cookie")
+			stripResponseCookies(response.Header)
+			stripResponseCookies(response.Trailer)
+			if response.Body != nil {
+				response.Body = &cookieStrippingBody{ReadCloser: response.Body, trailer: &response.Trailer}
+			}
 			if response.StatusCode >= http.StatusMultipleChoices &&
 				response.StatusCode < http.StatusBadRequest &&
 				response.StatusCode != http.StatusNotModified &&
@@ -115,7 +120,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	stripUntrustedHeaders(proxyRequest.Header)
 	proxyRequest.TransferEncoding = nil
 	proxyRequest.Trailer = nil
-	proxy.ServeHTTP(w, proxyRequest)
+	proxy.ServeHTTP(&cookieStrippingResponseWriter{ResponseWriter: w}, proxyRequest)
 }
 
 func defaultTransport() *http.Transport {
@@ -159,6 +164,73 @@ func stripUntrustedHeaders(headers http.Header) {
 func cloneURL(source *url.URL) *url.URL {
 	cloned := *source
 	return &cloned
+}
+
+type cookieStrippingResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w *cookieStrippingResponseWriter) WriteHeader(statusCode int) {
+	stripResponseCookies(w.Header())
+	w.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (w *cookieStrippingResponseWriter) Write(body []byte) (int, error) {
+	stripResponseCookies(w.Header())
+	return w.ResponseWriter.Write(body)
+}
+
+func (w *cookieStrippingResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+type cookieStrippingBody struct {
+	io.ReadCloser
+	trailer *http.Header
+}
+
+func (b *cookieStrippingBody) Read(buffer []byte) (int, error) {
+	read, err := b.ReadCloser.Read(buffer)
+	if err != nil {
+		stripResponseCookies(*b.trailer)
+	}
+	return read, err
+}
+
+func (b *cookieStrippingBody) Close() error {
+	err := b.ReadCloser.Close()
+	stripResponseCookies(*b.trailer)
+	return err
+}
+
+func stripResponseCookies(headers http.Header) {
+	for name, values := range headers {
+		if strings.EqualFold(name, "Set-Cookie") || strings.EqualFold(name, http.TrailerPrefix+"Set-Cookie") {
+			delete(headers, name)
+			continue
+		}
+		if !strings.EqualFold(name, "Trailer") {
+			continue
+		}
+		filteredValues := make([]string, 0, len(values))
+		for _, value := range values {
+			filteredNames := make([]string, 0, 1)
+			for _, trailerName := range strings.Split(value, ",") {
+				trailerName = strings.TrimSpace(trailerName)
+				if trailerName != "" && !strings.EqualFold(trailerName, "Set-Cookie") {
+					filteredNames = append(filteredNames, trailerName)
+				}
+			}
+			if len(filteredNames) != 0 {
+				filteredValues = append(filteredValues, strings.Join(filteredNames, ", "))
+			}
+		}
+		if len(filteredValues) == 0 {
+			delete(headers, name)
+		} else {
+			headers[name] = filteredValues
+		}
+	}
 }
 
 func isAPIPath(requestPath string) bool {

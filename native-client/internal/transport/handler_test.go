@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -370,6 +372,108 @@ func TestHandlerStripsAllUpstreamSetCookieHeaders(t *testing.T) {
 	}
 	if cookies := response.Header().Values("Set-Cookie"); len(cookies) != 0 {
 		t.Fatalf("Set-Cookie = %q", cookies)
+	}
+}
+
+func TestHandlerStripsSetCookieFromEarlyHints(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Set-Cookie", "early=secret-early")
+		w.Header().Set("Link", "</app.css>; rel=preload")
+		w.WriteHeader(http.StatusEarlyHints)
+		w.Header().Set("Set-Cookie", "final=secret-final")
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+	downstream := httptest.NewServer(New(
+		staticTarget{profile: configstore.Profile{BaseURL: upstream.URL}, ok: true},
+		staticCredentials{},
+		nil,
+	))
+	defer downstream.Close()
+
+	var earlyHints []http.Header
+	trace := &httptrace.ClientTrace{
+		Got1xxResponse: func(code int, header textproto.MIMEHeader) error {
+			if code == http.StatusEarlyHints {
+				earlyHints = append(earlyHints, http.Header(header).Clone())
+			}
+			return nil
+		},
+	}
+	request, err := http.NewRequestWithContext(
+		httptrace.WithClientTrace(t.Context(), trace),
+		http.MethodGet,
+		downstream.URL+"/api/models",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := downstream.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(earlyHints) != 1 {
+		t.Fatalf("early hints count = %d", len(earlyHints))
+	}
+	if cookies := earlyHints[0].Values("Set-Cookie"); len(cookies) != 0 {
+		t.Fatalf("early hints Set-Cookie = %q", cookies)
+	}
+	if links := earlyHints[0].Values("Link"); len(links) != 1 {
+		t.Fatalf("early hints Link = %q", links)
+	}
+	if response.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("response = %d %q", response.StatusCode, body)
+	}
+	if cookies := response.Header.Values("Set-Cookie"); len(cookies) != 0 {
+		t.Fatalf("final Set-Cookie = %q", cookies)
+	}
+}
+
+func TestHandlerStripsSetCookieResponseTrailer(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Add("Trailer", "Set-Cookie")
+		w.Header().Add("Trailer", "X-Checksum")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+		w.Header().Set("Set-Cookie", "trailer=secret-trailer")
+		w.Header().Set("X-Checksum", "passed")
+	}))
+	defer upstream.Close()
+	downstream := httptest.NewServer(New(
+		staticTarget{profile: configstore.Profile{BaseURL: upstream.URL}, ok: true},
+		staticCredentials{},
+		nil,
+	))
+	defer downstream.Close()
+
+	response, err := downstream.Client().Get(downstream.URL + "/api/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if response.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("response = %d %q", response.StatusCode, body)
+	}
+	if cookies := response.Header.Values("Set-Cookie"); len(cookies) != 0 {
+		t.Fatalf("header Set-Cookie = %q", cookies)
+	}
+	if cookies := response.Trailer.Values("Set-Cookie"); len(cookies) != 0 {
+		t.Fatalf("trailer Set-Cookie = %q", cookies)
+	}
+	if got := response.Trailer.Get("X-Checksum"); got != "passed" {
+		t.Fatalf("X-Checksum trailer = %q", got)
 	}
 }
 
