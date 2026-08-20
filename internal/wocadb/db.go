@@ -176,15 +176,35 @@ func (d *DB) migrate() error {
 				updated_at BIGINT NOT NULL,
 				PRIMARY KEY (namespace, key)
 			)`,
+			`CREATE TABLE IF NOT EXISTS runs (
+				run_id TEXT PRIMARY KEY,
+				session_id TEXT NOT NULL,
+				status TEXT NOT NULL,
+				owner TEXT NOT NULL DEFAULT '',
+				lease_expires_at __TS__ NOT NULL DEFAULT 0,
+				config_snapshot TEXT NOT NULL DEFAULT '',
+				created_at __TS__ NOT NULL,
+				updated_at __TS__ NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS run_events (
+				run_id TEXT NOT NULL,
+				seq __SEQ__ NOT NULL,
+				kind TEXT NOT NULL,
+				payload TEXT NOT NULL,
+				at __TS__ NOT NULL,
+				PRIMARY KEY (run_id, seq)
+			)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session
+				ON runs(session_id) WHERE status IN ('queued', 'running')`,
 			`CREATE TABLE IF NOT EXISTS session_state (
 				session_id TEXT PRIMARY KEY,
 				status TEXT NOT NULL,
 				run_id TEXT NOT NULL,
 				owner TEXT NOT NULL,
-				updated_at BIGINT NOT NULL
+				updated_at __TS__ NOT NULL
 			)`,
 		}
-		for _, table := range []string{"settings", "secrets", "checkpoints", "memory", "session_state"} {
+		for _, table := range []string{"settings", "secrets", "checkpoints", "memory", "session_state", "runs", "run_events"} {
 			stmts = append(stmts,
 				`ALTER TABLE `+table+` ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT `+tenantGUCDefault,
 				// Reset the default every migrate: an earlier Phase 1 build
@@ -234,12 +254,32 @@ func (d *DB) migrate() error {
 				updated_at INTEGER NOT NULL,
 				PRIMARY KEY (namespace, key)
 			)`,
+			`CREATE TABLE IF NOT EXISTS runs (
+				run_id TEXT PRIMARY KEY,
+				session_id TEXT NOT NULL,
+				status TEXT NOT NULL,
+				owner TEXT NOT NULL DEFAULT '',
+				lease_expires_at __TS__ NOT NULL DEFAULT 0,
+				config_snapshot TEXT NOT NULL DEFAULT '',
+				created_at __TS__ NOT NULL,
+				updated_at __TS__ NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS run_events (
+				run_id TEXT NOT NULL,
+				seq __SEQ__ NOT NULL,
+				kind TEXT NOT NULL,
+				payload TEXT NOT NULL,
+				at __TS__ NOT NULL,
+				PRIMARY KEY (run_id, seq)
+			)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session
+				ON runs(session_id) WHERE status IN ('queued', 'running')`,
 			`CREATE TABLE IF NOT EXISTS session_state (
 				session_id TEXT PRIMARY KEY,
 				status TEXT NOT NULL,
 				run_id TEXT NOT NULL,
 				owner TEXT NOT NULL,
-				updated_at INTEGER NOT NULL
+				updated_at __TS__ NOT NULL
 			)`,
 		}
 	}
