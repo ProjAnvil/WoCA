@@ -322,3 +322,54 @@ func followSSE(t *testing.T, url, lastEventID string) []sseFrame {
 	defer timer.Stop()
 	return readSSE(t, resp, stop)
 }
+
+// dbSessionState degrades instead of failing on store errors, and snapshot
+// paths handle both live and nil stores.
+func TestSessionStateDegradesOnStoreErrors(t *testing.T) {
+	db, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "ss.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := &dbSessionState{db: db}
+	ctx := context.Background()
+	_ = ctx
+	st.Set(wocadb.SessionState{SessionID: "s1", Status: "running", RunID: "r1"})
+	if ok := st.ClearIfRun("s1", "r1"); !ok {
+		t.Fatal("ClearIfRun after Set failed")
+	}
+	st.Set(wocadb.SessionState{SessionID: "s2", Status: "running", RunID: "r2"})
+	st.Delete("s2")
+	if st.ClearIfRun("s2", "r2") {
+		t.Fatal("cleared a deleted session")
+	}
+	if snap := st.Snapshot(); len(snap) != 0 {
+		t.Fatalf("snapshot after deletes = %v", snap)
+	}
+	// A closed store degrades on every path without panicking.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st.Set(wocadb.SessionState{SessionID: "s3"}) // error swallowed
+	_ = st.ClearIfRun("s3", "r")                 // false
+	st.Delete("s3")                              // error swallowed
+	_ = st.Snapshot()                            // empty on error
+}
+
+// The in-memory state store covers the same interface contract.
+func TestMemSessionStateContract(t *testing.T) {
+	st := newMemSessionState()
+	st.Set(wocadb.SessionState{SessionID: "s1", Status: wocadb.SessionRunning, RunID: "r1"})
+	snap := st.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("mem snapshot = %v", snap)
+	}
+	if ok := st.ClearIfRun("s1", "r1"); !ok {
+		t.Fatal("mem ClearIfRun failed")
+	}
+	if st.ClearIfRun("s1", "r9") {
+		t.Fatal("mem cleared wrong run")
+	}
+	if snap := st.Snapshot(); len(snap) != 0 {
+		t.Fatalf("mem snapshot after clear = %v", snap)
+	}
+}
