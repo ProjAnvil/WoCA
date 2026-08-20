@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,6 +100,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Transport:     h.transport,
 		FlushInterval: -1,
 		ModifyResponse: func(response *http.Response) error {
+			if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+				sanitizeUnauthorizedResponse(response)
+				return nil
+			}
 			stripResponseCookies(response.Header)
 			stripResponseCookies(response.Trailer)
 			if response.Body != nil {
@@ -235,6 +240,24 @@ func stripResponseCookies(headers http.Header) {
 			headers[name] = filteredValues
 		}
 	}
+}
+
+func sanitizeUnauthorizedResponse(response *http.Response) {
+	if response.Body != nil {
+		_ = response.Body.Close()
+	}
+	const body = `{"error":"authorization required"}`
+	response.StatusCode = http.StatusUnauthorized
+	response.Status = strconv.Itoa(http.StatusUnauthorized) + " " + http.StatusText(http.StatusUnauthorized)
+	response.Header = make(http.Header)
+	response.Header.Set("Content-Type", "application/json")
+	response.Header.Set("Content-Length", strconv.Itoa(len(body)))
+	response.Body = io.NopCloser(strings.NewReader(body))
+	response.ContentLength = int64(len(body))
+	response.TransferEncoding = nil
+	response.Trailer = nil
+	response.Close = false
+	response.Uncompressed = false
 }
 
 func isAPIPath(requestPath string) bool {

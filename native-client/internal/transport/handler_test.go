@@ -70,6 +70,26 @@ type firstWriteHeaderWins struct {
 	body   bytes.Buffer
 }
 
+type trackingBody struct {
+	reader *strings.Reader
+	reads  atomic.Int32
+	closed atomic.Bool
+}
+
+func newTrackingBody(value string) *trackingBody {
+	return &trackingBody{reader: strings.NewReader(value)}
+}
+
+func (b *trackingBody) Read(buffer []byte) (int, error) {
+	b.reads.Add(1)
+	return b.reader.Read(buffer)
+}
+
+func (b *trackingBody) Close() error {
+	b.closed.Store(true)
+	return nil
+}
+
 func newFirstWriteHeaderWins() *firstWriteHeaderWins {
 	return &firstWriteHeaderWins{header: make(http.Header)}
 }
@@ -545,6 +565,108 @@ func TestHandlerStripsSetCookieResponseTrailer(t *testing.T) {
 	}
 	if got := response.Trailer.Get("X-Checksum"); got != "passed" {
 		t.Fatalf("X-Checksum trailer = %q", got)
+	}
+}
+
+func TestHandlerSanitizesUpstreamAuthorizationFailures(t *testing.T) {
+	for _, upstreamStatus := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(upstreamStatus), func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("WWW-Authenticate", `DPoP error="secret-challenge"`)
+				w.Header().Set("Proxy-Authenticate", `Basic realm="secret-proxy"`)
+				w.Header().Set("Set-Cookie", "session=secret-cookie")
+				w.Header().Set("X-Diagnostic-ID", "secret-diagnostic")
+				w.Header().Set("Location", "https://secret.example/login")
+				w.Header().Add("Trailer", "X-Diagnostic-Trailer")
+				w.WriteHeader(upstreamStatus)
+				_, _ = io.WriteString(w, `{"secret":"upstream-detail"}`)
+				w.Header().Set("X-Diagnostic-Trailer", "secret-trailer")
+			}))
+			defer upstream.Close()
+			downstream := httptest.NewServer(New(
+				staticTarget{profile: configstore.Profile{BaseURL: upstream.URL}, ok: true},
+				staticCredentials{},
+				nil,
+			))
+			defer downstream.Close()
+
+			response, err := downstream.Client().Get(downstream.URL + "/api/models")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			body, err := io.ReadAll(response.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if response.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("status = %d", response.StatusCode)
+			}
+			if got := string(body); got != `{"error":"authorization required"}` {
+				t.Fatalf("body = %q", got)
+			}
+			if got := response.Header.Get("Content-Type"); got != "application/json" {
+				t.Fatalf("Content-Type = %q", got)
+			}
+			if got, want := response.Header.Get("Content-Length"), strconv.Itoa(len(`{"error":"authorization required"}`)); got != want {
+				t.Fatalf("Content-Length = %q, want %q", got, want)
+			}
+			for name := range response.Header {
+				switch name {
+				case "Content-Type", "Content-Length", "Date":
+				default:
+					t.Fatalf("unexpected response header %s: %q", name, response.Header.Values(name))
+				}
+			}
+			if len(response.Trailer) != 0 {
+				t.Fatalf("trailers = %q", response.Trailer)
+			}
+			for _, secret := range []string{"secret-challenge", "secret-proxy", "secret-cookie", "secret-diagnostic", "secret.example", "secret-trailer", "upstream-detail"} {
+				if strings.Contains(string(body), secret) {
+					t.Fatalf("body leaked %q: %q", secret, body)
+				}
+				for _, values := range response.Header {
+					if strings.Contains(strings.Join(values, " "), secret) {
+						t.Fatalf("headers leaked %q: %q", secret, response.Header)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestHandlerClosesUnauthorizedUpstreamBodyWithoutReadingIt(t *testing.T) {
+	originalBody := newTrackingBody(`{"secret":"do-not-read"}`)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			Status:           "403 Forbidden",
+			StatusCode:       http.StatusForbidden,
+			Header:           http.Header{"X-Diagnostic-ID": {"secret-header"}},
+			Body:             originalBody,
+			ContentLength:    int64(originalBody.reader.Len()),
+			TransferEncoding: []string{"chunked"},
+			Trailer:          http.Header{"X-Diagnostic-Trailer": {"secret-trailer"}},
+			Request:          request,
+		}, nil
+	})}
+	handler := New(
+		staticTarget{profile: configstore.Profile{BaseURL: "http://localhost"}, ok: true},
+		staticCredentials{},
+		client,
+	)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil))
+
+	if response.Code != http.StatusUnauthorized || response.Body.String() != `{"error":"authorization required"}` {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+	if !originalBody.closed.Load() {
+		t.Fatal("original upstream body was not closed")
+	}
+	if reads := originalBody.reads.Load(); reads != 0 {
+		t.Fatalf("original upstream body reads = %d", reads)
 	}
 }
 
