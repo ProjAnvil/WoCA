@@ -12,6 +12,7 @@ declare global {
   interface BootstrapState {
     state: 'unconfigured' | 'authorization_required' | 'ready'
     server_url?: string
+    message?: string
   }
 
   interface ConnectionInput {
@@ -22,6 +23,7 @@ declare global {
   interface PreferenceInput {
     key: string
     value: string
+    revision: number
   }
 
   interface PreferenceValue {
@@ -29,12 +31,17 @@ declare global {
     found: boolean
   }
 
+  interface PreferenceWriteResult {
+    revision: number
+    applied: boolean
+  }
+
   interface NativeAppBridge {
     Bootstrap(): Promise<BootstrapState>
     Connect(input: ConnectionInput): Promise<BootstrapState>
     Logout(): Promise<BootstrapState>
     Preference(key: string): Promise<PreferenceValue>
-    PutPreference(input: PreferenceInput): Promise<void>
+    SetPreference(input: PreferenceInput): Promise<PreferenceWriteResult>
   }
 
   interface Window {

@@ -3,7 +3,7 @@ export interface NativeBridge {
   Connect(input: ConnectionInput): Promise<BootstrapState>
   Logout(): Promise<BootstrapState>
   Preference(key: string): Promise<PreferenceValue>
-  PutPreference(input: PreferenceInput): Promise<void>
+  SetPreference(input: PreferenceInput): Promise<PreferenceWriteResult>
 }
 
 export function getNativeBridge(): NativeBridge | null {

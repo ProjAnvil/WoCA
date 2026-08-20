@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { useToggle } from '@vueuse/core'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { getSettings, updateSettings } from '../api/client'
 import i18n, { applyLocale, LOCALE_STORAGE_KEY, resolveLocale, type LocaleOption } from '../i18n'
 import type { AppSettings, AppSettingsUpdate } from '../types'
@@ -22,6 +22,7 @@ export const useSettingsStore = defineStore('settings', () => {
     localePref.value = pref
     applyLocale(pref)
   }
+  watch(localePref, (pref) => applyLocale(pref))
 
   // Client-side preferences (cards in the settings panel). The refs stay
   // assignable through the store while the adapter chooses browser or native

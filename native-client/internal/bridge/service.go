@@ -36,13 +36,24 @@ type ConnectionInput struct {
 }
 
 type PreferenceInput struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
+	Key      string `json:"key"`
+	Value    string `json:"value"`
+	Revision uint64 `json:"revision"`
 }
 
 type PreferenceValue struct {
 	Value string `json:"value"`
 	Found bool   `json:"found"`
+}
+
+type PreferenceWriteResult struct {
+	Revision uint64 `json:"revision"`
+	Applied  bool   `json:"applied"`
+}
+
+type preferenceSequence struct {
+	mu       sync.Mutex
+	revision uint64
 }
 
 type nativeStore interface {
@@ -60,13 +71,19 @@ type Service struct {
 
 	mu           sync.RWMutex
 	readyBaseURL string
+
+	preferenceMu        sync.Mutex
+	preferenceSequences map[string]*preferenceSequence
 }
 
 func NewService(store nativeStore, activator auth.Activator) *Service {
 	if activator == nil {
 		activator = auth.UnavailableActivator{}
 	}
-	return &Service{store: store, activator: activator}
+	return &Service{
+		store: store, activator: activator,
+		preferenceSequences: make(map[string]*preferenceSequence),
+	}
 }
 
 func (s *Service) Bootstrap(ctx context.Context) (BootstrapState, error) {
@@ -135,6 +152,9 @@ func (s *Service) Preference(ctx context.Context, key string) (PreferenceValue, 
 	if s.store == nil {
 		return PreferenceValue{}, errors.New("preference store is required")
 	}
+	sequence := s.preferenceSequence(key)
+	sequence.mu.Lock()
+	defer sequence.mu.Unlock()
 	value, found, err := s.store.Preference(ctx, key)
 	if err != nil {
 		return PreferenceValue{}, err
@@ -145,17 +165,42 @@ func (s *Service) Preference(ctx context.Context, key string) (PreferenceValue, 
 	return PreferenceValue{Value: value, Found: found}, nil
 }
 
-func (s *Service) PutPreference(ctx context.Context, input PreferenceInput) error {
+func (s *Service) SetPreference(ctx context.Context, input PreferenceInput) (PreferenceWriteResult, error) {
 	if !knownPreferenceKey(input.Key) {
-		return errors.New("preference key is not allowed")
+		return PreferenceWriteResult{}, errors.New("preference key is not allowed")
 	}
 	if !validPreferenceValue(input.Key, input.Value) {
-		return errors.New("preference value is invalid")
+		return PreferenceWriteResult{}, errors.New("preference value is invalid")
+	}
+	if input.Revision == 0 || input.Revision > 9_007_199_254_740_991 {
+		return PreferenceWriteResult{}, errors.New("preference revision is invalid")
 	}
 	if s.store == nil {
-		return errors.New("preference store is required")
+		return PreferenceWriteResult{}, errors.New("preference store is required")
 	}
-	return s.store.PutPreference(ctx, input.Key, input.Value)
+
+	sequence := s.preferenceSequence(input.Key)
+	sequence.mu.Lock()
+	defer sequence.mu.Unlock()
+	if input.Revision <= sequence.revision {
+		return PreferenceWriteResult{Revision: input.Revision, Applied: false}, nil
+	}
+	sequence.revision = input.Revision
+	if err := s.store.PutPreference(ctx, input.Key, input.Value); err != nil {
+		return PreferenceWriteResult{Revision: input.Revision, Applied: false}, err
+	}
+	return PreferenceWriteResult{Revision: input.Revision, Applied: true}, nil
+}
+
+func (s *Service) preferenceSequence(key string) *preferenceSequence {
+	s.preferenceMu.Lock()
+	defer s.preferenceMu.Unlock()
+	sequence := s.preferenceSequences[key]
+	if sequence == nil {
+		sequence = &preferenceSequence{}
+		s.preferenceSequences[key] = sequence
+	}
+	return sequence
 }
 
 func knownPreferenceKey(key string) bool {

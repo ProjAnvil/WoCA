@@ -20,7 +20,7 @@ function bridgeWithPreferences(overrides: Partial<NativeAppBridge> = {}): Native
       value: storedNativePreferences[key] ?? '',
       found: key in storedNativePreferences,
     })),
-    PutPreference: vi.fn(async () => undefined),
+    SetPreference: vi.fn(async (input) => ({ revision: input.revision, applied: true })),
     ...overrides,
   }
 }
@@ -47,6 +47,8 @@ describe('native-aware preferences', () => {
     const settings = useSettingsStore()
 
     expect(settings.isDark).toBe(true)
+    await nextTick()
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
     expect(settings.localePref).toBe('en')
     expect(settings.autoCollapseTools).toBe(false)
     expect(settings.markdownPreview).toBe(true)
@@ -84,6 +86,8 @@ describe('native-aware preferences', () => {
     const settings = useSettingsStore()
 
     expect(settings.isDark).toBe(true)
+    await nextTick()
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
     expect(settings.localePref).toBe('en')
     expect(settings.autoCollapseTools).toBe(false)
     expect(settings.markdownPreview).toBe(true)
@@ -99,15 +103,28 @@ describe('native-aware preferences', () => {
     await nextTick()
     await preferences.drainPreferenceWrites()
 
-    expect(bridge.PutPreference).toHaveBeenCalledWith({ key: 'woca-theme', value: 'auto' })
-    expect(bridge.PutPreference).toHaveBeenCalledWith({ key: 'woca.pref.locale', value: 'zh-CN' })
-    expect(bridge.PutPreference).toHaveBeenCalledWith({ key: 'woca.pref.autoCollapseTools', value: 'true' })
-    expect(bridge.PutPreference).toHaveBeenCalledWith({ key: 'woca.pref.markdownPreview', value: 'false' })
-    expect(bridge.PutPreference).toHaveBeenCalledWith({ key: 'woca.pref.model', value: 'updated-native-model' })
-    expect(bridge.PutPreference).toHaveBeenCalledWith({
-      key: 'woca.pref.permissionMode',
-      value: 'bypassPermissions',
-    })
+    expect(bridge.SetPreference).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'woca-theme', value: 'auto', revision: expect.any(Number) }),
+    )
+    expect(bridge.SetPreference).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'woca.pref.locale', value: 'zh-CN', revision: expect.any(Number) }),
+    )
+    expect(bridge.SetPreference).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'woca.pref.autoCollapseTools', value: 'true', revision: expect.any(Number) }),
+    )
+    expect(bridge.SetPreference).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'woca.pref.markdownPreview', value: 'false', revision: expect.any(Number) }),
+    )
+    expect(bridge.SetPreference).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'woca.pref.model', value: 'updated-native-model', revision: expect.any(Number) }),
+    )
+    expect(bridge.SetPreference).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: 'woca.pref.permissionMode',
+        value: 'bypassPermissions',
+        revision: expect.any(Number),
+      }),
+    )
     expect(localGet).not.toHaveBeenCalled()
     expect(localSet).not.toHaveBeenCalled()
     expect(sessionGet).not.toHaveBeenCalled()
@@ -134,24 +151,101 @@ describe('native-aware preferences', () => {
     expect(settings.permissionMode).toBe('default')
   })
 
-  it('serializes native writes so a stale completion cannot win', async () => {
-    let finishFirst!: () => void
-    const putPreference = vi
-      .fn<NativeAppBridge['PutPreference']>()
-      .mockImplementationOnce(() => new Promise<void>((resolve) => (finishFirst = resolve)))
-      .mockResolvedValue(undefined)
-    const bridge = bridgeWithPreferences({ PutPreference: putPreference })
+  it('rolls back a failed latest write and retries the retained desired value', async () => {
+    const setPreference = vi
+      .fn<NativeAppBridge['SetPreference']>()
+      .mockRejectedValueOnce(new Error('secret value: updated-native-model'))
+      .mockImplementation(async (input) => ({ revision: input.revision, applied: true }))
+    const bridge = bridgeWithPreferences({ SetPreference: setPreference })
+    vi.stubGlobal('go', { main: { App: bridge } })
+    const preferences = await import('./preferences')
+    await preferences.hydrateNativePreferences(bridge)
+
+    setActivePinia(createPinia())
+    const { useSettingsStore } = await import('../stores/settings')
+    const settings = useSettingsStore()
+
+    settings.model = 'updated-native-model'
+    await nextTick()
+    expect(settings.model).toBe('updated-native-model')
+    expect(preferences.readPreference('woca.pref.model')).toBe('updated-native-model')
+
+    await expect(preferences.drainPreferenceWrites()).rejects.toThrow('unable to persist native preferences')
+    await nextTick()
+    expect(settings.model).toBe('native-model')
+    expect(preferences.readPreference('woca.pref.model')).toBe('native-model')
+
+    expect(preferences.retryFailedNativePreference('woca.pref.model')).toBe(true)
+    await nextTick()
+    expect(settings.model).toBe('updated-native-model')
+    await preferences.drainPreferenceWrites()
+    expect(preferences.readPreference('woca.pref.model')).toBe('updated-native-model')
+  })
+
+  it('sends every write immediately and ignores an older failed completion', async () => {
+    let failFirst!: () => void
+    let finishSecond!: (result: PreferenceWriteResult) => void
+    const setPreference = vi
+      .fn<NativeAppBridge['SetPreference']>()
+      .mockImplementationOnce(
+        () => new Promise<PreferenceWriteResult>((_, reject) => (failFirst = () => reject(new Error('older failed')))),
+      )
+      .mockImplementationOnce(
+        () => new Promise<PreferenceWriteResult>((resolve) => (finishSecond = resolve)),
+      )
+    const bridge = bridgeWithPreferences({ SetPreference: setPreference })
     vi.stubGlobal('go', { main: { App: bridge } })
     const preferences = await import('./preferences')
     await preferences.hydrateNativePreferences(bridge)
 
     preferences.writeNativePreference('woca.pref.model', 'first')
     preferences.writeNativePreference('woca.pref.model', 'second')
-    await Promise.resolve()
 
-    expect(putPreference).toHaveBeenCalledTimes(1)
-    finishFirst()
+    expect(setPreference).toHaveBeenCalledTimes(2)
+    const secondInput = setPreference.mock.calls[1][0]
+    expect(secondInput.revision).toBeGreaterThan(setPreference.mock.calls[0][0].revision)
+
+    failFirst()
+    await Promise.resolve()
+    expect(preferences.readPreference('woca.pref.model')).toBe('second')
+
+    finishSecond({ revision: secondInput.revision, applied: true })
     await preferences.drainPreferenceWrites()
-    expect(putPreference).toHaveBeenNthCalledWith(2, { key: 'woca.pref.model', value: 'second' })
+    expect(preferences.readPreference('woca.pref.model')).toBe('second')
+  })
+
+  it('reconciles a late older success after the latest write already failed', async () => {
+    let finishFirst!: (result: PreferenceWriteResult) => void
+    let failSecond!: () => void
+    const setPreference = vi
+      .fn<NativeAppBridge['SetPreference']>()
+      .mockImplementationOnce(
+        () => new Promise<PreferenceWriteResult>((resolve) => (finishFirst = resolve)),
+      )
+      .mockImplementationOnce(
+        () => new Promise<PreferenceWriteResult>((_, reject) => (failSecond = () => reject(new Error('latest failed')))),
+      )
+      .mockImplementation(async (input) => ({ revision: input.revision, applied: true }))
+    const bridge = bridgeWithPreferences({ SetPreference: setPreference })
+    vi.stubGlobal('go', { main: { App: bridge } })
+    const preferences = await import('./preferences')
+    await preferences.hydrateNativePreferences(bridge)
+
+    preferences.writeNativePreference('woca.pref.model', 'first')
+    preferences.writeNativePreference('woca.pref.model', 'second')
+    const firstRevision = setPreference.mock.calls[0][0].revision
+
+    failSecond()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(preferences.readPreference('woca.pref.model')).toBe('native-model')
+
+    finishFirst({ revision: firstRevision, applied: true })
+    await expect(preferences.drainPreferenceWrites()).rejects.toThrow('unable to persist native preferences')
+    expect(preferences.readPreference('woca.pref.model')).toBe('first')
+
+    expect(preferences.retryFailedNativePreference('woca.pref.model')).toBe(true)
+    await preferences.drainPreferenceWrites()
+    expect(preferences.readPreference('woca.pref.model')).toBe('second')
   })
 })

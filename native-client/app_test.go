@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/projanvil/woca/native-client/internal/bridge"
 	"github.com/projanvil/woca/native-client/internal/configstore"
@@ -14,13 +17,17 @@ type fakeBridgeAPI struct {
 	connectState   bridge.BootstrapState
 	logoutState    bridge.BootstrapState
 
-	bootstrapCtx    context.Context
-	connectCtx      context.Context
-	logoutCtx       context.Context
-	connectInput    bridge.ConnectionInput
-	preferenceKey   string
-	preferenceInput bridge.PreferenceInput
-	preferenceValue bridge.PreferenceValue
+	bootstrapCtx     context.Context
+	connectCtx       context.Context
+	logoutCtx        context.Context
+	connectInput     bridge.ConnectionInput
+	preferenceKey    string
+	preferenceInput  bridge.PreferenceInput
+	preferenceValue  bridge.PreferenceValue
+	preferenceResult bridge.PreferenceWriteResult
+	setPreferenceFn  func(context.Context, bridge.PreferenceInput) (bridge.PreferenceWriteResult, error)
+	preferenceMu     sync.Mutex
+	preferenceCalls  int
 }
 
 func (f *fakeBridgeAPI) Bootstrap(ctx context.Context) (bridge.BootstrapState, error) {
@@ -44,9 +51,15 @@ func (f *fakeBridgeAPI) Preference(ctx context.Context, key string) (bridge.Pref
 	return f.preferenceValue, nil
 }
 
-func (f *fakeBridgeAPI) PutPreference(ctx context.Context, input bridge.PreferenceInput) error {
+func (f *fakeBridgeAPI) SetPreference(ctx context.Context, input bridge.PreferenceInput) (bridge.PreferenceWriteResult, error) {
+	f.preferenceMu.Lock()
 	f.preferenceInput = input
-	return nil
+	f.preferenceCalls++
+	f.preferenceMu.Unlock()
+	if f.setPreferenceFn != nil {
+		return f.setPreferenceFn(ctx, input)
+	}
+	return f.preferenceResult, nil
 }
 
 func TestAppDelegatesWithStartupContext(t *testing.T) {
@@ -85,8 +98,12 @@ func TestAppPreferencesPersistAcrossSQLiteRestart(t *testing.T) {
 	}
 	app := NewApp(bridge.NewService(store, nil))
 	app.startup(t.Context())
-	if err := app.PutPreference(bridge.PreferenceInput{Key: "woca.pref.locale", Value: "en"}); err != nil {
+	result, err := app.SetPreference(bridge.PreferenceInput{Key: "woca.pref.locale", Value: "en", Revision: 1})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !result.Applied || result.Revision != 1 {
+		t.Fatalf("SetPreference() = %#v, want applied revision 1", result)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -112,6 +129,70 @@ func TestAppPreferencesPersistAcrossSQLiteRestart(t *testing.T) {
 	}
 	if missing.Found || missing.Value != "" {
 		t.Fatalf("missing Preference() = %#v, want distinguishable missing value", missing)
+	}
+}
+
+func TestAppShutdownWaitsForPreferenceWriteAndRejectsNewCalls(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	cleanup := make(chan struct{})
+	service := &fakeBridgeAPI{
+		setPreferenceFn: func(_ context.Context, input bridge.PreferenceInput) (bridge.PreferenceWriteResult, error) {
+			close(entered)
+			<-release
+			return bridge.PreferenceWriteResult{Revision: input.Revision, Applied: true}, nil
+		},
+	}
+	app := newAppWithShutdown(service, func() { close(cleanup) })
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, err := app.SetPreference(bridge.PreferenceInput{Key: "woca.pref.model", Value: "slow-model", Revision: 1})
+		writeDone <- err
+	}()
+	<-entered
+
+	shutdownDone := make(chan struct{})
+	go func() {
+		app.shutdown(t.Context())
+		close(shutdownDone)
+	}()
+	for {
+		app.preferenceMu.Lock()
+		closing := app.preferenceClosing
+		app.preferenceMu.Unlock()
+		if closing {
+			break
+		}
+		runtime.Gosched()
+	}
+	_, err := app.SetPreference(bridge.PreferenceInput{
+		Key: "woca.pref.model", Value: "must-not-enter-bridge", Revision: 2,
+	})
+	if err == nil || err.Error() != "native application is shutting down" {
+		t.Fatalf("SetPreference() while closing error = %v", err)
+	}
+	select {
+	case <-cleanup:
+		t.Fatal("shutdown closed SQLite while a preference write was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+	<-shutdownDone
+	select {
+	case <-cleanup:
+	default:
+		t.Fatal("shutdown did not run cleanup after the preference write finished")
+	}
+
+	service.preferenceMu.Lock()
+	defer service.preferenceMu.Unlock()
+	if service.preferenceCalls != 1 {
+		t.Fatalf("bridge preference calls = %d, want 1", service.preferenceCalls)
 	}
 }
 

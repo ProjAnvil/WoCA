@@ -15,7 +15,7 @@ type bridgeAPI interface {
 	Connect(context.Context, bridge.ConnectionInput) (bridge.BootstrapState, error)
 	Logout(context.Context) (bridge.BootstrapState, error)
 	Preference(context.Context, string) (bridge.PreferenceValue, error)
-	PutPreference(context.Context, bridge.PreferenceInput) error
+	SetPreference(context.Context, bridge.PreferenceInput) (bridge.PreferenceWriteResult, error)
 }
 
 type App struct {
@@ -23,6 +23,10 @@ type App struct {
 	bridge       bridgeAPI
 	onShutdown   func()
 	shutdownOnce sync.Once
+
+	preferenceMu      sync.Mutex
+	preferenceCalls   sync.WaitGroup
+	preferenceClosing bool
 }
 
 func NewApp(service bridgeAPI) *App {
@@ -39,6 +43,10 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) shutdown(context.Context) {
 	a.shutdownOnce.Do(func() {
+		a.preferenceMu.Lock()
+		a.preferenceClosing = true
+		a.preferenceMu.Unlock()
+		a.preferenceCalls.Wait()
 		if a.onShutdown != nil {
 			a.onShutdown()
 		}
@@ -70,14 +78,32 @@ func (a *App) Preference(key string) (bridge.PreferenceValue, error) {
 	if a.bridge == nil {
 		return bridge.PreferenceValue{}, errors.New("native bridge is required")
 	}
+	if err := a.beginPreferenceCall(); err != nil {
+		return bridge.PreferenceValue{}, err
+	}
+	defer a.preferenceCalls.Done()
 	return a.bridge.Preference(a.context(), key)
 }
 
-func (a *App) PutPreference(input bridge.PreferenceInput) error {
+func (a *App) SetPreference(input bridge.PreferenceInput) (bridge.PreferenceWriteResult, error) {
 	if a.bridge == nil {
-		return errors.New("native bridge is required")
+		return bridge.PreferenceWriteResult{}, errors.New("native bridge is required")
 	}
-	return a.bridge.PutPreference(a.context(), input)
+	if err := a.beginPreferenceCall(); err != nil {
+		return bridge.PreferenceWriteResult{}, err
+	}
+	defer a.preferenceCalls.Done()
+	return a.bridge.SetPreference(a.context(), input)
+}
+
+func (a *App) beginPreferenceCall() error {
+	a.preferenceMu.Lock()
+	defer a.preferenceMu.Unlock()
+	if a.preferenceClosing {
+		return errors.New("native application is shutting down")
+	}
+	a.preferenceCalls.Add(1)
+	return nil
 }
 
 func (a *App) context() context.Context {
