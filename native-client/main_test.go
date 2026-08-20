@@ -30,6 +30,14 @@ func TestBuildOptionsUsesSharedAssetsTransportAndBridge(t *testing.T) {
 	if opts.AssetServer == nil || opts.AssetServer.Assets == nil || opts.AssetServer.Handler == nil {
 		t.Fatal("asset server not wired")
 	}
+	if opts.AssetServer.Middleware == nil {
+		t.Fatal("asset server document guard middleware not wired")
+	}
+	guarded := opts.AssetServer.Middleware(handler)
+	guarded.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/", nil))
+	if handlerCalled {
+		t.Fatal("document guard middleware forwarded a document-shaped API path")
+	}
 	opts.AssetServer.Handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/test", nil))
 	if !handlerCalled {
 		t.Fatal("asset server did not use the supplied transport handler")

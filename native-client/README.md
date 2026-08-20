@@ -80,6 +80,18 @@ SQLite.
 Browser/personal requests retain their existing endpoints and do not add the
 native header or call the Wails bridge.
 
+Wails v2.14 treats GET URL paths ending in `/` or `/index.html` as application
+documents before the custom transport runs: a handler 404 is replaced with
+default HTML and a 200 HTML response receives runtime injection, and traversal
+aliases such as `/api/../index.html` resolve to the embedded application
+without reaching the transport at all. The rejection therefore runs as an
+asset-server middleware (`transport.AssetDocumentGuard`) installed ahead of
+Wails' document handling, with the same check repeated inside the transport
+handler: those shapes under the decoded `/api` namespace receive a fixed JSON
+400 before any asset, profile, credential, or network work. Queries do not
+participate in this match, non-GET methods bypass it, and backslashes remain
+ordinary URL-path characters on macOS and Windows.
+
 This scaffold claims incremental native SSE on macOS. Wails v2.14's WebView2
 AssetServer response path buffers responses on Windows, so Windows incremental
 SSE is not claimed here even though explicit abort propagation remains wired.

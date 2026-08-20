@@ -60,6 +60,15 @@ func NewWithCancellation(
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Defense in depth behind AssetDocumentGuard: Wails v2.14 wraps GET paths
+	// ending in a slash or /index.html before this handler runs. A downstream
+	// 404 is replaced with default HTML and a downstream 200 text/html is
+	// runtime-injected. Reject those API-shaped paths with a non-404 response
+	// so no remote response enters that UI path.
+	if isWailsRuntimeInjectionAPIPath(r.Method, r.URL.Path) {
+		writeJSONError(w, http.StatusBadRequest, "unsupported API path")
+		return
+	}
 	if !isAPIPath(r.URL.Path) {
 		writeJSONError(w, http.StatusNotFound, "not found")
 		return
@@ -308,6 +317,33 @@ func isAPIPath(requestPath string) bool {
 	}
 	cleaned := path.Clean(requestPath)
 	return cleaned == "/api" || strings.HasPrefix(cleaned, "/api/")
+}
+
+// AssetDocumentGuard wraps the Wails asset handler chain and must be installed
+// as assetserver.Options.Middleware. Wails v2.14 treats GET paths ending in a
+// slash or /index.html as application documents: a handler 404 is replaced with
+// default HTML and a 200 text/html response is runtime-injected. Traversal
+// aliases such as /api/../index.html are path.Clean-resolved to the embedded
+// application before the fallback handler runs at all. The guard rejects those
+// API-shaped GET paths before any asset, profile, credential, or upstream work.
+func AssetDocumentGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isWailsRuntimeInjectionAPIPath(r.Method, r.URL.Path) {
+			writeJSONError(w, http.StatusBadRequest, "unsupported API path")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isWailsRuntimeInjectionAPIPath(method, requestPath string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	if requestPath != "/api" && !strings.HasPrefix(requestPath, "/api/") {
+		return false
+	}
+	return strings.HasSuffix(requestPath, "/") || strings.HasSuffix(requestPath, "/index.html")
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {

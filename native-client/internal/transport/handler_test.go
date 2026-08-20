@@ -14,9 +14,12 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/projanvil/woca/native-client/internal/configstore"
+	wailsassetserver "github.com/wailsapp/wails/v2/pkg/assetserver"
+	wailsassetoptions "github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
 
 type staticTarget struct {
@@ -63,6 +66,12 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
 }
+
+type testRuntimeAssets struct{}
+
+func (testRuntimeAssets) DesktopIPC() []byte       { return nil }
+func (testRuntimeAssets) WebsocketIPC() []byte     { return nil }
+func (testRuntimeAssets) RuntimeDesktopJS() []byte { return []byte("// test runtime") }
 
 type firstWriteHeaderWins struct {
 	header http.Header
@@ -459,6 +468,177 @@ func TestHandlerRejectsNonAPIPaths(t *testing.T) {
 	assertJSONError(t, response, http.StatusNotFound)
 	if got := hits.Load(); got != 0 {
 		t.Fatalf("upstream hits = %d", got)
+	}
+}
+
+func TestWailsAssetServerRejectsInjectionMatchedAPIPathsBeforeLookup(t *testing.T) {
+	tests := []struct {
+		name        string
+		requestURL  string
+		status      int
+		contentType string
+		body        string
+	}{
+		{
+			name:        "API root trailing slash is an exact injection match",
+			requestURL:  "http://native.local/api/",
+			status:      http.StatusNoContent,
+			contentType: "application/json",
+		},
+		{
+			name:        "API root index document is an exact injection match",
+			requestURL:  "http://native.local/api/index.html",
+			status:      http.StatusNoContent,
+			contentType: "application/json",
+		},
+		{
+			name:        "trailing slash would replace upstream 404 with default HTML",
+			requestURL:  "http://native.local/api/models/",
+			status:      http.StatusNotFound,
+			contentType: "application/json",
+			body:        `{"upstream":"missing"}`,
+		},
+		{
+			name:        "index document would receive runtime injection",
+			requestURL:  "http://native.local/api/models/index.html",
+			status:      http.StatusOK,
+			contentType: "text/html",
+			body:        "<html><head></head><body>upstream</body></html>",
+		},
+		{
+			name:        "escaped trailing slash is matched after URL decoding",
+			requestURL:  "http://native.local/api/models%2F",
+			status:      http.StatusNoContent,
+			contentType: "application/json",
+		},
+		{
+			name:        "escaped index document is matched after URL decoding",
+			requestURL:  "http://native.local/api/models/%69ndex%2Ehtml",
+			status:      http.StatusNoContent,
+			contentType: "application/json",
+		},
+		{
+			name:        "traversal ending in index document must not fall back to HTML",
+			requestURL:  "http://native.local/api/models/%2e%2e/index.html",
+			status:      http.StatusNoContent,
+			contentType: "application/json",
+		},
+		{
+			name:        "canonical root index alias must not serve the embedded application",
+			requestURL:  "http://native.local/api/%2e%2e/index.html",
+			status:      http.StatusNoContent,
+			contentType: "application/json",
+		},
+		{
+			name:        "duplicate slash still triggers suffix matching",
+			requestURL:  "http://native.local/api/models//",
+			status:      http.StatusNoContent,
+			contentType: "application/json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var targetCalls atomic.Int32
+			var credentialCalls atomic.Int32
+			var roundTrips atomic.Int32
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				roundTrips.Add(1)
+				return &http.Response{
+					StatusCode: tt.status,
+					Header:     http.Header{"Content-Type": []string{tt.contentType}},
+					Body:       io.NopCloser(strings.NewReader(tt.body)),
+					Request:    request,
+				}, nil
+			})}
+			handler := New(
+				countingTarget{calls: &targetCalls, profile: configstore.Profile{BaseURL: "https://enterprise.example.com"}, ok: true},
+				countingCredentials{calls: &credentialCalls},
+				client,
+			)
+			server, err := wailsassetserver.NewAssetServer(
+				"",
+				wailsassetoptions.Options{
+					Assets:     fstest.MapFS{"index.html": {Data: []byte("<html><head></head><body>app</body></html>")}},
+					Handler:    handler,
+					Middleware: AssetDocumentGuard,
+				},
+				false,
+				nil,
+				testRuntimeAssets{},
+			)
+			if err != nil {
+				t.Fatalf("NewAssetServer() error = %v", err)
+			}
+
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, tt.requestURL, nil))
+
+			assertJSONError(t, response, http.StatusBadRequest)
+			if got := response.Body.String(); got != `{"error":"unsupported API path"}` {
+				t.Fatalf("body = %q", got)
+			}
+			if targetCalls.Load() != 0 || credentialCalls.Load() != 0 || roundTrips.Load() != 0 {
+				t.Fatalf("calls: target=%d credentials=%d upstream=%d", targetCalls.Load(), credentialCalls.Load(), roundTrips.Load())
+			}
+		})
+	}
+}
+
+func TestWailsAssetServerDoesNotRejectPathsItDoesNotInjectionMatch(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string
+		requestURL string
+	}{
+		{name: "query suffix is not part of URL path", method: http.MethodGet, requestURL: "http://native.local/api/models?next=/index.html"},
+		{name: "POST bypasses Wails GET injection handling", method: http.MethodPost, requestURL: "http://native.local/api/models/"},
+		{name: "HEAD bypasses Wails GET injection handling", method: http.MethodHead, requestURL: "http://native.local/api/models/"},
+		{name: "backslash remains a URL path character on every host OS", method: http.MethodGet, requestURL: "http://native.local/api/models%5C"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var roundTrips atomic.Int32
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				roundTrips.Add(1)
+				return &http.Response{
+					StatusCode: http.StatusNoContent,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader("")),
+					Request:    request,
+				}, nil
+			})}
+			handler := New(
+				staticTarget{profile: configstore.Profile{BaseURL: "https://enterprise.example.com"}, ok: true},
+				staticCredentials{},
+				client,
+			)
+			server, err := wailsassetserver.NewAssetServer(
+				"",
+				wailsassetoptions.Options{
+					Assets:     fstest.MapFS{"index.html": {Data: []byte("<html><head></head><body>app</body></html>")}},
+					Handler:    handler,
+					Middleware: AssetDocumentGuard,
+				},
+				false,
+				nil,
+				testRuntimeAssets{},
+			)
+			if err != nil {
+				t.Fatalf("NewAssetServer() error = %v", err)
+			}
+
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, httptest.NewRequest(tt.method, tt.requestURL, nil))
+
+			if response.Code != http.StatusNoContent {
+				t.Fatalf("response = %d %q", response.Code, response.Body.String())
+			}
+			if roundTrips.Load() != 1 {
+				t.Fatalf("upstream round trips = %d, want 1", roundTrips.Load())
+			}
+		})
 	}
 }
 

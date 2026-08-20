@@ -45,8 +45,9 @@ func buildOptions(app *App, assets fs.FS, handler http.Handler) *options.App {
 		BackgroundColour: options.NewRGB(24, 24, 27),
 		Logger:           newRedactingLogger(wailslogger.NewDefaultLogger()),
 		AssetServer: &assetserver.Options{
-			Assets:  assets,
-			Handler: handler,
+			Assets:     assets,
+			Handler:    handler,
+			Middleware: transport.AssetDocumentGuard,
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
