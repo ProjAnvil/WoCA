@@ -182,6 +182,64 @@ describe('native-aware preferences', () => {
     expect(preferences.readPreference('woca.pref.model')).toBe('updated-native-model')
   })
 
+  it('restores a missing theme to its typed default after rejection and reapplies it on retry', async () => {
+    let darkAttempts = 0
+    const setPreference = vi.fn<NativeAppBridge['SetPreference']>().mockImplementation(async (input) => {
+      if (input.key === 'woca-theme' && input.value === 'dark' && darkAttempts++ === 0) {
+        throw new Error('secret persistence detail')
+      }
+      return { revision: input.revision, applied: true }
+    })
+    const bridge = bridgeWithPreferences({
+      Preference: vi.fn(async (key: string) => ({
+        value: key === 'woca-theme' ? '' : storedNativePreferences[key] ?? '',
+        found: key !== 'woca-theme' && key in storedNativePreferences,
+      })),
+      SetPreference: setPreference,
+    })
+    vi.stubGlobal('go', { main: { App: bridge } })
+    const localGet = vi.spyOn(window.localStorage, 'getItem')
+    const localSet = vi.spyOn(window.localStorage, 'setItem')
+    const sessionGet = vi.spyOn(window.sessionStorage, 'getItem')
+    const sessionSet = vi.spyOn(window.sessionStorage, 'setItem')
+
+    const preferences = await import('./preferences')
+    await preferences.hydrateNativePreferences(bridge)
+    setActivePinia(createPinia())
+    const { useSettingsStore } = await import('../stores/settings')
+    const settings = useSettingsStore()
+
+    await nextTick()
+    expect(settings.isDark).toBe(false)
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
+    expect(preferences.readPreference('woca-theme')).toBeNull()
+    expect(setPreference).not.toHaveBeenCalled()
+
+    settings.isDark = true
+    await nextTick()
+    expect(settings.isDark).toBe(true)
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
+
+    await expect(preferences.drainPreferenceWrites()).rejects.toThrow('unable to persist native preferences')
+    await nextTick()
+    expect(settings.isDark).toBe(false)
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
+    expect(preferences.readPreference('woca-theme')).toBeNull()
+    expect(setPreference).toHaveBeenCalledTimes(1)
+
+    expect(preferences.retryFailedNativePreference('woca-theme')).toBe(true)
+    await nextTick()
+    expect(settings.isDark).toBe(true)
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
+    await preferences.drainPreferenceWrites()
+    expect(preferences.readPreference('woca-theme')).toBe('dark')
+    expect(setPreference).toHaveBeenCalledTimes(2)
+    expect(localGet).not.toHaveBeenCalled()
+    expect(localSet).not.toHaveBeenCalled()
+    expect(sessionGet).not.toHaveBeenCalled()
+    expect(sessionSet).not.toHaveBeenCalled()
+  })
+
   it('sends every write immediately and ignores an older failed completion', async () => {
     let failFirst!: () => void
     let finishSecond!: (result: PreferenceWriteResult) => void

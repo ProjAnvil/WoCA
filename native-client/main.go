@@ -27,6 +27,8 @@ func (e authorizationRequiredError) Error() string { return e.Code }
 
 type productionCredentials struct{}
 
+const singleInstanceUniqueID = "com.projanvil.woca.enterprise.native-client"
+
 func (productionCredentials) Credentials(context.Context, string, *url.URL) (transport.Credentials, error) {
 	return transport.Credentials{}, authorizationRequiredError{Code: "authorization_required"}
 }
@@ -46,6 +48,9 @@ func buildOptions(app *App, assets fs.FS, handler http.Handler) *options.App {
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
 		Bind:       []interface{}{app},
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: singleInstanceUniqueID,
+		},
 	}
 }
 

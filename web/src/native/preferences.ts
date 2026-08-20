@@ -70,11 +70,27 @@ export function readPreference(key: PreferenceKey): string | null {
 }
 
 export function usePreference<T>(key: PreferenceKey, defaults: T): RemovableRef<T> {
-  return useStorage(key, defaults, preferenceStorage())
+  const storage = preferenceStorage()
+  if (storage === nativeStorage) {
+    // Missing SQLite values stay absent until the user changes them. This also
+    // lets a failed first write reconcile to the typed default without VueUse
+    // immediately turning that reconciliation into another persistence call.
+    return useStorage(key, defaults, storage, { writeDefaults: false })
+  }
+  return useStorage(key, defaults, storage)
 }
 
 export function useThemePreference() {
-  return useDark({ storageKey: 'woca-theme', storage: preferenceStorage() })
+  const storage = preferenceStorage()
+  if (storage === nativeStorage) {
+    // useColorMode does not forward all UseStorageOptions, so provide the
+    // storage ref explicitly to keep a missing native value absent.
+    const storageRef = useStorage<'auto' | 'dark' | 'light'>('woca-theme', 'auto', storage, {
+      writeDefaults: false,
+    })
+    return useDark({ storageRef })
+  }
+  return useDark({ storageKey: 'woca-theme', storage })
 }
 
 export async function hydrateNativePreferences(bridge: NativeBridge): Promise<void> {
@@ -171,7 +187,7 @@ function failWrite(key: PreferenceKey, value: string, revision: number): void {
   const oldValue = state.desired
   state.desired = state.confirmed
   state.retryValue = value
-  if (state.confirmed !== null) notifyStorageChange(key, oldValue, state.confirmed)
+  notifyStorageChange(key, oldValue, state.confirmed)
 }
 
 function stateFor(key: PreferenceKey): PreferenceState {

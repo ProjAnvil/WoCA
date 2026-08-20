@@ -65,6 +65,28 @@ func TestBuildOptionsConfiguresWindowAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBuildOptionsUsesStableSingleInstanceLock(t *testing.T) {
+	first := buildOptions(&App{}, fstest.MapFS{}, http.NotFoundHandler())
+	second := buildOptions(&App{}, fstest.MapFS{}, http.NotFoundHandler())
+
+	if first.SingleInstanceLock == nil {
+		t.Fatal("SingleInstanceLock = nil")
+	}
+	if first.SingleInstanceLock.UniqueId == "" {
+		t.Fatal("SingleInstanceLock.UniqueId is empty")
+	}
+	const wantUniqueID = "com.projanvil.woca.enterprise.native-client"
+	if first.SingleInstanceLock.UniqueId != wantUniqueID {
+		t.Fatalf("SingleInstanceLock.UniqueId = %q, want stable ID %q", first.SingleInstanceLock.UniqueId, wantUniqueID)
+	}
+	if second.SingleInstanceLock == nil || second.SingleInstanceLock.UniqueId != first.SingleInstanceLock.UniqueId {
+		t.Fatalf("SingleInstanceLock is not stable: first=%#v second=%#v", first.SingleInstanceLock, second.SingleInstanceLock)
+	}
+	if first.SingleInstanceLock.OnSecondInstanceLaunch != nil {
+		t.Fatal("unexpected second-instance UI callback")
+	}
+}
+
 func TestProductionCredentialsFailClosed(t *testing.T) {
 	credentials, err := (productionCredentials{}).Credentials(
 		t.Context(),

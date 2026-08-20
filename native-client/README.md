@@ -41,6 +41,13 @@ later server-side milestone. OAuth access and refresh tokens must never enter
 the Vue application or be persisted by this native client. See the approved
 [native-client design](../docs/superpowers/specs/2026-08-20-woca-native-client-design.md).
 
+Wails 2.14's cross-platform single-instance lock prevents two desktop processes from
+issuing preference writes concurrently. Preference revisions are intentionally
+process-local: shutdown first stops admission and drains every accepted write,
+then closes SQLite and releases the process. A later instance can therefore
+start a fresh revision sequence without overlapping the prior sequence. The
+same reasoning holds after a crash because the prior process no longer runs.
+
 ## Loopback UI and transport development
 
 For local visual development, first build and run the personal Woca service:
