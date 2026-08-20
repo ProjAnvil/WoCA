@@ -22,9 +22,9 @@ func TestRemoteEngineAgainstLiveLadyM(t *testing.T) {
 		t.Skip("WOCA_LADYM_E2E_URL not set")
 	}
 	eng, err := BuildRemote(RemoteConfig{
-		Endpoint:  endpoint,
-		Username:  os.Getenv("WOCA_LADYM_E2E_USER"),
-		Password:  os.Getenv("WOCA_LADYM_E2E_PASS"),
+		Endpoint: endpoint,
+		Username: os.Getenv("WOCA_LADYM_E2E_USER"),
+		Password: os.Getenv("WOCA_LADYM_E2E_PASS"),
 	})
 	if err != nil {
 		t.Fatal(err)

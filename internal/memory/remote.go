@@ -90,11 +90,16 @@ func BuildRemote(cfg RemoteConfig) (*RemoteEngine, error) {
 }
 
 // workspaceKey maps a woca workspace into ladyM's one-dimensional workspace
-// key: woca:{tenant}:{user}:{workspace} (design §6.3.4). The org level does
-// not exist in woca yet. Without a tenancy context (local console paths) the
-// local machine identity is used — the key still namespaces by caller, so
-// cross-tenant reads cannot be assembled by omitting the context.
+// key: woca:{tenant}:{user}:{workspace} (design §6.3.4). A workspace that
+// already carries the woca: encoding (migration imports targeting an exact
+// enterprise key) passes through unchanged. Without a tenancy context
+// (local console paths) the local machine identity is used — the key still
+// namespaces by caller, so cross-tenant reads cannot be assembled by
+// omitting the context.
 func workspaceKey(ctx context.Context, workspace string) string {
+	if strings.HasPrefix(workspace, "woca:") {
+		return workspace
+	}
 	tenant, user := "local", ""
 	if tc, ok := tenancy.FromContext(ctx); ok {
 		if tc.TenantID != "" {
