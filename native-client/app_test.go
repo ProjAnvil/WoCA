@@ -61,3 +61,15 @@ func TestAppDelegatesWithStartupContext(t *testing.T) {
 		t.Fatalf("Connect input = %#v, want %#v", service.connectInput, input)
 	}
 }
+
+func TestAppShutdownRunsCleanupOnce(t *testing.T) {
+	cleanupCalls := 0
+	app := newAppWithShutdown(nil, func() { cleanupCalls++ })
+
+	app.shutdown(t.Context())
+	app.shutdown(t.Context())
+
+	if cleanupCalls != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", cleanupCalls)
+	}
+}

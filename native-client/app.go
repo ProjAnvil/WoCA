@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/projanvil/woca/native-client/internal/bridge"
 )
@@ -16,16 +17,30 @@ type bridgeAPI interface {
 }
 
 type App struct {
-	ctx    context.Context
-	bridge bridgeAPI
+	ctx          context.Context
+	bridge       bridgeAPI
+	onShutdown   func()
+	shutdownOnce sync.Once
 }
 
 func NewApp(service bridgeAPI) *App {
-	return &App{bridge: service}
+	return newAppWithShutdown(service, nil)
+}
+
+func newAppWithShutdown(service bridgeAPI, onShutdown func()) *App {
+	return &App{bridge: service, onShutdown: onShutdown}
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+}
+
+func (a *App) shutdown(context.Context) {
+	a.shutdownOnce.Do(func() {
+		if a.onShutdown != nil {
+			a.onShutdown()
+		}
+	})
 }
 
 func (a *App) Bootstrap() (bridge.BootstrapState, error) {

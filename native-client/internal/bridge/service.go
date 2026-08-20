@@ -5,6 +5,8 @@ package bridge
 import (
 	"context"
 	"errors"
+	"net"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -112,6 +114,26 @@ func (s *Service) Logout(ctx context.Context) (BootstrapState, error) {
 	return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, nil
 }
 
+// ApplyDevelopmentOverride enables the unauthenticated development transport
+// only for a strict loopback HTTP origin. It deliberately has no API-key or
+// credential parameter, so development configuration cannot reinterpret a
+// bootstrap key as a session.
+func (s *Service) ApplyDevelopmentOverride(ctx context.Context, rawURL string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || !isLoopbackHTTPOrigin(parsed) {
+		return "", errors.New("development server URL must be a loopback HTTP origin")
+	}
+	if s.store == nil {
+		return "", errors.New("connection profile store is required")
+	}
+	profile, err := s.store.SaveProfile(ctx, rawURL)
+	if err != nil {
+		return "", err
+	}
+	s.markReady(profile.BaseURL)
+	return profile.BaseURL, nil
+}
+
 func (s *Service) activeProfile(ctx context.Context) (configstore.Profile, bool, error) {
 	if s.store == nil {
 		return configstore.Profile{}, false, errors.New("connection profile store is required")
@@ -135,4 +157,19 @@ func (s *Service) clearReady() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.readyBaseURL = ""
+}
+
+func isLoopbackHTTPOrigin(parsed *url.URL) bool {
+	if parsed == nil || !strings.EqualFold(parsed.Scheme, "http") || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	if parsed.Path != "" && parsed.Path != "/" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" {
+		return false
+	}
+	host := parsed.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

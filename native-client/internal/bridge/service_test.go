@@ -205,6 +205,48 @@ func TestConnectRejectsBlankAPIKeyBeforeSavingProfile(t *testing.T) {
 	}
 }
 
+func TestApplyDevelopmentOverridePersistsLoopbackAndMarksReady(t *testing.T) {
+	store := openTestStore(t)
+	service := NewService(store, nil)
+
+	baseURL, err := service.ApplyDevelopmentOverride(t.Context(), "http://LOCALHOST:9090/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseURL != "http://localhost:9090" {
+		t.Fatalf("ApplyDevelopmentOverride() base URL = %q", baseURL)
+	}
+
+	state, err := service.Bootstrap(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != StateReady || state.ServerURL != "http://localhost:9090" {
+		t.Fatalf("Bootstrap() = %#v, want ready loopback profile", state)
+	}
+}
+
+func TestApplyDevelopmentOverrideRejectsUnsafeTargetBeforeSaving(t *testing.T) {
+	tests := []string{
+		"http://enterprise.example.com",
+		"https://localhost:9090",
+		"http://localhost:9090/app",
+	}
+	for _, rawURL := range tests {
+		t.Run(rawURL, func(t *testing.T) {
+			store := openTestStore(t)
+			service := NewService(store, nil)
+
+			if _, err := service.ApplyDevelopmentOverride(t.Context(), rawURL); err == nil {
+				t.Fatal("ApplyDevelopmentOverride() error = nil")
+			}
+			if _, ok, err := store.ActiveProfile(t.Context()); err != nil || ok {
+				t.Fatalf("ActiveProfile() ok = %v, err = %v", ok, err)
+			}
+		})
+	}
+}
+
 func openTestStore(t *testing.T) *configstore.Store {
 	t.Helper()
 	store, err := configstore.Open(filepath.Join(t.TempDir(), "client.db"))
