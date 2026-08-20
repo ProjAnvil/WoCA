@@ -16,6 +16,7 @@ import (
 	"github.com/projanvil/woca/native-client/internal/configstore"
 	"github.com/projanvil/woca/native-client/internal/transport"
 	"github.com/wailsapp/wails/v2"
+	wailslogger "github.com/wailsapp/wails/v2/pkg/logger"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
@@ -42,6 +43,7 @@ func buildOptions(app *App, assets fs.FS, handler http.Handler) *options.App {
 		MinWidth:         1024,
 		MinHeight:        640,
 		BackgroundColour: options.NewRGB(24, 24, 27),
+		Logger:           newRedactingLogger(wailslogger.NewDefaultLogger()),
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
 			Handler: handler,

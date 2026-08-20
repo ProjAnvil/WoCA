@@ -41,6 +41,12 @@ later server-side milestone. OAuth access and refresh tokens must never enter
 the Vue application or be persisted by this native client. See the approved
 [native-client design](../docs/superpowers/specs/2026-08-20-woca-native-client-design.md).
 
+Wails dispatcher failures may contain the complete bound-call IPC arguments.
+The application installs a logger boundary that replaces every named or
+obfuscated call/secure-call dispatcher failure with one constant message before
+delegating it. This prevents an argument parsing error or panic from logging an
+ephemeral API key, enterprise URL, raw argument payload, or error detail.
+
 Wails 2.14's single-instance lock is a best-effort desktop UX guard, not a data
 integrity mutex. SQLite is the preference-ordering authority. Schema version 2
 maintains a persistent epoch counter and records the applied `(epoch, revision)`

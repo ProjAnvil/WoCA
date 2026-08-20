@@ -66,6 +66,16 @@ func TestBuildOptionsConfiguresWindowAndLifecycle(t *testing.T) {
 	}
 }
 
+func TestBuildOptionsUsesRedactingWailsLogger(t *testing.T) {
+	opts := buildOptions(&App{}, fstest.MapFS{}, http.NotFoundHandler())
+	if opts.Logger == nil {
+		t.Fatal("Logger = nil")
+	}
+	if _, ok := opts.Logger.(*redactingLogger); !ok {
+		t.Fatalf("Logger = %T, want redacting logger", opts.Logger)
+	}
+}
+
 func TestBuildOptionsUsesStableSingleInstanceLock(t *testing.T) {
 	first := buildOptions(&App{}, fstest.MapFS{}, http.NotFoundHandler())
 	second := buildOptions(&App{}, fstest.MapFS{}, http.NotFoundHandler())
