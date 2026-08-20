@@ -8,6 +8,9 @@
       // Apply the saved/system theme before first paint to avoid a flash.
       ;(function () {
         try {
+          // Wails preferences hydrate through the Go bridge and SQLite. Never
+          // touch Web Storage in the native WebView.
+          if (window.go && window.go.main && window.go.main.App) return
           var saved = localStorage.getItem('woca-theme')
           var dark = saved
             ? saved === 'dark'
@@ -16,7 +19,7 @@
         } catch (e) {}
       })()
     </script>
-    <script type="module" crossorigin src="/assets/index-Dl5x3mxV.js"></script>
+    <script type="module" crossorigin src="/assets/index-CLh52b4B.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-CdRpD1g0.css">
   </head>
   <body>
