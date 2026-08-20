@@ -32,6 +32,7 @@ type NativeSession struct {
 	TenantID        string `json:"tenant_id"`
 	UserID          string `json:"user_id"`
 	DeviceID        string `json:"device_id"`
+	Role            string `json:"role"`
 	DPoPThumbprint  string `json:"dpop_thumbprint"`
 	ExpiresAt       int64  `json:"expires_at"`
 	CreatedAt       int64  `json:"created_at"`
@@ -48,6 +49,7 @@ func (s *Store) migrateNativeSessions(ts string) error {
 		user_id TEXT NOT NULL REFERENCES users(id),
 		id_hash TEXT NOT NULL,
 		device_id TEXT NOT NULL,
+		role TEXT NOT NULL,
 		dpop_thumbprint TEXT NOT NULL,
 		expires_at ` + ts + ` NOT NULL,
 		created_at ` + ts + ` NOT NULL,
@@ -63,7 +65,7 @@ func (s *Store) migrateNativeSessions(ts string) error {
 // IssueSession generates and stores a native session for a user, pinning the
 // device id and DPoP JWK thumbprint. The full session id (the DPoP access
 // token) is returned exactly once; only its SHA-256 hash is persisted.
-func (s *Store) IssueSession(_ context.Context, tenantID, userID, deviceID, thumbprint string, ttl time.Duration) (NativeSession, string, error) {
+func (s *Store) IssueSession(_ context.Context, tenantID, userID, deviceID, thumbprint, role string, ttl time.Duration) (NativeSession, string, error) {
 	if deviceID == "" || thumbprint == "" {
 		return NativeSession{}, "", errors.New("tenant: issue session: device id and DPoP thumbprint are required")
 	}
@@ -93,14 +95,15 @@ func (s *Store) IssueSession(_ context.Context, tenantID, userID, deviceID, thum
 			TenantID:       tenantID,
 			UserID:         userID,
 			DeviceID:       deviceID,
+			Role:           role,
 			DPoPThumbprint: thumbprint,
 			ExpiresAt:      now + ttl.Milliseconds(),
 			CreatedAt:      now,
 		}
 		_, err = s.db.Exec(
-			`INSERT INTO native_sessions (prefix, tenant_id, user_id, id_hash, device_id, dpop_thumbprint, expires_at, created_at, last_validated_at, revoked_at)
-			 VALUES (`+s.ph(0)+`, `+s.ph(1)+`, `+s.ph(2)+`, `+s.ph(3)+`, `+s.ph(4)+`, `+s.ph(5)+`, `+s.ph(6)+`, `+s.ph(7)+`, 0, NULL)`,
-			sess.Prefix, sess.TenantID, sess.UserID, hashKey(full), sess.DeviceID, sess.DPoPThumbprint, sess.ExpiresAt, sess.CreatedAt)
+			`INSERT INTO native_sessions (prefix, tenant_id, user_id, id_hash, device_id, role, dpop_thumbprint, expires_at, created_at, last_validated_at, revoked_at)
+			 VALUES (`+s.ph(0)+`, `+s.ph(1)+`, `+s.ph(2)+`, `+s.ph(3)+`, `+s.ph(4)+`, `+s.ph(5)+`, `+s.ph(6)+`, `+s.ph(7)+`, `+s.ph(8)+`, 0, NULL)`,
+			sess.Prefix, sess.TenantID, sess.UserID, hashKey(full), sess.DeviceID, sess.Role, sess.DPoPThumbprint, sess.ExpiresAt, sess.CreatedAt)
 		if err != nil {
 			if isUniqueViolation(err) && attempt < 4 {
 				continue
@@ -130,9 +133,9 @@ func (s *Store) LookupSession(_ context.Context, full string) (NativeSession, bo
 		revoked sql.NullInt64
 	)
 	err := s.db.QueryRow(
-		`SELECT prefix, tenant_id, user_id, device_id, dpop_thumbprint, expires_at, created_at, last_validated_at, revoked_at, id_hash
+		`SELECT prefix, tenant_id, user_id, device_id, role, dpop_thumbprint, expires_at, created_at, last_validated_at, revoked_at, id_hash
 		 FROM native_sessions WHERE prefix = `+s.ph(0), parts[1]).
-		Scan(&sess.Prefix, &sess.TenantID, &sess.UserID, &sess.DeviceID, &sess.DPoPThumbprint,
+		Scan(&sess.Prefix, &sess.TenantID, &sess.UserID, &sess.DeviceID, &sess.Role, &sess.DPoPThumbprint,
 			&sess.ExpiresAt, &sess.CreatedAt, &sess.LastValidatedAt, &revoked, &idHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		hashKey(full)

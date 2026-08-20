@@ -293,3 +293,22 @@ func (c *replayCache) add(jti string, now time.Time) bool {
 }
 
 func newBig(b []byte) *big.Int { return new(big.Int).SetBytes(b) }
+
+// ParseJWKThumbprint validates a public EC P-256 JWK (as sent by the native
+// client at activation) and returns its RFC 7638 thumbprint. A JWK carrying
+// private key material ("d") is rejected: activation must pin a public key
+// only.
+func ParseJWKThumbprint(jwkJSON []byte) (string, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(jwkJSON, &raw); err != nil {
+		return "", ErrInvalidProof
+	}
+	if _, hasD := raw["d"]; hasD {
+		return "", ErrInvalidProof
+	}
+	var k jwk
+	if err := json.Unmarshal(jwkJSON, &k); err != nil {
+		return "", ErrInvalidProof
+	}
+	return thumbprintOfJWK(k)
+}

@@ -23,31 +23,81 @@ import (
 // (design doc §11.3, red line 1).
 const healthPath = "/api/health"
 
+// activatePath is the native-client credential exchange: like an OAuth token
+// endpoint it bootstraps authentication (the API key travels once in the
+// body), so it cannot itself require a credential. The handler performs the
+// key validation and rate-limits attempts.
+const activatePath = "/api/native/activate"
+
+// nativePrefix is the native-client credential surface. It carries no host
+// data, so RequireLocalTenant does not apply to it; the non-activate routes
+// still require a DPoP-authenticated session.
+const nativePrefix = "/api/native/"
+
+// SessionAuthenticator authenticates a request whose Authorization header
+// uses the DPoP scheme (RFC 6750 extension, RFC 9449): the access token
+// alone is not sufficient — the DPoP proof header must bind it to this
+// request. Implemented by tenant.SessionProvider.
+type SessionAuthenticator interface {
+	AuthenticateRequest(r *http.Request, accessToken string) (tenancy.Context, error)
+}
+
 // Authenticate returns middleware that authenticates every /api request
-// (except the health probe) via p and injects the resulting tenancy context
-// into the request context. Non-API paths (the embedded SPA and its assets)
-// pass through untouched: they carry no tenant data.
+// (except the health probe and the activation exchange) and injects the
+// resulting tenancy context into the request context. Non-API paths (the
+// embedded SPA and its assets) pass through untouched: they carry no tenant
+// data.
 //
 // Requests with a missing, malformed, or rejected credential get 401. A
 // credential is read from the Authorization header using the Bearer scheme
-// (RFC 6750); the scheme prefix is matched case-insensitively.
-func Authenticate(p authn.Provider) func(http.Handler) http.Handler {
+// (RFC 6750, matched case-insensitively), or the DPoP scheme when a session
+// authenticator is installed. Any other scheme is rejected rather than
+// falling back to anonymous, so misconfigured clients fail loudly.
+func Authenticate(p authn.Provider, sessions ...SessionAuthenticator) func(http.Handler) http.Handler {
+	var session SessionAuthenticator
+	if len(sessions) > 0 {
+		session = sessions[0]
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != healthPath && strings.HasPrefix(r.URL.Path, "/api/") {
+			if isAPIPath(r.URL.Path) && r.URL.Path != healthPath && r.URL.Path != activatePath {
 				credential := ""
 				if h := r.Header.Get("Authorization"); h != "" {
-					if len(h) >= 7 && strings.EqualFold(h[:7], "bearer ") {
+					switch {
+					case len(h) >= 7 && strings.EqualFold(h[:7], "bearer "):
 						credential = strings.TrimSpace(h[7:])
-					} else {
-						// Present but not a Bearer credential: reject rather
-						// than fall back to anonymous, so misconfigured
-						// clients fail loudly.
+					case len(h) >= 5 && strings.EqualFold(h[:5], "dpop "):
+						if session == nil {
+							writeError(w, http.StatusUnauthorized, "unauthorized: unsupported authorization scheme")
+							return
+						}
+						token := strings.TrimSpace(h[5:])
+						tc, err := session.AuthenticateRequest(r, token)
+						if err != nil {
+							w.Header().Set("WWW-Authenticate", "DPoP")
+							writeError(w, http.StatusUnauthorized, "unauthorized")
+							return
+						}
+						r = r.WithContext(tenancy.NewContext(r.Context(), tc))
+						next.ServeHTTP(w, r)
+						return
+					default:
+						// Present but not a supported credential scheme:
+						// reject rather than fall back to anonymous, so
+						// misconfigured clients fail loudly.
 						writeError(w, http.StatusUnauthorized, "unauthorized: unsupported authorization scheme")
 						return
 					}
 				}
-				tc, err := p.Authenticate(r.Context(), credential)
+				var tc tenancy.Context
+				var err error
+				if session != nil && credential == "" && r.Header.Get("DPoP") != "" {
+					// A DPoP proof without an Authorization token cannot
+					// authenticate.
+					writeError(w, http.StatusUnauthorized, "unauthorized")
+					return
+				}
+				tc, err = p.Authenticate(r.Context(), credential)
 				if err != nil {
 					w.Header().Set("WWW-Authenticate", "Bearer")
 					writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -59,6 +109,8 @@ func Authenticate(p authn.Provider) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+func isAPIPath(p string) bool { return strings.HasPrefix(p, "/api/") }
 
 // RequireScope returns middleware that enforces scope via a before the
 // handler runs. It must be installed after Authenticate; requests without an
@@ -89,11 +141,12 @@ func RequireScope(a authz.Authorizer, scope string) func(http.Handler) http.Hand
 // must not reach any of it, so this middleware denies every non-local
 // tenant on /api (except the health probe). It wraps the same mux for every
 // deployment form; the personal edition authenticates as the local tenant
-// and never trips it.
+// and never trips it. The /api/native credential surface is exempt: it is
+// the enterprise client's own session lifecycle, not a host surface.
 func RequireLocalTenant() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == healthPath || !strings.HasPrefix(r.URL.Path, "/api/") {
+			if r.URL.Path == healthPath || !isAPIPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, nativePrefix) {
 				next.ServeHTTP(w, r)
 				return
 			}

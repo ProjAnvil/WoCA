@@ -185,8 +185,14 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 	defer ap.PluginMgr.Close()
 	defer ap.Agent.Close()
 
+	var native *server.NativeAuth
 	if authMode != "" && authMode != "local" {
 		authProv, err = newAPIKeyProvider(ap.Settings)
+		if err != nil {
+			_ = hs.Close()
+			return err
+		}
+		native, err = newNativeAuth(ap.Settings, authProv)
 		if err != nil {
 			_ = hs.Close()
 			return err
@@ -199,6 +205,7 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 	}
 	srv := server.New(server.Config{
 		Auth:         authProv,
+		NativeAuth:   native,
 		Agent:        ap.Agent,
 		Static:       webdist.DistFS(),
 		Logger:       log,
@@ -253,6 +260,19 @@ func newAPIKeyProvider(st *settings.Store) (authn.Provider, error) {
 		return nil, fmt.Errorf("api-key auth: %w", err)
 	}
 	return tenant.NewAPIKeyProvider(ts), nil
+}
+
+// newNativeAuth builds the native-client credential surface over the same
+// tenant store as the API-key provider.
+func newNativeAuth(st *settings.Store, keys authn.Provider) (*server.NativeAuth, error) {
+	if st == nil {
+		return nil, fmt.Errorf("native auth requires a settings database")
+	}
+	ts, err := tenant.NewStore(st.DB())
+	if err != nil {
+		return nil, fmt.Errorf("native auth: %w", err)
+	}
+	return server.NewNativeAuth(ts, keys), nil
 }
 
 // startingHandler serves the window between the port bind and the agent

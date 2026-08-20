@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projanvil/woca/internal/platform/authz"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -15,7 +16,7 @@ func TestIssueSessionReturnsFullIDOnce(t *testing.T) {
 	ctx := context.Background()
 	tenantID, userID := seedSessionTenant(t, st)
 
-	sess, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "thumbprint-1", time.Hour)
+	sess, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "thumbprint-1", authz.RoleMember, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +47,7 @@ func TestLookupSessionRejectsWrongSecretAndMalformed(t *testing.T) {
 	ctx := context.Background()
 	tenantID, userID := seedSessionTenant(t, st)
 
-	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", time.Hour)
+	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", authz.RoleMember, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,9 +56,9 @@ func TestLookupSessionRejectsWrongSecretAndMalformed(t *testing.T) {
 		"",
 		"wsess_" + strings.Repeat("0", 12) + "_" + strings.Repeat("0", 48),
 		"Bearer abc",
-		full[:len(full)-1],            // truncated secret
-		"wsess_" + full,               // double prefix
-		strings.ToUpper(full),         // non-hex (uppercase is rejected)
+		full[:len(full)-1],    // truncated secret
+		"wsess_" + full,       // double prefix
+		strings.ToUpper(full), // non-hex (uppercase is rejected)
 	} {
 		if _, ok, err := st.LookupSession(ctx, bad); ok || err != nil {
 			t.Fatalf("LookupSession(%q) = ok=%v err=%v, want ok=false err=nil", bad, ok, err)
@@ -70,7 +71,7 @@ func TestLookupSessionRejectsExpiredSession(t *testing.T) {
 	ctx := context.Background()
 	tenantID, userID := seedSessionTenant(t, st)
 
-	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", -time.Minute)
+	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", authz.RoleMember, -time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func TestRevokeSessionDisablesLookup(t *testing.T) {
 	ctx := context.Background()
 	tenantID, userID := seedSessionTenant(t, st)
 
-	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", time.Hour)
+	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", authz.RoleMember, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +106,7 @@ func TestTouchSessionUpdatesLastValidated(t *testing.T) {
 	ctx := context.Background()
 	tenantID, userID := seedSessionTenant(t, st)
 
-	sess, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", time.Hour)
+	sess, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", authz.RoleMember, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,14 +139,14 @@ func TestSessionSecretNeverPersisted(t *testing.T) {
 	ctx := context.Background()
 	tenantID, userID := seedSessionTenant(t, st)
 
-	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", time.Hour)
+	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", authz.RoleMember, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
 	secret := strings.SplitN(full, "_", 3)[2]
 	var count int
 	if err := db.DB.QueryRow(
-		`SELECT COUNT(*) FROM native_sessions WHERE id_hash LIKE ` + st.ph(0) + ` OR device_id LIKE ` + st.ph(1),
+		`SELECT COUNT(*) FROM native_sessions WHERE id_hash LIKE `+st.ph(0)+` OR device_id LIKE `+st.ph(1),
 		"%"+secret+"%", "%"+secret+"%").Scan(&count); err != nil {
 		t.Fatal(err)
 	}

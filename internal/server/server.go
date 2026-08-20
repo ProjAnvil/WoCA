@@ -29,12 +29,14 @@ import (
 	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/platform/authz"
+	"github.com/projanvil/woca/internal/platform/dpop"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/quota"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
+	"github.com/projanvil/woca/internal/tenant"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -48,6 +50,9 @@ type Config struct {
 	// Authz authorizes /api requests against per-route scopes. Nil uses the
 	// local scope-set authorizer.
 	Authz authz.Authorizer
+	// NativeAuth enables the native-client credential surface
+	// (/api/native/*). Nil disables it (personal edition).
+	NativeAuth *NativeAuth
 	// Agent is the coding agent that runs each conversation turn.
 	Agent *agent.Agent
 	// Static is the frontend filesystem (embedded or os.DirFS for development).
@@ -109,11 +114,12 @@ type Config struct {
 
 // Server serves the woca web UI and its HTTP API.
 type Server struct {
-	agent  *agent.Agent
-	static fs.FS
-	log    zerolog.Logger
-	auth   authn.Provider
-	authz  authz.Authorizer
+	agent      *agent.Agent
+	static     fs.FS
+	log        zerolog.Logger
+	auth       authn.Provider
+	authz      authz.Authorizer
+	nativeAuth *NativeAuth
 
 	mu             sync.Mutex
 	runs           map[string]*Run
@@ -181,6 +187,7 @@ func New(cfg Config) *Server {
 		log:            cfg.Logger,
 		auth:           auth,
 		authz:          authorizer,
+		nativeAuth:     cfg.NativeAuth,
 		runs:           map[string]*Run{},
 		sessions:       store,
 		admission:      newAdmission(),
@@ -235,6 +242,9 @@ func New(cfg Config) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	if s.nativeAuth != nil {
+		s.registerNativeAuth(mux)
+	}
 	s.route(mux, "POST /api/runs", authz.ScopeRunsWrite, s.handleCreateRun)
 	s.route(mux, "GET /api/runs/{id}/events", authz.ScopeRunsRead, s.handleEvents)
 	s.route(mux, "POST /api/runs/{id}/answer", authz.ScopeRunsWrite, s.handleAnswer)
@@ -269,6 +279,11 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/memory", authz.ScopeMemoryWrite, s.handleRememberMemory)
 	s.route(mux, "DELETE /api/memory/{id}", authz.ScopeMemoryWrite, s.handleForgetMemory)
 	mux.Handle("/", s.staticHandler())
+	if s.nativeAuth != nil {
+		return gateway.Authenticate(s.auth, tenant.NewSessionProvider(s.nativeAuth.tenantStore(), dpop.NewVerifier()))(
+			gateway.RequireLocalTenant()(mux),
+		)
+	}
 	return gateway.Authenticate(s.auth)(
 		gateway.RequireLocalTenant()(mux),
 	)
