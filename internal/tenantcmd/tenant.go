@@ -1,4 +1,4 @@
-package main
+package tenantcmd
 
 import (
 	"fmt"
@@ -17,7 +17,8 @@ import (
 // settings database (sqlite path or postgres DSN, resolved from --db /
 // WOCA_DB like every woca command). Keys are shown exactly once at issue
 // time; only their SHA-256 hash is stored.
-func newTenantCmd() *cobra.Command {
+// New returns the tenant administration command group.
+func New() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "tenant",
 		Short: "Manage tenants and API keys (platform edition)",
@@ -173,9 +174,9 @@ func newTenantCmd() *cobra.Command {
 	return cmd
 }
 
-// openTenantStore opens the tenant store over target for tests in this
-// package (the CLI's own helper is a closure).
-func openTenantStore(target string) (*tenant.Store, func(), error) {
+// OpenTenantStore opens the tenant store over target (shared with the
+// tests and other entry points).
+func OpenTenantStore(target string) (*tenant.Store, func(), error) {
 	db, err := wocadb.Open(target)
 	if err != nil {
 		return nil, nil, err

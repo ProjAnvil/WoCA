@@ -98,3 +98,23 @@ ent-ps:
 
 ent-logs:
 	$(ENT_COMPOSE) logs -f
+
+# Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
+SERVER_ARTIFACTS := woca-server woca-tenant
+
+.PHONY: build-server check-server-artifacts
+build-server:
+	@for a in $(SERVER_ARTIFACTS); do \
+		go build -o build/$$a ./cmd/$$a || exit 1; \
+	done
+	@echo "server artifacts: $(SERVER_ARTIFACTS)"
+
+# Dependency hygiene: server artifacts must not link the interactive
+# surfaces (TUI, REPL) or the one-shot CLI's root command wiring.
+check-server-artifacts: build-server
+	@for a in $(SERVER_ARTIFACTS); do \
+		if go list -deps ./cmd/$$a | grep -qE 'internal/(tui|repl)'; then \
+			echo "$$a links interactive surfaces"; exit 1; \
+		fi; \
+	done
+	@echo "server artifacts pass dependency hygiene"

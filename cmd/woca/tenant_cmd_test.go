@@ -3,6 +3,8 @@ package main
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/projanvil/woca/internal/tenantcmd"
 )
 
 func tenantDB(t *testing.T) string {
@@ -40,7 +42,7 @@ func TestTenantIssueAndListKeys(t *testing.T) {
 	}
 	// Resolve the created tenant id from the shared store (the CLI prints it
 	// to stdout; going through the store keeps the test hermetic).
-	st, closeDB, err := openTenantStore(db)
+	st, closeDB, err := tenantcmd.OpenTenantStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-package main
+package memcmd
 
 import (
 	"fmt"
@@ -12,7 +12,8 @@ import (
 // personal→enterprise memory migration path (design §6.3.8). Export reads
 // the embedded personal engine; import writes through the remote ladyM
 // enterprise client.
-func newMemoryMigrateCmd() *cobra.Command {
+// New returns the memory migration command group.
+func New() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "memory",
 		Short: "Migrate factual memories between engines (personal ↔ enterprise)",

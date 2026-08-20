@@ -40,6 +40,7 @@ import (
 	"github.com/projanvil/woca/internal/console"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/mcp"
+	"github.com/projanvil/woca/internal/memcmd"
 	"github.com/projanvil/woca/internal/oauth"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/plugins"
@@ -50,6 +51,7 @@ import (
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/tenantcmd"
 	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/tui"
 	"github.com/projanvil/woca/internal/webgui"
@@ -120,8 +122,8 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newPluginCmd())
 	root.AddCommand(newMcpAuthCmd())
-	root.AddCommand(newTenantCmd())
-	root.AddCommand(newMemoryMigrateCmd())
+	root.AddCommand(tenantcmd.New())
+	root.AddCommand(memcmd.New())
 	root.AddCommand(servefront.NewWebCmd())
 	return root
 }
