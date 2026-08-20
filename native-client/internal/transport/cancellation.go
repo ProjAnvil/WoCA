@@ -47,13 +47,13 @@ func (r *CancellationRegistry) register(parent context.Context, id string) (cont
 		return rejectedRegistration(parent)
 	}
 
-	now := r.currentTime()
 	r.mu.Lock()
-	r.pruneExpiredLocked(now)
 	if r.closed {
 		r.mu.Unlock()
 		return rejectedRegistration(parent)
 	}
+	now := r.currentTime()
+	r.pruneExpiredLocked(now)
 	if r.overflowUntil.After(now) {
 		r.mu.Unlock()
 		return rejectedRegistration(parent)
@@ -92,9 +92,7 @@ func (r *CancellationRegistry) Cancel(id string) bool {
 	if r == nil || !validRequestID(id) {
 		return false
 	}
-	now := r.currentTime()
 	r.mu.Lock()
-	r.pruneExpiredLocked(now)
 	if r.closed {
 		r.mu.Unlock()
 		return false
@@ -104,23 +102,34 @@ func (r *CancellationRegistry) Cancel(id string) bool {
 		registration.cancel()
 		return true
 	}
+	now := r.currentTime()
+	r.pruneExpiredLocked(now)
+	expiresAt := now.Add(pendingCancellationTTL)
 	if r.overflowUntil.After(now) {
+		r.overflowUntil = laterDeadline(r.overflowUntil, expiresAt)
 		r.mu.Unlock()
 		return true
 	}
-	if _, exists := r.pending[id]; exists {
-		r.pending[id] = now.Add(pendingCancellationTTL)
+	if pendingUntil, exists := r.pending[id]; exists {
+		r.pending[id] = laterDeadline(pendingUntil, expiresAt)
 		r.mu.Unlock()
 		return true
 	}
 	if len(r.pending) >= maxPendingCancellations {
-		r.overflowUntil = now.Add(pendingCancellationTTL)
+		r.overflowUntil = laterDeadline(r.overflowUntil, expiresAt)
 		r.mu.Unlock()
 		return true
 	}
-	r.pending[id] = now.Add(pendingCancellationTTL)
+	r.pending[id] = expiresAt
 	r.mu.Unlock()
 	return true
+}
+
+func laterDeadline(current, candidate time.Time) time.Time {
+	if candidate.After(current) {
+		return candidate
+	}
+	return current
 }
 
 func (r *CancellationRegistry) CancelAll() {

@@ -293,7 +293,9 @@ func TestHandlerRejectsInvalidAndDuplicateNativeRequestIDsBeforeLookup(t *testin
 }
 
 func TestHandlerRejectsAllNativeRequestIDsDuringCancellationOverflowBeforeLookup(t *testing.T) {
-	registry := NewCancellationRegistry()
+	start := time.Unix(1_700_000_000, 0)
+	now := start
+	registry := newCancellationRegistryWithClock(func() time.Time { return now })
 	for index := 0; index < maxPendingCancellations; index++ {
 		if !registry.Cancel(indexedRequestID(index)) {
 			t.Fatalf("Cancel() rejected pending ID %d", index)
@@ -302,6 +304,11 @@ func TestHandlerRejectsAllNativeRequestIDsDuringCancellationOverflowBeforeLookup
 	if !registry.Cancel(requestID("J")) {
 		t.Fatal("Cancel() did not enter fail-closed overflow state")
 	}
+	now = start.Add(pendingCancellationTTL - time.Nanosecond)
+	if !registry.Cancel(requestID("K")) {
+		t.Fatal("Cancel() rejected the last valid overflow cancellation")
+	}
+	now = start.Add(pendingCancellationTTL + time.Nanosecond)
 	var targetCalls atomic.Int32
 	var credentialCalls atomic.Int32
 	var roundTrips atomic.Int32
@@ -314,7 +321,7 @@ func TestHandlerRejectsAllNativeRequestIDsDuringCancellationOverflowBeforeLookup
 		})},
 		registry,
 	)
-	for _, id := range []string{indexedRequestID(0), requestID("J"), requestID("K")} {
+	for _, id := range []string{indexedRequestID(0), requestID("J"), requestID("K"), requestID("Q")} {
 		request := httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil)
 		request.Header.Set(RequestIDHeader, id)
 		response := httptest.NewRecorder()

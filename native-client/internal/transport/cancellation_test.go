@@ -92,7 +92,8 @@ func TestCancellationRegistryUnregisterIsGenerationSafe(t *testing.T) {
 }
 
 func TestCancellationRegistryOverflowFailsClosedAndRecovers(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
+	start := time.Unix(1_700_000_000, 0)
+	now := start
 	registry := newCancellationRegistryWithClock(func() time.Time { return now })
 	for i := 0; i < maxPendingCancellations; i++ {
 		id := indexedRequestID(i)
@@ -103,6 +104,12 @@ func TestCancellationRegistryOverflowFailsClosedAndRecovers(t *testing.T) {
 	if !registry.Cancel(requestID("D")) {
 		t.Fatal("Cancel() did not enter fail-closed overflow state")
 	}
+	lastCancel := start.Add(pendingCancellationTTL - time.Nanosecond)
+	now = lastCancel
+	if !registry.Cancel(requestID("E")) {
+		t.Fatal("Cancel() rejected a valid ID during overflow")
+	}
+	now = start.Add(pendingCancellationTTL + time.Nanosecond)
 	for _, id := range []string{indexedRequestID(0), requestID("D"), requestID("E")} {
 		ctx, unregister, ok := registry.register(context.Background(), id)
 		unregister()
@@ -116,8 +123,20 @@ func TestCancellationRegistryOverflowFailsClosedAndRecovers(t *testing.T) {
 		}
 	}
 
-	now = now.Add(pendingCancellationTTL + time.Nanosecond)
+	now = lastCancel.Add(pendingCancellationTTL - time.Nanosecond)
 	ctx, unregister, ok := registry.register(context.Background(), requestID("E"))
+	unregister()
+	if ok {
+		t.Fatal("registry recovered before a full TTL from the last accepted cancellation")
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("pre-deadline registration was not rejected with a cancelled context")
+	}
+
+	now = lastCancel.Add(pendingCancellationTTL)
+	ctx, unregister, ok = registry.register(context.Background(), requestID("E"))
 	defer unregister()
 	if !ok {
 		t.Fatal("registry did not recover after the bounded overflow window")
@@ -126,6 +145,72 @@ func TestCancellationRegistryOverflowFailsClosedAndRecovers(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("recovered registration inherited an expired cancellation")
 	default:
+	}
+}
+
+func TestCancellationRegistryClockRegressionCannotShortenPendingOrOverflow(t *testing.T) {
+	start := time.Unix(1_700_000_000, 0)
+	now := start.Add(10 * time.Second)
+	pendingRegistry := newCancellationRegistryWithClock(func() time.Time { return now })
+	id := requestID("J")
+	if !pendingRegistry.Cancel(id) {
+		t.Fatal("initial pending cancellation failed")
+	}
+	now = start
+	if !pendingRegistry.Cancel(id) {
+		t.Fatal("repeated pending cancellation failed after clock regression")
+	}
+	now = start.Add(30 * time.Second)
+	ctx, unregister, ok := pendingRegistry.register(context.Background(), id)
+	unregister()
+	if ok {
+		t.Fatal("regressed clock shortened a pending cancellation deadline")
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("pending registration was not rejected with a cancelled context")
+	}
+
+	now = start.Add(10 * time.Second)
+	overflowRegistry := newCancellationRegistryWithClock(func() time.Time { return now })
+	for index := 0; index < maxPendingCancellations; index++ {
+		if !overflowRegistry.Cancel(indexedRequestID(index)) {
+			t.Fatalf("Cancel() rejected pending ID %d", index)
+		}
+	}
+	if !overflowRegistry.Cancel(requestID("K")) {
+		t.Fatal("initial overflow cancellation failed")
+	}
+	now = start
+	if !overflowRegistry.Cancel(requestID("L")) {
+		t.Fatal("overflow cancellation failed after clock regression")
+	}
+	now = start.Add(30 * time.Second)
+	ctx, unregister, ok = overflowRegistry.register(context.Background(), requestID("M"))
+	unregister()
+	if ok {
+		t.Fatal("regressed clock shortened the overflow deadline")
+	}
+}
+
+func TestCancellationRegistrySamplesClockUnderMutex(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	clockObservedUnlocked := false
+	var registry *CancellationRegistry
+	registry = newCancellationRegistryWithClock(func() time.Time {
+		if registry.mu.TryLock() {
+			clockObservedUnlocked = true
+			registry.mu.Unlock()
+		}
+		return now
+	})
+
+	if !registry.Cancel(requestID("N")) {
+		t.Fatal("Cancel() rejected valid ID")
+	}
+	if clockObservedUnlocked {
+		t.Fatal("registry sampled its clock outside the mutex")
 	}
 }
 
@@ -167,6 +252,19 @@ func TestCancellationRegistryCancelAllCloses(t *testing.T) {
 		t.Fatal("Cancel() accepted work after CancelAll()")
 	}
 	if _, _, ok := registry.register(context.Background(), requestID("I")); ok {
+		t.Fatal("register() accepted work after CancelAll()")
+	}
+}
+
+func TestCancellationRegistryCancelAllDoesNotConsultClock(t *testing.T) {
+	registry := newCancellationRegistryWithClock(func() time.Time {
+		panic("clock read after CancelAll")
+	})
+	registry.CancelAll()
+	if registry.Cancel(requestID("O")) {
+		t.Fatal("Cancel() accepted work after CancelAll()")
+	}
+	if _, _, ok := registry.register(context.Background(), requestID("P")); ok {
 		t.Fatal("register() accepted work after CancelAll()")
 	}
 }
