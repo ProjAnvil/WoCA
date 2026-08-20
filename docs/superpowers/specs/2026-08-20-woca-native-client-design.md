@@ -40,14 +40,17 @@ milestones, but their contracts and trust boundaries are fixed by this design.
 - It navigates the top-level browser window to the selected enterprise origin,
   which serves the Web UI and remote BFF on the same origin.
 - The browser holds only a `Secure`, `HttpOnly`, `SameSite` session cookie.
-- API keys and OAuth access/refresh tokens are never persisted in Web Storage
-  or exposed to application JavaScript.
+- API keys and OAuth access/refresh tokens are never persisted in Web Storage.
+  Enterprise Web collects the API key only on a BFF-hosted activation page,
+  outside the main Vue application, and discards it after activation.
 
 ### 2.3 Enterprise native client
 
 - Is a separate distributable Wails desktop application under
   `native-client/`.
-- On first launch, asks for the Enterprise Woca URL and a server-issued API key.
+- On first launch, its Vue bootstrap form asks for the Enterprise Woca URL and
+  a server-issued API key. The form holds the key only until it passes the
+  activation input to the Wails bridge, then clears it.
 - Uses the API key only to bootstrap a tenant/device authorization transaction;
   it does not persist the API key.
 - Opens the system browser for Authorization Code + PKCE user authorization.
