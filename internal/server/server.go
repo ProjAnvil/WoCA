@@ -320,6 +320,24 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 // agent was built): it waits for serveErr or ctx cancellation, then stops
 // admission and shuts the server down gracefully.
 func (s *Server) ServeStarted(ctx context.Context, srv *http.Server, serveErr <-chan error) error {
+	// Periodic lease reconciliation: re-queue runs whose owning instance
+	// died, so another instance (or the Phase 3 worker) can take them over.
+	if s.ledger != nil {
+		go func() {
+			ticker := time.NewTicker(runLeaseDuration / 2)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := s.reconcileRunLeases(context.WithoutCancel(ctx)); err != nil {
+						s.log.Warn().Err(err).Msg("run lease reconcile failed")
+					}
+				}
+			}
+		}()
+	}
 	select {
 	case err := <-serveErr:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -1152,4 +1170,16 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 			terminal = row.Status != runstate.StatusQueued && row.Status != runstate.StatusRunning
 		}
 	}
+}
+
+// reconcileRunLeases re-queues runs whose owning instance lost its lease
+// (process death). Called periodically from ServeStarted when the run
+// ledger is configured; the Phase 3 worker claims what lands back in the
+// queue.
+func (s *Server) reconcileRunLeases(ctx context.Context) error {
+	if s.ledger == nil {
+		return nil
+	}
+	_, err := s.ledger.ReapExpired(ctx)
+	return err
 }

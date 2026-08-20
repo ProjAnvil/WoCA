@@ -158,3 +158,67 @@ func TestClaimEmptyQueue(t *testing.T) {
 		t.Fatalf("Claim on empty = %+v err=%v", got, err)
 	}
 }
+
+func TestPutEventExplicitSeqSemantics(t *testing.T) {
+	l := openLedger(t)
+	ctx := context.Background()
+	if err := l.Enqueue(ctx, Run{RunID: "r", SessionID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.PutEvent(ctx, "r", 5, "delta", `{}`); err != nil {
+		t.Fatal(err)
+	}
+	// Idempotent retry of the same (run, seq, kind).
+	if err := l.PutEvent(ctx, "r", 5, "delta", `{}`); err != nil {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+	// Same seq with a different kind is a conflict, not a silent overwrite.
+	if err := l.PutEvent(ctx, "r", 5, "tool_call", `{}`); err == nil {
+		t.Fatal("conflicting kind at same seq accepted")
+	}
+	if err := l.PutEvent(ctx, "r", 1, "", "{}"); err == nil {
+		t.Fatal("empty kind accepted")
+	}
+	// The explicit seq does not disturb Append's monotonic minting.
+	if _, err := l.Append(ctx, "r", Event{Kind: "tail"}); err != nil {
+		t.Fatal(err)
+	}
+	tail, _ := l.Replay(ctx, "r", 4, 10)
+	if len(tail) != 2 || tail[0].Seq != 5 || tail[1].Seq != 6 {
+		t.Fatalf("events after explicit seq = %+v", tail)
+	}
+}
+
+// A closed database surfaces errors on every path instead of panicking.
+func TestLedgerClosedDBSurfacesErrors(t *testing.T) {
+	l := openLedger(t)
+	ctx := context.Background()
+	if err := l.Enqueue(ctx, Run{RunID: "r", SessionID: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	check := func(what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: no error on closed db", what)
+		}
+	}
+	check("enqueue", l.Enqueue(ctx, Run{RunID: "x", SessionID: "y"}))
+	check("start", l.Start(ctx, Run{RunID: "x", SessionID: "y"}, "w", time.Minute))
+	_, err := l.Claim(ctx, "w", time.Minute)
+	check("claim", err)
+	check("heartbeat", l.Heartbeat(ctx, "r", "w", time.Minute))
+	check("finish", l.Finish(ctx, "r", "w", "done"))
+	check("append", func() error { _, err := l.Append(ctx, "r", Event{Kind: "k"}); return err }())
+	check("putevent", l.PutEvent(ctx, "r", 1, "k", "{}"))
+	_, _, err = l.ActiveRun(ctx, "s")
+	check("activerun", err)
+	_, err = l.ReapExpired(ctx)
+	check("reap", err)
+	_, err = l.Replay(ctx, "r", 0, 5)
+	check("replay", err)
+	_, _, err = l.Row(ctx, "r")
+	check("row", err)
+}

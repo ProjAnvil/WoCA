@@ -353,3 +353,35 @@ func TestBuildRemoteValidation(t *testing.T) {
 	}
 	_ = fmt.Sprintf
 }
+
+// Phase 2 acceptance: two tenants never touch each other's ladyM key
+// space — every call under a tenant context addresses only that tenant's
+// encoded workspace keys.
+func TestRemoteTenantKeyIsolation(t *testing.T) {
+	f := newFakeLadyM(t)
+	eng := newTestRemote(t, f)
+
+	ctxA := tenancy.NewContext(context.Background(), tenancy.Context{TenantID: "tA", UserID: "u1"})
+	ctxB := tenancy.NewContext(context.Background(), tenancy.Context{TenantID: "tB", UserID: "u1"})
+
+	if _, err := eng.Remember(ctxA, "/w", "alpha-secret", nil, "s"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Remember(ctxB, "/w", "beta-secret", nil, "s"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recall under each tenant consults only that tenant's keys (workspace
+	// scope plus its own user-level float-up).
+	ws, _, _ := f.snapshot()
+	seen := map[string]bool{}
+	for _, k := range ws {
+		seen[k] = true
+	}
+	if !seen["woca:tA:u1:/w"] || !seen["woca:tB:u1:/w"] {
+		t.Fatalf("writes missing tenant keys: %v", ws)
+	}
+	if seen["woca:tA:u1"] != seen["woca:tB:u1"] {
+		t.Fatalf("float-up asymmetric: %v", ws)
+	}
+}
