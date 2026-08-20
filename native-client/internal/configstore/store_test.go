@@ -140,6 +140,33 @@ func TestNormalizeBaseURLAllowsOnlyExactHTTPLoopbackHosts(t *testing.T) {
 	}
 }
 
+func TestNormalizeBaseURLCanonicalizesAuthorityAndPorts(t *testing.T) {
+	for rawURL, want := range map[string]string{
+		"https://EXAMPLE.COM:443/":       "https://example.com",
+		"https://EXAMPLE.COM:8443/":      "https://example.com:8443",
+		"http://LOCALHOST:80/":           "http://localhost",
+		"http://127.0.0.1:8080/":         "http://127.0.0.1:8080",
+		"http://[0:0:0:0:0:0:0:1]:8080/": "http://[::1]:8080",
+		"http://[::1]:80/":               "http://[::1]",
+	} {
+		got, err := NormalizeBaseURL(rawURL)
+		if err != nil || got != want {
+			t.Fatalf("NormalizeBaseURL(%q) = %q, %v; want %q, nil", rawURL, got, err, want)
+		}
+	}
+
+	for _, rawURL := range []string{
+		"https://example.com:",
+		"https://example.com:0",
+		"https://example.com:65536",
+		"https://example.com:not-a-port",
+	} {
+		if _, err := NormalizeBaseURL(rawURL); err == nil {
+			t.Fatalf("NormalizeBaseURL(%q) error = nil", rawURL)
+		}
+	}
+}
+
 func TestOpenRejectsFutureSchemaVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "client.db")
 	prepareDatabase(t, path, `
@@ -150,6 +177,9 @@ func TestOpenRejectsFutureSchemaVersion(t *testing.T) {
 	if store, err := Open(path); err == nil {
 		store.Close()
 		t.Fatal("Open() error = nil for future schema version")
+	}
+	if countApplicationObjects(t, path) != 0 {
+		t.Fatal("Open() created application objects for future schema")
 	}
 }
 
@@ -173,6 +203,61 @@ func TestOpenRejectsIncompatibleVersionOneSchema(t *testing.T) {
 	}
 }
 
+func TestOpenDoesNotRepairVersionOneSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	prepareDatabase(t, path, strings.Replace(validVersionOneSchema, `CREATE TABLE preferences (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+`, "", 1))
+
+	if store, err := Open(path); err == nil {
+		store.Close()
+		t.Fatal("Open() error = nil for incomplete version-1 schema")
+	}
+	if tableExists(t, path, "preferences") {
+		t.Fatal("Open() repaired the incomplete version-1 schema")
+	}
+}
+
+func TestOpenRejectsAlteredVersionOneSchemaSemantics(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(string) string
+	}{
+		{"base URL unique", func(schema string) string {
+			return strings.Replace(schema, "base_url TEXT NOT NULL UNIQUE", "base_url TEXT NOT NULL", 1)
+		}},
+		{"active default", func(schema string) string {
+			return strings.Replace(schema, "DEFAULT 0", "DEFAULT 1", 1)
+		}},
+		{"active check", func(schema string) string {
+			return strings.Replace(schema, "CHECK (active IN (0, 1))", "CHECK (active IN (0, 2))", 1)
+		}},
+		{"profile autoincrement", func(schema string) string {
+			return strings.Replace(schema, "INTEGER PRIMARY KEY AUTOINCREMENT", "INTEGER PRIMARY KEY", 1)
+		}},
+		{"native session foreign key", func(schema string) string {
+			return strings.Replace(schema, "ON DELETE CASCADE", "ON DELETE RESTRICT", 1)
+		}},
+		{"active predicate", func(schema string) string {
+			return strings.Replace(schema, "WHERE active = 1", "WHERE active IN (0, 1)", 1)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "client.db")
+			prepareDatabase(t, path, tt.mutate(validVersionOneSchema))
+			if store, err := Open(path); err == nil {
+				store.Close()
+				t.Fatal("Open() error = nil for altered version-1 schema")
+			}
+		})
+	}
+}
+
 func prepareDatabase(t *testing.T, path, statements string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)
@@ -184,6 +269,59 @@ func prepareDatabase(t *testing.T, path, statements string) {
 		t.Fatal(err)
 	}
 }
+
+func countApplicationObjects(t *testing.T, path string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile')`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func tableExists(t *testing.T, path, name string) bool {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count == 1
+}
+
+const validVersionOneSchema = `
+CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0);
+CREATE TABLE connection_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    base_url TEXT NOT NULL UNIQUE,
+    active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX one_active_profile ON connection_profiles(active) WHERE active = 1;
+CREATE TABLE preferences (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE native_sessions (
+    profile_id INTEGER PRIMARY KEY REFERENCES connection_profiles(id) ON DELETE CASCADE,
+    device_id TEXT NOT NULL,
+    session_ciphertext BLOB NOT NULL,
+    expires_at INTEGER NOT NULL,
+    last_validated_at INTEGER NOT NULL
+);
+`
 
 func TestStoreSchemaHasNoAPIKeyOrOAuthTokenColumns(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "client.db"))

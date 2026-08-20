@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -146,11 +148,20 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
-            version INTEGER PRIMARY KEY,
-            applied_at INTEGER NOT NULL
-        )`); err != nil {
-		return fmt.Errorf("create schema migrations table: %w", err)
+	migrationsExist, err := sqliteObjectExists(ctx, tx, "table", "schema_migrations")
+	if err != nil {
+		return err
+	}
+	if !migrationsExist {
+		if err := rejectApplicationObjects(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE schema_migrations (
+	            version INTEGER PRIMARY KEY,
+	            applied_at INTEGER NOT NULL
+	        )`); err != nil {
+			return fmt.Errorf("create schema migrations table: %w", err)
+		}
 	}
 	if err := validateColumns(ctx, tx, "schema_migrations", []schemaColumn{
 		{name: "version", kind: "INTEGER", primaryKey: true},
@@ -159,12 +170,24 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 
-	version, err := schemaVersion(ctx, tx)
+	version, versioned, err := schemaVersion(ctx, tx)
 	if err != nil {
 		return err
 	}
 	if version > currentSchemaVersion {
 		return fmt.Errorf("database schema version %d is newer than supported version %d", version, currentSchemaVersion)
+	}
+	if versioned {
+		if version != currentSchemaVersion {
+			return fmt.Errorf("unsupported database schema version %d", version)
+		}
+		if err := validateVersionOneSchema(ctx, tx); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if err := rejectApplicationObjects(ctx, tx); err != nil {
+		return err
 	}
 
 	for _, statement := range []string{
@@ -197,21 +220,42 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := validateVersionOneSchema(ctx, tx); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`, currentSchemaVersion, time.Now().Unix()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, currentSchemaVersion, time.Now().Unix()); err != nil {
 		return fmt.Errorf("record SQLite migration: %w", err)
 	}
 	return tx.Commit()
 }
 
-func schemaVersion(ctx context.Context, tx *sql.Tx) (int, error) {
+func schemaVersion(ctx context.Context, tx *sql.Tx) (int, bool, error) {
 	var version sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
-		return 0, fmt.Errorf("read database schema version: %w", err)
+		return 0, false, fmt.Errorf("read database schema version: %w", err)
 	}
 	if !version.Valid {
-		return 0, nil
+		return 0, false, nil
 	}
-	return int(version.Int64), nil
+	return int(version.Int64), true, nil
+}
+
+func rejectApplicationObjects(ctx context.Context, tx *sql.Tx) error {
+	const query = `SELECT name FROM sqlite_master WHERE name IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile') LIMIT 1`
+	var name string
+	err := tx.QueryRowContext(ctx, query).Scan(&name)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect application schema objects: %w", err)
+	}
+	return fmt.Errorf("unversioned database contains application object %q", name)
+}
+
+func sqliteObjectExists(ctx context.Context, tx *sql.Tx, objectType, name string) (bool, error) {
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?`, objectType, name).Scan(&count); err != nil {
+		return false, fmt.Errorf("inspect SQLite object %s: %w", name, err)
+	}
+	return count == 1, nil
 }
 
 type schemaColumn struct {
@@ -253,6 +297,12 @@ func validateVersionOneSchema(ctx context.Context, tx *sql.Tx) error {
 			return err
 		}
 	}
+	if err := validateConnectionProfileSemantics(ctx, tx); err != nil {
+		return err
+	}
+	if err := validateNativeSessionForeignKey(ctx, tx); err != nil {
+		return err
+	}
 
 	var indexSQL sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'one_active_profile'`).Scan(&indexSQL); err != nil {
@@ -262,7 +312,7 @@ func validateVersionOneSchema(ctx context.Context, tx *sql.Tx) error {
 		return fmt.Errorf("read one_active_profile index: %w", err)
 	}
 	normalizedIndex := strings.Join(strings.Fields(strings.ToLower(indexSQL.String)), "")
-	if !strings.Contains(normalizedIndex, "onconnection_profiles(active)whereactive=1") {
+	if normalizedIndex != "createuniqueindexone_active_profileonconnection_profiles(active)whereactive=1" {
 		return fmt.Errorf("incompatible schema: invalid one_active_profile index")
 	}
 	var unique, partial int
@@ -272,7 +322,126 @@ func validateVersionOneSchema(ctx context.Context, tx *sql.Tx) error {
 	if unique != 1 || partial != 1 {
 		return fmt.Errorf("incompatible schema: one_active_profile index must be unique and partial")
 	}
+	if err := validateIndexColumns(ctx, tx, "one_active_profile", []string{"active"}); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateConnectionProfileSemantics(ctx context.Context, tx *sql.Tx) error {
+	sqlDefinition, err := sqliteObjectSQL(ctx, tx, "table", "connection_profiles")
+	if err != nil {
+		return err
+	}
+	normalized := normalizeSQLiteSQL(sqlDefinition)
+	for _, required := range []string{
+		"idintegerprimarykeyautoincrement",
+		"activeintegernotnulldefault0check(activein(0,1))",
+	} {
+		if !strings.Contains(normalized, required) {
+			return fmt.Errorf("incompatible schema: connection_profiles is missing %s", required)
+		}
+	}
+	return validateUniqueIndex(ctx, tx, "connection_profiles", []string{"base_url"})
+}
+
+func validateNativeSessionForeignKey(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `SELECT "table", "from", "to", on_delete FROM pragma_foreign_key_list(?)`, "native_sessions")
+	if err != nil {
+		return fmt.Errorf("inspect native_sessions foreign keys: %w", err)
+	}
+	defer rows.Close()
+	var matches int
+	for rows.Next() {
+		var table, from, to, onDelete string
+		if err := rows.Scan(&table, &from, &to, &onDelete); err != nil {
+			return fmt.Errorf("read native_sessions foreign key: %w", err)
+		}
+		if table == "connection_profiles" && from == "profile_id" && to == "id" && strings.EqualFold(onDelete, "CASCADE") {
+			matches++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read native_sessions foreign keys: %w", err)
+	}
+	if matches != 1 {
+		return fmt.Errorf("incompatible schema: native_sessions must cascade profile_id to connection_profiles.id")
+	}
+	return nil
+}
+
+func sqliteObjectSQL(ctx context.Context, tx *sql.Tx, objectType, name string) (string, error) {
+	var definition sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = ? AND name = ?`, objectType, name).Scan(&definition); err != nil {
+		if err == sql.ErrNoRows {
+			return "", fmt.Errorf("incompatible schema: missing %s %s", objectType, name)
+		}
+		return "", fmt.Errorf("read %s %s: %w", objectType, name, err)
+	}
+	return definition.String, nil
+}
+
+func validateUniqueIndex(ctx context.Context, tx *sql.Tx, table string, columns []string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT name, "unique", partial FROM pragma_index_list(?)`, table)
+	if err != nil {
+		return fmt.Errorf("inspect %s indexes: %w", table, err)
+	}
+	defer rows.Close()
+	var candidates []string
+	for rows.Next() {
+		var name string
+		var unique, partial int
+		if err := rows.Scan(&name, &unique, &partial); err != nil {
+			return fmt.Errorf("read %s index: %w", table, err)
+		}
+		if unique == 1 && partial == 0 {
+			candidates = append(candidates, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read %s indexes: %w", table, err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close %s indexes: %w", table, err)
+	}
+	for _, name := range candidates {
+		if validateIndexColumns(ctx, tx, name, columns) == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("incompatible schema: %s must have a unique %s index", table, strings.Join(columns, ", "))
+}
+
+func validateIndexColumns(ctx context.Context, tx *sql.Tx, name string, want []string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT name FROM pragma_index_info(?) ORDER BY seqno`, name)
+	if err != nil {
+		return fmt.Errorf("inspect %s index columns: %w", name, err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			return fmt.Errorf("read %s index columns: %w", name, err)
+		}
+		got = append(got, column)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read %s index columns: %w", name, err)
+	}
+	if len(got) != len(want) {
+		return fmt.Errorf("incompatible schema: %s index has unexpected columns", name)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return fmt.Errorf("incompatible schema: %s index has unexpected columns", name)
+		}
+	}
+	return nil
+}
+
+func normalizeSQLiteSQL(definition string) string {
+	return strings.Join(strings.Fields(strings.ToLower(definition)), "")
 }
 
 func validateColumns(ctx context.Context, tx *sql.Tx, table string, want []schemaColumn) error {
@@ -333,16 +502,71 @@ func NormalizeBaseURL(rawURL string) (string, error) {
 		return "", fmt.Errorf("server URL must be an origin")
 	}
 	scheme := strings.ToLower(parsed.Scheme)
-	host := strings.ToLower(parsed.Host)
 	if scheme != "https" && scheme != "http" {
 		return "", fmt.Errorf("server URL must use HTTPS")
 	}
-	if scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
+	host, port, hasPort, err := normalizeAuthority(parsed)
+	if err != nil {
+		return "", err
+	}
+	if scheme == "http" && !isLoopbackHost(strings.Trim(host, "[]")) {
 		return "", fmt.Errorf("HTTP is only allowed for loopback server URLs")
+	}
+	if hasPort && !isDefaultPort(scheme, port) {
+		host += ":" + strconv.Itoa(port)
 	}
 	return scheme + "://" + host, nil
 }
 
 func isLoopbackHost(host string) bool {
 	return strings.EqualFold(host, "localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+func normalizeAuthority(parsed *url.URL) (string, int, bool, error) {
+	authority := parsed.Host
+	hostname := parsed.Hostname()
+	if hostname == "" {
+		return "", 0, false, fmt.Errorf("server URL must include a host")
+	}
+	hasPort := hasExplicitPort(authority)
+	port := 0
+	if hasPort {
+		rawPort := parsed.Port()
+		if rawPort == "" {
+			return "", 0, false, fmt.Errorf("server URL port is required after colon")
+		}
+		for _, character := range rawPort {
+			if character < '0' || character > '9' {
+				return "", 0, false, fmt.Errorf("server URL port must be numeric")
+			}
+		}
+		var err error
+		port, err = strconv.Atoi(rawPort)
+		if err != nil || port < 1 || port > 65535 {
+			return "", 0, false, fmt.Errorf("server URL port must be between 1 and 65535")
+		}
+	}
+
+	if address, err := netip.ParseAddr(hostname); err == nil {
+		if address.Is6() {
+			return "[" + address.String() + "]", port, hasPort, nil
+		}
+		return address.String(), port, hasPort, nil
+	}
+	if strings.ContainsAny(hostname, "[]") || strings.Contains(hostname, ":") {
+		return "", 0, false, fmt.Errorf("server URL host is malformed")
+	}
+	return strings.ToLower(hostname), port, hasPort, nil
+}
+
+func hasExplicitPort(authority string) bool {
+	if strings.HasPrefix(authority, "[") {
+		closingBracket := strings.LastIndex(authority, "]")
+		return closingBracket >= 0 && len(authority) > closingBracket+1
+	}
+	return strings.Contains(authority, ":")
+}
+
+func isDefaultPort(scheme string, port int) bool {
+	return scheme == "https" && port == 443 || scheme == "http" && port == 80
 }
