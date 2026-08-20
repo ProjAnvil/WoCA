@@ -123,16 +123,15 @@ func TestHandlerStripsCallerAuthCookieAndForwardingHeaders(t *testing.T) {
 		request.Header.Set(header, "attacker")
 	}
 	request.Header.Set("Connection", "X-Evil-Hop")
+	request.Header.Set("TE", "trailers")
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
 
 	headers := <-observed
-	for name, values := range headers {
-		for _, value := range values {
-			if strings.Contains(value, "attacker") {
-				t.Fatalf("upstream received attacker-controlled %s: %q", name, value)
-			}
+	for _, name := range stripped {
+		if values, ok := headers[http.CanonicalHeaderKey(name)]; ok {
+			t.Errorf("upstream received forbidden %s header: %q", name, values)
 		}
 	}
 }

@@ -109,7 +109,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadGateway, "bad gateway")
 		},
 	}
-	proxy.ServeHTTP(w, r)
+	proxyRequest := r.Clone(r.Context())
+	stripUntrustedHeaders(proxyRequest.Header)
+	proxyRequest.TransferEncoding = nil
+	proxyRequest.Trailer = nil
+	proxy.ServeHTTP(w, proxyRequest)
 }
 
 func defaultTransport() *http.Transport {
