@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/projanvil/woca/internal/platform/authn"
 )
 
 func TestServeAPIDrivesClosures(t *testing.T) {
@@ -145,5 +147,14 @@ func TestServeOpensBrowserWithFakeOpen(t *testing.T) {
 	defer cancel()
 	if err := Serve(ctx, opts, "127.0.0.1:0", false, ""); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNewAPIKeyProviderRequiresDB(t *testing.T) {
+	if _, err := newAPIKeyProvider(nil); err == nil {
+		t.Fatal("nil settings store accepted")
+	}
+	if _, err := newNativeAuth(nil, authn.NewLocal()); err == nil {
+		t.Fatal("nil settings store accepted for native auth")
 	}
 }

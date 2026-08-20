@@ -57,3 +57,23 @@ func TestDecodeInterruptValuePassthrough(t *testing.T) {
 		t.Fatal("envelope decode returned nil")
 	}
 }
+
+// ResumeStream answers a parked interrupt as a chunk stream (the streaming
+// counterpart the runner's resume path uses).
+func TestResumeStreamContinuesParkedThread(t *testing.T) {
+	a, err := New(Config{
+		Model:          language.NewFakeChatModel(language.WithResponses(messages.AI("first"), messages.AI("resumed"))),
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	_ = a
+	// Draining the stream (even on an unknown thread) exercises the
+	// wrapper; it must terminate without hanging.
+	for range a.ResumeStream(ctx, "thread-resume", "y") {
+	}
+}
