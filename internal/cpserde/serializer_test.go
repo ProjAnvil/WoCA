@@ -57,3 +57,57 @@ func TestUnknownStructStaysError(t *testing.T) {
 		t.Fatal("unregistered struct serialized")
 	}
 }
+
+type conflictPayload struct{ A int }
+
+func TestRegisterTypeValidationPanics(t *testing.T) {
+	RegisterType(testPayload{}, "cpserde.testPayload") // already registered
+	defer func() { t.Log(recover()) }()
+	RegisterType(conflictPayload{}, "cpserde.testPayload")
+	t.Fatal("duplicate name accepted")
+}
+
+func TestRegisterTypeNonStructPanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("non-struct accepted")
+		}
+	}()
+	RegisterType(42, "int")
+}
+
+func TestRegisterTypeReregisterConflictPanics(t *testing.T) {
+	type dual struct{}
+	RegisterType(dual{}, "cpserde.dual")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("conflicting re-registration accepted")
+		}
+	}()
+	RegisterType(dual{}, "cpserde.dual-other")
+}
+
+func TestLoadsTypedUnknownEnvelopeName(t *testing.T) {
+	if _, err := NewSerializer().LoadsTyped("woca:nope", []byte("{}")); err == nil {
+		t.Fatal("unknown envelope name decoded")
+	}
+}
+
+type badPayload struct {
+	Ch chan int `json:"ch"`
+}
+
+func TestDumpsTypedUnmarshalableFallsBackToError(t *testing.T) {
+	// The woca envelope path json.Marshal fails on a chan field — but such
+	// a type must be registered to reach it; marshal failure surfaces as an
+	// error, never a panic.
+	RegisterType(badPayload{}, "cpserde.bad")
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic: %v", r)
+		}
+	}()
+	if _, _, err := NewSerializer().DumpsTyped(badPayload{Ch: make(chan int)}); err == nil {
+		t.Fatal("unmarshalable value serialized")
+	}
+}

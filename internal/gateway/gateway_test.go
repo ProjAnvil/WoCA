@@ -217,3 +217,52 @@ func TestChainLocalProvider(t *testing.T) {
 		t.Errorf("tenancy context = %+v, want local", h.tc)
 	}
 }
+
+func TestRequireLocalTenantGatesAPI(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := RequireLocalTenant()(next)
+
+	// Non-API paths pass regardless of tenancy.
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("static path = %d", w.Code)
+	}
+
+	// API paths need the local tenant injected.
+	r = httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("missing tenancy = %d", w.Code)
+	}
+	r = r.WithContext(tenancy.NewContext(r.Context(), tenancy.Local()))
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("local tenant = %d", w.Code)
+	}
+	r2 := httptest.NewRequest(http.MethodGet, "/api/models", nil)
+	r2 = r2.WithContext(tenancy.NewContext(r2.Context(), tenancy.Context{TenantID: "tX"}))
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r2)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("foreign tenant = %d", w.Code)
+	}
+	// The native credential surface is exempt (session lifecycle).
+	r3 := httptest.NewRequest(http.MethodGet, "/api/native/session", nil)
+	r3 = r3.WithContext(tenancy.NewContext(r3.Context(), tenancy.Context{TenantID: "tX"}))
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r3)
+	if w.Code != http.StatusOK {
+		t.Fatalf("native surface for foreign tenant = %d", w.Code)
+	}
+	// So is the health probe.
+	r4 := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r4)
+	if w.Code != http.StatusOK {
+		t.Fatalf("health = %d", w.Code)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -383,5 +384,25 @@ func TestRemoteTenantKeyIsolation(t *testing.T) {
 	}
 	if seen["woca:tA:u1"] != seen["woca:tB:u1"] {
 		t.Fatalf("float-up asymmetric: %v", ws)
+	}
+}
+
+func TestRemoteDescriptionAndClosedEngineDegradation(t *testing.T) {
+	f := newFakeLadyM(t)
+	eng := newTestRemote(t, f)
+	if d := eng.Description(); !strings.HasPrefix(d, "ladym-remote:") {
+		t.Fatalf("Description = %q", d)
+	}
+	// Description tolerates an endpoint that stops parsing.
+	weird, err := BuildRemote(RemoteConfig{Endpoint: "http://" + f.server.URL[len("http://"):], Username: ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer weird.Close()
+	_ = weird.Description()
+
+	// orDefaultSource branches.
+	if orDefaultSource("x") != "x" || orDefaultSource("") != "woca:migration" {
+		t.Fatal("orDefaultSource branches")
 	}
 }

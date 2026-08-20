@@ -520,3 +520,43 @@ func TestEngineNilSafety(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Closing the engine surfaces errors on every Engine path instead of
+// panicking (deep error-injection sweep over the embedded adapter).
+func TestLadyMEngineClosedSurfacesErrors(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := Build(BuildInput{
+		EngineEnabled: true, DBPath: filepath.Join(dir, "l.db"),
+		DefaultWorkspace: "/w", Embedding: "hashing", LLM: "none",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	check := func(what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: no error after close", what)
+		}
+	}
+	_, err = eng.Recall(ctx, "q", "/w", 3)
+	check("recall", err)
+	_, err = eng.SearchCode(ctx, "q", "/w", 3)
+	check("searchcode", err)
+	_, err = eng.Remember(ctx, "/w", "x", nil, "s")
+	check("remember", err)
+	check("recordevent", eng.RecordEvent(ctx, "/w", "a", "b", "c", "d"))
+	_, err = eng.List(ctx, "/w", "", 5, 0)
+	check("list", err)
+	check("forget", eng.Forget(ctx, "id"))
+	_, err = eng.Stats(ctx, "/w")
+	check("stats", err)
+	// IndexCode walks the source root (filesystem-driven); a closed engine
+	// must not panic even where it may not error.
+	_, _ = eng.IndexCode(ctx, dir, "/w", false)
+	_, err = eng.Consolidate(ctx, "/w")
+	check("consolidate", err)
+}

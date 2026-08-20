@@ -172,3 +172,21 @@ func newTenantCmd() *cobra.Command {
 
 	return cmd
 }
+
+// openTenantStore opens the tenant store over target for tests in this
+// package (the CLI's own helper is a closure).
+func openTenantStore(target string) (*tenant.Store, func(), error) {
+	db, err := wocadb.Open(target)
+	if err != nil {
+		return nil, nil, err
+	}
+	if db == nil {
+		return nil, nil, fmt.Errorf("tenant management requires a database")
+	}
+	st, err := tenant.NewStore(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, nil, err
+	}
+	return st, func() { _ = db.Close() }, nil
+}

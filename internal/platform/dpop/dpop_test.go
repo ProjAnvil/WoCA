@@ -4,7 +4,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"testing"
@@ -151,5 +153,89 @@ func TestThumbprintIsStableAndBase64URL(t *testing.T) {
 	}
 	if _, err := base64.RawURLEncoding.DecodeString(tp); err != nil {
 		t.Fatalf("thumbprint is not base64url: %v", err)
+	}
+}
+
+type notP256 struct{}
+
+func TestNonP256KeysRejected(t *testing.T) {
+	// P-384 key: every P-256-pinned entry point must reject it.
+	priv384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sign(priv384, ProofInput{HTM: "GET", HTU: "https://x/y"}); err == nil {
+		t.Fatal("Sign accepted P-384")
+	}
+	if _, err := Thumbprint(priv384.PublicKey); err == nil {
+		t.Fatal("Thumbprint accepted P-384")
+	}
+
+	key := newTestKey(t)
+	now := time.Now()
+	v := NewVerifier(WithClock(func() time.Time { return now }))
+	// A proof whose header advertises a bogus curve (signed correctly over
+	// that header) is rejected by the JWK shape check.
+	bad := signTamperedHeader(t, key, `{"typ":"dpop+jwt","alg":"ES256","jwk":{"kty":"EC","crv":"P-384","x":"AA","y":"AA"}}`,
+		http.MethodGet, "https://bff.example.com/api", "tok", now)
+	err = v.Verify(bad, Request{Method: http.MethodGet, URI: "https://bff.example.com/api"}, "tok", key.pub)
+	if !errors.Is(err, ErrInvalidProof) {
+		t.Fatalf("bogus curve = %v", err)
+	}
+}
+
+func signTamperedHeader(t *testing.T, key testKey, headerJSON, htm, htu, token string, at time.Time) string {
+	t.Helper()
+	claims, err := json.Marshal(map[string]any{"htm": htm, "htu": htu, "iat": at.Unix(), "jti": "jti-t", "ath": accessTokenHash(token)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	si := base64.RawURLEncoding.EncodeToString([]byte(headerJSON)) + "." + base64.RawURLEncoding.EncodeToString(claims)
+	sum := sha256.Sum256([]byte(si))
+	sig, err := ecdsa.SignASN1(rand.Reader, key.priv, sum[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return si + "." + base64.RawURLEncoding.EncodeToString(sig)
+}
+
+func mustSign(t *testing.T, key testKey, htm, htu, token string, at time.Time, jti string) string {
+	t.Helper()
+	p, err := Sign(key.priv, ProofInput{HTM: htm, HTU: htu, AccessToken: token, IAT: at, JTI: jti})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestEqualHTUNormalization(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"https://X.COM/p", "https://x.com/p", true},
+		{"https://x.com/p?q=1", "https://x.com/p", true}, // query stripped
+		{"https://x.com/p#f", "https://x.com/p", true},   // fragment stripped
+		{"http://x.com/p", "https://x.com/p", false},     // scheme mismatch
+		{"https://x.com/a", "https://x.com/b", false},    // path mismatch
+		{"not a url", "https://x.com/p", false},          // malformed
+		{"https://x.com/p%20q", "https://x.com/p%20q", true},
+	}
+	for _, c := range cases {
+		if got := equalHTU(c.a, c.b); got != c.want {
+			t.Fatalf("equalHTU(%q,%q) = %v want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+func TestParseJWKThumbprintRejectsMalformed(t *testing.T) {
+	for _, bad := range []string{``, `not json`, `{"kty":"EC","crv":"P-256"}`, `{"d":"AA","kty":"EC","crv":"P-256","x":"AA","y":"AA"}`} {
+		if _, err := ParseJWKThumbprint([]byte(bad)); err == nil {
+			t.Fatalf("ParseJWKThumbprint(%q) accepted", bad)
+		}
+	}
+	tp, err := ParseJWKThumbprint([]byte(`{"kty":"EC","crv":"P-256","x":"AA","y":"AA"}`))
+	if err != nil || tp == "" {
+		t.Fatalf("public jwk = %q err=%v", tp, err)
 	}
 }
