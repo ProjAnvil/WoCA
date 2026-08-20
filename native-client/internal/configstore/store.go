@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -776,9 +777,15 @@ func scanProfile(row profileScanner) (Profile, error) {
 }
 
 func NormalizeBaseURL(rawURL string) (string, error) {
+	if containsDefaultIgnorable(rawURL) {
+		return "", fmt.Errorf("server URL contains forbidden characters")
+	}
+	if decoded, err := url.PathUnescape(rawURL); err == nil && containsDefaultIgnorable(decoded) {
+		return "", fmt.Errorf("server URL contains forbidden characters")
+	}
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return "", fmt.Errorf("parse server URL: %w", err)
+		return "", fmt.Errorf("server URL is invalid")
 	}
 	if parsed.Scheme == "" || parsed.Host == "" {
 		return "", fmt.Errorf("server URL must include scheme and host")
@@ -816,6 +823,9 @@ func normalizeAuthority(parsed *url.URL) (string, int, bool, error) {
 	if hostname == "" {
 		return "", 0, false, fmt.Errorf("server URL must include a host")
 	}
+	if containsDefaultIgnorable(authority) || containsDefaultIgnorable(hostname) {
+		return "", 0, false, fmt.Errorf("server URL contains forbidden characters")
+	}
 	hasPort := hasExplicitPort(authority)
 	port := 0
 	if hasPort {
@@ -851,6 +861,9 @@ func normalizeAuthority(parsed *url.URL) (string, int, bool, error) {
 		}
 		return address.String(), port, hasPort, nil
 	}
+	if isAlternateIPv4(hostname) {
+		return "", 0, false, fmt.Errorf("server URL IPv4 address is not canonical")
+	}
 	if bracketed {
 		return "", 0, false, fmt.Errorf("only IPv6 server URL hosts may be bracketed")
 	}
@@ -870,4 +883,55 @@ func hasExplicitPort(authority string) bool {
 
 func isDefaultPort(scheme string, port int) bool {
 	return scheme == "https" && port == 443 || scheme == "http" && port == 80
+}
+
+func containsDefaultIgnorable(value string) bool {
+	for _, r := range value {
+		if unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r) || unicode.Is(unicode.Variation_Selector, r) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAlternateIPv4(host string) bool {
+	components := strings.Split(strings.ToLower(host), ".")
+	for _, component := range components {
+		if !isIPv4NumberComponent(component) {
+			return false
+		}
+	}
+	if address, err := netip.ParseAddr(host); err == nil && address.Is4() && address.String() == host {
+		return false
+	}
+	return true
+}
+
+func isIPv4NumberComponent(component string) bool {
+	if component == "" {
+		return false
+	}
+	base := 10
+	digits := component
+	if len(component) > 2 && strings.HasPrefix(component, "0x") {
+		base = 16
+		digits = component[2:]
+	} else if len(component) > 1 && component[0] == '0' {
+		base = 8
+		digits = component[1:]
+	}
+	if digits == "" {
+		return false
+	}
+	for _, r := range digits {
+		if r >= '0' && r <= '9' && int(r-'0') < base {
+			continue
+		}
+		if base == 16 && r >= 'a' && r <= 'f' {
+			continue
+		}
+		return false
+	}
+	_, err := strconv.ParseUint(digits, base, 32)
+	return err == nil
 }
