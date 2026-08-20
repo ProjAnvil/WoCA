@@ -3,6 +3,7 @@ package configstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"net/netip"
@@ -954,4 +955,62 @@ func isIPv4NumberComponent(component string) bool {
 		return false
 	}
 	return true
+}
+
+// NativeSession is the persisted (encrypted) opaque session of a profile.
+// The ciphertext is opaque to this store; only the device key can open it.
+type NativeSession struct {
+	ProfileID         int64
+	DeviceID          string
+	SessionCiphertext []byte
+	ExpiresAt         int64
+	LastValidatedAt   int64
+}
+
+// SaveNativeSession upserts the encrypted session bound to a profile.
+func (s *Store) SaveNativeSession(ctx context.Context, profileID int64, deviceID string, ciphertext []byte, expiresAt int64) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO native_sessions (profile_id, device_id, session_ciphertext, expires_at, last_validated_at)
+		VALUES (?, ?, ?, ?, 0)
+		ON CONFLICT(profile_id) DO UPDATE SET
+		  device_id = excluded.device_id,
+		  session_ciphertext = excluded.session_ciphertext,
+		  expires_at = excluded.expires_at,
+		  last_validated_at = 0`,
+		profileID, deviceID, ciphertext, expiresAt)
+	if err != nil {
+		return fmt.Errorf("configstore: save native session: %w", err)
+	}
+	return nil
+}
+
+// NativeSession returns the stored session of a profile, if any.
+func (s *Store) NativeSession(ctx context.Context, profileID int64) (NativeSession, bool, error) {
+	var n NativeSession
+	err := s.db.QueryRowContext(ctx,
+		`SELECT profile_id, device_id, session_ciphertext, expires_at, last_validated_at
+		 FROM native_sessions WHERE profile_id = ?`, profileID).
+		Scan(&n.ProfileID, &n.DeviceID, &n.SessionCiphertext, &n.ExpiresAt, &n.LastValidatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return NativeSession{}, false, nil
+	}
+	if err != nil {
+		return NativeSession{}, false, fmt.Errorf("configstore: native session: %w", err)
+	}
+	return n, true, nil
+}
+
+// DeleteNativeSession removes the stored session (logout).
+func (s *Store) DeleteNativeSession(ctx context.Context, profileID int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM native_sessions WHERE profile_id = ?`, profileID); err != nil {
+		return fmt.Errorf("configstore: delete native session: %w", err)
+	}
+	return nil
+}
+
+// TouchNativeSession records the last successful validation.
+func (s *Store) TouchNativeSession(ctx context.Context, profileID int64, atMilli int64) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE native_sessions SET last_validated_at = ? WHERE profile_id = ?`, atMilli, profileID); err != nil {
+		return fmt.Errorf("configstore: touch native session: %w", err)
+	}
+	return nil
 }
