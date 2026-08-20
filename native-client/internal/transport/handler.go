@@ -172,6 +172,10 @@ type cookieStrippingResponseWriter struct {
 
 func (w *cookieStrippingResponseWriter) WriteHeader(statusCode int) {
 	stripResponseCookies(w.Header())
+	if statusCode >= 100 && statusCode < 200 {
+		clear(w.Header())
+		return
+	}
 	w.ResponseWriter.WriteHeader(statusCode)
 }
 

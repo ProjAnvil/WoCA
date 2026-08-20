@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -61,6 +62,33 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
+}
+
+type firstWriteHeaderWins struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func newFirstWriteHeaderWins() *firstWriteHeaderWins {
+	return &firstWriteHeaderWins{header: make(http.Header)}
+}
+
+func (w *firstWriteHeaderWins) Header() http.Header {
+	return w.header
+}
+
+func (w *firstWriteHeaderWins) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+}
+
+func (w *firstWriteHeaderWins) Write(body []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.body.Write(body)
 }
 
 func TestHandlerForwardsMethodPathQueryAndBody(t *testing.T) {
@@ -375,7 +403,7 @@ func TestHandlerStripsAllUpstreamSetCookieHeaders(t *testing.T) {
 	}
 }
 
-func TestHandlerStripsSetCookieFromEarlyHints(t *testing.T) {
+func TestHandlerSuppressesEarlyHintsAndStripsCookies(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Set-Cookie", "early=secret-early")
 		w.Header().Set("Link", "</app.css>; rel=preload")
@@ -419,20 +447,63 @@ func TestHandlerStripsSetCookieFromEarlyHints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(earlyHints) != 1 {
+	if len(earlyHints) != 0 {
 		t.Fatalf("early hints count = %d", len(earlyHints))
-	}
-	if cookies := earlyHints[0].Values("Set-Cookie"); len(cookies) != 0 {
-		t.Fatalf("early hints Set-Cookie = %q", cookies)
-	}
-	if links := earlyHints[0].Values("Link"); len(links) != 1 {
-		t.Fatalf("early hints Link = %q", links)
 	}
 	if response.StatusCode != http.StatusOK || string(body) != "ok" {
 		t.Fatalf("response = %d %q", response.StatusCode, body)
 	}
 	if cookies := response.Header.Values("Set-Cookie"); len(cookies) != 0 {
 		t.Fatalf("final Set-Cookie = %q", cookies)
+	}
+}
+
+func TestHandlerSuppressesInformationalResponsesForFirstWriteHeaderWinsWriter(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Link", "</early.css>; rel=preload")
+		w.Header().Set("Set-Cookie", "early=secret-early")
+		w.WriteHeader(http.StatusEarlyHints)
+		w.Header().Del("Link")
+		w.Header().Del("Set-Cookie")
+
+		w.Header().Set("X-Processing", "temporary")
+		w.Header().Set("Set-Cookie", "processing=secret-processing")
+		w.WriteHeader(http.StatusProcessing)
+		w.Header().Del("X-Processing")
+		w.Header().Del("Set-Cookie")
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Final", "present")
+		w.Header().Set("Set-Cookie", "final=secret-final")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+	handler := New(
+		staticTarget{profile: configstore.Profile{BaseURL: upstream.URL}, ok: true},
+		staticCredentials{},
+		nil,
+	)
+	response := newFirstWriteHeaderWins()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil))
+
+	if response.status != http.StatusOK {
+		t.Fatalf("status = %d, body = %q", response.status, response.body.String())
+	}
+	if response.body.String() != `{"ok":true}` {
+		t.Fatalf("body = %q", response.body.String())
+	}
+	if got := response.header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	if got := response.header.Get("X-Final"); got != "present" {
+		t.Fatalf("X-Final = %q", got)
+	}
+	for _, name := range []string{"Link", "X-Processing", "Set-Cookie"} {
+		if values := response.header.Values(name); len(values) != 0 {
+			t.Fatalf("%s = %q", name, values)
+		}
 	}
 }
 
