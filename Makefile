@@ -5,7 +5,7 @@ all: web build
 
 # Build the web frontend into web/dist (required before the Go build embeds it).
 web:
-	cd web && npm install && npm run build
+	cd web && bun install && bun run build
 
 build:
 	go build -o build/woca ./cmd/woca

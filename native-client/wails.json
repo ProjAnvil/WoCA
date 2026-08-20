@@ -3,9 +3,9 @@
   "name": "woca-native-client",
   "outputfilename": "woca-native-client",
   "frontend:dir": "../web",
-  "frontend:install": "npm install",
-  "frontend:build": "npm run build",
-  "frontend:dev:build": "npm run build",
+  "frontend:install": "bun install",
+  "frontend:build": "bun run build",
+  "frontend:dev:build": "bun run build",
   "assetdir": "../web/dist",
   "author": {
     "name": "ProjAnvil"
