@@ -24,12 +24,16 @@ function mountGate() {
   })
 }
 
-function nativeBridge(bootstrap: NativeBridge['Bootstrap']): NativeBridge {
+function nativeBridge(bootstrap: NativeBridge['Bootstrap'], theme?: string): NativeBridge {
   return {
     Bootstrap: bootstrap,
     Connect: vi.fn(),
     Logout: vi.fn(),
-    Preference: vi.fn(async () => ({ value: '', found: false })),
+    Preference: vi.fn(async (key?: string) =>
+      key === 'woca-theme' && theme !== undefined
+        ? { value: theme, found: true }
+        : { value: '', found: false },
+    ),
     SetPreference: vi.fn(async (input) => ({ revision: input.revision, applied: true })),
     CancelRequest: vi.fn(async () => true),
   }
@@ -39,6 +43,7 @@ describe('NativeGate', () => {
   beforeEach(() => {
     getNativeBridge.mockReset()
     i18n.global.locale.value = 'en'
+    document.documentElement.classList.remove('dark')
   })
 
   it('renders the app immediately in a normal browser', () => {
@@ -76,6 +81,24 @@ describe('NativeGate', () => {
 
     expect(wrapper.get('[data-testid="connect-view"]').attributes('data-testid')).toBe('connect-view')
     expect(wrapper.find('[data-testid="app-marker"]').exists()).toBe(false)
+  })
+
+  it('applies the hydrated dark theme to the connection gate', async () => {
+    getNativeBridge.mockReturnValue(nativeBridge(async () => ({ state: 'unconfigured' }), 'dark'))
+
+    mountGate()
+    await flushPromises()
+
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
+  })
+
+  it('keeps the connection gate light when the hydrated theme is light', async () => {
+    getNativeBridge.mockReturnValue(nativeBridge(async () => ({ state: 'unconfigured' }), 'light'))
+
+    mountGate()
+    await flushPromises()
+
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
   })
 
   it('withholds the app until ready preferences finish hydrating', async () => {

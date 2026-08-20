@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ConnectView from './ConnectView.vue'
 import { getNativeBridge } from './bridge'
-import { hydrateNativePreferences } from './preferences'
+import { hydrateNativePreferences, readPreference } from './preferences'
 import { applyStoredLocalePreference } from '../i18n'
 
 type GateState =
@@ -21,13 +21,37 @@ const serverUrl = ref('')
 const databasePath = ref('')
 const error = ref('')
 
+// The pre-paint theme script in index.html deliberately skips native mode
+// (Web Storage is never touched there), so the gate itself must apply the
+// hydrated theme — otherwise the connection and fatal-data screens render in
+// the light theme regardless of the stored preference.
+function applyNativeTheme() {
+  const value = readPreference('woca-theme')
+  const dark =
+    value === 'dark' ||
+    (value !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+  document.documentElement.classList.toggle('dark', dark)
+}
+
 async function useBootstrapState(next: BootstrapState) {
   serverUrl.value = next.server_url ?? ''
   databasePath.value = next.database_path ?? ''
-  if (next.state === 'ready' && bridge) {
-    state.value = 'loading'
-    await hydrateNativePreferences(bridge)
-    applyStoredLocalePreference()
+  if (bridge) {
+    if (next.state === 'ready') {
+      state.value = 'loading'
+      await hydrateNativePreferences(bridge)
+      applyStoredLocalePreference()
+      applyNativeTheme()
+    } else {
+      // Gate screens render immediately; theme and locale land as soon as the
+      // preference read returns rather than blocking the form behind it.
+      void hydrateNativePreferences(bridge)
+        .then(() => {
+          applyStoredLocalePreference()
+          applyNativeTheme()
+        })
+        .catch(() => {})
+    }
   }
   state.value = next.state
 }
