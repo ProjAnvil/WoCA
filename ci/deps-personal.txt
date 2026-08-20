@@ -1,6 +1,7 @@
 github.com/BurntSushi/toml
 github.com/BurntSushi/toml/internal
 github.com/ProjAnvil/LadyM/adapter
+github.com/ProjAnvil/LadyM/client/golang
 github.com/ProjAnvil/LadyM/code
 github.com/ProjAnvil/LadyM/config
 github.com/ProjAnvil/LadyM/engine
@@ -53,6 +54,8 @@ github.com/ncruces/go-strftime
 github.com/odvcencio/gotreesitter
 github.com/odvcencio/gotreesitter/grammars
 github.com/odvcencio/gotreesitter/internal/parsercorephase0
+github.com/pgvector/pgvector-go
+github.com/pgvector/pgvector-go/pgx
 github.com/projanvil/langchain-golang/core/callbacks
 github.com/projanvil/langchain-golang/core/chathistory
 github.com/projanvil/langchain-golang/core/documents
@@ -148,6 +151,7 @@ github.com/rs/zerolog
 github.com/rs/zerolog/internal/json
 github.com/spf13/cobra
 github.com/spf13/pflag
+github.com/x448/float16
 github.com/xo/terminfo
 golang.org/x/crypto/blake2b
 golang.org/x/image/draw

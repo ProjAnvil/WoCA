@@ -177,6 +177,12 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- hs.Serve(ln) }()
 
+	// apikey auth is the multi-tenant posture: every tenant-sharing
+	// subsystem must be remote or off. EnterpriseMemory forbids the
+	// embedded ladyM engine (memory-engine must be remote or none).
+	if authMode != "" && authMode != "local" {
+		opts.EnterpriseMemory = true
+	}
 	ap, err := agentbuild.BuildAgent(ctx, opts, log)
 	if err != nil {
 		_ = hs.Close()

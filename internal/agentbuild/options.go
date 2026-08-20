@@ -51,6 +51,10 @@ type Options struct {
 	DB               string
 	MaxTurns         int
 	DebugLog         bool
+	// EnterpriseMemory marks a multi-tenant deployment (serve --auth
+	// apikey). The embedded ladyM engine is then forbidden: memory is the
+	// remote ladyM enterprise client or none (design §6.3.2/§6.3.8).
+	EnterpriseMemory bool
 }
 
 // RegisterFlags binds every option to fl. It is used for the root command's

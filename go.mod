@@ -3,7 +3,7 @@ module github.com/projanvil/woca
 go 1.26.4
 
 require (
-	github.com/ProjAnvil/LadyM v0.3.1
+	github.com/ProjAnvil/LadyM v0.4.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -12,6 +12,7 @@ require (
 	github.com/projanvil/langchain-golang v0.5.4
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.9
 	golang.org/x/image v0.45.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/term v0.45.0
@@ -44,9 +45,11 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/odvcencio/gotreesitter v0.49.0 // indirect
+	github.com/pgvector/pgvector-go v0.4.1 // indirect
+	github.com/pgvector/pgvector-go/pgx v0.4.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect

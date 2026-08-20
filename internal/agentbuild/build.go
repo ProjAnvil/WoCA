@@ -293,7 +293,7 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	// Factual-memory engine (ladyM): startup build degrades to nil on
 	// failure so the harness always comes up; settings changes rebuild it
 	// live via app.RebuildMemory.
-	memEngine, memErr := buildMemoryEngine(&App{Cfg: cfg, Settings: st}, dbSettings, model)
+	memEngine, memErr := buildMemoryEngine(&App{Cfg: cfg, Settings: st}, dbSettings, model, opts.EnterpriseMemory)
 	if memErr != nil {
 		log.Warn().Err(memErr).Msg("memory engine unavailable; continuing without memory")
 		memEngine = nil

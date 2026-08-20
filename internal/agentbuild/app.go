@@ -124,7 +124,7 @@ const memoryCloseGrace = 60 * time.Second
 // Close.
 func (ap *App) RebuildMemory() error {
 	dbSettings := ap.Settings.Load()
-	eng, err := buildMemoryEngine(ap, dbSettings, ap.Agent.CurrentModel())
+	eng, err := buildMemoryEngine(ap, dbSettings, ap.Agent.CurrentModel(), false)
 	if err != nil {
 		return err
 	}
@@ -157,9 +157,22 @@ func (ap *App) FetchQuota(ctx context.Context) (quota.Info, error) {
 // buildMemoryEngine constructs the memory engine from current settings.
 // engine=none returns (nil, nil); build failures degrade to nil (logged by
 // the caller) so woca always starts.
-func buildMemoryEngine(ap *App, dbSettings settings.Settings, chatModel language.ChatModel) (memory.Engine, error) {
+func buildMemoryEngine(ap *App, dbSettings settings.Settings, chatModel language.ChatModel, enterprise bool) (memory.Engine, error) {
 	if dbSettings.MemoryEngine == settings.MemoryEngineNone {
 		return nil, nil
+	}
+	if dbSettings.MemoryEngine == settings.MemoryEngineRemote {
+		return memory.BuildRemote(memory.RemoteConfig{
+			Endpoint: dbSettings.LadyMEndpoint,
+			Username: dbSettings.LadyMAPIUsername,
+			Password: ap.Settings.GetSecret(settings.SecretLadyMAPIPassword),
+		})
+	}
+	if enterprise {
+		// The embedded engine keeps its database inside this process; a
+		// multi-tenant deployment must not mix tenant memory into one local
+		// store. Only the remote ladyM enterprise API (or none) is allowed.
+		return nil, fmt.Errorf("enterprise deployments require memory-engine remote (with ladym-endpoint) or none; the embedded ladyM engine is not available")
 	}
 	dbPath := memory.ExpandHome(dbSettings.LadyMDBPath)
 	if dbPath == "" {

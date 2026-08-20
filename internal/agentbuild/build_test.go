@@ -513,7 +513,7 @@ func TestBuildMemoryEngineNone(t *testing.T) {
 	if err := settings.Apply(&cfg, settings.KeyMemoryEngine, settings.MemoryEngineNone); err != nil {
 		t.Fatal(err)
 	}
-	eng, err := buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}}, cfg, nil)
+	eng, err := buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}}, cfg, nil, false)
 	if err != nil || eng != nil {
 		t.Fatalf("none engine = %v %v", eng, err)
 	}
@@ -766,7 +766,7 @@ func TestBuildMemoryEngineBadPath(t *testing.T) {
 	if err := settings.Apply(&cfg, settings.KeyLadyMDBPath, filepath.Join(blocker, "ladym.DB")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}, Settings: st}, cfg, nil); err == nil {
+	if _, err := buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}, Settings: st}, cfg, nil, false); err == nil {
 		t.Fatal("expected engine build error")
 	}
 }
@@ -1014,5 +1014,29 @@ func TestApplyClaudeEnvSyncFailure(t *testing.T) {
 	}
 	if err := ap.ApplyClaudeEnv([]string{"s"}, nil); err == nil {
 		t.Fatal("expected sync failure")
+	}
+}
+
+func TestEnterpriseMemoryForbidsEmbeddedEngine(t *testing.T) {
+	cfg := settings.Default()
+	// The default engine is the embedded ladyM: forbidden in enterprise mode.
+	if _, err := buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}}, cfg, nil, true); err == nil {
+		t.Fatal("embedded engine allowed in enterprise mode")
+	}
+	// none stays allowed.
+	cfgNone := cfg
+	cfgNone.MemoryEngine = settings.MemoryEngineNone
+	if eng, err := buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}}, cfgNone, nil, true); err != nil || eng != nil {
+		t.Fatalf("none engine = %v err=%v", eng, err)
+	}
+	// remote without endpoint is a configuration error, not a silent fallback.
+	cfgRemote := cfg
+	cfgRemote.MemoryEngine = settings.MemoryEngineRemote
+	if _, err := buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}}, cfgRemote, nil, true); err == nil {
+		t.Fatal("remote engine without endpoint accepted")
+	}
+	// Personal mode keeps the embedded default.
+	if _, err := buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}}, cfg, nil, false); err != nil {
+		t.Fatalf("personal embedded engine = %v", err)
 	}
 }

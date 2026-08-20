@@ -131,7 +131,7 @@ func TestKeyValueAllKeys(t *testing.T) {
 		CheckpointBackend: "file", MemoryBackend: "memory", CheckpointDir: "cd",
 		MemoryEngine: "none", LadyMDBPath: "lp", LadyMEmbedding: "openai",
 		LadyMEmbeddingModel: "em", LadyMEmbeddingBaseURL: "eb", LadyMLLM: "none",
-		LadyMAutoRetain: true, LadyMTopK: 3, LadyMSystem2: true, LadyMSystem2Interval: 61,
+		LadyMAutoRetain: true, LadyMTopK: 3, LadyMSystem2: true, LadyMSystem2Interval: 61, LadyMEndpoint: "http://ladym:8080", LadyMAPIUsername: "woca-worker",
 		DebugLog: true,
 	}
 	for _, k := range KeyNames() {
