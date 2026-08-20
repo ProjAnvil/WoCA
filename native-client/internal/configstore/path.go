@@ -3,7 +3,7 @@ package configstore
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	pathpkg "path"
 	"runtime"
 	"strings"
 )
@@ -11,25 +11,32 @@ import (
 const applicationName = "woca-native-client"
 
 func DefaultPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
+	return defaultPath(runtime.GOOS, os.UserHomeDir, os.Getenv)
+}
+
+func defaultPath(goos string, userHomeDir func() (string, error), getenv func(string) string) (string, error) {
+	home := ""
+	if requiresHome(goos, getenv) {
+		var err error
+		home, err = userHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
 	}
-	dir, err := DataDir(runtime.GOOS, home, os.Getenv)
+	dir, err := DataDir(goos, home, getenv)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "client.db"), nil
+	return joinForOS(goos, dir, "client.db"), nil
 }
 
 func DataDir(goos, home string, getenv func(string) string) (string, error) {
-	if home == "" || !filepath.IsAbs(home) && goos != "windows" {
-		return "", fmt.Errorf("home directory must be absolute")
-	}
-
 	switch goos {
 	case "darwin":
-		return filepath.Join(home, "Library", "Application Support", applicationName), nil
+		if !posixAbsolute(home) {
+			return "", fmt.Errorf("home directory must be an absolute POSIX path")
+		}
+		return pathpkg.Join(home, "Library", "Application Support", applicationName), nil
 	case "windows":
 		appData := getenv("APPDATA")
 		if !windowsAbsolute(appData) {
@@ -38,13 +45,35 @@ func DataDir(goos, home string, getenv func(string) string) (string, error) {
 		return windowsJoin(appData, applicationName), nil
 	default:
 		if xdgDataHome := getenv("XDG_DATA_HOME"); xdgDataHome != "" {
-			if !filepath.IsAbs(xdgDataHome) {
-				return "", fmt.Errorf("XDG_DATA_HOME must be absolute")
+			if !posixAbsolute(xdgDataHome) {
+				return "", fmt.Errorf("XDG_DATA_HOME must be an absolute POSIX path")
 			}
-			return filepath.Join(xdgDataHome, applicationName), nil
+			return pathpkg.Join(xdgDataHome, applicationName), nil
 		}
-		return filepath.Join(home, ".local", "share", applicationName), nil
+		if !posixAbsolute(home) {
+			return "", fmt.Errorf("home directory must be an absolute POSIX path")
+		}
+		return pathpkg.Join(home, ".local", "share", applicationName), nil
 	}
+}
+
+func requiresHome(goos string, getenv func(string) string) bool {
+	return goos == "darwin" || goos != "windows" && getenv("XDG_DATA_HOME") == ""
+}
+
+func joinForOS(goos string, elements ...string) string {
+	if goos == "windows" {
+		joined := elements[0]
+		for _, element := range elements[1:] {
+			joined = windowsJoin(joined, element)
+		}
+		return joined
+	}
+	return pathpkg.Join(elements...)
+}
+
+func posixAbsolute(path string) bool {
+	return strings.HasPrefix(path, "/")
 }
 
 func windowsAbsolute(path string) bool {
