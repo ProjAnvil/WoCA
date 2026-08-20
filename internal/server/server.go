@@ -25,7 +25,10 @@ import (
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/gateway"
 	"github.com/projanvil/woca/internal/memory"
+	"github.com/projanvil/woca/internal/platform/authn"
+	"github.com/projanvil/woca/internal/platform/authz"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/quota"
@@ -37,6 +40,14 @@ import (
 
 // Config configures the web server.
 type Config struct {
+	// Auth authenticates /api requests and resolves the tenancy context
+	// (gateway.Authenticate). Nil trusts the local machine — the personal
+	// edition behavior — through the same middleware code path server
+	// editions use with stricter providers (design doc §3.3, §11.1).
+	Auth authn.Provider
+	// Authz authorizes /api requests against per-route scopes. Nil uses the
+	// local scope-set authorizer.
+	Authz authz.Authorizer
 	// Agent is the coding agent that runs each conversation turn.
 	Agent *agent.Agent
 	// Static is the frontend filesystem (embedded or os.DirFS for development).
@@ -101,6 +112,8 @@ type Server struct {
 	agent  *agent.Agent
 	static fs.FS
 	log    zerolog.Logger
+	auth   authn.Provider
+	authz  authz.Authorizer
 
 	mu             sync.Mutex
 	runs           map[string]*Run
@@ -154,10 +167,20 @@ func New(cfg Config) *Server {
 	if stateDB != nil {
 		state = &dbSessionState{db: stateDB}
 	}
+	auth := cfg.Auth
+	if auth == nil {
+		auth = authn.NewLocal()
+	}
+	authorizer := cfg.Authz
+	if authorizer == nil {
+		authorizer = authz.NewLocal()
+	}
 	s := &Server{
 		agent:          cfg.Agent,
 		static:         cfg.Static,
 		log:            cfg.Logger,
+		auth:           auth,
+		authz:          authorizer,
 		runs:           map[string]*Run{},
 		sessions:       store,
 		admission:      newAdmission(),
@@ -203,44 +226,57 @@ func New(cfg Config) *Server {
 }
 
 // Handler returns the full HTTP handler (API + embedded frontend).
+//
+// Every /api route passes the same chain: authentication (provider
+// injectable, design doc §11.3 red line 1), the local-tenant gate on host
+// surfaces (Phase 1 posture, see gateway.RequireLocalTenant), and a
+// per-route scope check. The health probe is the only exempt /api route
+// (infrastructure liveness).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.handleHealth)
-	mux.HandleFunc("POST /api/runs", s.handleCreateRun)
-	mux.HandleFunc("GET /api/runs/{id}/events", s.handleEvents)
-	mux.HandleFunc("POST /api/runs/{id}/answer", s.handleAnswer)
-	mux.HandleFunc("POST /api/runs/{id}/cancel", s.handleCancel)
-	mux.HandleFunc("POST /api/runs/{id}/input", s.handleQueueInput)
-	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
-	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
-	mux.HandleFunc("GET /api/events", s.handleGlobalEvents)
-	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
-	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
-	mux.HandleFunc("GET /api/sessions/{id}/goal", s.handleGetGoal)
-	mux.HandleFunc("POST /api/sessions/{id}/goal", s.handleGoalCommand)
-	mux.HandleFunc("GET /api/sessions/{id}/context", s.handleSessionContext)
-	mux.HandleFunc("GET /api/workspace", s.handleWorkspace)
-	mux.HandleFunc("GET /api/workspace/file", s.handleWorkspaceFile)
-	mux.HandleFunc("GET /api/completions", s.handleCompletions)
-	mux.HandleFunc("GET /api/agent", s.handleGetAgent)
-	mux.HandleFunc("POST /api/agent/permissions", s.handleSetPermissionMode)
-	mux.HandleFunc("POST /api/agent/thinking", s.handleSetThinking)
-	mux.HandleFunc("GET /api/quota", s.handleQuota)
-	mux.HandleFunc("GET /api/claudeenv", s.handleGetClaudeEnv)
-	mux.HandleFunc("PUT /api/claudeenv", s.handlePutClaudeEnv)
-	mux.HandleFunc("GET /api/plugins", s.handleGetPlugins)
-	mux.HandleFunc("PUT /api/plugins", s.handlePutPlugins)
-	mux.HandleFunc("POST /api/plugins/{name}/install", s.handleInstallPlugin)
-	mux.HandleFunc("POST /api/plugins/{name}/reinstall", s.handleInstallPlugin)
-	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
-	mux.HandleFunc("PUT /api/settings", s.handleUpdateSettings)
-	mux.HandleFunc("GET /api/memory", s.handleListMemory)
-	mux.HandleFunc("GET /api/memory/stats", s.handleMemoryStats)
-	mux.HandleFunc("GET /api/stats", s.handleStats)
-	mux.HandleFunc("POST /api/memory", s.handleRememberMemory)
-	mux.HandleFunc("DELETE /api/memory/{id}", s.handleForgetMemory)
+	s.route(mux, "POST /api/runs", authz.ScopeRunsWrite, s.handleCreateRun)
+	s.route(mux, "GET /api/runs/{id}/events", authz.ScopeRunsRead, s.handleEvents)
+	s.route(mux, "POST /api/runs/{id}/answer", authz.ScopeRunsWrite, s.handleAnswer)
+	s.route(mux, "POST /api/runs/{id}/cancel", authz.ScopeRunsWrite, s.handleCancel)
+	s.route(mux, "POST /api/runs/{id}/input", authz.ScopeRunsWrite, s.handleQueueInput)
+	s.route(mux, "POST /api/sessions", authz.ScopeSessionsWrite, s.handleCreateSession)
+	s.route(mux, "GET /api/sessions", authz.ScopeSessionsRead, s.handleListSessions)
+	s.route(mux, "GET /api/events", authz.ScopeRunsRead, s.handleGlobalEvents)
+	s.route(mux, "GET /api/sessions/{id}", authz.ScopeSessionsRead, s.handleGetSession)
+	s.route(mux, "DELETE /api/sessions/{id}", authz.ScopeSessionsWrite, s.handleDeleteSession)
+	s.route(mux, "GET /api/sessions/{id}/goal", authz.ScopeSessionsRead, s.handleGetGoal)
+	s.route(mux, "POST /api/sessions/{id}/goal", authz.ScopeSessionsWrite, s.handleGoalCommand)
+	s.route(mux, "GET /api/sessions/{id}/context", authz.ScopeSessionsRead, s.handleSessionContext)
+	s.route(mux, "GET /api/workspace", authz.ScopeWorkspaceRead, s.handleWorkspace)
+	s.route(mux, "GET /api/workspace/file", authz.ScopeWorkspaceRead, s.handleWorkspaceFile)
+	s.route(mux, "GET /api/completions", authz.ScopeSessionsRead, s.handleCompletions)
+	s.route(mux, "GET /api/agent", authz.ScopeSettingsRead, s.handleGetAgent)
+	s.route(mux, "POST /api/agent/permissions", authz.ScopeAgentWrite, s.handleSetPermissionMode)
+	s.route(mux, "POST /api/agent/thinking", authz.ScopeAgentWrite, s.handleSetThinking)
+	s.route(mux, "GET /api/quota", authz.ScopeSettingsRead, s.handleQuota)
+	s.route(mux, "GET /api/claudeenv", authz.ScopeSettingsRead, s.handleGetClaudeEnv)
+	s.route(mux, "PUT /api/claudeenv", authz.ScopeSettingsWrite, s.handlePutClaudeEnv)
+	s.route(mux, "GET /api/plugins", authz.ScopePluginsRead, s.handleGetPlugins)
+	s.route(mux, "PUT /api/plugins", authz.ScopePluginsWrite, s.handlePutPlugins)
+	s.route(mux, "POST /api/plugins/{name}/install", authz.ScopePluginsWrite, s.handleInstallPlugin)
+	s.route(mux, "POST /api/plugins/{name}/reinstall", authz.ScopePluginsWrite, s.handleInstallPlugin)
+	s.route(mux, "GET /api/settings", authz.ScopeSettingsRead, s.handleGetSettings)
+	s.route(mux, "PUT /api/settings", authz.ScopeSettingsWrite, s.handleUpdateSettings)
+	s.route(mux, "GET /api/memory", authz.ScopeMemoryRead, s.handleListMemory)
+	s.route(mux, "GET /api/memory/stats", authz.ScopeMemoryRead, s.handleMemoryStats)
+	s.route(mux, "GET /api/stats", authz.ScopeSettingsRead, s.handleStats)
+	s.route(mux, "POST /api/memory", authz.ScopeMemoryWrite, s.handleRememberMemory)
+	s.route(mux, "DELETE /api/memory/{id}", authz.ScopeMemoryWrite, s.handleForgetMemory)
 	mux.Handle("/", s.staticHandler())
-	return mux
+	return gateway.Authenticate(s.auth)(
+		gateway.RequireLocalTenant()(mux),
+	)
+}
+
+// route registers h at pattern with a required scope (gateway.RequireScope).
+func (s *Server) route(mux *http.ServeMux, pattern, scope string, h http.HandlerFunc) {
+	mux.Handle(pattern, gateway.RequireScope(s.authz, scope)(h))
 }
 
 // Serve listens on addr and serves until ctx is cancelled, shutting down
@@ -294,13 +330,19 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	if active < 0 {
 		active = 0
 	}
-	lspActive, lspBroken := s.agent.LSPStats()
+	lspActive, lspBroken := 0, 0
+	teammates, background := 0, 0
+	if s.agent != nil {
+		lspActive, lspBroken = s.agent.LSPStats()
+		teammates = s.agent.ActiveTeammateCount()
+		background = s.agent.RunningTaskCount()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"active_runs":          active,
 		"queued_runs":          queued,
 		"session_queue_depths": depths,
-		"teammates":            s.agent.ActiveTeammateCount(),
-		"background_tasks":     s.agent.RunningTaskCount(),
+		"teammates":            teammates,
+		"background_tasks":     background,
 		"sse_dropped":          dropped,
 		"lsp":                  map[string]any{"active": lspActive, "broken": lspBroken},
 	})

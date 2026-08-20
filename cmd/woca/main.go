@@ -120,6 +120,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newPluginCmd())
 	root.AddCommand(newMcpAuthCmd())
+	root.AddCommand(newTenantCmd())
 	root.AddCommand(servefront.NewWebCmd())
 	return root
 }

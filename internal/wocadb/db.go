@@ -23,6 +23,13 @@ const (
 	DialectPostgres Dialect = "postgres"
 )
 
+// tenantGUCDefault resolves the effective tenant for RLS policies and row
+// defaults from the app.tenant_id GUC. The NULLIF is load-bearing: after a
+// transaction-scoped SET LOCAL ends, a pooled connection re-reads the GUC
+// as the empty string, not NULL — without the guard such connections would
+// match tenant ” instead of 'local' and silently mistag written rows.
+const tenantGUCDefault = `COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), 'local')`
+
 // DB is an opened woca database with its dialect and human-readable location.
 type DB struct {
 	*sql.DB
@@ -130,6 +137,17 @@ func summarizeDSN(dsn string) string {
 // secrets are single-row-per-key; checkpoints store graph checkpoints;
 // memory is a namespace+key JSON document store; session_state records the
 // durable per-session run state (running / awaiting an interrupt answer).
+//
+// On postgres every business table additionally carries tenant_id and is
+// RLS-scoped (design doc §9.1, Phase 1). The policy compares against the
+// per-transaction GUC app.tenant_id, defaulting to 'local' when unset —
+// so existing single-tenant deployments (which never SET it) keep seeing
+// and writing exactly their 'local' rows, while tenant-scoped transactions
+// (BEGIN; SET LOCAL app.tenant_id = …) see only their own. FORCE ROW LEVEL
+// SECURITY makes the table owner subject to the policy too, since the app
+// role creates and therefore owns these tables. The sqlite backend stays
+// single-tenant by design: no tenant column, isolation is enforced one
+// layer up (store namespace prefixes + route gates).
 func (d *DB) migrate() error {
 	var stmts []string
 	switch d.Dialect {
@@ -165,6 +183,31 @@ func (d *DB) migrate() error {
 				owner TEXT NOT NULL,
 				updated_at BIGINT NOT NULL
 			)`,
+		}
+		for _, table := range []string{"settings", "secrets", "checkpoints", "memory", "session_state"} {
+			stmts = append(stmts,
+				`ALTER TABLE `+table+` ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT `+tenantGUCDefault,
+				// Reset the default every migrate: an earlier Phase 1 build
+				// shipped a COALESCE without the NULLIF empty-string guard.
+				`ALTER TABLE `+table+` ALTER COLUMN tenant_id SET DEFAULT `+tenantGUCDefault,
+				`ALTER TABLE `+table+` ENABLE ROW LEVEL SECURITY`,
+				`ALTER TABLE `+table+` FORCE ROW LEVEL SECURITY`,
+				`DO $$
+				DECLARE existing text;
+				BEGIN
+					SELECT qual INTO existing FROM pg_policies
+					WHERE tablename = '`+table+`' AND policyname = 'tenant_isolation';
+					-- Replace policies from earlier Phase 1 builds (no NULLIF guard).
+					IF existing IS NOT NULL AND existing NOT LIKE '%NULLIF%' THEN
+						DROP POLICY tenant_isolation ON `+table+`;
+						existing := NULL;
+					END IF;
+					IF existing IS NULL THEN
+						CREATE POLICY tenant_isolation ON `+table+`
+							USING (tenant_id = `+tenantGUCDefault+`)
+							WITH CHECK (tenant_id = `+tenantGUCDefault+`);
+					END IF;
+				END $$;`)
 		}
 	default:
 		stmts = []string{

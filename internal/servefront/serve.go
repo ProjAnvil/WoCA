@@ -22,9 +22,12 @@ import (
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/logging"
+	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
+	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/tenant"
 	"github.com/projanvil/woca/internal/webd"
 	"github.com/projanvil/woca/internal/webgui"
 	webdist "github.com/projanvil/woca/web"
@@ -38,11 +41,13 @@ func NewServeCmd(opts *agentbuild.Options) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			addr, _ := cmd.Flags().GetString("addr")
 			noBrowser, _ := cmd.Flags().GetBool("no-browser")
-			return Serve(cmd.Context(), *opts, addr, noBrowser)
+			authMode, _ := cmd.Flags().GetString("auth")
+			return Serve(cmd.Context(), *opts, addr, noBrowser, authMode)
 		},
 	}
 	cmd.Flags().String("addr", webgui.DefaultAddr, "listen address for the web server")
 	cmd.Flags().Bool("no-browser", false, "do not open the browser on startup")
+	cmd.Flags().String("auth", "", "authentication mode: local (default, trust the machine) or apikey (woca_ API keys, managed via `woca tenant`; env WOCA_AUTH)")
 	return cmd
 }
 
@@ -131,12 +136,24 @@ func NewWebCmd() *cobra.Command {
 }
 
 // Serve runs the embedded web UI server.
-func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser bool) error {
+func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser bool, authMode string) error {
 	level, err := logging.ParseLevel(opts.LogLevel)
 	if err != nil {
 		return err
 	}
 	log := logging.NewConsole(os.Stderr, level)
+
+	if authMode == "" {
+		authMode = os.Getenv("WOCA_AUTH")
+	}
+	var authProv authn.Provider
+	if authMode != "" && authMode != "local" {
+		switch authMode {
+		case "apikey", "api-key", "api-keys", "keys":
+		default:
+			return fmt.Errorf("unknown --auth mode %q (want local or apikey)", authMode)
+		}
+	}
 
 	// Bind and answer /api/health before the agent build: the build makes
 	// network calls (MCP connect, embedding probe) that can hang for many
@@ -168,11 +185,20 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 	defer ap.PluginMgr.Close()
 	defer ap.Agent.Close()
 
+	if authMode != "" && authMode != "local" {
+		authProv, err = newAPIKeyProvider(ap.Settings)
+		if err != nil {
+			_ = hs.Close()
+			return err
+		}
+	}
+
 	sessionDir := ""
 	if d := session.DefaultDir(); d != "" {
 		sessionDir = filepath.Join(d, "sessions")
 	}
 	srv := server.New(server.Config{
+		Auth:         authProv,
 		Agent:        ap.Agent,
 		Static:       webdist.DistFS(),
 		Logger:       log,
@@ -213,6 +239,20 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return srv.ServeStarted(ctx, hs, serveErr)
+}
+
+// newAPIKeyProvider builds the API-key authn provider over the settings
+// database (the same database the agent build opened, so tenant tables and
+// credentials live next to settings).
+func newAPIKeyProvider(st *settings.Store) (authn.Provider, error) {
+	if st == nil {
+		return nil, fmt.Errorf("api-key auth requires a settings database (set --db; it cannot be \"none\")")
+	}
+	ts, err := tenant.NewStore(st.DB())
+	if err != nil {
+		return nil, fmt.Errorf("api-key auth: %w", err)
+	}
+	return tenant.NewAPIKeyProvider(ts), nil
 }
 
 // startingHandler serves the window between the port bind and the agent

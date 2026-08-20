@@ -101,3 +101,32 @@ networks:
 开发默认值在 [.env](.env)(已入库,方便开箱即用);接任何半正式环境前
 务必改掉两个密码。端口覆盖:改 `.env` 里的 `ENT_*` 后 `docker compose up -d`
 重建 gateway 即可。
+
+## 租户与 API key 认证(Phase 1)
+
+`woca serve --auth apikey`(或 env `WOCA_AUTH=apikey`)后,除 `/api/health`
+外全部 API 要求 Bearer 凭证;默认 `local` 模式信任本机(个人版行为不变)。
+凭证用 `woca tenant` 管理(走同一 `--db`/`WOCA_DB`):
+
+```sh
+# 建 tenant 并发 key(secret 只显示一次)
+woca tenant --db "postgres://woca:…@127.0.0.1:35432/woca?sslmode=disable" create acme
+woca tenant --db … issue <tenant-id> --role member --name ci     # --user 省略则自动建用户
+woca tenant --db … keys <tenant-id> && woca tenant --db … revoke <prefix>
+
+curl -H "Authorization: Bearer woca_…" http://127.0.0.3484/api/sessions
+```
+
+- **key 形态** `woca_<前缀12hex>_<密钥48hex>`:库中只存 SHA-256,前缀是非
+  机密查找句柄;角色(tenant-admin/member/viewer)在签发时冻结为 scope 集。
+- **PG RLS**:wocadb 五张业务表(`settings`/`secrets`/`checkpoints`/
+  `memory`/`session_state`)自动加 `tenant_id` 列并启用
+  `FORCE ROW LEVEL SECURITY`;policy 按 `app.tenant_id` GUC 过滤,未设置时
+  默认 `local`(存量单租户部署无感)。注意:**超级用户绕过 RLS**,应用
+  连接必须用建表的非超户角色(本环境 `woca` 即初始超户,生产应另建
+  `NOBYPASSRLS` 应用角色——initdb 的角色约定文件是落点)。
+- **默认拒绝**:Phase 3 沙箱落地前,非 local 租户在全部宿主面
+  (runs/workspace/settings/memory…)一律 403,仅 health 与 SPA 可达;
+  local 租户的 key 也受 role scope 约束(viewer 只读)。
+- sqlite(个人版)不建租户列:隔离由 store 层 `tenant:` 命名空间前缀 +
+  路由门承担,行为与今日一致。

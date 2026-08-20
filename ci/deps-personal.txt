@@ -100,6 +100,7 @@ github.com/projanvil/woca/internal/config
 github.com/projanvil/woca/internal/console
 github.com/projanvil/woca/internal/context
 github.com/projanvil/woca/internal/cost
+github.com/projanvil/woca/internal/gateway
 github.com/projanvil/woca/internal/hooks
 github.com/projanvil/woca/internal/lgcp
 github.com/projanvil/woca/internal/logging
@@ -111,8 +112,11 @@ github.com/projanvil/woca/internal/notify
 github.com/projanvil/woca/internal/oauth
 github.com/projanvil/woca/internal/obslog
 github.com/projanvil/woca/internal/permissions
+github.com/projanvil/woca/internal/platform/authn
+github.com/projanvil/woca/internal/platform/authz
 github.com/projanvil/woca/internal/platform/eventbus
 github.com/projanvil/woca/internal/platform/executor
+github.com/projanvil/woca/internal/platform/tenancy
 github.com/projanvil/woca/internal/pluginrt
 github.com/projanvil/woca/internal/plugins
 github.com/projanvil/woca/internal/prompt
@@ -129,6 +133,7 @@ github.com/projanvil/woca/internal/settings
 github.com/projanvil/woca/internal/skills
 github.com/projanvil/woca/internal/slashcmds
 github.com/projanvil/woca/internal/store
+github.com/projanvil/woca/internal/tenant
 github.com/projanvil/woca/internal/tokens
 github.com/projanvil/woca/internal/tools
 github.com/projanvil/woca/internal/tui

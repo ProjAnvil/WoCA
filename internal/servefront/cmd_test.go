@@ -17,14 +17,14 @@ func TestServeFunc(t *testing.T) {
 	opts := baseOpts(t, url)
 	ctx, cancel := context.WithTimeout(t.Context(), 700*time.Millisecond)
 	defer cancel()
-	if err := Serve(ctx, opts, "127.0.0.1:0", true); err != nil {
+	if err := Serve(ctx, opts, "127.0.0.1:0", true, ""); err != nil {
 		t.Fatalf("Serve = %v", err)
 	}
 }
 
 func TestServeBadLogLevel(t *testing.T) {
 	opts := agentbuild.Options{LogLevel: "bogus"}
-	if err := Serve(t.Context(), opts, "127.0.0.1:0", true); err == nil {
+	if err := Serve(t.Context(), opts, "127.0.0.1:0", true, ""); err == nil {
 		t.Fatal("expected log-level error")
 	}
 }

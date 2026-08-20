@@ -32,7 +32,7 @@ func TestServeAPIDrivesClosures(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- Serve(ctx, opts, addr, true) }()
+	go func() { serveDone <- Serve(ctx, opts, addr, true, "") }()
 
 	base := "http://" + addr
 	// Serve() answers /api/health from the moment the port is bound; the
@@ -131,7 +131,7 @@ func TestServeBuildAgentError(t *testing.T) {
 	isolateEnv(t)
 	opts := baseOpts(t, fakeOpenAI(t, "hi"))
 	opts.Provider = "nope"
-	if err := Serve(t.Context(), opts, "127.0.0.1:0", true); err == nil {
+	if err := Serve(t.Context(), opts, "127.0.0.1:0", true, ""); err == nil {
 		t.Fatal("expected buildAgent error")
 	}
 }
@@ -143,7 +143,7 @@ func TestServeOpensBrowserWithFakeOpen(t *testing.T) {
 	opts := baseOpts(t, fakeOpenAI(t, "hi"))
 	ctx, cancel := context.WithTimeout(t.Context(), 700*time.Millisecond)
 	defer cancel()
-	if err := Serve(ctx, opts, "127.0.0.1:0", false); err != nil {
+	if err := Serve(ctx, opts, "127.0.0.1:0", false, ""); err != nil {
 		t.Fatal(err)
 	}
 }
