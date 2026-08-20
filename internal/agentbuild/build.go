@@ -288,7 +288,11 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	case backend == settings.CheckpointPostgres:
 		if st != nil {
 			if dsn := st.GetSecret(settings.SecretPostgresURL); dsn != "" {
-				if s, err := lgcppostgres.NewFromConnString(ctx, dsn, serializer); err == nil {
+				// The saver's tables live in the lgcp schema (their canonical
+				// name "checkpoints" collides with woca's own KV table in
+				// public; wocadb pre-creates the schema and its RLS
+				// ownership policies).
+				if s, err := lgcppostgres.NewFromConnString(ctx, dsnWithLgcpSchema(dsn), serializer); err == nil {
 					checkpointer = s
 				} else {
 					log.Warn().Err(err).Msg("checkpoint postgres backend unavailable")
@@ -687,4 +691,18 @@ func McpAuthRunner(st *settings.Store) func(ctx context.Context, server string) 
 // the settings database (~/.woca/checkpoints.db).
 func checkpointsDefaultPath() string {
 	return filepath.Join(filepath.Dir(wocadb.DefaultPath()), "checkpoints.db")
+}
+
+// dsnWithLgcpSchema points a postgres DSN's search_path at the lgcp schema
+// (URL and key=value forms both accepted; pgx treats the parameter as a
+// runtime param applied to every pooled session).
+func dsnWithLgcpSchema(dsn string) string {
+	const param = "search_path=lgcp"
+	if strings.Contains(dsn, "://") {
+		if strings.Contains(dsn, "?") {
+			return dsn + "&" + param
+		}
+		return dsn + "?" + param
+	}
+	return dsn + " " + param
 }
