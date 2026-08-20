@@ -32,7 +32,9 @@ type RemoteConfig struct {
 	// Endpoint is the ladyM API base URL (scheme://host:port).
 	Endpoint string
 	// Username/Password feed the data-plane's Basic auth (ladyM users
-	// table). Tenant-scoped bearer tokens arrive with ladyM P3.
+	// table). Both empty targets a no-auth deployment (auth=off behind a
+	// private-segment gateway); tenant-scoped bearer tokens arrive with
+	// ladyM P3.
 	Username string
 	Password string
 
@@ -72,9 +74,6 @@ func BuildRemote(cfg RemoteConfig) (*RemoteEngine, error) {
 	}
 	if u, err := url.Parse(cfg.Endpoint); err != nil || u.Scheme == "" || u.Host == "" {
 		return nil, fmt.Errorf("memory: invalid ladym_endpoint %q", cfg.Endpoint)
-	}
-	if cfg.Username == "" {
-		return nil, errors.New("memory: remote engine requires a ladym API username")
 	}
 	if cfg.RecallBudget <= 0 {
 		cfg.RecallBudget = 3 * time.Second

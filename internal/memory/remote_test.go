@@ -347,8 +347,9 @@ func TestBuildRemoteValidation(t *testing.T) {
 	if _, err := BuildRemote(RemoteConfig{Endpoint: "not a url"}); err == nil {
 		t.Fatal("malformed endpoint accepted")
 	}
-	if _, err := BuildRemote(RemoteConfig{Endpoint: "http://ladym:8080"}); err == nil {
-		t.Fatal("missing username accepted")
+	// No-auth deployments are valid: empty credentials build fine.
+	if _, err := BuildRemote(RemoteConfig{Endpoint: "http://ladym:8080"}); err != nil {
+		t.Fatalf("no-auth deployment rejected: %v", err)
 	}
 	_ = fmt.Sprintf
 }
