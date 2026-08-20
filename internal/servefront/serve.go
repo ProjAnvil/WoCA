@@ -24,6 +24,7 @@ import (
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/pluginrt"
+	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
@@ -209,9 +210,18 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 	if d := session.DefaultDir(); d != "" {
 		sessionDir = filepath.Join(d, "sessions")
 	}
+	var runLedger *runstate.Ledger
+	if st := ap.Settings.DB(); st != nil {
+		runLedger, err = runstate.New(st)
+		if err != nil {
+			_ = hs.Close()
+			return fmt.Errorf("run ledger: %w", err)
+		}
+	}
 	srv := server.New(server.Config{
 		Auth:         authProv,
 		NativeAuth:   native,
+		RunLedger:    runLedger,
 		Agent:        ap.Agent,
 		Static:       webdist.DistFS(),
 		Logger:       log,

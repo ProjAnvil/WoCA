@@ -33,6 +33,7 @@ import (
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/quota"
+	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
@@ -53,6 +54,10 @@ type Config struct {
 	// NativeAuth enables the native-client credential surface
 	// (/api/native/*). Nil disables it (personal edition).
 	NativeAuth *NativeAuth
+	// RunLedger externalizes run state (runs + run_events) so multiple
+	// instances sharing one database see each other's runs and adopt
+	// expired leases (Phase 2). Nil keeps the in-process behavior only.
+	RunLedger *runstate.Ledger
 	// Agent is the coding agent that runs each conversation turn.
 	Agent *agent.Agent
 	// Static is the frontend filesystem (embedded or os.DirFS for development).
@@ -120,6 +125,8 @@ type Server struct {
 	auth       authn.Provider
 	authz      authz.Authorizer
 	nativeAuth *NativeAuth
+	ledger     *runstate.Ledger
+	workerID   string
 
 	mu             sync.Mutex
 	runs           map[string]*Run
@@ -188,6 +195,8 @@ func New(cfg Config) *Server {
 		auth:           auth,
 		authz:          authorizer,
 		nativeAuth:     cfg.NativeAuth,
+		ledger:         cfg.RunLedger,
+		workerID:       newWorkerID(),
 		runs:           map[string]*Run{},
 		sessions:       store,
 		admission:      newAdmission(),
@@ -828,6 +837,27 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 			run.finish("done", map[string]any{"cancelled": true})
 			return
 		}
+		// Externalized run state (Phase 2): the database row is created when
+		// the run actually starts executing — the one_active_run_per_session
+		// constraint then holds across instances. A uniqueness failure means
+		// another instance is running this session (crash-leftover rows are
+		// reaped by their lease expiring), so this run errors out instead of
+		// double-executing.
+		if s.ledger != nil {
+			thread := agent.NewThreadID()
+			run.mu.Lock()
+			run.thread = thread
+			run.mu.Unlock()
+			if err := s.ledger.Start(run.ctx, runstate.Run{
+				RunID: run.id, SessionID: sid, ThreadID: thread,
+			}, s.workerID, runLeaseDuration); err != nil {
+				s.log.Warn().Str("run", run.id).Str("session", sid).Err(err).Msg("run rejected by the run ledger")
+				run.finish("error", map[string]any{"message": "session is running on another instance"})
+				s.admission.release(sid)
+				return
+			}
+			s.trackRunLease(run, sid)
+		}
 		run.emit(Event{Type: "run_started", Data: map[string]any{}})
 		s.markSessionState(sid, wocadb.SessionRunning, run.id)
 		history := s.sessions.load(sid)
@@ -955,4 +985,75 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
+}
+
+// newWorkerID mints this server instance's lease identity for the run
+// ledger (owner of runs it executes; the reconciler re-queues runs whose
+// lease expires).
+func newWorkerID() string {
+	return fmt.Sprintf("srv-%s-%d", shortHost(), os.Getpid())
+}
+
+func shortHost() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "unknown"
+	}
+	if i := strings.IndexByte(host, '.'); i > 0 {
+		host = host[:i]
+	}
+	return host
+}
+
+// runLease is the heartbeat cadence for externalized runs: extend the lease
+// every leaseInterval while the run lives; a lease lost to the reconciler
+// (another instance adopted the run) cancels the local execution.
+const runLeaseDuration = 90 * time.Second
+
+func (s *Server) trackRunLease(run *Run, sid string) {
+	interval := runLeaseDuration / 3
+	stop := make(chan struct{})
+	// Chain the ledger finish onto the terminal event exactly once.
+	prev := run.onFinish
+	var once sync.Once
+	run.onFinish = func() {
+		once.Do(func() {
+			close(stop)
+			if s.ledger != nil {
+				_ = s.ledger.Finish(context.WithoutCancel(run.ctx), run.id, s.workerID, run.finishType())
+			}
+		})
+		if prev != nil {
+			prev()
+		}
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-run.ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.ledger.Heartbeat(context.WithoutCancel(run.ctx), run.id, s.workerID, runLeaseDuration); err != nil {
+					// The lease was reaped (worker death from the ledger's
+					// point of view) or handed to another worker: stop this
+					// execution so the run is not double-run.
+					s.log.Warn().Str("run", run.id).Str("session", sid).Err(err).Msg("run lease lost; cancelling local execution")
+					run.cancel()
+					return
+				}
+			}
+		}
+	}()
+}
+
+// finishType returns the terminal event type ("done" or "error") recorded by
+// finish; "" before the terminal event.
+func (r *Run) finishType() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.finishKind
 }

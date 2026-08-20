@@ -30,6 +30,7 @@ type Run struct {
 	Status         string
 	Owner          string
 	LeaseExpiresAt int64
+	ThreadID       string
 	ConfigSnapshot string
 	CreatedAt      int64
 	UpdatedAt      int64
@@ -81,9 +82,9 @@ func (l *Ledger) Enqueue(ctx context.Context, run Run) error {
 	}
 	now := l.nowMilli()
 	_, err := l.db.DB.ExecContext(ctx,
-		`INSERT INTO runs (run_id, session_id, status, owner, lease_expires_at, config_snapshot, created_at, updated_at)
-		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusQueued+`', '', 0, `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`)`,
-		run.RunID, run.SessionID, run.ConfigSnapshot, now, now)
+		`INSERT INTO runs (run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, created_at, updated_at)
+		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusQueued+`', 0, 0, `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`)`,
+		run.RunID, run.SessionID, run.ThreadID, run.ConfigSnapshot, now, now)
 	if err != nil && isUniqueViolation(err) {
 		return fmt.Errorf("runstate: session %s already has an active run", run.SessionID)
 	}
@@ -104,7 +105,7 @@ func (l *Ledger) Claim(ctx context.Context, workerID string, lease time.Duration
 	q := `UPDATE runs SET status = '` + StatusRunning + `', owner = ` + l.ph(0) +
 		`, lease_expires_at = ` + l.ph(1) + `, updated_at = ` + l.ph(2) +
 		` WHERE run_id = (SELECT run_id FROM runs WHERE status = '` + StatusQueued +
-		`' ORDER BY updated_at, created_at LIMIT 1) RETURNING run_id, session_id, config_snapshot, created_at`
+		`' ORDER BY updated_at, created_at LIMIT 1) RETURNING run_id, session_id, thread_id, config_snapshot, created_at`
 	if l.dialect != wocadb.DialectPostgres {
 		// sqlite has no UPDATE...RETURNING on every driver version used here;
 		// select-then-update inside a transaction is equivalent because the
@@ -113,7 +114,7 @@ func (l *Ledger) Claim(ctx context.Context, workerID string, lease time.Duration
 	}
 	var run Run
 	err := l.db.DB.QueryRowContext(ctx, q, workerID, expires, now).
-		Scan(&run.RunID, &run.SessionID, &run.ConfigSnapshot, &run.CreatedAt)
+		Scan(&run.RunID, &run.SessionID, &run.ThreadID, &run.ConfigSnapshot, &run.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -135,9 +136,9 @@ func (l *Ledger) claimSQLite(ctx context.Context, workerID string, expires, now 
 	defer func() { _ = tx.Rollback() }()
 	var run Run
 	err = tx.QueryRowContext(ctx,
-		`SELECT run_id, session_id, config_snapshot, created_at FROM runs
+		`SELECT run_id, session_id, thread_id, config_snapshot, created_at FROM runs
 		 WHERE status = '`+StatusQueued+`' ORDER BY updated_at, created_at LIMIT 1`).
-		Scan(&run.RunID, &run.SessionID, &run.ConfigSnapshot, &run.CreatedAt)
+		Scan(&run.RunID, &run.SessionID, &run.ThreadID, &run.ConfigSnapshot, &run.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -192,11 +193,11 @@ func (l *Ledger) Finish(ctx context.Context, runID, workerID, status string) err
 func (l *Ledger) ActiveRun(ctx context.Context, sessionID string) (*Run, bool, error) {
 	var run Run
 	err := l.db.DB.QueryRowContext(ctx,
-		`SELECT run_id, session_id, status, owner, lease_expires_at, config_snapshot, created_at, updated_at
+		`SELECT run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, created_at, updated_at
 		 FROM runs WHERE session_id = `+l.ph(0)+` AND status IN ('`+StatusQueued+`','`+StatusRunning+`')`,
 		sessionID).
 		Scan(&run.RunID, &run.SessionID, &run.Status, &run.Owner, &run.LeaseExpiresAt,
-			&run.ConfigSnapshot, &run.CreatedAt, &run.UpdatedAt)
+			&run.ThreadID, &run.ConfigSnapshot, &run.CreatedAt, &run.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -297,4 +298,40 @@ func isUniqueViolation(err error) bool {
 	return strings.Contains(msg, "UNIQUE constraint failed") ||
 		strings.Contains(msg, "duplicate key value violates unique constraint") ||
 		strings.Contains(msg, "23505")
+}
+
+// Row returns the recorded state of one run (read-only accessor).
+func (l *Ledger) Row(ctx context.Context, runID string) (Run, bool, error) {
+	var run Run
+	err := l.db.DB.QueryRowContext(ctx,
+		`SELECT run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, created_at, updated_at
+		 FROM runs WHERE run_id = `+l.ph(0), runID).
+		Scan(&run.RunID, &run.SessionID, &run.Status, &run.Owner, &run.LeaseExpiresAt,
+			&run.ThreadID, &run.ConfigSnapshot, &run.CreatedAt, &run.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Run{}, false, nil
+	}
+	if err != nil {
+		return Run{}, false, err
+	}
+	return run, true, nil
+}
+
+// Start registers a run this caller executes itself: the row is born
+// running under workerID's lease (the one_active_run_per_session constraint
+// still applies). Workers that pick runs up from a queue use Enqueue/Claim
+// instead.
+func (l *Ledger) Start(ctx context.Context, run Run, workerID string, lease time.Duration) error {
+	if run.RunID == "" || run.SessionID == "" {
+		return errors.New("runstate: run id and session id are required")
+	}
+	now := l.nowMilli()
+	_, err := l.db.DB.ExecContext(ctx,
+		`INSERT INTO runs (run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, created_at, updated_at)
+		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusRunning+`', `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`, `+l.ph(6)+`, `+l.ph(7)+`)`,
+		run.RunID, run.SessionID, workerID, now+lease.Milliseconds(), run.ThreadID, run.ConfigSnapshot, now, now)
+	if err != nil && isUniqueViolation(err) {
+		return fmt.Errorf("runstate: session %s already has an active run", run.SessionID)
+	}
+	return err
 }

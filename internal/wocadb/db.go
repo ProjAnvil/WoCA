@@ -182,6 +182,7 @@ func (d *DB) migrate() error {
 				status TEXT NOT NULL,
 				owner TEXT NOT NULL DEFAULT '',
 				lease_expires_at __TS__ NOT NULL DEFAULT 0,
+				thread_id TEXT NOT NULL DEFAULT '',
 				config_snapshot TEXT NOT NULL DEFAULT '',
 				created_at __TS__ NOT NULL,
 				updated_at __TS__ NOT NULL
@@ -260,6 +261,7 @@ func (d *DB) migrate() error {
 				status TEXT NOT NULL,
 				owner TEXT NOT NULL DEFAULT '',
 				lease_expires_at __TS__ NOT NULL DEFAULT 0,
+				thread_id TEXT NOT NULL DEFAULT '',
 				config_snapshot TEXT NOT NULL DEFAULT '',
 				created_at __TS__ NOT NULL,
 				updated_at __TS__ NOT NULL

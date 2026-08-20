@@ -41,14 +41,19 @@ type Run struct {
 	a      *agent.Agent
 	ctx    context.Context
 	cancel context.CancelFunc
+	// thread is the checkpoint thread id the runner will pin (minted by the
+	// server so the externalized run ledger records the same value).
+	thread string
 
 	mu      sync.Mutex
 	subs    map[*subscriber]struct{}
 	history []Event
 	pending *interruptState
-	done    bool         // terminal event (done or error) emitted
-	seq     int64        // under mu; last assigned Seq
-	dropped atomic.Int64 // fanout drops on full subscriber channels
+	done    bool // terminal event (done or error) emitted
+	// finishKind records the terminal event type for the run ledger.
+	finishKind string
+	seq        int64        // under mu; last assigned Seq
+	dropped    atomic.Int64 // fanout drops on full subscriber channels
 	// onFinish, when set, fires exactly once when the terminal event is
 	// emitted — on error and cancellation too, before onDone runs.
 	onFinish func()
@@ -78,7 +83,7 @@ func (r *Run) ID() string { return r.id }
 // gate release) to a single point.
 func (r *Run) start(history []messages.Message, onDone func([]messages.Message)) {
 	go func() {
-		final, err := runner.New(r.a, r.handleInterrupt, r.render).Run(r.ctx, history)
+		final, err := runner.New(r.a, r.handleInterrupt, r.render).WithThreadID(r.thread).Run(r.ctx, history)
 		if err != nil {
 			if r.ctx.Err() != nil {
 				r.finish("done", map[string]any{"cancelled": true})
@@ -103,7 +108,7 @@ func (r *Run) start(history []messages.Message, onDone func([]messages.Message))
 // fires exactly once on every exit path; final is nil on error or cancel.
 func (r *Run) startGoal(history []messages.Message, onDone func([]messages.Message)) {
 	go func() {
-		final, err := runner.New(r.a, r.handleInterrupt, r.render).RunGoal(r.ctx, history)
+		final, err := runner.New(r.a, r.handleInterrupt, r.render).WithThreadID(r.thread).RunGoal(r.ctx, history)
 		if err != nil {
 			if r.ctx.Err() != nil {
 				r.finish("done", map[string]any{"cancelled": true})
@@ -305,6 +310,7 @@ func (r *Run) finish(evType string, data map[string]any) {
 	r.mu.Lock()
 	first := !r.done
 	r.done = true
+	r.finishKind = evType
 	hook := r.onFinish
 	r.mu.Unlock()
 	r.emit(Event{Type: evType, Data: data})
