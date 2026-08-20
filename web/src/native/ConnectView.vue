@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { validateEnterpriseOrigin } from './origin'
 
 const props = defineProps<{
   serverUrl?: string
@@ -30,9 +31,16 @@ async function submit() {
     return
   }
 
+  const origin = validateEnterpriseOrigin(serverUrl.value)
+  if (!origin) {
+    validation.value = t('native.invalidOrigin')
+    return
+  }
+
   pending.value = true
   try {
-    await props.connect({ server_url: serverUrl.value, api_key: apiKey.value })
+    serverUrl.value = origin
+    await props.connect({ server_url: origin, api_key: apiKey.value })
   } catch {
     error.value = t('native.connectionError')
   } finally {
