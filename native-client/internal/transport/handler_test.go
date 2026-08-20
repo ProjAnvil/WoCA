@@ -212,6 +212,160 @@ func TestHandlerStripsCallerAuthCookieAndForwardingHeaders(t *testing.T) {
 	}
 }
 
+func TestHandlerStripsNativeRequestIDBeforeUpstream(t *testing.T) {
+	observed := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed <- r.Header.Clone()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	registry := NewCancellationRegistry()
+	handler := NewWithCancellation(
+		staticTarget{profile: configstore.Profile{BaseURL: upstream.URL}, ok: true},
+		staticCredentials{},
+		nil,
+		registry,
+	)
+	request := httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil)
+	request.Header.Set(RequestIDHeader, requestID("H"))
+
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+
+	if values := (<-observed).Values(RequestIDHeader); len(values) != 0 {
+		t.Fatalf("upstream received native request ID: %q", values)
+	}
+}
+
+func TestHandlerRejectsInvalidAndDuplicateNativeRequestIDsBeforeLookup(t *testing.T) {
+	for _, configure := range []func(*http.Request){
+		func(request *http.Request) { request.Header.Set(RequestIDHeader, "invalid") },
+		func(request *http.Request) {
+			request.Header.Add(RequestIDHeader, requestID("I"))
+			request.Header.Add(RequestIDHeader, requestID("J"))
+		},
+	} {
+		registry := NewCancellationRegistry()
+		var targetCalls atomic.Int32
+		var credentialCalls atomic.Int32
+		var roundTrips atomic.Int32
+		handler := NewWithCancellation(
+			countingTarget{calls: &targetCalls, profile: configstore.Profile{BaseURL: "http://localhost"}, ok: true},
+			countingCredentials{calls: &credentialCalls},
+			&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				roundTrips.Add(1)
+				return nil, nil
+			})},
+			registry,
+		)
+		request := httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil)
+		configure(request)
+		response := httptest.NewRecorder()
+
+		handler.ServeHTTP(response, request)
+
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, body = %q", response.Code, response.Body.String())
+		}
+		if targetCalls.Load() != 0 || credentialCalls.Load() != 0 || roundTrips.Load() != 0 {
+			t.Fatalf("calls: target=%d credentials=%d upstream=%d", targetCalls.Load(), credentialCalls.Load(), roundTrips.Load())
+		}
+	}
+
+	registry := NewCancellationRegistry()
+	id := requestID("K")
+	_, unregister, ok := registry.register(context.Background(), id)
+	if !ok {
+		t.Fatal("precondition registration failed")
+	}
+	defer unregister()
+	var targetCalls atomic.Int32
+	handler := NewWithCancellation(
+		countingTarget{calls: &targetCalls, profile: configstore.Profile{BaseURL: "http://localhost"}, ok: true},
+		staticCredentials{}, nil, registry,
+	)
+	request := httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil)
+	request.Header.Set(RequestIDHeader, id)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || targetCalls.Load() != 0 {
+		t.Fatalf("duplicate response = %d %q, target calls = %d", response.Code, response.Body.String(), targetCalls.Load())
+	}
+}
+
+func TestHandlerNativeCancellationBridgesBackgroundContext(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+		close(cancelled)
+	}))
+	defer upstream.Close()
+	registry := NewCancellationRegistry()
+	handler := NewWithCancellation(
+		staticTarget{profile: configstore.Profile{BaseURL: upstream.URL}, ok: true},
+		staticCredentials{}, nil, registry,
+	)
+	id := requestID("L")
+	request := httptest.NewRequest(http.MethodGet, "http://native.local/api/events", nil)
+	request.Header.Set(RequestIDHeader, id)
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), request)
+		close(done)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream request did not start")
+	}
+	if !registry.Cancel(id) {
+		t.Fatal("Cancel() did not find the Wails-like request")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("explicit native cancellation did not release upstream")
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not return after explicit native cancellation")
+	}
+}
+
+func TestHandlerNaturallyUnregistersNativeRequestID(t *testing.T) {
+	var roundTrips atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		roundTrips.Add(1)
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+			Request:    request,
+		}, nil
+	})}
+	registry := NewCancellationRegistry()
+	handler := NewWithCancellation(
+		staticTarget{profile: configstore.Profile{BaseURL: "http://localhost"}, ok: true},
+		staticCredentials{}, client, registry,
+	)
+	id := requestID("M")
+	for range 2 {
+		request := httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil)
+		request.Header.Set(RequestIDHeader, id)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("response = %d %q", response.Code, response.Body.String())
+		}
+	}
+	if roundTrips.Load() != 2 {
+		t.Fatalf("upstream round trips = %d, want 2", roundTrips.Load())
+	}
+}
+
 func TestHandlerRejectsNonAPIPaths(t *testing.T) {
 	var hits atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {

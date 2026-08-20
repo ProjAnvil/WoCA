@@ -31,6 +31,7 @@ function nativeBridge(bootstrap: NativeBridge['Bootstrap']): NativeBridge {
     Logout: vi.fn(),
     Preference: vi.fn(async () => ({ value: '', found: false })),
     SetPreference: vi.fn(async (input) => ({ revision: input.revision, applied: true })),
+    CancelRequest: vi.fn(async () => true),
   }
 }
 

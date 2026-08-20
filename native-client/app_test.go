@@ -2,14 +2,19 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/projanvil/woca/native-client/internal/bridge"
 	"github.com/projanvil/woca/native-client/internal/configstore"
+	"github.com/projanvil/woca/native-client/internal/transport"
 )
 
 type fakeBridgeAPI struct {
@@ -205,5 +210,135 @@ func TestAppShutdownRunsCleanupOnce(t *testing.T) {
 
 	if cleanupCalls != 1 {
 		t.Fatalf("cleanup calls = %d, want 1", cleanupCalls)
+	}
+}
+
+type blockingCancellationRegistry struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingCancellationRegistry) Cancel(string) bool { return false }
+func (b *blockingCancellationRegistry) CancelAll() {
+	close(b.entered)
+	<-b.release
+}
+
+func TestAppShutdownRejectsPreferenceCallsWhileCancellingRequests(t *testing.T) {
+	cancellations := &blockingCancellationRegistry{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	service := &fakeBridgeAPI{}
+	app := newAppWithCancellation(service, cancellations, nil)
+	done := make(chan struct{})
+	go func() {
+		app.shutdown(t.Context())
+		close(done)
+	}()
+	<-cancellations.entered
+
+	_, err := app.SetPreference(bridge.PreferenceInput{
+		Key: "woca.pref.model", Value: "must-not-enter-bridge", Revision: 1,
+	})
+	close(cancellations.release)
+	<-done
+
+	if err == nil || err.Error() != "native application is shutting down" {
+		t.Fatalf("SetPreference() while cancellation drains error = %v", err)
+	}
+	service.preferenceMu.Lock()
+	defer service.preferenceMu.Unlock()
+	if service.preferenceCalls != 0 {
+		t.Fatalf("bridge preference calls = %d, want 0", service.preferenceCalls)
+	}
+}
+
+type appTestCredentials struct{}
+
+func (appTestCredentials) Credentials(context.Context, string, *url.URL) (transport.Credentials, error) {
+	return transport.Credentials{}, nil
+}
+
+func TestAppCancelRequestReleasesWailsLikeBackgroundRequest(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		close(started)
+		<-request.Context().Done()
+		close(cancelled)
+	}))
+	defer upstream.Close()
+	store, err := configstore.Open(filepath.Join(t.TempDir(), "client.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.SaveProfile(t.Context(), upstream.URL); err != nil {
+		t.Fatal(err)
+	}
+	registry := transport.NewCancellationRegistry()
+	app := newAppWithCancellation(nil, registry, nil)
+	handler := transport.NewWithCancellation(store, appTestCredentials{}, nil, registry)
+	id := strings.Repeat("N", 43)
+	request := httptest.NewRequest(http.MethodGet, "http://native.local/api/events", nil)
+	request.Header.Set(transport.RequestIDHeader, id)
+	done := make(chan struct{})
+	go func() {
+		handler.ServeHTTP(httptest.NewRecorder(), request)
+		close(done)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream request did not start")
+	}
+
+	if !app.CancelRequest(id) {
+		t.Fatal("CancelRequest() did not accept the active request ID")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("App.CancelRequest did not release the upstream request")
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not return after App.CancelRequest")
+	}
+}
+
+func TestAppShutdownCancelsRequestsBeforeCleanupAndRejectsFutureCancellation(t *testing.T) {
+	registry := transport.NewCancellationRegistry()
+	id := strings.Repeat("O", 43)
+	if !registry.Cancel(id) {
+		t.Fatal("precondition pending cancellation failed")
+	}
+	cleanup := make(chan struct{})
+	cleanupRanBeforeCancellation := false
+	app := newAppWithCancellation(nil, registry, func() {
+		cleanupRanBeforeCancellation = registry.Cancel(strings.Repeat("P", 43))
+		close(cleanup)
+	})
+
+	app.shutdown(t.Context())
+
+	select {
+	case <-cleanup:
+	default:
+		t.Fatal("shutdown cleanup did not run")
+	}
+	if cleanupRanBeforeCancellation {
+		t.Fatal("cleanup ran before CancelAll closed the registry")
+	}
+	if app.CancelRequest(strings.Repeat("P", 43)) {
+		t.Fatal("CancelRequest() admitted work after shutdown")
+	}
+}
+
+func TestAppCancelRequestIsHarmlessWithoutRegistry(t *testing.T) {
+	if NewApp(nil).CancelRequest(strings.Repeat("Q", 43)) {
+		t.Fatal("CancelRequest() succeeded without a native cancellation registry")
 	}
 }

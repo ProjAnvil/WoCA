@@ -30,24 +30,61 @@ type Credentials struct {
 	Proof   string
 }
 
+const RequestIDHeader = "X-Woca-Native-Request-ID"
+
 type handler struct {
-	targets     TargetProvider
-	credentials CredentialProvider
-	transport   http.RoundTripper
+	targets       TargetProvider
+	credentials   CredentialProvider
+	transport     http.RoundTripper
+	cancellations *CancellationRegistry
 }
 
 func New(targets TargetProvider, credentials CredentialProvider, client *http.Client) http.Handler {
+	return NewWithCancellation(targets, credentials, client, nil)
+}
+
+func NewWithCancellation(
+	targets TargetProvider,
+	credentials CredentialProvider,
+	client *http.Client,
+	cancellations *CancellationRegistry,
+) http.Handler {
 	transport := http.RoundTripper(defaultTransport())
 	if client != nil && client.Transport != nil {
 		transport = client.Transport
 	}
-	return &handler{targets: targets, credentials: credentials, transport: transport}
+	return &handler{
+		targets: targets, credentials: credentials, transport: transport,
+		cancellations: cancellations,
+	}
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !isAPIPath(r.URL.Path) {
 		writeJSONError(w, http.StatusNotFound, "not found")
 		return
+	}
+	if h.cancellations != nil && h.cancellations.isClosed() {
+		writeJSONError(w, http.StatusServiceUnavailable, "service unavailable")
+		return
+	}
+
+	r = r.Clone(r.Context())
+	r.Header = r.Header.Clone()
+	requestIDs := r.Header.Values(RequestIDHeader)
+	r.Header.Del(RequestIDHeader)
+	if h.cancellations != nil && len(requestIDs) != 0 {
+		if len(requestIDs) != 1 || !validRequestID(requestIDs[0]) {
+			writeJSONError(w, http.StatusBadRequest, "invalid request")
+			return
+		}
+		ctx, unregister, ok := h.cancellations.register(r.Context(), requestIDs[0])
+		if !ok {
+			writeJSONError(w, http.StatusBadRequest, "invalid request")
+			return
+		}
+		defer unregister()
+		r = r.Clone(ctx)
 	}
 	if h.targets == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "service unavailable")
@@ -152,7 +189,7 @@ func stripUntrustedHeaders(headers http.Header) {
 	}
 	for _, name := range []string{
 		"Authorization", "DPoP", "Cookie", "Forwarded", "Connection", "Proxy-Connection",
-		"Keep-Alive", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
+		"Keep-Alive", "TE", "Trailer", "Transfer-Encoding", "Upgrade", RequestIDHeader,
 	} {
 		headers.Del(name)
 	}

@@ -81,8 +81,9 @@ func runWith(
 		return fmt.Errorf("configure development server: %w", err)
 	}
 
-	app := newAppWithShutdown(service, closeStore)
-	handler := transport.New(store, credentials, nil)
+	cancellations := transport.NewCancellationRegistry()
+	app := newAppWithCancellation(service, cancellations, closeStore)
+	handler := transport.NewWithCancellation(store, credentials, nil, cancellations)
 	return runApp(buildOptions(app, frontendAssets(), handler))
 }
 

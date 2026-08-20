@@ -21,6 +21,7 @@ function bridgeWithPreferences(overrides: Partial<NativeAppBridge> = {}): Native
       found: key in storedNativePreferences,
     })),
     SetPreference: vi.fn(async (input) => ({ revision: input.revision, applied: true })),
+    CancelRequest: vi.fn(async () => true),
     ...overrides,
   }
 }

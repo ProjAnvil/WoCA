@@ -62,6 +62,25 @@ not. Controlled shutdown still stops new preference calls and drains accepted
 calls before closing SQLite, but data safety does not depend on the Wails lock
 or graceful shutdown.
 
+## Native request cancellation and SSE scope
+
+Wails v2.14 creates AssetServer HTTP requests with a background context. On
+macOS, WebKit's `stopURLSchemeTask` callback closes only the request body stream,
+so aborting a Vue fetch does not by itself cancel the remote-BFF request. The
+native SSE client therefore adds a fresh 32-byte random, process-local request
+ID and calls the typed `App.CancelRequest` binding when its `AbortSignal` fires.
+The Go handler derives a cancellable upstream context from that ID, removes the
+ID header before credential generation and network transport, and unregisters
+it when the request ends. Invalid IDs, duplicate active registrations, and
+excessive pending cancellations fail closed; shutdown cancels all registered
+requests before draining local preference writes and closing SQLite.
+Browser/personal requests retain their existing endpoints and do not add the
+native header or call the Wails bridge.
+
+This scaffold claims incremental native SSE on macOS. Wails v2.14's WebView2
+AssetServer response path buffers responses on Windows, so Windows incremental
+SSE is not claimed here even though explicit abort propagation remains wired.
+
 ## Local database recovery
 
 If the native client cannot resolve, open, or migrate `client.db`, it opens a

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -255,6 +256,9 @@ func assertFatalLocalDataOptions(t *testing.T, opts *options.App, wantPath strin
 	}
 	if state.State != bridge.StateFatalLocalData || state.DatabasePath != wantPath {
 		t.Fatalf("Bootstrap() = %#v", state)
+	}
+	if app.CancelRequest(strings.Repeat("Z", 43)) {
+		t.Fatal("fatal local-data app accepted native request cancellation")
 	}
 	response := httptest.NewRecorder()
 	opts.AssetServer.Handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/models", nil))

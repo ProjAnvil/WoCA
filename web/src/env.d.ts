@@ -43,6 +43,7 @@ declare global {
     Logout(): Promise<BootstrapState>
     Preference(key: string): Promise<PreferenceValue>
     SetPreference(input: PreferenceInput): Promise<PreferenceWriteResult>
+    CancelRequest(id: string): Promise<boolean>
   }
 
   interface Window {

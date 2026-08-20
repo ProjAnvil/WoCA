@@ -18,11 +18,17 @@ type bridgeAPI interface {
 	SetPreference(context.Context, bridge.PreferenceInput) (bridge.PreferenceWriteResult, error)
 }
 
+type requestCancellationRegistry interface {
+	Cancel(string) bool
+	CancelAll()
+}
+
 type App struct {
-	ctx          context.Context
-	bridge       bridgeAPI
-	onShutdown   func()
-	shutdownOnce sync.Once
+	ctx           context.Context
+	bridge        bridgeAPI
+	cancellations requestCancellationRegistry
+	onShutdown    func()
+	shutdownOnce  sync.Once
 
 	preferenceMu      sync.Mutex
 	preferenceCalls   sync.WaitGroup
@@ -34,7 +40,15 @@ func NewApp(service bridgeAPI) *App {
 }
 
 func newAppWithShutdown(service bridgeAPI, onShutdown func()) *App {
-	return &App{bridge: service, onShutdown: onShutdown}
+	return newAppWithCancellation(service, nil, onShutdown)
+}
+
+func newAppWithCancellation(
+	service bridgeAPI,
+	cancellations requestCancellationRegistry,
+	onShutdown func(),
+) *App {
+	return &App{bridge: service, cancellations: cancellations, onShutdown: onShutdown}
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -46,11 +60,24 @@ func (a *App) shutdown(context.Context) {
 		a.preferenceMu.Lock()
 		a.preferenceClosing = true
 		a.preferenceMu.Unlock()
+		if a.cancellations != nil {
+			a.cancellations.CancelAll()
+		}
 		a.preferenceCalls.Wait()
 		if a.onShutdown != nil {
 			a.onShutdown()
 		}
 	})
+}
+
+// CancelRequest bridges AbortController to the request context created by the
+// native AssetServer handler. The opaque ID has no authority beyond this
+// process-local registry.
+func (a *App) CancelRequest(id string) bool {
+	if a.cancellations == nil {
+		return false
+	}
+	return a.cancellations.Cancel(id)
 }
 
 func (a *App) Bootstrap() (bridge.BootstrapState, error) {
