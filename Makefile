@@ -1,4 +1,4 @@
-.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web install deps-baseline check-deps ent-up ent-down ent-ps ent-logs
+.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web install deps-baseline check-deps native-test native-build native-dev ent-up ent-down ent-ps ent-logs
 
 # Default: build the web frontend, then the binary (frontend is embedded).
 all: web build
@@ -65,6 +65,17 @@ check-deps: build
 	@mkdir -p build
 	@go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca | sort -u > build/deps-personal.actual
 	@diff -u ci/deps-personal.txt build/deps-personal.actual && echo "personal-edition deps match baseline"
+
+# Enterprise-only native client commands. These remain independent of the
+# personal-edition default/build targets above.
+native-test:
+	cd native-client && go test ./...
+
+native-build: web
+	cd native-client && wails build -clean
+
+native-dev:
+	cd native-client && wails dev
 
 # woca-enterprise: the microservice (enterprise) edition persistence layer —
 # PostgreSQL primary+replica and a 3-node NATS JetStream cluster, segmented

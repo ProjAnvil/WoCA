@@ -1,0 +1,62 @@
+# Woca Enterprise native client
+
+This directory contains the enterprise-only Wails desktop client. It is an
+independent Go module that embeds the existing `../web` application; it is not
+part of the personal-edition `woca` binary or its default build targets.
+
+## Prerequisites and commands
+
+Install the Wails CLI at the version pinned by this module:
+
+```bash
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0
+wails version
+```
+
+From the repository root, use:
+
+```bash
+make native-test
+make native-build
+make native-dev
+```
+
+`native-build` first builds the shared Vue application in `web/dist`, then
+creates a clean Wails artifact. The generated binary is written below
+`native-client/build/bin/`, which is intentionally ignored while Wails source
+icons and platform metadata below `native-client/build/` stay tracked.
+
+## Production boundary
+
+On first launch, an unconfigured production native client presents the
+enterprise server URL and one-time API-key activation screen. The API key is
+kept only long enough to submit activation and is never stored in SQLite,
+browser storage, logs, or generated files. SQLite stores only local,
+non-sensitive configuration such as the remote BFF URL and preferences.
+
+The production client is fail-closed in this milestone. Remote BFF activation,
+system-browser Authorization Code with PKCE, one-time handoff, DPoP-bound native
+sessions, secure device-key storage, and logout/device management belong to a
+later server-side milestone. OAuth access and refresh tokens must never enter
+the Vue application or be persisted by this native client. See the approved
+[native-client design](../docs/superpowers/specs/2026-08-20-woca-native-client-design.md).
+
+## Loopback UI and transport development
+
+For local visual development, first build and run the personal Woca service:
+
+```bash
+make build
+./build/woca serve --addr 127.0.0.1:8899 --no-browser
+```
+
+In another terminal, start Wails with the development-only override:
+
+```bash
+WOCA_NATIVE_DEV_BFF_URL=http://127.0.0.1:8899 make native-dev
+```
+
+The loopback Woca service is only a UI/HTTP/SSE transport development fixture.
+It is not the enterprise production authentication path and the override is
+excluded from production builds. Enterprise Web and native production clients
+must both communicate only with the remote BFF.
