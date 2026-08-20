@@ -2,6 +2,7 @@ package configstore
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -113,6 +114,74 @@ func TestStoreAllowsHTTPOnlyForLoopback(t *testing.T) {
 
 	if _, err := s.SaveProfile(t.Context(), "http://example.com"); err == nil {
 		t.Fatal("SaveProfile(remote HTTP) error = nil")
+	}
+}
+
+func TestNormalizeBaseURLAllowsOnlyExactHTTPLoopbackHosts(t *testing.T) {
+	for rawURL, want := range map[string]string{
+		"http://LOCALHOST:8080": "http://localhost:8080",
+		"http://127.0.0.1:8080": "http://127.0.0.1:8080",
+		"http://[::1]:8080":     "http://[::1]:8080",
+	} {
+		got, err := NormalizeBaseURL(rawURL)
+		if err != nil || got != want {
+			t.Fatalf("NormalizeBaseURL(%q) = %q, %v; want %q, nil", rawURL, got, err, want)
+		}
+	}
+
+	for _, rawURL := range []string{
+		"http://127.0.0.2:8080",
+		"http://127.255.255.255:8080",
+		"http://[::2]:8080",
+	} {
+		if _, err := NormalizeBaseURL(rawURL); err == nil {
+			t.Fatalf("NormalizeBaseURL(%q) error = nil", rawURL)
+		}
+	}
+}
+
+func TestOpenRejectsFutureSchemaVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	prepareDatabase(t, path, `
+		CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (2, 0);
+	`)
+
+	if store, err := Open(path); err == nil {
+		store.Close()
+		t.Fatal("Open() error = nil for future schema version")
+	}
+}
+
+func TestOpenRejectsIncompatibleVersionOneSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	prepareDatabase(t, path, `
+		CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0);
+		CREATE TABLE connection_profiles (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			base_url TEXT NOT NULL UNIQUE,
+			active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+			created_at INTEGER NOT NULL
+		);
+		CREATE UNIQUE INDEX one_active_profile ON connection_profiles(active) WHERE active = 1;
+	`)
+
+	if store, err := Open(path); err == nil {
+		store.Close()
+		t.Fatal("Open() error = nil for incompatible version-1 schema")
+	}
+}
+
+func prepareDatabase(t *testing.T, path, statements string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(statements); err != nil {
+		t.Fatal(err)
 	}
 }
 

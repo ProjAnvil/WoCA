@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -24,6 +23,8 @@ type Profile struct {
 type Store struct {
 	db *sql.DB
 }
+
+const currentSchemaVersion = 1
 
 func OpenDefault() (*Store, error) {
 	path, err := DefaultPath()
@@ -68,7 +69,7 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) SaveProfile(ctx context.Context, rawURL string) (Profile, error) {
-	baseURL, err := normalizeBaseURL(rawURL)
+	baseURL, err := NormalizeBaseURL(rawURL)
 	if err != nil {
 		return Profile{}, err
 	}
@@ -145,11 +146,28 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	defer tx.Rollback()
 
-	for _, statement := range []string{
-		`CREATE TABLE IF NOT EXISTS schema_migrations (
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
             applied_at INTEGER NOT NULL
-        )`,
+        )`); err != nil {
+		return fmt.Errorf("create schema migrations table: %w", err)
+	}
+	if err := validateColumns(ctx, tx, "schema_migrations", []schemaColumn{
+		{name: "version", kind: "INTEGER", primaryKey: true},
+		{name: "applied_at", kind: "INTEGER", notNull: true},
+	}); err != nil {
+		return err
+	}
+
+	version, err := schemaVersion(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if version > currentSchemaVersion {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", version, currentSchemaVersion)
+	}
+
+	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS connection_profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             base_url TEXT NOT NULL UNIQUE,
@@ -176,10 +194,116 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("apply SQLite migration: %w", err)
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (1, ?)`, time.Now().Unix()); err != nil {
+	if err := validateVersionOneSchema(ctx, tx); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)`, currentSchemaVersion, time.Now().Unix()); err != nil {
 		return fmt.Errorf("record SQLite migration: %w", err)
 	}
 	return tx.Commit()
+}
+
+func schemaVersion(ctx context.Context, tx *sql.Tx) (int, error) {
+	var version sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
+		return 0, fmt.Errorf("read database schema version: %w", err)
+	}
+	if !version.Valid {
+		return 0, nil
+	}
+	return int(version.Int64), nil
+}
+
+type schemaColumn struct {
+	name       string
+	kind       string
+	notNull    bool
+	primaryKey bool
+}
+
+type schemaColumnInfo struct {
+	kind       string
+	notNull    bool
+	primaryKey bool
+}
+
+func validateVersionOneSchema(ctx context.Context, tx *sql.Tx) error {
+	for table, columns := range map[string][]schemaColumn{
+		"connection_profiles": {
+			{name: "id", kind: "INTEGER", primaryKey: true},
+			{name: "base_url", kind: "TEXT", notNull: true},
+			{name: "active", kind: "INTEGER", notNull: true},
+			{name: "created_at", kind: "INTEGER", notNull: true},
+			{name: "updated_at", kind: "INTEGER", notNull: true},
+		},
+		"preferences": {
+			{name: "key", kind: "TEXT", primaryKey: true},
+			{name: "value", kind: "TEXT", notNull: true},
+			{name: "updated_at", kind: "INTEGER", notNull: true},
+		},
+		"native_sessions": {
+			{name: "profile_id", kind: "INTEGER", primaryKey: true},
+			{name: "device_id", kind: "TEXT", notNull: true},
+			{name: "session_ciphertext", kind: "BLOB", notNull: true},
+			{name: "expires_at", kind: "INTEGER", notNull: true},
+			{name: "last_validated_at", kind: "INTEGER", notNull: true},
+		},
+	} {
+		if err := validateColumns(ctx, tx, table, columns); err != nil {
+			return err
+		}
+	}
+
+	var indexSQL sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'one_active_profile'`).Scan(&indexSQL); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("incompatible schema: missing one_active_profile index")
+		}
+		return fmt.Errorf("read one_active_profile index: %w", err)
+	}
+	normalizedIndex := strings.Join(strings.Fields(strings.ToLower(indexSQL.String)), "")
+	if !strings.Contains(normalizedIndex, "onconnection_profiles(active)whereactive=1") {
+		return fmt.Errorf("incompatible schema: invalid one_active_profile index")
+	}
+	var unique, partial int
+	if err := tx.QueryRowContext(ctx, `SELECT "unique", partial FROM pragma_index_list(?) WHERE name = ?`, "connection_profiles", "one_active_profile").Scan(&unique, &partial); err != nil {
+		return fmt.Errorf("inspect one_active_profile index: %w", err)
+	}
+	if unique != 1 || partial != 1 {
+		return fmt.Errorf("incompatible schema: one_active_profile index must be unique and partial")
+	}
+	return nil
+}
+
+func validateColumns(ctx context.Context, tx *sql.Tx, table string, want []schemaColumn) error {
+	rows, err := tx.QueryContext(ctx, `SELECT name, type, "notnull", pk FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	defer rows.Close()
+
+	got := make(map[string]schemaColumnInfo, len(want))
+	for rows.Next() {
+		var name, kind string
+		var notNull, primaryKey int
+		if err := rows.Scan(&name, &kind, &notNull, &primaryKey); err != nil {
+			return fmt.Errorf("read %s schema: %w", table, err)
+		}
+		got[name] = schemaColumnInfo{kind: strings.ToUpper(kind), notNull: notNull != 0, primaryKey: primaryKey != 0}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read %s schema: %w", table, err)
+	}
+	if len(got) != len(want) {
+		return fmt.Errorf("incompatible schema: %s has %d columns, want %d", table, len(got), len(want))
+	}
+	for _, column := range want {
+		actual, ok := got[column.name]
+		if !ok || actual.kind != column.kind || actual.notNull != column.notNull || actual.primaryKey != column.primaryKey {
+			return fmt.Errorf("incompatible schema: %s.%s has unexpected definition", table, column.name)
+		}
+	}
+	return nil
 }
 
 type profileScanner interface {
@@ -194,7 +318,7 @@ func scanProfile(row profileScanner) (Profile, error) {
 	return profile, nil
 }
 
-func normalizeBaseURL(rawURL string) (string, error) {
+func NormalizeBaseURL(rawURL string) (string, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("parse server URL: %w", err)
@@ -220,9 +344,5 @@ func normalizeBaseURL(rawURL string) (string, error) {
 }
 
 func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return strings.EqualFold(host, "localhost") || host == "127.0.0.1" || host == "::1"
 }
