@@ -14,8 +14,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/wocadb"
 )
+
+// querier is the subset of *sql.DB/*sql.Tx the ledger uses.
+type querier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
 
 // Status values of a run row.
 const (
@@ -63,6 +71,65 @@ func New(db *wocadb.DB) (*Ledger, error) {
 		return nil, errors.New("runstate: nil database")
 	}
 	return &Ledger{db: db, dialect: db.Dialect, now: time.Now}, nil
+}
+
+// begin returns the querier for one ledger call. Non-local tenants on
+// postgres run inside a transaction carrying SET LOCAL app.tenant_id (the
+// GUC the runs/run_events RLS policies compare against), mirroring the
+// store package's Phase-1 pattern; sqlite and the local tenant use the
+// shared pool.
+func (l *Ledger) begin(ctx context.Context) (querier, func(bool) error, error) {
+	tc, _ := tenancy.FromContext(ctx)
+	if tc.TenantID == "" || tc.TenantID == "local" || l.dialect != wocadb.DialectPostgres {
+		return l.db.DB, func(bool) error { return nil }, nil
+	}
+	tx, err := l.db.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("runstate: tenant tx: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.tenant_id', `+l.ph(0)+`, true)`, tc.TenantID); err != nil {
+		_ = tx.Rollback()
+		return nil, nil, fmt.Errorf("runstate: tenant tx scope: %w", err)
+	}
+	return tx, func(ok bool) error {
+		if ok {
+			return tx.Commit()
+		}
+		return tx.Rollback()
+	}, nil
+}
+
+// PutEvent stores one run event under an explicit sequence number — the
+// server's SSE id and the ledger row must agree, so mirroring callers bring
+// their own seq (Append mints one instead for telemetry/worker events). A
+// duplicate (run_id, seq) with the same kind is treated as an idempotent
+// retry.
+func (l *Ledger) PutEvent(ctx context.Context, runID string, seq int64, kind, payload string) error {
+	if kind == "" {
+		return errors.New("runstate: event kind is required")
+	}
+	q, finish, err := l.begin(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx,
+		`INSERT INTO run_events (run_id, seq, kind, payload, at) VALUES (`+
+			l.ph(0)+`, `+l.ph(1)+`, `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`)`,
+		runID, seq, kind, payload, l.nowMilli())
+	if err != nil && isUniqueViolation(err) {
+		var existing string
+		if err2 := q.QueryRowContext(ctx,
+			`SELECT kind FROM run_events WHERE run_id = `+l.ph(0)+` AND seq = `+l.ph(1),
+			runID, seq).Scan(&existing); err2 == nil && existing == kind {
+			_ = finish(false)
+			return nil
+		}
+	}
+	if err != nil {
+		_ = finish(false)
+		return err
+	}
+	return finish(true)
 }
 
 func (l *Ledger) ph(i int) string {
@@ -270,7 +337,11 @@ func (l *Ledger) Replay(ctx context.Context, runID string, sinceSeq int64, limit
 	if limit <= 0 {
 		limit = 1000
 	}
-	rows, err := l.db.DB.QueryContext(ctx,
+	q, finish, err := l.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.QueryContext(ctx,
 		`SELECT seq, kind, payload, at FROM run_events
 		 WHERE run_id = `+l.ph(0)+` AND seq > `+l.ph(1)+` ORDER BY seq LIMIT `+l.ph(2),
 		runID, sinceSeq, limit)
@@ -283,11 +354,16 @@ func (l *Ledger) Replay(ctx context.Context, runID string, sinceSeq int64, limit
 		var ev Event
 		ev.RunID = runID
 		if err := rows.Scan(&ev.Seq, &ev.Kind, &ev.Payload, &ev.At); err != nil {
+			_ = finish(false)
 			return nil, err
 		}
 		out = append(out, ev)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = finish(false)
+		return nil, err
+	}
+	return out, finish(true)
 }
 
 func isUniqueViolation(err error) bool {
@@ -302,19 +378,25 @@ func isUniqueViolation(err error) bool {
 
 // Row returns the recorded state of one run (read-only accessor).
 func (l *Ledger) Row(ctx context.Context, runID string) (Run, bool, error) {
+	q, finish, err := l.begin(ctx)
+	if err != nil {
+		return Run{}, false, err
+	}
 	var run Run
-	err := l.db.DB.QueryRowContext(ctx,
+	err = q.QueryRowContext(ctx,
 		`SELECT run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, created_at, updated_at
 		 FROM runs WHERE run_id = `+l.ph(0), runID).
 		Scan(&run.RunID, &run.SessionID, &run.Status, &run.Owner, &run.LeaseExpiresAt,
 			&run.ThreadID, &run.ConfigSnapshot, &run.CreatedAt, &run.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
+		_ = finish(false)
 		return Run{}, false, nil
 	}
 	if err != nil {
+		_ = finish(false)
 		return Run{}, false, err
 	}
-	return run, true, nil
+	return run, true, finish(true)
 }
 
 // Start registers a run this caller executes itself: the row is born

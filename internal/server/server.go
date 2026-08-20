@@ -634,6 +634,12 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	run := s.lookupRun(r.PathValue("id"))
 	if run == nil {
+		// The run may live on another instance sharing the database:
+		// stream it from the run ledger instead (Phase 2 cross-instance
+		// SSE).
+		if s.ledger != nil && s.serveLedgerRunEvents(w, r) {
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}
@@ -1011,6 +1017,19 @@ func shortHost() string {
 const runLeaseDuration = 90 * time.Second
 
 func (s *Server) trackRunLease(run *Run, sid string) {
+	// Mirror every emitted event into run_events so another instance (or a
+	// reconnect after this process dies) can replay the stream. The SSE id
+	// and the ledger seq are the same number.
+	run.mirror = func(ev Event) {
+		payload, err := json.Marshal(ev.Data)
+		if err != nil {
+			payload = []byte(`{}`)
+		}
+		mctx := context.WithoutCancel(run.ctx)
+		if err := s.ledger.PutEvent(mctx, run.id, ev.Seq, ev.Type, string(payload)); err != nil {
+			s.log.Warn().Str("run", run.id).Int64("seq", ev.Seq).Err(err).Msg("run event mirror failed")
+		}
+	}
 	interval := runLeaseDuration / 3
 	stop := make(chan struct{})
 	// Chain the ledger finish onto the terminal event exactly once.
@@ -1056,4 +1075,77 @@ func (r *Run) finishType() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.finishKind
+}
+
+// ledgerEventPoll is the cross-instance tail interval.
+const ledgerEventPoll = 150 * time.Millisecond
+
+// serveLedgerRunEvents streams a foreign run's events from the run ledger:
+// replay from the Last-Event-ID cursor, then poll for live events until the
+// terminal one arrives. It reports false when the run is unknown (→ 404).
+func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bool {
+	runID := r.PathValue("id")
+	ctx := r.Context()
+	row, ok, err := s.ledger.Row(ctx, runID)
+	if err != nil {
+		http.Error(w, "run ledger unavailable", http.StatusInternalServerError)
+		return true
+	}
+	if !ok {
+		return false
+	}
+	flusher, canFlush := w.(http.Flusher)
+	if !canFlush {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return true
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	sinceSeq, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
+	terminal := row.Status != runstate.StatusQueued && row.Status != runstate.StatusRunning
+	for {
+		events, err := s.ledger.Replay(ctx, runID, sinceSeq, 500)
+		if err != nil {
+			// The stream dies loudly; the client's resync path reloads.
+			fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"ledger_unavailable"}`)
+			flusher.Flush()
+			return true
+		}
+		done := false
+		for _, ev := range events {
+			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Kind, ev.Payload)
+			sinceSeq = ev.Seq
+			if ev.Kind == "done" || ev.Kind == "error" {
+				done = true
+			}
+		}
+		if len(events) > 0 {
+			flusher.Flush()
+		}
+		if done {
+			return true
+		}
+		if terminal {
+			// The row ended without a mirrored terminal event (mirror gap):
+			// tell the client to resync rather than hang.
+			fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"terminal_without_event"}`)
+			flusher.Flush()
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return true
+		case <-time.After(ledgerEventPoll):
+			// Re-check the row so a terminal transition ends the stream.
+			row, ok, err = s.ledger.Row(ctx, runID)
+			if err != nil || !ok {
+				fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"ledger_unavailable"}`)
+				flusher.Flush()
+				return true
+			}
+			terminal = row.Status != runstate.StatusQueued && row.Status != runstate.StatusRunning
+		}
+	}
 }

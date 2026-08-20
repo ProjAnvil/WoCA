@@ -52,8 +52,12 @@ type Run struct {
 	done    bool // terminal event (done or error) emitted
 	// finishKind records the terminal event type for the run ledger.
 	finishKind string
-	seq        int64        // under mu; last assigned Seq
-	dropped    atomic.Int64 // fanout drops on full subscriber channels
+	// mirror, when set, persists every emitted event to the run ledger's
+	// run_events stream (cross-instance SSE replay). Failures are the
+	// caller's to log; they never block the live stream.
+	mirror  func(ev Event)
+	seq     int64        // under mu; last assigned Seq
+	dropped atomic.Int64 // fanout drops on full subscriber channels
 	// onFinish, when set, fires exactly once when the terminal event is
 	// emitted — on error and cancellation too, before onDone runs.
 	onFinish func()
@@ -300,6 +304,9 @@ func (r *Run) emit(ev Event) {
 		}
 	}
 	r.mu.Unlock()
+	if r.mirror != nil {
+		r.mirror(ev)
+	}
 }
 
 func (r *Run) droppedCount() int64 { return r.dropped.Load() }
