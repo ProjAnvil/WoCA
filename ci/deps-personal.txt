@@ -110,6 +110,7 @@ github.com/projanvil/woca/internal/gateway
 github.com/projanvil/woca/internal/hooks
 github.com/projanvil/woca/internal/logging
 github.com/projanvil/woca/internal/mcp
+github.com/projanvil/woca/internal/memcmd
 github.com/projanvil/woca/internal/memory
 github.com/projanvil/woca/internal/merge
 github.com/projanvil/woca/internal/model
@@ -143,6 +144,7 @@ github.com/projanvil/woca/internal/slashcmds
 github.com/projanvil/woca/internal/store
 github.com/projanvil/woca/internal/telemetry
 github.com/projanvil/woca/internal/tenant
+github.com/projanvil/woca/internal/tenantcmd
 github.com/projanvil/woca/internal/tokens
 github.com/projanvil/woca/internal/tools
 github.com/projanvil/woca/internal/tui
