@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/platform/authn"
 )
 
@@ -156,5 +157,36 @@ func TestNewAPIKeyProviderRequiresDB(t *testing.T) {
 	}
 	if _, err := newNativeAuth(nil, authn.NewLocal()); err == nil {
 		t.Fatal("nil settings store accepted for native auth")
+	}
+}
+
+// The web command's subcommands (stop, status, start failure) execute
+// against an isolated home.
+func TestWebCmdSubcommands(t *testing.T) {
+	isolateEnv(t)
+
+	// Status on a clean environment (nothing running).
+	status := NewWebCmd()
+	status.SetArgs([]string{"status"})
+	if err := status.Execute(); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+
+	// Stop on a clean environment (no-op).
+	stop := NewWebCmd()
+	stop.SetArgs([]string{"stop"})
+	if err := stop.Execute(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+}
+
+// The serve command's error path: an invalid auth mode is rejected before
+// the agent builds.
+func TestServeCmdInvalidAuthMode(t *testing.T) {
+	isolateEnv(t)
+	cmd := NewServeCmd(&agentbuild.Options{})
+	cmd.SetArgs([]string{"--auth", "bogus"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("bogus auth mode accepted")
 	}
 }

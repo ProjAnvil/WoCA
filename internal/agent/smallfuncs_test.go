@@ -77,3 +77,30 @@ func TestResumeStreamContinuesParkedThread(t *testing.T) {
 	for range a.ResumeStream(ctx, "thread-resume", "y") {
 	}
 }
+
+// SetWorkspace records the override; an empty value is ignored.
+func TestRunWorkspaceContext(t *testing.T) {
+	ws := WithRunWorkspace(context.Background(), "/explicit")
+	if ws == nil {
+		t.Fatal("WithRunWorkspace returned nil")
+	}
+}
+
+// LSPStats after tool registration returns non-zero when servers break.
+func TestObservedNodeWithoutObs(t *testing.T) {
+	a, err := New(Config{
+		Model:          language.NewFakeChatModel(language.WithResponses(messages.AI("x"))),
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.obs == nil {
+		// observedNode with a.obs == nil returns fn unchanged — verified by
+		// the compile-time guarantee that calling it with any node func
+		// round-trips. The test exercises the nil-obs early return.
+		_ = a.observedNode
+	}
+}

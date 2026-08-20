@@ -20,6 +20,14 @@ import (
 )
 
 func main() {
+	root := newWorkerRoot()
+	if err := root.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func newWorkerRoot() *cobra.Command {
 	var logLevel string
 	root := &cobra.Command{
 		Use:           "woca-worker",
@@ -70,10 +78,7 @@ func main() {
 	}
 	root.Flags().StringVar(&logLevel, "log-level", "info", "debug | info | warn | error")
 	root.Flags().String("db", "", "settings database: sqlite path, postgres:// DSN (env WOCA_DB)")
-	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	return root
 }
 
 // openWorkerDB opens the shared settings/runstate database.
