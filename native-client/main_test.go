@@ -68,6 +68,11 @@ func TestBuildOptionsConfiguresWindowAndLifecycle(t *testing.T) {
 
 func TestBuildOptionsUsesRedactingWailsLogger(t *testing.T) {
 	opts := buildOptions(&App{}, fstest.MapFS{}, http.NotFoundHandler())
+	assertRedactingOptionsLogger(t, opts)
+}
+
+func assertRedactingOptionsLogger(t *testing.T, opts *options.App) {
+	t.Helper()
 	if opts.Logger == nil {
 		t.Fatal("Logger = nil")
 	}
@@ -129,7 +134,10 @@ func TestRunWithClosesStoreWhenWailsReturns(t *testing.T) {
 			}
 			return store, nil
 		},
-		func(*options.App) error { return runnerError },
+		func(opts *options.App) error {
+			assertRedactingOptionsLogger(t, opts)
+			return runnerError
+		},
 		"",
 	)
 	if !errors.Is(err, runnerError) {
@@ -233,6 +241,7 @@ func TestRunWithFatalWindowFailureKeepsStoreAndWailsErrorContext(t *testing.T) {
 
 func assertFatalLocalDataOptions(t *testing.T, opts *options.App, wantPath string) {
 	t.Helper()
+	assertRedactingOptionsLogger(t, opts)
 	if len(opts.Bind) != 1 {
 		t.Fatalf("Bind = %#v", opts.Bind)
 	}

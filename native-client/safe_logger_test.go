@@ -61,7 +61,7 @@ func TestRedactingLoggerSanitizesDispatcherCallPayloadOnEveryMethod(t *testing.T
 		t.Fatalf("entries = %d, want %d", len(recorder.entries), len(methods))
 	}
 	for index, entry := range recorder.entries {
-		if entry.level != methods[index].level || entry.message != redactedDispatcherCallError {
+		if entry.level != methods[index].level || entry.message != redactedWailsMessage {
 			t.Fatalf("entry %d = %#v", index, entry)
 		}
 		if strings.Contains(entry.message, secret) || strings.Contains(entry.message, serverURL) || strings.Contains(entry.message, `"args"`) {
@@ -80,21 +80,53 @@ func TestRedactingLoggerSanitizesObfuscatedSecureCallPanicAndDelegatesFatal(t *t
 	if len(recorder.entries) != 1 {
 		t.Fatalf("entries = %#v", recorder.entries)
 	}
-	if recorder.entries[0] != (logEntry{level: "fatal", message: redactedDispatcherCallError}) {
+	if recorder.entries[0] != (logEntry{level: "fatal", message: redactedWailsMessage}) {
 		t.Fatalf("Fatal entry = %#v", recorder.entries[0])
 	}
 }
 
-func TestRedactingLoggerDelegatesUnrelatedMessagesUnchanged(t *testing.T) {
+func TestRedactingLoggerSanitizesCallbackResultData(t *testing.T) {
+	const secret = "callback-result-secret"
+	message := `json call result data: {"result":{"server_url":"https://private.example",` +
+		`"database_path":"/Users/private/client.db","error":"` + secret + `"}}`
 	recorder := &recordingLogger{}
 	logger := newRedactingLogger(recorder)
 
-	logger.Info("ordinary Wails startup message")
+	logger.Trace(message)
 
 	if len(recorder.entries) != 1 || recorder.entries[0] != (logEntry{
-		level: "info", message: "ordinary Wails startup message",
+		level: "trace", message: redactedWailsMessage,
 	}) {
 		t.Fatalf("entries = %#v", recorder.entries)
+	}
+	if strings.Contains(recorder.entries[0].message, secret) {
+		t.Fatalf("callback result leaked: %q", recorder.entries[0].message)
+	}
+}
+
+func TestRedactingLoggerSanitizesArbitraryFrontendAndInternalMessages(t *testing.T) {
+	const frontendSecret = "frontend-runtime-secret"
+	const internalSecret = "internal-callback-secret"
+	recorder := &recordingLogger{}
+	logger := newRedactingLogger(recorder)
+
+	logger.Print("window.runtime.LogPrint: " + frontendSecret)
+	logger.Info("ordinary Wails callback: " + internalSecret)
+
+	want := []logEntry{
+		{level: "print", message: redactedWailsMessage},
+		{level: "info", message: redactedWailsMessage},
+	}
+	if len(recorder.entries) != len(want) {
+		t.Fatalf("entries = %#v", recorder.entries)
+	}
+	for index, entry := range recorder.entries {
+		if entry != want[index] {
+			t.Fatalf("entry %d = %#v, want %#v", index, entry, want[index])
+		}
+		if strings.Contains(entry.message, frontendSecret) || strings.Contains(entry.message, internalSecret) {
+			t.Fatalf("entry %d leaked dynamic content: %q", index, entry.message)
+		}
 	}
 }
 

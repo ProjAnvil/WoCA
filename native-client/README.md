@@ -41,11 +41,15 @@ later server-side milestone. OAuth access and refresh tokens must never enter
 the Vue application or be persisted by this native client. See the approved
 [native-client design](../docs/superpowers/specs/2026-08-20-woca-native-client-design.md).
 
-Wails dispatcher failures may contain the complete bound-call IPC arguments.
-The application installs a logger boundary that replaces every named or
-obfuscated call/secure-call dispatcher failure with one constant message before
-delegating it. This prevents an argument parsing error or panic from logging an
-ephemeral API key, enterprise URL, raw argument payload, or error detail.
+Wails routes bound-call arguments, callback results, frontend `runtime.Log*`
+text, and internal diagnostics through the same public logger interface. Since
+their origins cannot be distinguished at that boundary, the application never
+delegates any Wails message body: every method emits one fixed constant at the
+original level. This also preserves the delegate's fatal termination semantics.
+The deliberate diagnostics tradeoff prevents API keys, URLs, database paths,
+arguments, callbacks, frontend text, or error details from reaching logs.
+Top-level startup failures still use Go's standard logger; bound bridge calls
+cannot reach that path, and startup errors contain no bridge/API-key input.
 
 Wails 2.14's single-instance lock is a best-effort desktop UX guard, not a data
 integrity mutex. SQLite is the preference-ordering authority. Schema version 2

@@ -102,6 +102,8 @@ func run() error {
 }
 
 func main() {
+	// This logger is outside Wails and receives only run/startup failures. Bound
+	// bridge inputs remain inside Wails and cannot flow into run's error path.
 	if err := run(); err != nil {
 		log.Print(err)
 		os.Exit(1)
