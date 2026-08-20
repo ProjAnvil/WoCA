@@ -10,6 +10,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/projanvil/woca/native-client/internal/bridge"
 	"github.com/projanvil/woca/native-client/internal/configstore"
 	"github.com/wailsapp/wails/v2/pkg/options"
 )
@@ -103,14 +104,21 @@ func TestProductionCredentialsFailClosed(t *testing.T) {
 }
 
 func TestRunWithClosesStoreWhenWailsReturns(t *testing.T) {
-	store, err := configstore.Open(filepath.Join(t.TempDir(), "client.db"))
+	path := filepath.Join(t.TempDir(), "client.db")
+	store, err := configstore.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runnerError := errors.New("Wails startup failed")
 
 	err = runWith(
-		func() (*configstore.Store, error) { return store, nil },
+		func() (string, error) { return path, nil },
+		func(gotPath string) (*configstore.Store, error) {
+			if gotPath != path {
+				t.Fatalf("Open path = %q, want %q", gotPath, path)
+			}
+			return store, nil
+		},
 		func(*options.App) error { return runnerError },
 		"",
 	)
@@ -123,14 +131,16 @@ func TestRunWithClosesStoreWhenWailsReturns(t *testing.T) {
 }
 
 func TestRunWithRejectsUnsafeDevelopmentOverrideAndClosesStore(t *testing.T) {
-	store, err := configstore.Open(filepath.Join(t.TempDir(), "client.db"))
+	path := filepath.Join(t.TempDir(), "client.db")
+	store, err := configstore.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runnerCalled := false
 
 	err = runWith(
-		func() (*configstore.Store, error) { return store, nil },
+		func() (string, error) { return path, nil },
+		func(string) (*configstore.Store, error) { return store, nil },
 		func(*options.App) error { runnerCalled = true; return nil },
 		"https://localhost:9090",
 	)
@@ -142,5 +152,94 @@ func TestRunWithRejectsUnsafeDevelopmentOverrideAndClosesStore(t *testing.T) {
 	}
 	if _, _, err := store.ActiveProfile(t.Context()); err == nil {
 		t.Fatal("store remains open after development override failure")
+	}
+}
+
+func TestRunWithOpenFailureStartsFatalWindowWithDatabasePath(t *testing.T) {
+	const databasePath = "/Users/test/Library/Application Support/woca-native-client/client.db"
+	storeErr := errors.New("injected migration failure containing raw SQL")
+	openCalls := 0
+	runnerCalls := 0
+
+	err := runWith(
+		func() (string, error) { return databasePath, nil },
+		func(path string) (*configstore.Store, error) {
+			openCalls++
+			if path != databasePath {
+				t.Fatalf("Open path = %q", path)
+			}
+			return nil, storeErr
+		},
+		func(opts *options.App) error {
+			runnerCalls++
+			assertFatalLocalDataOptions(t, opts, databasePath)
+			return nil
+		},
+		"",
+	)
+	if err != nil {
+		t.Fatalf("runWith() error = %v; fatal window handled the failure", err)
+	}
+	if openCalls != 1 || runnerCalls != 1 {
+		t.Fatalf("calls = Open %d, Wails %d; want exactly one each", openCalls, runnerCalls)
+	}
+}
+
+func TestRunWithDefaultPathFailureStartsFatalWindowWithUnavailablePath(t *testing.T) {
+	pathErr := errors.New("injected home resolution failure")
+	openCalled := false
+
+	err := runWith(
+		func() (string, error) { return "", pathErr },
+		func(string) (*configstore.Store, error) { openCalled = true; return nil, nil },
+		func(opts *options.App) error {
+			assertFatalLocalDataOptions(t, opts, "")
+			return nil
+		},
+		"",
+	)
+	if err != nil {
+		t.Fatalf("runWith() error = %v; fatal window handled the failure", err)
+	}
+	if openCalled {
+		t.Fatal("Open called after DefaultPath failed")
+	}
+}
+
+func TestRunWithFatalWindowFailureKeepsStoreAndWailsErrorContext(t *testing.T) {
+	storeErr := errors.New("injected SQLite open failure")
+	runnerErr := errors.New("injected Wails startup failure")
+
+	err := runWith(
+		func() (string, error) { return "/tmp/client.db", nil },
+		func(string) (*configstore.Store, error) { return nil, storeErr },
+		func(*options.App) error { return runnerErr },
+		"",
+	)
+	if !errors.Is(err, storeErr) || !errors.Is(err, runnerErr) {
+		t.Fatalf("runWith() error = %v, want both Store and Wails causes", err)
+	}
+}
+
+func assertFatalLocalDataOptions(t *testing.T, opts *options.App, wantPath string) {
+	t.Helper()
+	if len(opts.Bind) != 1 {
+		t.Fatalf("Bind = %#v", opts.Bind)
+	}
+	app, ok := opts.Bind[0].(*App)
+	if !ok {
+		t.Fatalf("bound bridge = %T, want *App", opts.Bind[0])
+	}
+	state, err := app.Bootstrap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != bridge.StateFatalLocalData || state.DatabasePath != wantPath {
+		t.Fatalf("Bootstrap() = %#v", state)
+	}
+	response := httptest.NewRecorder()
+	opts.AssetServer.Handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/models", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("fatal handler status = %d, want 404", response.Code)
 	}
 }

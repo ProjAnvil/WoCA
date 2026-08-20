@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -55,13 +56,18 @@ func buildOptions(app *App, assets fs.FS, handler http.Handler) *options.App {
 }
 
 func runWith(
-	openStore func() (*configstore.Store, error),
+	resolvePath func() (string, error),
+	openStore func(string) (*configstore.Store, error),
 	runApp func(*options.App) error,
 	developmentURL string,
 ) error {
-	store, err := openStore()
+	databasePath, err := resolvePath()
 	if err != nil {
-		return fmt.Errorf("open native configuration: %w", err)
+		return runFatalLocalDataWindow(runApp, "", err)
+	}
+	store, err := openStore(databasePath)
+	if err != nil {
+		return runFatalLocalDataWindow(runApp, databasePath, err)
 	}
 	var closeOnce sync.Once
 	closeStore := func() { closeOnce.Do(func() { _ = store.Close() }) }
@@ -78,8 +84,19 @@ func runWith(
 	return runApp(buildOptions(app, frontendAssets(), handler))
 }
 
+func runFatalLocalDataWindow(runApp func(*options.App) error, databasePath string, localDataErr error) error {
+	app := NewApp(newFatalLocalDataBridge(databasePath))
+	if err := runApp(buildOptions(app, frontendAssets(), http.NotFoundHandler())); err != nil {
+		return errors.Join(
+			fmt.Errorf("open native configuration: %w", localDataErr),
+			fmt.Errorf("start fatal local-data window: %w", err),
+		)
+	}
+	return nil
+}
+
 func run() error {
-	return runWith(configstore.OpenDefault, wails.Run, developmentServerURL())
+	return runWith(configstore.DefaultPath, configstore.Open, wails.Run, developmentServerURL())
 }
 
 func main() {

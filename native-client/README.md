@@ -52,6 +52,17 @@ not. Controlled shutdown still stops new preference calls and drains accepted
 calls before closing SQLite, but data safety does not depend on the Wails lock
 or graceful shutdown.
 
+## Local database recovery
+
+If the native client cannot resolve, open, or migrate `client.db`, it opens a
+fatal local-data screen instead of silently replacing or repairing the
+database. When available, the screen shows the exact database path but never
+renders raw SQLite errors. Quit Woca, restore compatible file permissions or a
+supported schema (or recover the database from a known-good backup), and then
+relaunch the application. If the path itself is unavailable, repair the user
+home or platform application-data environment before relaunching. The failed
+process does not offer an in-place retry because its Store was never opened.
+
 ## Loopback UI and transport development
 
 For local visual development, first build and run the personal Woca service:

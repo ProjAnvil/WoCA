@@ -22,12 +22,14 @@ const (
 	StateUnconfigured        State = "unconfigured"
 	StateAuthorizationNeeded State = "authorization_required"
 	StateReady               State = "ready"
+	StateFatalLocalData      State = "fatal_local_data"
 )
 
 type BootstrapState struct {
-	State     State  `json:"state"`
-	ServerURL string `json:"server_url,omitempty"`
-	Message   string `json:"message,omitempty"`
+	State        State  `json:"state"`
+	ServerURL    string `json:"server_url,omitempty"`
+	Message      string `json:"message,omitempty"`
+	DatabasePath string `json:"database_path,omitempty"`
 }
 
 type ConnectionInput struct {

@@ -9,4 +9,9 @@ export default {
     '请输入不含路径、查询参数、片段或凭据的绝对 HTTPS 地址。仅 localhost、127.0.0.1 或 ::1 可使用 HTTP。',
   authorizationRequired: '需要授权后才能继续。',
   connectionError: '无法连接，请检查连接后重试。',
+  localDataFatalTitle: '本地配置不可用',
+  localDataFatalDescription: 'Woca 无法打开本地配置数据库。',
+  localDataFatalRecovery: '修复文件权限或数据库结构后，请重新启动 Woca。',
+  databasePathLabel: '数据库路径：',
+  databasePathUnavailable: '无法获取',
 }

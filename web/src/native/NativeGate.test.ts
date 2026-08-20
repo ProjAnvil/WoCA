@@ -193,4 +193,51 @@ describe('NativeGate', () => {
 
     expect(wrapper.get('[data-testid="app-marker"]').text()).toBe('Woca app')
   })
+
+  it('shows a localized fatal local-data screen without mounting app or connection UI', async () => {
+    getNativeBridge.mockReturnValue(
+      nativeBridge(async () => ({
+        state: 'fatal_local_data',
+        database_path: '/Users/test/Library/Application Support/woca-native-client/client.db',
+        message: 'raw SQLite error: secret schema detail',
+      })),
+    )
+
+    const wrapper = mountGate()
+    await flushPromises()
+
+    const fatal = wrapper.get('[data-testid="fatal-local-data"]')
+    expect(wrapper.find('[data-testid="app-marker"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="connect-view"]').exists()).toBe(false)
+    expect(fatal.get('code').text()).toBe(
+      '/Users/test/Library/Application Support/woca-native-client/client.db',
+    )
+    expect(fatal.text()).toContain('Woca cannot open its local configuration database.')
+    expect(fatal.text()).toContain('Fix the file permissions or database schema, then relaunch Woca.')
+    expect(fatal.text()).not.toContain('secret schema detail')
+    expect(fatal.find('button').exists()).toBe(false)
+
+    i18n.global.locale.value = 'zh-CN'
+    await flushPromises()
+    expect(fatal.text()).toContain('Woca 无法打开本地配置数据库。')
+    expect(fatal.text()).toContain('修复文件权限或数据库结构后，请重新启动 Woca。')
+  })
+
+  it('uses fixed unavailable-path copy when the database path cannot be resolved', async () => {
+    getNativeBridge.mockReturnValue(
+      nativeBridge(async () => ({
+        state: 'fatal_local_data',
+        message: 'raw home directory failure',
+      })),
+    )
+
+    const wrapper = mountGate()
+    await flushPromises()
+
+    const fatal = wrapper.get('[data-testid="fatal-local-data"]')
+    expect(fatal.get('code').text()).toBe('Unavailable')
+    expect(fatal.text()).not.toContain('raw home directory failure')
+    expect(wrapper.find('[data-testid="app-marker"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="connect-view"]').exists()).toBe(false)
+  })
 })

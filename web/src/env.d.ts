@@ -10,9 +10,10 @@ declare module '@iconify-json/vscode-icons/icons.json' {
 
 declare global {
   interface BootstrapState {
-    state: 'unconfigured' | 'authorization_required' | 'ready'
+    state: 'unconfigured' | 'authorization_required' | 'ready' | 'fatal_local_data'
     server_url?: string
     message?: string
+    database_path?: string
   }
 
   interface ConnectionInput {

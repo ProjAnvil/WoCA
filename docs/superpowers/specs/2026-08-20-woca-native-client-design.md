@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-20
 
-**Status:** Approved in conversation; awaiting written-spec review
+**Status:** Approved; scaffold implemented (production OAuth/DPoP remains a later milestone)
 
 **Target:** Wails v2.14.0
 
@@ -280,6 +280,9 @@ A small native bootstrap layer is added under `web/src/native/`:
   existing stores call `/api`.
 - A session that requires authorization shows the login action while retaining
   the configured URL.
+- A local path, open, or migration failure returns `fatal_local_data`; the gate
+  shows fixed localized recovery guidance and the database path when known,
+  without mounting the application or connection screen.
 - Once ready, the unchanged Woca application shell is mounted.
 
 This gate prevents the current `App.vue` startup hooks from sending API calls

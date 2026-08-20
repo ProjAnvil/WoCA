@@ -6,16 +6,24 @@ import { getNativeBridge } from './bridge'
 import { hydrateNativePreferences } from './preferences'
 import { applyStoredLocalePreference } from '../i18n'
 
-type GateState = 'loading' | 'unconfigured' | 'authorization_required' | 'ready' | 'error'
+type GateState =
+  | 'loading'
+  | 'unconfigured'
+  | 'authorization_required'
+  | 'ready'
+  | 'fatal_local_data'
+  | 'error'
 
 const bridge = getNativeBridge()
 const { t } = useI18n()
 const state = ref<GateState>(bridge ? 'loading' : 'ready')
 const serverUrl = ref('')
+const databasePath = ref('')
 const error = ref('')
 
 async function useBootstrapState(next: BootstrapState) {
   serverUrl.value = next.server_url ?? ''
+  databasePath.value = next.database_path ?? ''
   if (next.state === 'ready' && bridge) {
     state.value = 'loading'
     await hydrateNativePreferences(bridge)
@@ -68,6 +76,21 @@ onMounted(() => {
     :authorization-required="state === 'authorization_required'"
     :connect="connect"
   />
+
+  <main
+    v-else-if="state === 'fatal_local_data'"
+    data-testid="fatal-local-data"
+    class="native-gate"
+    role="alert"
+  >
+    <h1>{{ t('native.localDataFatalTitle') }}</h1>
+    <p>{{ t('native.localDataFatalDescription') }}</p>
+    <p>{{ t('native.localDataFatalRecovery') }}</p>
+    <p>
+      <span>{{ t('native.databasePathLabel') }}</span>
+      <code>{{ databasePath || t('native.databasePathUnavailable') }}</code>
+    </p>
+  </main>
 
   <main v-else class="native-gate" role="alert">
     <p>{{ error }}</p>
