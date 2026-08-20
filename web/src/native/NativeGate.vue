@@ -91,7 +91,26 @@ onMounted(() => {
   <slot v-if="state === 'ready'" />
 
   <main v-else-if="state === 'loading'" data-testid="native-loading" class="native-gate">
-    Loading…
+    <div class="gate-orb gate-orb--indigo" aria-hidden="true"></div>
+    <div class="gate-orb gate-orb--violet" aria-hidden="true"></div>
+    <div class="gate-orb gate-orb--cyan" aria-hidden="true"></div>
+    <section class="gate-card gate-plain gate-center">
+      <div class="gate-brand">
+        <div class="gate-logo" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M4 7l2.4 10h2.2L11 9.6 13.4 17h2.2L18 7h-2.1l-1.6 7.2L12 7h-2L7.7 14.2 6.1 7H4z"
+              fill="currentColor"
+            />
+          </svg>
+        </div>
+        <span class="gate-wordmark">WOCA</span>
+        <span class="gate-brand-tag">ENTERPRISE</span>
+      </div>
+      <p class="gate-sub gate-center-row">
+        <span class="gate-spinner" aria-hidden="true"></span>
+      </p>
+    </section>
   </main>
 
   <ConnectView
@@ -107,18 +126,49 @@ onMounted(() => {
     class="native-gate"
     role="alert"
   >
-    <h1>{{ t('native.localDataFatalTitle') }}</h1>
-    <p>{{ t('native.localDataFatalDescription') }}</p>
-    <p>{{ t('native.localDataFatalRecovery') }}</p>
-    <p>
-      <span>{{ t('native.databasePathLabel') }}</span>
-      <code>{{ databasePath || t('native.databasePathUnavailable') }}</code>
-    </p>
+    <div class="gate-orb gate-orb--indigo" aria-hidden="true"></div>
+    <div class="gate-orb gate-orb--violet" aria-hidden="true"></div>
+    <section class="gate-card gate-plain">
+      <div class="gate-brand">
+        <div class="gate-logo" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M4 7l2.4 10h2.2L11 9.6 13.4 17h2.2L18 7h-2.1l-1.6 7.2L12 7h-2L7.7 14.2 6.1 7H4z"
+              fill="currentColor"
+            />
+          </svg>
+        </div>
+        <span class="gate-wordmark">WOCA</span>
+        <span class="gate-brand-tag">ENTERPRISE</span>
+      </div>
+      <h1>{{ t('native.localDataFatalTitle') }}</h1>
+      <p>{{ t('native.localDataFatalDescription') }}</p>
+      <p>{{ t('native.localDataFatalRecovery') }}</p>
+      <p>
+        <span>{{ t('native.databasePathLabel') }}</span>
+        <code>{{ databasePath || t('native.databasePathUnavailable') }}</code>
+      </p>
+    </section>
   </main>
 
   <main v-else class="native-gate" role="alert">
-    <p>{{ error }}</p>
-    <button type="button" @click="bootstrap">{{ t('native.retry') }}</button>
+    <div class="gate-orb gate-orb--indigo" aria-hidden="true"></div>
+    <div class="gate-orb gate-orb--violet" aria-hidden="true"></div>
+    <section class="gate-card gate-plain">
+      <div class="gate-brand">
+        <div class="gate-logo" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+            <path
+              d="M4 7l2.4 10h2.2L11 9.6 13.4 17h2.2L18 7h-2.1l-1.6 7.2L12 7h-2L7.7 14.2 6.1 7H4z"
+              fill="currentColor"
+            />
+          </svg>
+        </div>
+        <span class="gate-wordmark">WOCA</span>
+        <span class="gate-brand-tag">ENTERPRISE</span>
+      </div>
+      <p>{{ error }}</p>
+      <button type="button" class="gate-ghost" @click="bootstrap">{{ t('native.retry') }}</button>
+    </section>
   </main>
-
 </template>

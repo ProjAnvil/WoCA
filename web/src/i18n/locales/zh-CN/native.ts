@@ -1,9 +1,14 @@
 export default {
   title: '连接企业服务',
+  subtitle: '使用工作区密钥登录,接入你团队部署的 Woca。',
   urlLabel: '企业服务地址',
+  urlPlaceholder: 'https://enterprise.example.com',
   apiKeyLabel: 'API 密钥',
+  apiKeyPlaceholder: 'woca_…',
   connect: '连接',
+  connecting: '正在连接…',
   retry: '重试',
+  keyHint: '你的密钥不会以明文离开本设备。',
   invalidInput: '请输入企业服务地址和 API 密钥。',
   invalidOrigin:
     '请输入不含路径、查询参数、片段或凭据的绝对 HTTPS 地址。仅 localhost、127.0.0.1 或 ::1 可使用 HTTP。',
