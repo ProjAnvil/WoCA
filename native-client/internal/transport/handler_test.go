@@ -35,6 +35,32 @@ func (s staticCredentials) Credentials(context.Context, string, *url.URL) (Crede
 	return s.value, s.err
 }
 
+type countingTarget struct {
+	calls   *atomic.Int32
+	profile configstore.Profile
+	ok      bool
+}
+
+func (s countingTarget) ActiveProfile(context.Context) (configstore.Profile, bool, error) {
+	s.calls.Add(1)
+	return s.profile, s.ok, nil
+}
+
+type countingCredentials struct {
+	calls *atomic.Int32
+}
+
+func (s countingCredentials) Credentials(context.Context, string, *url.URL) (Credentials, error) {
+	s.calls.Add(1)
+	return Credentials{}, nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
 func TestHandlerForwardsMethodPathQueryAndBody(t *testing.T) {
 	type observedRequest struct {
 		method      string
@@ -173,6 +199,77 @@ func TestHandlerReturnsServiceUnavailableWithoutActiveProfile(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsInvalidOrTamperedProfileOriginBeforeCredentials(t *testing.T) {
+	for _, baseURL := range []string{
+		"http://example.com",
+		"https://example.com/tenant-path",
+		"https://user:secret@example.com",
+	} {
+		t.Run(baseURL, func(t *testing.T) {
+			var credentialCalls atomic.Int32
+			var roundTrips atomic.Int32
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				roundTrips.Add(1)
+				return &http.Response{
+					StatusCode: http.StatusNoContent,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader("")),
+				}, nil
+			})}
+			handler := New(
+				staticTarget{profile: configstore.Profile{BaseURL: baseURL}, ok: true},
+				countingCredentials{calls: &credentialCalls},
+				client,
+			)
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil))
+
+			assertJSONError(t, response, http.StatusServiceUnavailable)
+			if credentialCalls.Load() != 0 {
+				t.Fatalf("credential calls = %d", credentialCalls.Load())
+			}
+			if roundTrips.Load() != 0 {
+				t.Fatalf("upstream round trips = %d", roundTrips.Load())
+			}
+			if strings.Contains(response.Body.String(), baseURL) || strings.Contains(response.Body.String(), "secret") {
+				t.Fatalf("response leaked profile data: %q", response.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandlerRejectsTraversalPathsBeforeTargetLookup(t *testing.T) {
+	for _, requestPath := range []string{
+		"/api/../auth",
+		"/api/./models",
+		"/api/%2e%2e%2fauth",
+	} {
+		t.Run(requestPath, func(t *testing.T) {
+			var targetCalls atomic.Int32
+			var credentialCalls atomic.Int32
+			var roundTrips atomic.Int32
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				roundTrips.Add(1)
+				return nil, nil
+			})}
+			handler := New(
+				countingTarget{calls: &targetCalls, profile: configstore.Profile{BaseURL: "http://localhost"}, ok: true},
+				countingCredentials{calls: &credentialCalls},
+				client,
+			)
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://native.local"+requestPath, nil))
+
+			assertJSONError(t, response, http.StatusNotFound)
+			if targetCalls.Load() != 0 || credentialCalls.Load() != 0 || roundTrips.Load() != 0 {
+				t.Fatalf("calls: target=%d credentials=%d upstream=%d", targetCalls.Load(), credentialCalls.Load(), roundTrips.Load())
+			}
+		})
+	}
+}
+
 func TestHandlerRefusesCrossOriginRedirect(t *testing.T) {
 	var redirectHits atomic.Int32
 	redirectTarget := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -199,6 +296,80 @@ func TestHandlerRefusesCrossOriginRedirect(t *testing.T) {
 	}
 	if body := response.Body.String(); strings.Contains(body, redirectTarget.URL) || strings.Contains(body, "session-secret") || strings.Contains(body, "proof-secret") {
 		t.Fatalf("response leaked redirect or credentials: %q", body)
+	}
+}
+
+func TestHandlerRefusesSameOriginAndRelativeRedirects(t *testing.T) {
+	for _, location := range []string{"absolute-api", "/api/next", "/login"} {
+		t.Run(location, func(t *testing.T) {
+			var upstream *httptest.Server
+			upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				redirectLocation := location
+				if location == "absolute-api" {
+					redirectLocation = upstream.URL + "/api/next"
+				}
+				w.Header().Set("Location", redirectLocation)
+				w.WriteHeader(http.StatusTemporaryRedirect)
+			}))
+			defer upstream.Close()
+			handler := New(
+				staticTarget{profile: configstore.Profile{BaseURL: upstream.URL}, ok: true},
+				staticCredentials{},
+				nil,
+			)
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil))
+
+			assertJSONError(t, response, http.StatusBadGateway)
+			if got := response.Header().Get("Location"); got != "" {
+				t.Fatalf("Location = %q", got)
+			}
+		})
+	}
+}
+
+func TestHandlerPreservesNotModifiedResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Location", "/cached-resource")
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer upstream.Close()
+	handler := New(
+		staticTarget{profile: configstore.Profile{BaseURL: upstream.URL}, ok: true},
+		staticCredentials{},
+		nil,
+	)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil))
+
+	if response.Code != http.StatusNotModified {
+		t.Fatalf("status = %d, body = %q", response.Code, response.Body.String())
+	}
+}
+
+func TestHandlerStripsAllUpstreamSetCookieHeaders(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Add("Set-Cookie", "session=secret-one; HttpOnly")
+		w.Header().Add("Set-Cookie", "tenant=secret-two; Secure")
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+	handler := New(
+		staticTarget{profile: configstore.Profile{BaseURL: upstream.URL}, ok: true},
+		staticCredentials{},
+		nil,
+	)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://native.local/api/models", nil))
+
+	if response.Code != http.StatusOK || response.Body.String() != "ok" {
+		t.Fatalf("response = %d %q", response.Code, response.Body.String())
+	}
+	if cookies := response.Header().Values("Set-Cookie"); len(cookies) != 0 {
+		t.Fatalf("Set-Cookie = %q", cookies)
 	}
 }
 

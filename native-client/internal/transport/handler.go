@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -42,7 +43,7 @@ func New(targets TargetProvider, credentials CredentialProvider, client *http.Cl
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/api" && !strings.HasPrefix(r.URL.Path, "/api/") {
+	if !isAPIPath(r.URL.Path) {
 		writeJSONError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -56,8 +57,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, "service unavailable")
 		return
 	}
-	target, err := url.Parse(profile.BaseURL)
-	if err != nil || target.Scheme == "" || target.Host == "" {
+	canonicalBaseURL, err := configstore.NormalizeBaseURL(profile.BaseURL)
+	if err != nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "service unavailable")
+		return
+	}
+	target, err := url.Parse(canonicalBaseURL)
+	if err != nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "service unavailable")
 		return
 	}
@@ -92,15 +98,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Transport:     h.transport,
 		FlushInterval: -1,
 		ModifyResponse: func(response *http.Response) error {
-			if response.StatusCode < http.StatusMultipleChoices || response.StatusCode >= http.StatusBadRequest {
-				return nil
-			}
-			location := response.Header.Get("Location")
-			if location == "" {
-				return nil
-			}
-			redirect, err := response.Request.URL.Parse(location)
-			if err != nil || !sameOrigin(response.Request.URL, redirect) {
+			response.Header.Del("Set-Cookie")
+			if response.StatusCode >= http.StatusMultipleChoices &&
+				response.StatusCode < http.StatusBadRequest &&
+				response.StatusCode != http.StatusNotModified &&
+				len(response.Header.Values("Location")) != 0 {
 				return errors.New("upstream redirect refused")
 			}
 			return nil
@@ -159,8 +161,17 @@ func cloneURL(source *url.URL) *url.URL {
 	return &cloned
 }
 
-func sameOrigin(left, right *url.URL) bool {
-	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
+func isAPIPath(requestPath string) bool {
+	if requestPath != "/api" && !strings.HasPrefix(requestPath, "/api/") {
+		return false
+	}
+	for _, segment := range strings.Split(requestPath, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	cleaned := path.Clean(requestPath)
+	return cleaned == "/api" || strings.HasPrefix(cleaned, "/api/")
 }
 
 func writeJSONError(w http.ResponseWriter, status int, message string) {
