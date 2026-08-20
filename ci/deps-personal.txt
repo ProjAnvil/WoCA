@@ -82,7 +82,9 @@ github.com/projanvil/langchain-golang/core/vectorstores
 github.com/projanvil/langchain-golang/langchain/chatmodels
 github.com/projanvil/langchain-golang/langgraph/channels
 github.com/projanvil/langchain-golang/langgraph/checkpoint
+github.com/projanvil/langchain-golang/langgraph/checkpoint/postgres
 github.com/projanvil/langchain-golang/langgraph/checkpoint/serde
+github.com/projanvil/langchain-golang/langgraph/checkpoint/sqlite
 github.com/projanvil/langchain-golang/langgraph/graph
 github.com/projanvil/langchain-golang/langgraph/runtime
 github.com/projanvil/langchain-golang/langgraph/store
@@ -103,9 +105,9 @@ github.com/projanvil/woca/internal/config
 github.com/projanvil/woca/internal/console
 github.com/projanvil/woca/internal/context
 github.com/projanvil/woca/internal/cost
+github.com/projanvil/woca/internal/cpserde
 github.com/projanvil/woca/internal/gateway
 github.com/projanvil/woca/internal/hooks
-github.com/projanvil/woca/internal/lgcp
 github.com/projanvil/woca/internal/logging
 github.com/projanvil/woca/internal/mcp
 github.com/projanvil/woca/internal/memory
@@ -127,6 +129,7 @@ github.com/projanvil/woca/internal/prompt
 github.com/projanvil/woca/internal/quota
 github.com/projanvil/woca/internal/repl
 github.com/projanvil/woca/internal/runner
+github.com/projanvil/woca/internal/runstate
 github.com/projanvil/woca/internal/runws
 github.com/projanvil/woca/internal/sdkout
 github.com/projanvil/woca/internal/searchapi

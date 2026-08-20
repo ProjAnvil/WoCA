@@ -121,7 +121,7 @@ func KeyHelp(key string) string {
 	case KeyBuiltinPlugins:
 		return "enabled built-in tool plugins as a JSON array (browser, pdf; runtime installed from Settings → 插件)"
 	case KeyCheckpoint:
-		return "checkpoint backend: none | file | sqlite | postgres (default sqlite)"
+		return "checkpoint backend: none | file | sqlite | postgres (default sqlite; file keeps a sqlite checkpoints.db inside checkpoint-dir)"
 	case KeyMemory:
 		return "memoryStore backend: none | memory | sqlite | postgres (default sqlite)"
 	case KeyCheckpointDir:

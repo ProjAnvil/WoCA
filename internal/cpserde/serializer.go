@@ -1,4 +1,4 @@
-package lgcp
+package cpserde
 
 import (
 	"encoding/json"
@@ -11,6 +11,13 @@ import (
 	"github.com/projanvil/langchain-golang/langgraph/checkpoint/serde"
 )
 
+// Package cpserde layers woca's harness payload types on top of the fork's
+// checkpoint serializer: values the fork registry handles pass through
+// unchanged; types registered via RegisterType round-trip through a
+// "woca:<name>" envelope. Storage itself is the upstream
+// langgraph/checkpoint/{sqlite,postgres} savers — this package owns only
+// the typed serde contract.
+//
 // The fork's serde registry is deliberately closed (langchain core types
 // plus JSON-native values). woca's interrupt payloads are harness structs
 // (PermissionRequest and friends), so this file layers a woca-aware
@@ -40,7 +47,7 @@ func RegisterType(v any, name string) {
 	defer registerMu.Unlock()
 	t := reflect.TypeOf(v)
 	if t == nil || t.Kind() != reflect.Struct {
-		panic(fmt.Sprintf("lgcp: RegisterType wants a struct zero value, got %T", v))
+		panic(fmt.Sprintf("cpserde: RegisterType wants a struct zero value, got %T", v))
 	}
 	if prev, ok := registered[t]; ok {
 		if prev == name {
@@ -60,8 +67,9 @@ type wocaSerializer struct {
 	base lgcheckpoint.Serializer
 }
 
-// newSerializer returns the serializer every saver in this package uses.
-func newSerializer() lgcheckpoint.Serializer {
+// NewSerializer returns the woca-aware Serializer every checkpoint saver
+// (the upstream langgraph/checkpoint sqlite and postgres savers) uses.
+func NewSerializer() lgcheckpoint.Serializer {
 	return wocaSerializer{base: serde.NewJSONSerializer()}
 }
 
@@ -79,7 +87,7 @@ func (s wocaSerializer) DumpsTyped(v any) (string, []byte, error) {
 	}
 	blob, merr := json.Marshal(v)
 	if merr != nil {
-		return "", nil, fmt.Errorf("lgcp: encode %s: %w", name, merr)
+		return "", nil, fmt.Errorf("cpserde: encode %s: %w", name, merr)
 	}
 	return wocaTagPrefix + name, blob, nil
 }
@@ -91,11 +99,11 @@ func (s wocaSerializer) LoadsTyped(typ string, data []byte) (any, error) {
 		zero, ok := newByName[name]
 		registerMu.RUnlock()
 		if !ok {
-			return nil, fmt.Errorf("lgcp: no type registered as %q", name)
+			return nil, fmt.Errorf("cpserde: no type registered as %q", name)
 		}
 		out := reflect.New(reflect.TypeOf(zero)).Interface()
 		if err := json.Unmarshal(data, out); err != nil {
-			return nil, fmt.Errorf("lgcp: decode %s: %w", name, err)
+			return nil, fmt.Errorf("cpserde: decode %s: %w", name, err)
 		}
 		return reflect.ValueOf(out).Elem().Interface(), nil
 	}

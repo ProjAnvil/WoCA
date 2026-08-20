@@ -17,14 +17,16 @@ import (
 	"github.com/projanvil/langchain-golang/core/language"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
+	lgcppostgres "github.com/projanvil/langchain-golang/langgraph/checkpoint/postgres"
+	lgcpsqlite "github.com/projanvil/langchain-golang/langgraph/checkpoint/sqlite"
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/claudeenv"
 	"github.com/projanvil/woca/internal/config"
 	contextx "github.com/projanvil/woca/internal/context"
+	"github.com/projanvil/woca/internal/cpserde"
 	"github.com/projanvil/woca/internal/hooks"
-	"github.com/projanvil/woca/internal/lgcp"
 	"github.com/projanvil/woca/internal/mcp"
 	"github.com/projanvil/woca/internal/obslog"
 	"github.com/projanvil/woca/internal/platform/executor"
@@ -254,25 +256,50 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		return st.DB()
 	}
 
+	// Checkpoint persistence uses the upstream langgraph/checkpoint
+	// savers (sqlite/postgres companion modules) with woca's typed serde
+	// (internal/cpserde). The legacy in-repo lgcp savers are gone; the
+	// "file" backend semantics became "a sqlite database inside the
+	// directory" (one checkpoints.db instead of per-thread JSON files).
 	var checkpointer lgcheckpoint.Saver
+	serializer := cpserde.NewSerializer()
+	dir := opts.CheckpointDir
+	if dir == "" {
+		dir = dbSettings.CheckpointDir
+	}
 	backend := dbSettings.CheckpointBackend
 	if backend == "" {
 		backend = settings.CheckpointSQLite
 	}
 	switch {
-	case opts.CheckpointDir != "":
-		checkpointer = lgcp.NewFileSaver(opts.CheckpointDir)
+	case dir != "":
+		if s, err := lgcpsqlite.New(filepath.Join(dir, "checkpoints.db"), serializer); err == nil {
+			checkpointer = s
+		} else {
+			log.Warn().Err(err).Msg("checkpoint dir backend unavailable")
+		}
 	case backend == settings.CheckpointFile:
-		if dir := dbSettings.CheckpointDir; dir != "" {
-			checkpointer = lgcp.NewFileSaver(dir)
+		log.Warn().Msg("checkpoint backend 'file' requires checkpoint-dir; falling back to sqlite")
+		if s, err := lgcpsqlite.New(checkpointsDefaultPath(), serializer); err == nil {
+			checkpointer = s
+		} else {
+			log.Warn().Err(err).Msg("checkpoint sqlite backend unavailable")
 		}
 	case backend == settings.CheckpointPostgres:
-		if db := openPostgres(); db != nil {
-			checkpointer = lgcp.NewSQLSaver(db.DB, string(db.Dialect))
+		if st != nil {
+			if dsn := st.GetSecret(settings.SecretPostgresURL); dsn != "" {
+				if s, err := lgcppostgres.NewFromConnString(ctx, dsn, serializer); err == nil {
+					checkpointer = s
+				} else {
+					log.Warn().Err(err).Msg("checkpoint postgres backend unavailable")
+				}
+			}
 		}
 	case backend == settings.CheckpointSQLite:
-		if db := localDB(); db != nil {
-			checkpointer = lgcp.NewSQLSaver(db.DB, string(db.Dialect))
+		if s, err := lgcpsqlite.New(checkpointsDefaultPath(), serializer); err == nil {
+			checkpointer = s
+		} else {
+			log.Warn().Err(err).Msg("checkpoint sqlite backend unavailable")
 		}
 	}
 
@@ -654,4 +681,10 @@ func McpAuthRunner(st *settings.Store) func(ctx context.Context, server string) 
 		}
 		return fmt.Errorf("MCP server %q is not configured with an https endpoint (start woca with --mcp %s=https://…)", server, server)
 	}
+}
+
+// checkpointsDefaultPath is the default on-disk checkpoint database beside
+// the settings database (~/.woca/checkpoints.db).
+func checkpointsDefaultPath() string {
+	return filepath.Join(filepath.Dir(wocadb.DefaultPath()), "checkpoints.db")
 }

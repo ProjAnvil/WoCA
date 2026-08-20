@@ -459,6 +459,14 @@ func run(ctx context.Context, opts agentbuild.Options, stdin io.Reader, stdout, 
 		if endErr := a.RunSessionEnd(ctx, "oneshot"); endErr != nil && err == nil {
 			err = endErr
 		}
+		// Durable checkpoints: tell the user how to resume this turn later
+		// (the thread id is the resume key; the legacy file-name discovery
+		// died with the per-thread JSON saver).
+		if opts.CheckpointDir != "" {
+			if thread := a.LastThreadID(); thread != "" {
+				fmt.Fprintf(stderr, "checkpoint thread: %s\n", thread)
+			}
+		}
 		return err
 	}
 
