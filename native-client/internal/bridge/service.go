@@ -51,15 +51,10 @@ type PreferenceWriteResult struct {
 	Applied  bool   `json:"applied"`
 }
 
-type preferenceSequence struct {
-	mu       sync.Mutex
-	revision uint64
-}
-
 type nativeStore interface {
 	SaveProfile(context.Context, string) (configstore.Profile, error)
 	ActiveProfile(context.Context) (configstore.Profile, bool, error)
-	PutPreference(context.Context, string, string) error
+	PutPreferenceVersioned(context.Context, string, string, uint64) (bool, error)
 	Preference(context.Context, string) (string, bool, error)
 }
 
@@ -71,19 +66,13 @@ type Service struct {
 
 	mu           sync.RWMutex
 	readyBaseURL string
-
-	preferenceMu        sync.Mutex
-	preferenceSequences map[string]*preferenceSequence
 }
 
 func NewService(store nativeStore, activator auth.Activator) *Service {
 	if activator == nil {
 		activator = auth.UnavailableActivator{}
 	}
-	return &Service{
-		store: store, activator: activator,
-		preferenceSequences: make(map[string]*preferenceSequence),
-	}
+	return &Service{store: store, activator: activator}
 }
 
 func (s *Service) Bootstrap(ctx context.Context) (BootstrapState, error) {
@@ -152,9 +141,6 @@ func (s *Service) Preference(ctx context.Context, key string) (PreferenceValue, 
 	if s.store == nil {
 		return PreferenceValue{}, errors.New("preference store is required")
 	}
-	sequence := s.preferenceSequence(key)
-	sequence.mu.Lock()
-	defer sequence.mu.Unlock()
 	value, found, err := s.store.Preference(ctx, key)
 	if err != nil {
 		return PreferenceValue{}, err
@@ -179,28 +165,11 @@ func (s *Service) SetPreference(ctx context.Context, input PreferenceInput) (Pre
 		return PreferenceWriteResult{}, errors.New("preference store is required")
 	}
 
-	sequence := s.preferenceSequence(input.Key)
-	sequence.mu.Lock()
-	defer sequence.mu.Unlock()
-	if input.Revision <= sequence.revision {
-		return PreferenceWriteResult{Revision: input.Revision, Applied: false}, nil
-	}
-	sequence.revision = input.Revision
-	if err := s.store.PutPreference(ctx, input.Key, input.Value); err != nil {
+	applied, err := s.store.PutPreferenceVersioned(ctx, input.Key, input.Value, input.Revision)
+	if err != nil {
 		return PreferenceWriteResult{Revision: input.Revision, Applied: false}, err
 	}
-	return PreferenceWriteResult{Revision: input.Revision, Applied: true}, nil
-}
-
-func (s *Service) preferenceSequence(key string) *preferenceSequence {
-	s.preferenceMu.Lock()
-	defer s.preferenceMu.Unlock()
-	sequence := s.preferenceSequences[key]
-	if sequence == nil {
-		sequence = &preferenceSequence{}
-		s.preferenceSequences[key] = sequence
-	}
-	return sequence
+	return PreferenceWriteResult{Revision: input.Revision, Applied: applied}, nil
 }
 
 func knownPreferenceKey(key string) bool {

@@ -182,6 +182,35 @@ describe('native-aware preferences', () => {
     expect(preferences.readPreference('woca.pref.model')).toBe('updated-native-model')
   })
 
+  it('treats a stale SQLite CAS result as retryable without claiming persistence', async () => {
+    const setPreference = vi
+      .fn<NativeAppBridge['SetPreference']>()
+      .mockImplementationOnce(async (input) => ({ revision: input.revision, applied: false }))
+      .mockImplementation(async (input) => ({ revision: input.revision, applied: true }))
+    const bridge = bridgeWithPreferences({ SetPreference: setPreference })
+    vi.stubGlobal('go', { main: { App: bridge } })
+    const preferences = await import('./preferences')
+    await preferences.hydrateNativePreferences(bridge)
+
+    setActivePinia(createPinia())
+    const { useSettingsStore } = await import('../stores/settings')
+    const settings = useSettingsStore()
+
+    settings.model = 'cas-rejected-model'
+    await nextTick()
+    await expect(preferences.drainPreferenceWrites()).rejects.toThrow('unable to persist native preferences')
+    await nextTick()
+    expect(settings.model).toBe('native-model')
+    expect(preferences.readPreference('woca.pref.model')).toBe('native-model')
+
+    expect(preferences.retryFailedNativePreference('woca.pref.model')).toBe(true)
+    await nextTick()
+    expect(settings.model).toBe('cas-rejected-model')
+    await preferences.drainPreferenceWrites()
+    expect(preferences.readPreference('woca.pref.model')).toBe('cas-rejected-model')
+    expect(setPreference).toHaveBeenCalledTimes(2)
+  })
+
   it('restores a missing theme to its typed default after rejection and reapplies it on retry', async () => {
     let darkAttempts = 0
     const setPreference = vi.fn<NativeAppBridge['SetPreference']>().mockImplementation(async (input) => {

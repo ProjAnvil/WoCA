@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"net/netip"
 	"net/url"
 	"os"
@@ -23,10 +24,11 @@ type Profile struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db    *sql.DB
+	epoch int64
 }
 
-const currentSchemaVersion = 1
+const currentSchemaVersion = 2
 
 const schemaMigrationsDDL = `CREATE TABLE schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -56,6 +58,17 @@ const nativeSessionsDDL = `CREATE TABLE native_sessions (
     session_ciphertext BLOB NOT NULL,
     expires_at INTEGER NOT NULL,
     last_validated_at INTEGER NOT NULL
+)`
+
+const preferenceEpochDDL = `CREATE TABLE preference_epoch (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    epoch INTEGER NOT NULL CHECK (epoch >= 0)
+)`
+
+const preferenceVersionsDDL = `CREATE TABLE preference_versions (
+    key TEXT PRIMARY KEY REFERENCES preferences(key) ON DELETE CASCADE,
+    epoch INTEGER NOT NULL CHECK (epoch > 0),
+    revision INTEGER NOT NULL CHECK (revision > 0)
 )`
 
 func OpenDefault() (*Store, error) {
@@ -93,6 +106,12 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	epoch, err := s.claimPreferenceEpoch(context.Background())
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	s.epoch = epoch
 	return s, nil
 }
 
@@ -151,14 +170,6 @@ func (s *Store) ActiveProfile(ctx context.Context) (Profile, bool, error) {
 	return profile, true, nil
 }
 
-func (s *Store) PutPreference(ctx context.Context, key, value string) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO preferences (key, value, updated_at) VALUES (?, ?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-		key, value, time.Now().Unix())
-	return err
-}
-
 func (s *Store) Preference(ctx context.Context, key string) (string, bool, error) {
 	var value string
 	err := s.db.QueryRowContext(ctx, `SELECT value FROM preferences WHERE key = ?`, key).Scan(&value)
@@ -169,6 +180,76 @@ func (s *Store) Preference(ctx context.Context, key string) (string, bool, error
 		return "", false, err
 	}
 	return value, true, nil
+}
+
+// PutPreferenceVersioned atomically applies a preference only when this Store
+// still owns the latest persisted epoch and revision is newer for the key.
+// Epoch fencing makes ordering authoritative in SQLite even when another
+// process bypasses Wails' best-effort single-instance lock.
+func (s *Store) PutPreferenceVersioned(ctx context.Context, key, value string, revision uint64) (bool, error) {
+	if s.epoch <= 0 {
+		return false, fmt.Errorf("preference epoch is unavailable")
+	}
+	if revision == 0 || revision > math.MaxInt64 {
+		return false, fmt.Errorf("preference revision is invalid")
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return false, fmt.Errorf("reserve SQLite connection for preference write: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return false, fmt.Errorf("begin versioned preference write: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+
+	var currentEpoch int64
+	if err := conn.QueryRowContext(ctx, `SELECT epoch FROM preference_epoch WHERE singleton = 1`).Scan(&currentEpoch); err != nil {
+		return false, fmt.Errorf("read current preference epoch: %w", err)
+	}
+	if currentEpoch != s.epoch {
+		return false, nil
+	}
+
+	var appliedEpoch, appliedRevision int64
+	err = conn.QueryRowContext(ctx, `
+		SELECT epoch, revision FROM preference_versions WHERE key = ?`, key).
+		Scan(&appliedEpoch, &appliedRevision)
+	if err != nil && err != sql.ErrNoRows {
+		return false, fmt.Errorf("read applied preference version: %w", err)
+	}
+	if err == nil {
+		if appliedEpoch > s.epoch {
+			return false, fmt.Errorf("stored preference version is invalid")
+		}
+		if appliedEpoch == s.epoch && appliedRevision >= int64(revision) {
+			return false, nil
+		}
+	}
+
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO preferences (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		key, value, time.Now().Unix()); err != nil {
+		return false, fmt.Errorf("write preference value: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO preference_versions (key, epoch, revision) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET epoch = excluded.epoch, revision = excluded.revision`,
+		key, s.epoch, int64(revision)); err != nil {
+		return false, fmt.Errorf("write preference version: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return false, fmt.Errorf("commit versioned preference write: %w", err)
+	}
+	committed = true
+	return true, nil
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -207,12 +288,27 @@ func (s *Store) migrate(ctx context.Context) error {
 	if version > currentSchemaVersion {
 		return fmt.Errorf("database schema version %d is newer than supported version %d", version, currentSchemaVersion)
 	}
+	if version == currentSchemaVersion {
+		if err := validateVersionTwoSchema(ctx, tx); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 	if versioned {
-		if version != currentSchemaVersion {
+		if version != 1 {
 			return fmt.Errorf("unsupported database schema version %d", version)
 		}
 		if err := validateVersionOneSchema(ctx, tx); err != nil {
 			return err
+		}
+		if err := applyVersionTwoMigration(ctx, tx); err != nil {
+			return err
+		}
+		if err := validateVersionTwoSchema(ctx, tx); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, currentSchemaVersion, time.Now().Unix()); err != nil {
+			return fmt.Errorf("record SQLite migration: %w", err)
 		}
 		return tx.Commit()
 	}
@@ -225,18 +321,75 @@ func (s *Store) migrate(ctx context.Context) error {
 		oneActiveProfileDDL,
 		preferencesDDL,
 		nativeSessionsDDL,
+		preferenceEpochDDL,
+		preferenceVersionsDDL,
 	} {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("apply SQLite migration: %w", err)
 		}
 	}
-	if err := validateVersionOneSchema(ctx, tx); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO preference_epoch (singleton, epoch) VALUES (1, 0)`); err != nil {
+		return fmt.Errorf("initialize preference epoch: %w", err)
+	}
+	if err := validateVersionTwoSchema(ctx, tx); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, currentSchemaVersion, time.Now().Unix()); err != nil {
 		return fmt.Errorf("record SQLite migration: %w", err)
 	}
 	return tx.Commit()
+}
+
+func applyVersionTwoMigration(ctx context.Context, tx *sql.Tx) error {
+	for _, statement := range []string{preferenceEpochDDL, preferenceVersionsDDL} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("apply SQLite migration version 2: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO preference_epoch (singleton, epoch) VALUES (1, 0)`); err != nil {
+		return fmt.Errorf("initialize preference epoch: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) claimPreferenceEpoch(ctx context.Context) (int64, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("reserve SQLite connection for preference epoch: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return 0, fmt.Errorf("begin preference epoch claim: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+
+	result, err := conn.ExecContext(ctx, `
+		UPDATE preference_epoch SET epoch = epoch + 1
+		WHERE singleton = 1 AND epoch < ?`, int64(math.MaxInt64))
+	if err != nil {
+		return 0, fmt.Errorf("claim preference epoch: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read preference epoch claim result: %w", err)
+	}
+	if changed != 1 {
+		return 0, fmt.Errorf("preference epoch is unavailable")
+	}
+	var epoch int64
+	if err := conn.QueryRowContext(ctx, `SELECT epoch FROM preference_epoch WHERE singleton = 1`).Scan(&epoch); err != nil {
+		return 0, fmt.Errorf("read claimed preference epoch: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return 0, fmt.Errorf("commit preference epoch claim: %w", err)
+	}
+	committed = true
+	return epoch, nil
 }
 
 func schemaVersion(ctx context.Context, tx *sql.Tx) (int, bool, error) {
@@ -251,7 +404,7 @@ func schemaVersion(ctx context.Context, tx *sql.Tx) (int, bool, error) {
 }
 
 func rejectApplicationObjects(ctx context.Context, tx *sql.Tx) error {
-	const query = `SELECT name FROM sqlite_master WHERE lower(name) IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile') LIMIT 1`
+	const query = `SELECT name FROM sqlite_master WHERE lower(name) IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile', 'preference_epoch', 'preference_versions') LIMIT 1`
 	var name string
 	err := tx.QueryRowContext(ctx, query).Scan(&name)
 	if err == sql.ErrNoRows {
@@ -356,13 +509,105 @@ func validateVersionOneSchema(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+func validateVersionTwoSchema(ctx context.Context, tx *sql.Tx) error {
+	if err := validateVersionOneSchema(ctx, tx); err != nil {
+		return err
+	}
+	for _, object := range []struct {
+		name       string
+		definition string
+	}{
+		{"preference_epoch", preferenceEpochDDL},
+		{"preference_versions", preferenceVersionsDDL},
+	} {
+		if err := validateCanonicalDDL(ctx, tx, "table", object.name, object.definition); err != nil {
+			return err
+		}
+	}
+	for table, columns := range map[string][]schemaColumn{
+		"preference_epoch": {
+			{name: "singleton", kind: "INTEGER", primaryKey: true},
+			{name: "epoch", kind: "INTEGER", notNull: true},
+		},
+		"preference_versions": {
+			{name: "key", kind: "TEXT", primaryKey: true},
+			{name: "epoch", kind: "INTEGER", notNull: true},
+			{name: "revision", kind: "INTEGER", notNull: true},
+		},
+	} {
+		if err := validateColumns(ctx, tx, table, columns); err != nil {
+			return err
+		}
+	}
+	if err := validatePreferenceVersionForeignKey(ctx, tx); err != nil {
+		return err
+	}
+	return validatePreferenceOrderingState(ctx, tx)
+}
+
+func validatePreferenceVersionForeignKey(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `SELECT "table", "from", "to", on_update, on_delete, "match" FROM pragma_foreign_key_list(?)`, "preference_versions")
+	if err != nil {
+		return fmt.Errorf("inspect preference_versions foreign keys: %w", err)
+	}
+	defer rows.Close()
+	var foreignKeys int
+	for rows.Next() {
+		var table, from, to, onUpdate, onDelete, match string
+		if err := rows.Scan(&table, &from, &to, &onUpdate, &onDelete, &match); err != nil {
+			return fmt.Errorf("read preference_versions foreign key: %w", err)
+		}
+		foreignKeys++
+		if !strings.EqualFold(table, "preferences") || from != "key" || to != "key" || !strings.EqualFold(onUpdate, "NO ACTION") || !strings.EqualFold(onDelete, "CASCADE") || !strings.EqualFold(match, "NONE") {
+			return fmt.Errorf("incompatible schema: preference_versions has an unexpected foreign key")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read preference_versions foreign keys: %w", err)
+	}
+	if foreignKeys != 1 {
+		return fmt.Errorf("incompatible schema: preference_versions must have exactly one preference foreign key")
+	}
+	return nil
+}
+
+func validatePreferenceOrderingState(ctx context.Context, tx *sql.Tx) error {
+	var epoch int64
+	if err := tx.QueryRowContext(ctx, `SELECT epoch FROM preference_epoch WHERE singleton = 1`).Scan(&epoch); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("incompatible schema: preference epoch singleton is missing")
+		}
+		return fmt.Errorf("read preference epoch: %w", err)
+	}
+	if epoch < 0 {
+		return fmt.Errorf("incompatible schema: preference epoch is negative")
+	}
+	var rows int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM preference_epoch`).Scan(&rows); err != nil {
+		return fmt.Errorf("count preference epochs: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("incompatible schema: preference epoch must contain one singleton")
+	}
+	var invalidVersions int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM preference_versions
+		WHERE epoch <= 0 OR revision <= 0 OR epoch > ?`, epoch).Scan(&invalidVersions); err != nil {
+		return fmt.Errorf("validate preference versions: %w", err)
+	}
+	if invalidVersions != 0 {
+		return fmt.Errorf("incompatible schema: preference versions contain invalid ordering data")
+	}
+	return nil
+}
+
 func validateCanonicalDDL(ctx context.Context, tx *sql.Tx, objectType, name, want string) error {
 	got, err := sqliteObjectSQL(ctx, tx, objectType, name)
 	if err != nil {
 		return err
 	}
 	if normalizeSQLiteSQL(got) != normalizeSQLiteSQL(want) {
-		return fmt.Errorf("incompatible schema: %s %s does not match version %d", objectType, name, currentSchemaVersion)
+		return fmt.Errorf("incompatible schema: %s %s does not match its canonical definition", objectType, name)
 	}
 	return nil
 }

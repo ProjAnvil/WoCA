@@ -41,12 +41,14 @@ later server-side milestone. OAuth access and refresh tokens must never enter
 the Vue application or be persisted by this native client. See the approved
 [native-client design](../docs/superpowers/specs/2026-08-20-woca-native-client-design.md).
 
-Wails 2.14's cross-platform single-instance lock prevents two desktop processes from
-issuing preference writes concurrently. Preference revisions are intentionally
-process-local: shutdown first stops admission and drains every accepted write,
-then closes SQLite and releases the process. A later instance can therefore
-start a fresh revision sequence without overlapping the prior sequence. The
-same reasoning holds after a crash because the prior process no longer runs.
+Wails 2.14's single-instance lock is a best-effort desktop UX guard, not a data
+integrity mutex. SQLite is the preference-ordering authority. Schema version 2
+atomically claims a persistent epoch whenever a Store opens and records the
+applied `(epoch, revision)` for each key. Every preference write checks both in
+one immediate transaction, so a later Store epoch fences older processes and
+same-process revisions remain last-write-wins. Controlled shutdown still stops
+new preference calls and drains accepted calls before closing SQLite, but data
+safety does not depend on the Wails lock or graceful shutdown.
 
 ## Loopback UI and transport development
 

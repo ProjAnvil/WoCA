@@ -45,8 +45,9 @@ func TestStorePersistsPreference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutPreference(t.Context(), "theme", "dark"); err != nil {
-		t.Fatal(err)
+	applied, err := s.PutPreferenceVersioned(t.Context(), "theme", "dark", 1)
+	if err != nil || !applied {
+		t.Fatalf("PutPreferenceVersioned() applied = %v, err = %v", applied, err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -60,6 +61,185 @@ func TestStorePersistsPreference(t *testing.T) {
 	value, ok, err := s.Preference(t.Context(), "theme")
 	if err != nil || !ok || value != "dark" {
 		t.Fatalf("Preference() = %q, %v, %v", value, ok, err)
+	}
+}
+
+func TestOpenCreatesVersionTwoAndClaimsIncreasingEpochs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	first, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	if err := first.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 {
+		t.Fatalf("schema version = %d, want 2", version)
+	}
+	var firstEpoch int64
+	if err := first.db.QueryRow(`SELECT epoch FROM preference_epoch WHERE singleton = 1`).Scan(&firstEpoch); err != nil {
+		t.Fatal(err)
+	}
+	if firstEpoch <= 0 {
+		t.Fatalf("first epoch = %d, want positive", firstEpoch)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	var secondEpoch int64
+	if err := second.db.QueryRow(`SELECT epoch FROM preference_epoch WHERE singleton = 1`).Scan(&secondEpoch); err != nil {
+		t.Fatal(err)
+	}
+	if secondEpoch <= firstEpoch {
+		t.Fatalf("reopened epoch = %d, want greater than %d", secondEpoch, firstEpoch)
+	}
+}
+
+func TestOpenMigratesVersionOnePreferencesWithoutLoss(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	prepareDatabase(t, path, validVersionOneSchema+`
+		INSERT INTO preferences (key, value, updated_at)
+		VALUES ('woca-theme', 'dark', 123);
+	`)
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	value, found, err := store.Preference(t.Context(), "woca-theme")
+	if err != nil || !found || value != "dark" {
+		t.Fatalf("Preference() = %q, %v, %v; want migrated dark", value, found, err)
+	}
+	var version int
+	if err := store.db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 2 {
+		t.Fatalf("schema version = %d, want 2", version)
+	}
+	if !tableExists(t, path, "preference_versions") {
+		t.Fatal("version-1 migration did not create preference_versions")
+	}
+}
+
+func TestVersionedPreferenceWritesFenceOlderStoresAndOrderRevisions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	storeA, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type writeOutcome struct {
+		applied bool
+		err     error
+	}
+	releaseA := make(chan struct{})
+	aDone := make(chan writeOutcome, 1)
+	go func() {
+		<-releaseA
+		applied, err := storeA.PutPreferenceVersioned(
+			t.Context(), "woca.pref.model", "stale-a", 9_000,
+		)
+		aDone <- writeOutcome{applied: applied, err: err}
+	}()
+
+	storeB, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storeB.epoch <= storeA.epoch {
+		t.Fatalf("store B epoch = %d, want greater than store A epoch %d", storeB.epoch, storeA.epoch)
+	}
+	fenced, err := storeA.PutPreferenceVersioned(t.Context(), "woca-theme", "dark", 8_000)
+	if err != nil || fenced {
+		t.Fatalf("store A write after B opened applied = %v, err = %v; want epoch fence", fenced, err)
+	}
+	applied, err := storeB.PutPreferenceVersioned(t.Context(), "woca.pref.model", "b-one", 1)
+	if err != nil || !applied {
+		t.Fatalf("store B revision 1 applied = %v, err = %v", applied, err)
+	}
+	close(releaseA)
+	staleA := <-aDone
+	if staleA.err != nil || staleA.applied {
+		t.Fatalf("delayed store A applied = %v, err = %v; want stale no-op", staleA.applied, staleA.err)
+	}
+	value, found, err := storeB.Preference(t.Context(), "woca.pref.model")
+	if err != nil || !found || value != "b-one" {
+		t.Fatalf("Preference() = %q, %v, %v; want b-one", value, found, err)
+	}
+
+	applied, err = storeB.PutPreferenceVersioned(t.Context(), "woca.pref.model", "b-equal", 1)
+	if err != nil || applied {
+		t.Fatalf("equal store B revision applied = %v, err = %v; want stale no-op", applied, err)
+	}
+	applied, err = storeB.PutPreferenceVersioned(t.Context(), "woca.pref.model", "b-two", 2)
+	if err != nil || !applied {
+		t.Fatalf("store B revision 2 applied = %v, err = %v", applied, err)
+	}
+	applied, err = storeB.PutPreferenceVersioned(t.Context(), "woca.pref.model", "b-stale", 1)
+	if err != nil || applied {
+		t.Fatalf("older store B revision applied = %v, err = %v; want stale no-op", applied, err)
+	}
+
+	startConcurrent := make(chan struct{})
+	concurrentResults := make(chan struct {
+		revision uint64
+		writeOutcome
+	}, 2)
+	for revision, value := range map[uint64]string{3: "b-three", 4: "b-four"} {
+		go func() {
+			<-startConcurrent
+			applied, err := storeB.PutPreferenceVersioned(t.Context(), "woca.pref.model", value, revision)
+			concurrentResults <- struct {
+				revision uint64
+				writeOutcome
+			}{revision: revision, writeOutcome: writeOutcome{applied: applied, err: err}}
+		}()
+	}
+	close(startConcurrent)
+	for range 2 {
+		result := <-concurrentResults
+		if result.err != nil {
+			t.Fatalf("concurrent store B revision %d error = %v", result.revision, result.err)
+		}
+		if result.revision == 4 && !result.applied {
+			t.Fatal("highest concurrent store B revision was not applied")
+		}
+	}
+	value, found, err = storeB.Preference(t.Context(), "woca.pref.model")
+	if err != nil || !found || value != "b-four" {
+		t.Fatalf("Preference() after concurrent writes = %q, %v, %v; want b-four", value, found, err)
+	}
+	if err := storeA.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := storeB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	storeC, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeC.Close()
+	if storeC.epoch <= storeB.epoch {
+		t.Fatalf("store C epoch = %d, want greater than store B epoch %d", storeC.epoch, storeB.epoch)
+	}
+	applied, err = storeC.PutPreferenceVersioned(t.Context(), "woca.pref.model", "c-one", 1)
+	if err != nil || !applied {
+		t.Fatalf("store C revision 1 applied = %v, err = %v", applied, err)
+	}
+	value, found, err = storeC.Preference(t.Context(), "woca.pref.model")
+	if err != nil || !found || value != "c-one" {
+		t.Fatalf("Preference() = %q, %v, %v; want c-one", value, found, err)
 	}
 }
 
@@ -191,7 +371,7 @@ func TestOpenRejectsFutureSchemaVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "client.db")
 	prepareDatabase(t, path, `
 		CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
-		INSERT INTO schema_migrations (version, applied_at) VALUES (2, 0);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (3, 0);
 	`)
 
 	if store, err := Open(path); err == nil {
@@ -200,6 +380,54 @@ func TestOpenRejectsFutureSchemaVersion(t *testing.T) {
 	}
 	if countApplicationObjects(t, path) != 0 {
 		t.Fatal("Open() created application objects for future schema")
+	}
+}
+
+func TestOpenRejectsIncompatibleVersionTwoSchemaWithoutRepair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	prepareDatabase(t, path, invalidVersionTwoSchemaWithoutPreferenceVersions)
+
+	store, err := Open(path)
+	if err == nil {
+		store.Close()
+		t.Fatal("Open() error = nil for incomplete version-2 schema")
+	}
+	if !strings.Contains(err.Error(), "missing table preference_versions") {
+		t.Fatalf("Open() error = %q, want missing preference_versions", err)
+	}
+	if tableExists(t, path, "preference_versions") {
+		t.Fatal("Open() silently repaired the incomplete version-2 schema")
+	}
+}
+
+func TestOpenRejectsAlteredVersionTwoOrderingSchema(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(string) string
+	}{
+		{"epoch singleton check", func(schema string) string {
+			return strings.Replace(schema, "CHECK (singleton = 1)", "CHECK (singleton > 0)", 1)
+		}},
+		{"revision positive check", func(schema string) string {
+			return strings.Replace(schema, "CHECK (revision > 0)", "CHECK (revision >= 0)", 1)
+		}},
+		{"version foreign key", func(schema string) string {
+			return strings.Replace(schema, "ON DELETE CASCADE,\n    epoch", "ON DELETE RESTRICT,\n    epoch", 1)
+		}},
+		{"missing epoch singleton", func(schema string) string {
+			return strings.Replace(schema, "INSERT INTO preference_epoch (singleton, epoch) VALUES (1, 0);", "", 1)
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "client.db")
+			prepareDatabase(t, path, tt.mutate(validVersionTwoSchema))
+			if store, err := Open(path); err == nil {
+				store.Close()
+				t.Fatal("Open() error = nil for altered version-2 ordering schema")
+			}
+		})
 	}
 }
 
@@ -307,7 +535,7 @@ func countApplicationObjects(t *testing.T, path string) int {
 	}
 	defer db.Close()
 	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE lower(name) IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile')`).Scan(&count); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE lower(name) IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile', 'preference_epoch', 'preference_versions')`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	return count
@@ -349,6 +577,44 @@ CREATE TABLE native_sessions (
     session_ciphertext BLOB NOT NULL,
     expires_at INTEGER NOT NULL,
     last_validated_at INTEGER NOT NULL
+);
+`
+
+const invalidVersionTwoSchemaWithoutPreferenceVersions = `
+CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+INSERT INTO schema_migrations (version, applied_at) VALUES (2, 0);
+CREATE TABLE connection_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    base_url TEXT NOT NULL UNIQUE,
+    active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX one_active_profile ON connection_profiles(active) WHERE active = 1;
+CREATE TABLE preferences (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE native_sessions (
+    profile_id INTEGER PRIMARY KEY REFERENCES connection_profiles(id) ON DELETE CASCADE,
+    device_id TEXT NOT NULL,
+    session_ciphertext BLOB NOT NULL,
+    expires_at INTEGER NOT NULL,
+    last_validated_at INTEGER NOT NULL
+);
+CREATE TABLE preference_epoch (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    epoch INTEGER NOT NULL CHECK (epoch >= 0)
+);
+INSERT INTO preference_epoch (singleton, epoch) VALUES (1, 0);
+`
+
+const validVersionTwoSchema = invalidVersionTwoSchemaWithoutPreferenceVersions + `
+CREATE TABLE preference_versions (
+    key TEXT PRIMARY KEY REFERENCES preferences(key) ON DELETE CASCADE,
+    epoch INTEGER NOT NULL CHECK (epoch > 0),
+    revision INTEGER NOT NULL CHECK (revision > 0)
 );
 `
 

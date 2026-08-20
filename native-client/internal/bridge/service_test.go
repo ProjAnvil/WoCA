@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/projanvil/woca/native-client/internal/auth"
@@ -142,8 +141,8 @@ func TestBootstrapRequiresAuthorizationForStoredProfileWithoutSession(t *testing
 
 func TestLogoutClearsOnlyInProcessReadiness(t *testing.T) {
 	store := openTestStore(t)
-	if err := store.PutPreference(t.Context(), "theme", "dark"); err != nil {
-		t.Fatal(err)
+	if applied, err := store.PutPreferenceVersioned(t.Context(), "theme", "dark", 1); err != nil || !applied {
+		t.Fatalf("PutPreferenceVersioned() applied = %v, err = %v", applied, err)
 	}
 	service := NewService(store, &recordingActivator{result: auth.ActivationResult{Ready: true}})
 	if _, err := service.Connect(t.Context(), ConnectionInput{
@@ -250,64 +249,49 @@ func TestSetPreferenceRejectsInvalidRevision(t *testing.T) {
 	}
 }
 
-type blockingPreferenceStore struct {
-	*configstore.Store
-	blockValue string
-	entered    chan struct{}
-	release    chan struct{}
-	once       sync.Once
-}
+func TestSetPreferenceReportsPersistentEpochAndRevisionDecisions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "client.db")
+	storeA, err := configstore.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeA.Close()
+	serviceA := NewService(storeA, nil)
 
-func (s *blockingPreferenceStore) PutPreference(ctx context.Context, key, value string) error {
-	if value == s.blockValue {
-		s.once.Do(func() { close(s.entered) })
-		select {
-		case <-s.release:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	storeB, err := configstore.Open(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return s.Store.PutPreference(ctx, key, value)
-}
+	defer storeB.Close()
+	serviceB := NewService(storeB, nil)
 
-func TestSetPreferencePreventsOlderRevisionFromOverwritingNewer(t *testing.T) {
-	base := openTestStore(t)
-	store := &blockingPreferenceStore{
-		Store: base, blockValue: "newer", entered: make(chan struct{}), release: make(chan struct{}),
+	newerProcess, err := serviceB.SetPreference(t.Context(), PreferenceInput{
+		Key: "woca.pref.model", Value: "newer-process", Revision: 1,
+	})
+	if err != nil || !newerProcess.Applied || newerProcess.Revision != 1 {
+		t.Fatalf("newer-process SetPreference() = %#v, %v", newerProcess, err)
 	}
-	service := NewService(store, nil)
-	type outcome struct {
-		result PreferenceWriteResult
-		err    error
+	olderProcess, err := serviceA.SetPreference(t.Context(), PreferenceInput{
+		Key: "woca.pref.model", Value: "stale-process", Revision: 9_000,
+	})
+	if err != nil || olderProcess.Applied || olderProcess.Revision != 9_000 {
+		t.Fatalf("older-process SetPreference() = %#v, %v, want stale no-op", olderProcess, err)
 	}
-	newerDone := make(chan outcome, 1)
-	go func() {
-		result, err := service.SetPreference(t.Context(), PreferenceInput{
-			Key: "woca.pref.model", Value: "newer", Revision: 2,
-		})
-		newerDone <- outcome{result, err}
-	}()
-	<-store.entered
-	olderDone := make(chan outcome, 1)
-	go func() {
-		result, err := service.SetPreference(t.Context(), PreferenceInput{
-			Key: "woca.pref.model", Value: "older", Revision: 1,
-		})
-		olderDone <- outcome{result, err}
-	}()
-	close(store.release)
-
-	newer := <-newerDone
-	older := <-olderDone
-	if newer.err != nil || !newer.result.Applied {
-		t.Fatalf("newer SetPreference() = %#v, %v", newer.result, newer.err)
+	equalRevision, err := serviceB.SetPreference(t.Context(), PreferenceInput{
+		Key: "woca.pref.model", Value: "equal-revision", Revision: 1,
+	})
+	if err != nil || equalRevision.Applied {
+		t.Fatalf("equal-revision SetPreference() = %#v, %v, want stale no-op", equalRevision, err)
 	}
-	if older.err != nil || older.result.Applied {
-		t.Fatalf("older SetPreference() = %#v, %v, want stale no-op", older.result, older.err)
+	latest, err := serviceB.SetPreference(t.Context(), PreferenceInput{
+		Key: "woca.pref.model", Value: "latest", Revision: 2,
+	})
+	if err != nil || !latest.Applied {
+		t.Fatalf("latest SetPreference() = %#v, %v", latest, err)
 	}
-	value, found, err := base.Preference(t.Context(), "woca.pref.model")
-	if err != nil || !found || value != "newer" {
-		t.Fatalf("Preference() = %q, %v, %v; want newer", value, found, err)
+	value, found, err := storeB.Preference(t.Context(), "woca.pref.model")
+	if err != nil || !found || value != "latest" {
+		t.Fatalf("Preference() = %q, %v, %v; want latest", value, found, err)
 	}
 }
 
