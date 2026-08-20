@@ -45,6 +45,19 @@ describe('ConnectView', () => {
     ['invalid port', 'https://enterprise.example.com:65536'],
     ['zero port', 'https://enterprise.example.com:0'],
     ['empty port', 'https://enterprise.example.com:'],
+    ['empty userinfo', 'https://@enterprise.example.com'],
+    ['encoded userinfo', 'https://%75ser@enterprise.example.com'],
+    ['encoded at-sign userinfo', 'https://%40@enterprise.example.com'],
+    ['backslash', 'https://enterprise.example.com\\'],
+    ['tab control character', 'https://enterprise.\texample.com'],
+    ['NUL control character', 'https://enterprise.example.com\u0000'],
+    ['abbreviated IPv4 loopback', 'http://127.1'],
+    ['decimal IPv4 loopback', 'http://2130706433'],
+    ['hex IPv4 loopback', 'http://0x7f000001'],
+    ['octal-like IPv4 loopback', 'http://0177.0.0.1'],
+    ['bracketed non-IPv6 host', 'http://[localhost]:8080'],
+    ['IPv6 zone', 'http://[fe80::1%25en0]:8080'],
+    ['ambiguous authority', 'https://enterprise.example.com::443'],
   ])('does not submit an invalid origin: %s', async (_name, origin) => {
     const { connect, wrapper } = mountConnect()
     await wrapper.get('[data-testid="url-input"]').setValue(origin)
