@@ -1,0 +1,14 @@
+# woca-server: the server-edition binary (serve + web daemon, no TUI/REPL).
+# Build context: repository root (the frontend dist must be pre-built).
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /woca-server ./cmd/woca-server
+
+FROM alpine:3.22
+RUN apk add --no-cache ca-certificates
+COPY --from=build /woca-server /usr/local/bin/woca-server
+ENTRYPOINT ["woca-server"]
+CMD ["serve", "--addr", ":8080"]
