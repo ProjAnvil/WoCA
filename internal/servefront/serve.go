@@ -7,6 +7,7 @@ package servefront
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -35,8 +36,35 @@ import (
 	webdist "github.com/projanvil/woca/web"
 )
 
+// Observability is the server-edition observability seam (design §12.3):
+// OTel providers, /healthz + /metrics endpoints, and RED recording around
+// the HTTP handler. It is implemented by internal/obs (OTel SDK) and linked
+// only by server entry points; the personal edition passes nil and keeps
+// the zero-dependency local telemetry sink (§5.2).
+type Observability interface {
+	// Install initializes providers and chains the OTel sink behind the
+	// sink currently installed as the telemetry default (local logs stay
+	// first, §6.5.3). Called before the agent build so startup spans are
+	// captured.
+	Install(ctx context.Context) error
+	// Wrap adds /healthz + /metrics and RED recording around h. Applied to
+	// the startup placeholder too, so K8s probes pass while the agent
+	// builds (the same window /api/health already covers).
+	Wrap(h http.Handler) http.Handler
+	// Shutdown flushes and stops providers.
+	Shutdown(ctx context.Context) error
+}
+
 // NewServeCmd builds `woca serve`: run the embedded web UI server.
 func NewServeCmd(opts *agentbuild.Options) *cobra.Command {
+	return NewServeCmdWithObs(opts, nil)
+}
+
+// NewServeCmdWithObs builds the serve command with a server-edition
+// observability assembly attached (nil factory keeps the personal-edition
+// posture). The factory runs at command time so provider setup errors
+// surface as normal command errors.
+func NewServeCmdWithObs(opts *agentbuild.Options, makeObs func(ctx context.Context) (Observability, error)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the embedded web UI server (frontend + SSE API)",
@@ -44,7 +72,14 @@ func NewServeCmd(opts *agentbuild.Options) *cobra.Command {
 			addr, _ := cmd.Flags().GetString("addr")
 			noBrowser, _ := cmd.Flags().GetBool("no-browser")
 			authMode, _ := cmd.Flags().GetString("auth")
-			return Serve(cmd.Context(), *opts, addr, noBrowser, authMode)
+			var obsrv Observability
+			if makeObs != nil {
+				var err error
+				if obsrv, err = makeObs(cmd.Context()); err != nil {
+					return err
+				}
+			}
+			return ServeWithObs(cmd.Context(), *opts, addr, noBrowser, authMode, obsrv)
 		},
 	}
 	cmd.Flags().String("addr", webgui.DefaultAddr, "listen address for the web server")
@@ -137,16 +172,30 @@ func NewWebCmd() *cobra.Command {
 	return cmd
 }
 
-// Serve runs the embedded web UI server.
+// Serve runs the embedded web UI server (personal-edition posture: local
+// telemetry only).
 func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser bool, authMode string) error {
+	return ServeWithObs(ctx, opts, addr, noBrowser, authMode, nil)
+}
+
+// ServeWithObs runs the embedded web UI server with an optional server-edition
+// observability assembly (OTel SDK, /healthz + /metrics, RED metrics).
+func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noBrowser bool, authMode string, obs Observability) error {
 	level, err := logging.ParseLevel(opts.LogLevel)
 	if err != nil {
 		return err
 	}
 	log := logging.NewConsole(os.Stderr, level)
 	// Observability seam (Phase 2 §6.5): one structured line per tool/LLM/
-	// skill span, correlated by tenant/run/session.
+	// skill span, correlated by tenant/run/session. The server edition
+	// chains the OTel sink behind it (design §6.5.3).
 	telemetry.SetDefault(telemetry.NewLocalSink(log))
+	if obs != nil {
+		if err := obs.Install(ctx); err != nil {
+			return fmt.Errorf("observability: %w", err)
+		}
+		defer func() { _ = obs.Shutdown(context.WithoutCancel(ctx)) }()
+	}
 
 	if authMode == "" {
 		authMode = os.Getenv("WOCA_AUTH")
@@ -175,6 +224,10 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 	// panics on inconsistent types.
 	var handler atomic.Pointer[http.Handler]
 	starting := http.Handler(http.HandlerFunc(startingHandler))
+	if obs != nil {
+		// Probes must answer from the first moment the port is bound.
+		starting = obs.Wrap(starting)
+	}
 	handler.Store(&starting)
 	hs := &http.Server{Addr: addr, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		(*handler.Load()).ServeHTTP(w, r)
@@ -231,6 +284,7 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 		Logger:       log,
 		SessionDir:   sessionDir,
 		WorkDir:      ap.Cfg.WorkDir,
+		GrafanaURL:   os.Getenv("WOCA_GRAFANA_URL"),
 		Settings:     ap.Settings,
 		Memory:       ap.Memory,
 		MemoryEngine: ap.MemEngine,
@@ -255,6 +309,9 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 		},
 	})
 	real := http.Handler(srv.Handler())
+	if obs != nil {
+		real = obs.Wrap(real)
+	}
 	handler.Store(&real)
 
 	url := "http://" + addr
@@ -301,9 +358,13 @@ func newNativeAuth(st *settings.Store, keys authn.Provider) (*server.NativeAuth,
 // until boot completes.
 func startingHandler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/api/health" {
+		payload := map[string]any{"ok": true, "starting": true}
+		if u := os.Getenv("WOCA_GRAFANA_URL"); u != "" {
+			payload["grafana_url"] = u
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ok":true,"starting":true}`)
+		_ = json.NewEncoder(w).Encode(payload)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {

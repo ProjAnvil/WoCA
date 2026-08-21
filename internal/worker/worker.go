@@ -25,22 +25,44 @@ const (
 	heartbeatEvery = leaseDuration / 3
 )
 
+// Metrics are optional run-lifecycle hooks, wired by the entry point (the
+// server edition feeds them from internal/obs; nil fields are no-ops). They
+// stay plain funcs so this package carries no observability dependency.
+type Metrics struct {
+	OnClaim  func()                           // one queued run claimed
+	OnFinish func(status string, dur float64) // run reached a terminal state, dur in seconds
+}
+
+func (m *Metrics) claim() {
+	if m != nil && m.OnClaim != nil {
+		m.OnClaim()
+	}
+}
+
+func (m *Metrics) finish(status string, dur time.Duration) {
+	if m != nil && m.OnFinish != nil {
+		m.OnFinish(status, dur.Seconds())
+	}
+}
+
 // Config wires the worker.
 type Config struct {
-	Ledger *runstate.Ledger
-	Agent  *agent.Agent
-	Bus    eventbus.Bus // event fanout (SSE tail reads from run_events)
-	Logger zerolog.Logger
-	ID     string // worker identity for lease ownership
+	Ledger  *runstate.Ledger
+	Agent   *agent.Agent
+	Bus     eventbus.Bus // event fanout (SSE tail reads from run_events)
+	Logger  zerolog.Logger
+	ID      string   // worker identity for lease ownership
+	Metrics *Metrics // optional run-lifecycle hooks (server edition wires obs)
 }
 
 // Worker claims and executes runs from the queue.
 type Worker struct {
-	ledger *runstate.Ledger
-	agent  *agent.Agent
-	bus    eventbus.Bus
-	log    zerolog.Logger
-	id     string
+	ledger  *runstate.Ledger
+	agent   *agent.Agent
+	bus     eventbus.Bus
+	log     zerolog.Logger
+	id      string
+	metrics *Metrics
 }
 
 // New returns a Worker over cfg.
@@ -48,7 +70,7 @@ func New(cfg Config) *Worker {
 	if cfg.ID == "" {
 		cfg.ID = fmt.Sprintf("worker-%d", time.Now().UnixNano())
 	}
-	return &Worker{ledger: cfg.Ledger, agent: cfg.Agent, bus: cfg.Bus, log: cfg.Logger, id: cfg.ID}
+	return &Worker{ledger: cfg.Ledger, agent: cfg.Agent, bus: cfg.Bus, log: cfg.Logger, id: cfg.ID, metrics: cfg.Metrics}
 }
 
 // Step claims one queued run and executes it to completion (or returns nil
@@ -63,12 +85,14 @@ func (w *Worker) Step(ctx context.Context) error {
 	if run == nil {
 		return nil // queue empty
 	}
+	w.metrics.claim()
 	return w.execute(ctx, run)
 }
 
 // execute runs one claimed run to its terminal state.
 func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 	w.log.Info().Str("run", run.RunID).Str("session", run.SessionID).Msg("worker claimed run")
+	started := time.Now()
 
 	// Heartbeat the lease while executing; stop when done.
 	hbCtx, hbCancel := context.WithCancel(ctx)
@@ -94,6 +118,7 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 		}
 	}
 	w.emitAndMirror(ctx, run.RunID, "done", map[string]any{"cancelled": false})
+	w.metrics.finish("done", time.Since(started))
 	return w.ledger.Finish(ctx, run.RunID, w.id, "done")
 }
 

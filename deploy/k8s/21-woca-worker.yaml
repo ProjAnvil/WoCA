@@ -1,0 +1,80 @@
+# woca-worker (L3 execution role, design §5.3): claims runs from the shared
+# ledger; scales on queue depth (KEDA over the runs table is the target
+# scaler — the CPU HPA below is the always-available fallback).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: woca-worker
+  namespace: woca
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: woca-worker}}
+  template:
+    metadata:
+      labels: {app: woca-worker}
+      annotations:
+        metrics.woca.dev/scrape: "true"
+        metrics.woca.dev/port: "9091"
+        metrics.woca.dev/job: woca-worker
+    spec:
+      containers:
+        - name: woca-worker
+          image: woca-worker:local
+          ports: [{name: metrics, containerPort: 9091}]
+          env:
+            - name: WOCA_SERVICE_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: WOCA_OBS_ADDR
+              value: ":9091"
+            - name: WOCA_DB
+              valueFrom: {secretKeyRef: {name: woca-secrets, key: WOCA_DB}}
+            - name: WOCA_OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom: {configMapKeyRef: {name: woca-infra, key: WOCA_OTEL_EXPORTER_OTLP_ENDPOINT}}
+          livenessProbe:
+            httpGet: {path: /healthz, port: metrics}
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: {path: /healthz, port: metrics}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 500m, memory: 512Mi}
+            limits: {memory: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: woca-worker
+  namespace: woca
+spec:
+  selector: {app: woca-worker}
+  ports: [{name: metrics, port: 9091, targetPort: metrics}]
+---
+# KEDA ScaledObject sketch (queue-depth autoscaling, design §12): point the
+# query at your PostgreSQL metrics exporter exposing pending runs:
+#
+#   apiVersion: keda.sh/v1alpha1
+#   kind: ScaledObject
+#   metadata: {name: woca-worker, namespace: woca}
+#   spec:
+#     scaleTargetRef: {name: woca-worker}
+#     minReplicaCount: 2
+#     maxReplicaCount: 20
+#     triggers:
+#       - type: postgresql
+#         metadata:
+#           query: "SELECT count(*) FROM runs WHERE status='queued'"
+#           target: "5"
+#           connectionFromEnv: WOCA_DB
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: woca-worker
+  namespace: woca
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: woca-worker}
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 80}}

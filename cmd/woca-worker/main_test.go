@@ -24,3 +24,10 @@ func TestWorkerBadLogLevel(t *testing.T) {
 		t.Fatal("bogus log level accepted")
 	}
 }
+
+func TestServeProbesOff(t *testing.T) {
+	srv, err := serveProbes("off", nil)
+	if err != nil || srv != nil {
+		t.Fatalf("serveProbes(off) = %v, %v; want nil, nil", srv, err)
+	}
+}

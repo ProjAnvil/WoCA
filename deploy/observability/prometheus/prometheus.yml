@@ -1,0 +1,37 @@
+# Prometheus scrape configuration for the woca enterprise compose stack
+# (design §12.3: the IT operations pane is Prometheus + Grafana, not a
+# homegrown console). Targets are the compose service names; in Kubernetes
+# replace the static_configs with kubernetes_sd_configs (see
+# deploy/k8s/README.md).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/woca-rules.yaml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # woca-server instances expose /metrics on the business port (8080).
+  - job_name: woca-server
+    static_configs:
+      - targets: ["woca-server-1:8080", "woca-server-2:8080"]
+
+  # woca-worker instances expose /healthz + /metrics on the probe port.
+  - job_name: woca-worker
+    static_configs:
+      - targets: ["woca-worker-1:9091", "woca-worker-2:9091"]
+
+  # The collector re-exports OTLP metrics (including GenAI spans-derived
+  # series with service_name labels) and its own pipeline health.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]

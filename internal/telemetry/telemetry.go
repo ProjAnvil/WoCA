@@ -156,6 +156,32 @@ func (b *Builder) End(ctx context.Context, err error) {
 	sink.Record(ctx, sp)
 }
 
+// MultiSink fans every span out to the wrapped sinks in order. The server
+// editions use it to chain the local structured-log sink with the OTel
+// exporter sink (design §6.5.3: remote = OTel export *plus* tagged
+// run_events/logs, not instead of them). A nil sink in the list is skipped.
+type MultiSink struct {
+	sinks []Sink
+}
+
+// NewMultiSink returns a sink broadcasting to the non-nil sinks.
+func NewMultiSink(sinks ...Sink) *MultiSink {
+	kept := make([]Sink, 0, len(sinks))
+	for _, s := range sinks {
+		if s != nil {
+			kept = append(kept, s)
+		}
+	}
+	return &MultiSink{sinks: kept}
+}
+
+// Record implements Sink.
+func (m *MultiSink) Record(ctx context.Context, sp Span) {
+	for _, s := range m.sinks {
+		s.Record(ctx, sp)
+	}
+}
+
 // LocalSink writes one structured log line per span.
 type LocalSink struct {
 	log zerolog.Logger

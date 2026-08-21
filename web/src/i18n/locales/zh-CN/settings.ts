@@ -149,5 +149,7 @@ export default {
     backgroundTasks: '后台 task：{count}',
     sseDropped: 'SSE 丢弃：{count}',
     lsp: 'LSP：{active} 活跃 / {broken} 熔断',
+    opsLink: 'Grafana 运维面板',
+    opsHint: '实例状态 · 接口流量 · trace 检索（IT 管理台）',
   },
 }

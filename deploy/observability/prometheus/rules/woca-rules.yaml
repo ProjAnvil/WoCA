@@ -1,0 +1,103 @@
+# woca alerting rules (design §12.3, Phase 4 IT-console deliverable).
+#
+# Metric names produced by internal/obs:
+#   http_server_request_count{http_route,http_request_method,http_response_status_code}
+#   http_server_request_duration_seconds_... (histogram, same labels)
+#   http_server_active_requests{http_route,...}
+#   woca_worker_claimed / woca_worker_runs{status} /
+#   woca_worker_run_duration_seconds_... (histogram)
+groups:
+  - name: woca-service-health
+    rules:
+      - alert: WocaServiceDown
+        expr: up{job=~"woca-(server|worker)"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} is down"
+          description: >-
+            Prometheus cannot scrape {{ $labels.instance }} (job
+            {{ $labels.job }}) for two minutes. Check the container/pod and
+            its /healthz probe.
+
+      - alert: WocaScrapeTargetMissing
+        expr: absent(up{job="woca-worker"})
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "no woca-worker scrape targets"
+          description: >-
+            The woca-worker job has no targets: every worker replica is
+            gone or scrape configuration drifted. Runs will queue without
+            being claimed.
+
+  - name: woca-gateway-traffic
+    rules:
+      - alert: WocaHTTP5xxRateHigh
+        expr: >-
+          sum by (job) (rate(http_server_request_count{http_response_status_code=~"5.."}[5m]))
+          / clamp_min(sum by (job) (rate(http_server_request_count[5m])), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "5xx ratio above 5% on {{ $labels.job }}"
+          description: >-
+            More than 5% of requests answered 5xx for ten minutes. Check
+            the Grafana route panel for the failing route family.
+
+      - alert: WocaRequestLatencyHigh
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket[5m]))
+          ) > 10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency above 10s on {{ $labels.http_route }}"
+          description: >-
+            Slow route family — SSE streams legitimately run long, so treat
+            this as a signal to check /api/runs and /api/events connection
+            health, not a hard page.
+
+  - name: woca-worker
+    rules:
+      - alert: WocaWorkerErrorRateHigh
+        expr: increase(woca_worker_runs{status="error"}[15m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "worker {{ $labels.instance }} failing runs"
+          description: >-
+            More than three runs finished with status=error in 15 minutes.
+            Inspect the worker logs and the failing runs' run_events.
+
+      - alert: WocaQueueClaimingStalled
+        expr: >-
+          sum(increase(woca_worker_claimed[30m])) == 0
+          and on() sum(increase(http_server_request_count{http_route="/api/runs"}[30m])) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "runs are enqueued but no worker claims them"
+          description: >-
+            New runs arrived via POST /api/runs yet no worker claimed
+            anything in 30 minutes — the execution plane is stalled.
+
+  - name: woca-pipeline
+    rules:
+      - alert: WocaOTelExportFailing
+        expr: rate(otelcol_exporter_send_failed_spans[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "OTel collector failing to export spans"
+          description: >-
+            The collector continuously fails to export to the trace backend
+            (Jaeger/Tempo). Trace search in Grafana will have gaps.

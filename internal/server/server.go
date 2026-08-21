@@ -70,6 +70,10 @@ type Config struct {
 	SessionDir string
 	// WorkDir is the agent's working directory, exposed via GET /api/workspace.
 	WorkDir string
+	// GrafanaURL is the ops console link surfaced through /api/health
+	// (design §12.3: the business SPA embeds the IT pane as a link).
+	// Empty hides it — the personal edition default.
+	GrafanaURL string
 	// Settings is the persisted settings store backing /api/settings. Nil
 	// disables the settings API.
 	Settings *settings.Store
@@ -138,6 +142,7 @@ type Server struct {
 	owner          string            // "pid@host" stamped on state rows
 	hub            eventbus.Bus      // global SSE broadcast (/api/events)
 	workdir        string
+	grafanaURL     string // ops console link from WOCA_GRAFANA_URL (design §12.3)
 	settings       *settings.Store
 	memory         *store.Store
 	memEngine      memory.Engine
@@ -205,6 +210,7 @@ func New(cfg Config) *Server {
 		owner:          newStateOwner(),
 		hub:            eventbus.NewLocalWithRetention(1024),
 		workdir:        cfg.WorkDir,
+		grafanaURL:     cfg.GrafanaURL,
 		settings:       cfg.Settings,
 		memory:         cfg.Memory,
 		memEngine:      cfg.MemoryEngine,
@@ -353,7 +359,11 @@ func (s *Server) ServeStarted(ctx context.Context, srv *http.Server, serveErr <-
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	payload := map[string]any{"ok": true}
+	if s.grafanaURL != "" {
+		payload["grafana_url"] = s.grafanaURL
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // handleStats reports runtime concurrency counters for threshold tuning.

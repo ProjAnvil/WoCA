@@ -4,12 +4,15 @@
 package wocadb
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/projanvil/woca/internal/discovery"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver name "pgx"
 	_ "modernc.org/sqlite"             // database/sql driver name "sqlite"
@@ -68,8 +71,17 @@ func Disabled(target string) bool {
 //	"sqlite:/path/to.db"      → sqlite at path
 //	"/path/to.db" | "a.db"    → sqlite at path
 //	"postgres://…" | "pg:…"   → PostgreSQL via pgx
+//	nacos://… | consul://…    → resolved via internal/discovery first
+//	                          (VM private deployments, design §12.1)
 func Open(target string) (*DB, error) {
 	target = strings.TrimSpace(target)
+	if isDiscoveryRef(target) {
+		resolved, err := discovery.Resolve(context.Background(), target)
+		if err != nil {
+			return nil, fmt.Errorf("wocadb: resolve %s: %w", redactRef(target), err)
+		}
+		target = resolved
+	}
 	if Disabled(target) {
 		return nil, nil
 	}
@@ -102,6 +114,24 @@ func Open(target string) (*DB, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// isDiscoveryRef reports whether a target references an external registry
+// (design §12.1: nacos://… / consul://… address sources).
+func isDiscoveryRef(target string) bool {
+	return strings.HasPrefix(target, "nacos://") || strings.HasPrefix(target, "consul://")
+}
+
+// redactRef keeps registry references (which may embed credentials) out of
+// error text: only the scheme and host survive.
+func redactRef(target string) string {
+	if i := strings.Index(target, "/"); i > 0 {
+		if j := strings.Index(target[i+1:], "/"); j >= 0 {
+			return target[:i+1+j]
+		}
+		return target
+	}
+	return target
 }
 
 // parseTarget splits a target into dialect, DSN, and display path.

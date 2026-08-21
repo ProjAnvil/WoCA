@@ -1,0 +1,112 @@
+# woca-enterprise observability stack (design §12.3, Phase 4 IT console).
+#
+# Overlay onto the full deployment; same compose project, so service names
+# resolve and lifecycle is shared:
+#
+#   docker compose -f deploy/enterprise/docker-compose.full.yml \
+#                  -f deploy/observability/docker-compose.observability.yml up -d
+#
+# Adds: OTel Collector (OTLP in, Prometheus/Jaeger out), Prometheus (+alert
+# rules), Alertmanager, Grafana (provisioned dashboard "woca Services"),
+# Jaeger (trace search). Host entry for Grafana is the gateway :8085.
+#
+# §12.2 config separation: everything here is infrastructure config (env +
+# files under deploy/observability/); tenant/business configuration stays in
+# tenant-svc and must never move into this layer.
+name: woca-enterprise-full
+
+services:
+  # Existing services gain OTLP export + service identity (env merges).
+  gateway:
+    ports:
+      - "${ENT_GRAFANA_PORT:-8085}:8085"
+    networks:
+      - woca-edge
+      - ladym-data
+      - woca-obs
+
+  woca-server-1:
+    environment:
+      WOCA_SERVICE_NAME: woca-server-1
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    networks: [woca-edge, woca-data, ladym-data, woca-obs]
+
+  woca-server-2:
+    environment:
+      WOCA_SERVICE_NAME: woca-server-2
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    networks: [woca-edge, woca-data, ladym-data, woca-obs]
+
+  woca-worker-1:
+    environment:
+      WOCA_SERVICE_NAME: woca-worker-1
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    networks: [woca-edge, woca-data, woca-obs]
+
+  woca-worker-2:
+    environment:
+      WOCA_SERVICE_NAME: woca-worker-2
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+    networks: [woca-edge, woca-data, woca-obs]
+
+  # ─────────────────── Observability pipeline ───────────────────
+  otel-collector:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.136.0
+    container_name: woca-ent-otelcol
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otelcol/config.yaml:/etc/otelcol/config.yaml:ro
+    networks: [woca-obs]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.65.0
+    container_name: woca-ent-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks: [woca-obs]
+
+  prometheus:
+    image: prom/prometheus:v3.4.1
+    container_name: woca-ent-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    networks: [woca-obs]
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: woca-ent-alertmanager
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    networks: [woca-obs]
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: woca-ent-grafana
+    environment:
+      # Internal ops console behind the gateway; harden before exposing
+      # wider (design §12.3 keeps the IT pane ops-facing, not tenant-facing).
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/provisioning/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks: [woca-obs]
+
+networks:
+  woca-obs:
+    name: woca-ent-obs
+    ipam:
+      config: [{ subnet: 172.28.40.0/24 }]
+
+volumes:
+  prometheus-data:
+    name: woca-ent-obs-prometheus
+  grafana-data:
+    name: woca-ent-obs-grafana

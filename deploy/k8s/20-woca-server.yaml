@@ -1,0 +1,65 @@
+# woca-server (L1/L2 modular monolith role, design §5.3): stateless, scaled
+# on QPS. /healthz + /metrics live on the business port (8080); Prometheus
+# discovers the pods via the metrics.woca.dev annotations.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: woca-server
+  namespace: woca
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: woca-server}}
+  template:
+    metadata:
+      labels: {app: woca-server}
+      annotations:
+        metrics.woca.dev/scrape: "true"
+        metrics.woca.dev/port: "8080"
+        metrics.woca.dev/job: woca-server
+    spec:
+      containers:
+        - name: woca-server
+          image: woca-server:local
+          args: ["serve", "--addr", "0.0.0.0:8080", "--auth", "apikey", "--no-browser"]
+          ports: [{name: http, containerPort: 8080}]
+          env:
+            - name: WOCA_SERVICE_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: WOCA_DB
+              valueFrom: {secretKeyRef: {name: woca-secrets, key: WOCA_DB}}
+            - name: WOCA_OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom: {configMapKeyRef: {name: woca-infra, key: WOCA_OTEL_EXPORTER_OTLP_ENDPOINT}}
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {memory: 1Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: woca-server
+  namespace: woca
+spec:
+  selector: {app: woca-server}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+# Scale on CPU for v1; SSE connection count is the better signal once a
+# custom metrics pipeline (Prometheus Adapter / KEDA) is in place.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: woca-server
+  namespace: woca
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: woca-server}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}

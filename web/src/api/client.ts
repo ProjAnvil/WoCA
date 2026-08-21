@@ -280,6 +280,12 @@ export function stats(): Promise<StatsResponse> {
   return request<StatsResponse>('/api/stats')
 }
 
+/** Deployment health; grafana_url appears only on server editions that
+ *  set WOCA_GRAFANA_URL (design §12.3: the SPA embeds the IT pane link). */
+export function health(): Promise<{ ok: boolean; starting?: boolean; grafana_url?: string }> {
+  return request<{ ok: boolean; starting?: boolean; grafana_url?: string }>('/api/health')
+}
+
 /** Returns the new memory id, or '' when the attention gate dropped it. */
 export function rememberMemory(body: {
   workspace?: string

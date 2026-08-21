@@ -2,13 +2,19 @@
 // server surface (serve + web daemon) without the interactive surfaces
 // (TUI/REPL/one-shot CLI). Deployed behind the enterprise gateway; the
 // personal `woca` binary keeps everything (design §5.1).
+//
+// Server governance baseline (design §12.3): OTel SDK embedded, /healthz
+// and /metrics on the business listener, RED metrics per route, spans
+// exported over OTLP when WOCA_OTEL_EXPORTER_OTLP_ENDPOINT is set.
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/projanvil/woca/internal/agentbuild"
+	"github.com/projanvil/woca/internal/obs"
 	"github.com/projanvil/woca/internal/servefront"
 	"github.com/spf13/cobra"
 )
@@ -22,7 +28,9 @@ func main() {
 		SilenceErrors: true,
 	}
 	agentbuild.RegisterFlags(root.PersistentFlags(), opts)
-	root.AddCommand(servefront.NewServeCmd(opts))
+	root.AddCommand(servefront.NewServeCmdWithObs(opts, func(ctx context.Context) (servefront.Observability, error) {
+		return obs.Setup(ctx, obs.FromEnv())
+	}))
 	root.AddCommand(servefront.NewWebCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

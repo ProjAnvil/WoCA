@@ -1,0 +1,26 @@
+# Infrastructure configuration (design §12.2): the service/infrastructure
+# layer — endpoints, ports, OTel — lives in ConfigMap/Secret and changes via
+# GitOps/Helm with releases. Tenant/business configuration (model
+# allowlists, quotas, flags) lives in tenant-svc and must never appear
+# here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: woca-infra
+  namespace: woca
+data:
+  # Addressing is cluster DNS (§12.1): zero registry coupling in code.
+  WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.woca.svc:4318
+---
+# Placeholder secret: replace the DSN with your managed-PostgreSQL instance
+# (CloudNativePG, RDS, ...) and seal with your secret manager (sealed-secrets,
+# external-secrets, ...). NATS/Redis enter the same way when the topology
+# grows beyond the PG queue.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: woca-secrets
+  namespace: woca
+type: Opaque
+stringData:
+  WOCA_DB: "postgres://woca:CHANGE_ME@postgres.woca.svc:5432/woca?sslmode=disable"

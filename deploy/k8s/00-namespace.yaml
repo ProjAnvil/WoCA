@@ -1,0 +1,7 @@
+# woca namespace for the microservices deployment (design §5.3/§12).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: woca
+  labels:
+    app.kubernetes.io/part-of: woca

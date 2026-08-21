@@ -1,0 +1,41 @@
+# OTel Collector for the woca enterprise stack (design §12.3).
+#
+# Receives OTLP/HTTP from every server artifact (woca-server on its business
+# port, woca-worker over the same push), exports:
+#   - metrics -> Prometheus exposition at :8889 (scraped by Prometheus)
+#   - traces  -> Jaeger (Tempo is a drop-in replacement via the otlphttp
+#                endpoint)
+#   - logs    -> not wired yet; Loki/Tempo arrive with the log pipeline.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true # service_name becomes a label for per-instance panels
+  otlphttp/jaeger:
+    endpoint: http://jaeger:4318
+  debug:
+    verbosity: basic
+
+service:
+  telemetry:
+    metrics:
+      level: basic
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/jaeger, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]

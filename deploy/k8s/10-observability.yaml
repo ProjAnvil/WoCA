@@ -1,0 +1,367 @@
+# Observability pipeline (design §12.3): OTel Collector + Prometheus +
+# Alertmanager + Grafana + Jaeger. woca app Deployments push OTLP to the
+# collector; Prometheus discovers scrape targets natively via
+# kubernetes_sd (pod annotation metrics.woca.dev/scrape), which replaces the
+# static service list of the compose stack.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: woca
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch: {timeout: 5s}
+    exporters:
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        resource_to_telemetry_conversion: {enabled: true}
+      otlphttp/jaeger:
+        endpoint: http://jaeger.woca.svc:4318
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [otlphttp/jaeger]
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [prometheus]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: woca
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: otel-collector}}
+  template:
+    metadata:
+      labels: {app: otel-collector}
+    spec:
+      containers:
+        - name: collector
+          image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.136.0
+          args: ["--config=/etc/otelcol/config.yaml"]
+          ports:
+            - {name: otlp-http, containerPort: 4318}
+            - {name: promexp, containerPort: 8889}
+          readinessProbe: {httpGet: {path: /, port: 13133}}
+          volumeMounts: [{name: config, mountPath: /etc/otelcol}]
+      volumes:
+        - name: config
+          configMap: {name: otel-collector-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: woca
+spec:
+  selector: {app: otel-collector}
+  ports:
+    - {name: otlp-http, port: 4318, targetPort: otlp-http}
+    - {name: promexp, port: 8889, targetPort: promexp}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: woca
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    rule_files: [/etc/prometheus/rules/woca-rules.yaml]
+    alerting:
+      alertmanagers:
+        - static_configs: [{targets: ["alertmanager.woca.svc:9093"]}]
+    scrape_configs:
+      - job_name: woca-kubernetes-pods
+        kubernetes_sd_configs: [{role: pod}]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_metrics_woca_dev_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_metrics_woca_dev_job]
+            target_label: job
+          - source_labels: [__address__,
+              __meta_kubernetes_pod_annotation_metrics_woca_dev_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $$1:$$2
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+      - job_name: otel-collector
+        static_configs: [{targets: ["otel-collector.woca.svc:8889"]}]
+  # Same rules file as deploy/observability/prometheus/rules/woca-rules.yaml.
+  # Keep the two in sync (or generate both from one source when a Helm chart
+  # lands).
+  woca-rules.yaml: |
+    groups:
+      - name: woca-service-health
+        rules:
+          - alert: WocaServiceDown
+            expr: up{job=~"woca-(server|worker)"} == 0
+            for: 2m
+            labels: {severity: critical}
+            annotations:
+              summary: "{{ $labels.pod }} is down"
+          - alert: WocaScrapeTargetMissing
+            expr: absent(up{job="woca-worker"})
+            for: 5m
+            labels: {severity: critical}
+            annotations:
+              summary: "no woca-worker scrape targets"
+      - name: woca-gateway-traffic
+        rules:
+          - alert: WocaHTTP5xxRateHigh
+            expr: >-
+              sum by (job) (rate(http_server_request_count{http_response_status_code=~"5.."}[5m]))
+              / clamp_min(sum by (job) (rate(http_server_request_count[5m])), 0.001) > 0.05
+            for: 10m
+            labels: {severity: warning}
+            annotations:
+              summary: "5xx ratio above 5% on {{ $labels.job }}"
+      - name: woca-worker
+        rules:
+          - alert: WocaWorkerErrorRateHigh
+            expr: increase(woca_worker_runs{status="error"}[15m]) > 3
+            for: 5m
+            labels: {severity: warning}
+            annotations:
+              summary: "worker failing runs"
+          - alert: WocaQueueClaimingStalled
+            expr: >-
+              sum(increase(woca_worker_claimed[30m])) == 0
+              and on() sum(increase(http_server_request_count{http_route="/api/runs"}[30m])) > 0
+            for: 10m
+            labels: {severity: critical}
+            annotations:
+              summary: "runs enqueued but no worker claims them"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: woca
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: woca-prometheus
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: woca-prometheus
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: woca-prometheus}
+subjects: [{kind: ServiceAccount, name: prometheus, namespace: woca}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: woca
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: prometheus}}
+  template:
+    metadata:
+      labels: {app: prometheus}
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.4.1
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.retention.time=15d
+          ports: [{name: web, containerPort: 9090}]
+          readinessProbe: {httpGet: {path: /-/ready, port: web}}
+          volumeMounts:
+            - {name: config, mountPath: /etc/prometheus}
+            - {name: data, mountPath: /prometheus}
+      volumes:
+        - name: config
+          configMap: {name: prometheus-config}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: woca
+spec:
+  selector: {app: prometheus}
+  ports: [{name: web, port: 9090}]
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: woca
+data:
+  alertmanager.yml: |
+    global: {resolve_timeout: 5m}
+    route:
+      group_by: ["alertname", "job", "pod"]
+      group_wait: 30s
+      repeat_interval: 4h
+      receiver: ops-webhook
+    receivers:
+      - name: ops-webhook
+        webhook_configs:
+          - url: http://alert-receiver.woca.svc:5001/alerts
+            send_resolved: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: woca
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: alertmanager}}
+  template:
+    metadata:
+      labels: {app: alertmanager}
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.28.1
+          args: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+          ports: [{name: web, containerPort: 9093}]
+          readinessProbe: {httpGet: {path: /-/ready, port: web}}
+          volumeMounts: [{name: config, mountPath: /etc/alertmanager}]
+      volumes:
+        - name: config
+          configMap: {name: alertmanager-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: woca
+spec:
+  selector: {app: alertmanager}
+  ports: [{name: web, port: 9093}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: woca
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: jaeger}}
+  template:
+    metadata:
+      labels: {app: jaeger}
+    spec:
+      containers:
+        - name: jaeger
+          image: jaegertracing/all-in-one:1.65.0
+          env: [{name: COLLECTOR_OTLP_ENABLED, value: "true"}]
+          ports:
+            - {name: otlp-http, containerPort: 4318}
+            - {name: query, containerPort: 16686}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: woca
+spec:
+  selector: {app: jaeger}
+  ports:
+    - {name: otlp-http, port: 4318, targetPort: otlp-http}
+    - {name: query, port: 16686, targetPort: query}
+---
+# Grafana with provisioned datasources + dashboard. The dashboard JSON is
+# loaded from the woca-grafana-dashboards ConfigMap:
+#   kubectl -n woca create configmap woca-grafana-dashboards \
+#     --from-file=deploy/observability/grafana/provisioning/dashboards/
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: woca
+data:
+  prometheus.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.woca.svc:9090
+        isDefault: true
+      - name: Jaeger
+        uid: jaeger
+        type: jaeger
+        access: proxy
+        url: http://jaeger.woca.svc:16686
+  dashboards.yml: |
+    apiVersion: 1
+    providers:
+      - name: woca
+        orgId: 1
+        folder: woca
+        type: file
+        updateIntervalSeconds: 30
+        options: {path: /var/lib/grafana/dashboards}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: woca
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: grafana}}
+  template:
+    metadata:
+      labels: {app: grafana}
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.6.0
+          env:
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "true"}
+            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: "Admin"}
+          ports: [{name: web, containerPort: 3000}]
+          readinessProbe: {httpGet: {path: /api/health, port: web}}
+          volumeMounts:
+            - {name: provisioning, mountPath: /etc/grafana/provisioning}
+            - {name: dashboards, mountPath: /var/lib/grafana/dashboards}
+      volumes:
+        - name: provisioning
+          configMap: {name: grafana-provisioning}
+        - name: dashboards
+          configMap: {name: woca-grafana-dashboards}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: woca
+spec:
+  selector: {app: grafana}
+  ports: [{name: web, port: 3000}]

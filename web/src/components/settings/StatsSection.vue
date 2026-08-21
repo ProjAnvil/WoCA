@@ -6,6 +6,7 @@ import type { StatsResponse } from '../../types'
 
 const { t } = useI18n()
 const data = ref<StatsResponse | null>(null)
+const grafanaUrl = ref('')
 let timer: ReturnType<typeof setInterval> | null = null
 
 async function refresh() {
@@ -14,6 +15,11 @@ async function refresh() {
 
 onMounted(() => {
   void refresh()
+  // Ops console link (server editions only): fetched once, hidden when the
+  // deployment exposes no Grafana URL.
+  void api.health().then((h) => {
+    grafanaUrl.value = h.grafana_url ?? ''
+  }).catch(() => {})
   timer = setInterval(() => void refresh(), 5000)
 })
 onUnmounted(() => {
@@ -35,8 +41,36 @@ onUnmounted(() => {
       </span>
     </div>
     <p v-else>{{ t('common.loading') }}</p>
+    <a v-if="grafanaUrl" class="ops-link" :href="grafanaUrl" target="_blank" rel="noopener">
+      <span class="ops-title">{{ t('settings.stats.opsLink') }}</span>
+      <span class="ops-hint">{{ t('settings.stats.opsHint') }}</span>
+    </a>
   </section>
 </template>
+
+<style scoped>
+.ops-link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #2a2a2e);
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+}
+.ops-link:hover {
+  border-color: var(--accent, #4c8bf5);
+}
+.ops-title {
+  font-weight: 600;
+}
+.ops-hint {
+  font-size: 12px;
+  opacity: 0.7;
+}
+</style>
 
 <style scoped>
 .stats-grid {

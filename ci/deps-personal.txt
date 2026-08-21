@@ -106,6 +106,7 @@ github.com/projanvil/woca/internal/console
 github.com/projanvil/woca/internal/context
 github.com/projanvil/woca/internal/cost
 github.com/projanvil/woca/internal/cpserde
+github.com/projanvil/woca/internal/discovery
 github.com/projanvil/woca/internal/gateway
 github.com/projanvil/woca/internal/hooks
 github.com/projanvil/woca/internal/logging

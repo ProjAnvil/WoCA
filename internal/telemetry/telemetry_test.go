@@ -102,3 +102,26 @@ func (r *recordingSink) Record(_ context.Context, sp Span) {
 	defer r.mu.Unlock()
 	r.spans = append(r.spans, sp)
 }
+
+func TestMultiSinkFansOutAndSkipsNil(t *testing.T) {
+	defer SetDefault(nil)
+	a, b := &recordingSink{}, &recordingSink{}
+	SetDefault(NewMultiSink(nil, a, b, nil))
+
+	ctx := WithRun(context.Background(), "run-1", "sess-1")
+	Start(ctx, "chat", KindLLM).End(ctx, nil)
+
+	for name, s := range map[string]*recordingSink{"a": a, "b": b} {
+		if len(s.spans) != 1 {
+			t.Fatalf("sink %s recorded %d spans, want 1", name, len(s.spans))
+		}
+		if s.spans[0].Tags["run_id"] != "run-1" {
+			t.Fatalf("sink %s missing run tag: %+v", name, s.spans[0].Tags)
+		}
+	}
+}
+
+func TestMultiSinkEmptyIsSafe(t *testing.T) {
+	m := NewMultiSink()
+	m.Record(context.Background(), Span{Name: "x"}) // must not panic
+}

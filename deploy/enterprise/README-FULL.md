@@ -96,3 +96,20 @@ docker compose -f docker-compose.full.yml up -d --scale woca-server-1=3
 ```bash
 docker compose -f docker-compose.full.yml down -v
 ```
+
+## Observability & IT console (design §12.3)
+
+Every server artifact embeds the OTel SDK: `/healthz` + `/metrics` on each
+instance, OTLP export to a collector, RED metrics per route, and worker
+run metrics. The IT pane is Grafana + Alertmanager (not homegrown):
+
+```bash
+make ent-obs-up        # collector + jaeger + prometheus + alertmanager + grafana
+open http://localhost:8085
+```
+
+Details, env contract, and the VM (Consul/Nacos) address-source mode live
+in `deploy/observability/README.md`; Kubernetes layouts in
+`deploy/k8s/README.md`. To surface the Grafana link inside the woca SPA,
+set `WOCA_GRAFANA_URL` on the woca-server containers (served via
+`/api/health`).

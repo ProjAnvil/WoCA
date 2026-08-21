@@ -2,6 +2,9 @@ package servefront
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
@@ -49,3 +52,66 @@ func TestServeCmdNoBrowser(t *testing.T) {
 		t.Fatalf("serve cmd = %v", err)
 	}
 }
+
+// fakeObs records the Observability seam calls.
+type fakeObs struct {
+	installed  int
+	wrapped    int
+	shutdowned int
+}
+
+func (f *fakeObs) Install(context.Context) error { f.installed++; return nil }
+func (f *fakeObs) Wrap(h http.Handler) http.Handler {
+	f.wrapped++
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			fmt.Fprint(w, "obs-healthz")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+func (f *fakeObs) Shutdown(context.Context) error { f.shutdowned++; return nil }
+
+func TestServeWithObservabilitySeam(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAI(t, "hi")
+	opts := baseOpts(t, url)
+	obs := &fakeObs{}
+	ctx, cancel := context.WithTimeout(t.Context(), 700*time.Millisecond)
+	defer cancel()
+	if err := ServeWithObs(ctx, opts, "127.0.0.1:0", true, "", obs); err != nil {
+		t.Fatalf("ServeWithObs = %v", err)
+	}
+	if obs.installed != 1 {
+		t.Errorf("installed = %d, want 1", obs.installed)
+	}
+	if obs.wrapped < 2 {
+		t.Errorf("wrapped = %d, want >=2 (startup placeholder + final handler)", obs.wrapped)
+	}
+	if obs.shutdowned != 1 {
+		t.Errorf("shutdowned = %d, want 1", obs.shutdowned)
+	}
+}
+
+func TestServeWithObsInstallError(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAI(t, "hi")
+	opts := baseOpts(t, url)
+	failing := &failingObs{}
+	if err := ServeWithObs(t.Context(), opts, "127.0.0.1:0", true, "", failing); err == nil {
+		t.Fatal("expected install error to abort Serve")
+	}
+	if failing.obs.shutdowned != 0 {
+		t.Errorf("shutdown must not run after a failed install")
+	}
+}
+
+type failingObs struct{ obs fakeObs }
+
+func (f *failingObs) Install(context.Context) error      { return errors.New("no provider") }
+func (f *failingObs) Wrap(h http.Handler) http.Handler   { return h }
+func (f *failingObs) Shutdown(ctx context.Context) error { return f.obs.Shutdown(ctx) }

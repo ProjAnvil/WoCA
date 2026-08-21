@@ -159,5 +159,7 @@ export default {
     backgroundTasks: 'Background tasks: {count}',
     sseDropped: 'SSE dropped: {count}',
     lsp: 'LSP: {active} active / {broken} tripped',
+    opsLink: 'Grafana ops console',
+    opsHint: 'Instance status · route traffic · trace search (IT console)',
   },
 }

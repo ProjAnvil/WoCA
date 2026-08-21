@@ -1,0 +1,21 @@
+# Alertmanager routing for the woca enterprise stack (design §12.3).
+# Replace the webhook with the incident channel of your ops environment
+# (Slack/PagerDuty/email integrations are standard Alertmanager fare).
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ["alertname", "job", "instance"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: ops-webhook
+
+receivers:
+  - name: ops-webhook
+    webhook_configs:
+      # Placeholder: point at the incident bridge. Alertmanager logs the
+      # delivery failure but keeps evaluating; alerts stay visible in
+      # Alertmanager's own UI (:9093) and Grafana.
+      - url: http://localhost:5001/alerts
+        send_resolved: true

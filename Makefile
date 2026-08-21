@@ -93,6 +93,24 @@ ent-down:
 	docker run --rm --privileged --pid=host alpine:3.22 nsenter -t 1 -m -n -- \
 		sh -c 'iptables -D DOCKER-USER -j WOCA-ENT-ISOLATION 2>/dev/null; iptables -F WOCA-ENT-ISOLATION 2>/dev/null; iptables -X WOCA-ENT-ISOLATION 2>/dev/null; echo woca-enterprise: isolation rules removed' 
 
+# Observability overlay (design §12.3): OTel Collector + Prometheus +
+# Alertmanager + Grafana + Jaeger onto the full stack. Requires the full
+# stack to be up (ent-up with the full compose file).
+ENT_FULL_COMPOSE = docker compose -f deploy/enterprise/docker-compose.full.yml -f deploy/observability/docker-compose.observability.yml
+ENT_OBS_SVCS = otel-collector jaeger prometheus alertmanager grafana
+
+ent-obs-up:
+	# up -d (not restart): the overlay changes app env/networks, and only
+	# up recreates containers whose merged configuration drifted.
+	$(ENT_FULL_COMPOSE) up -d gateway woca-server-1 woca-server-2 woca-worker-1 woca-worker-2 $(ENT_OBS_SVCS)
+	@echo "observability up: grafana http://localhost:$${ENT_GRAFANA_PORT:-8085}"
+
+ent-obs-down:
+	$(ENT_FULL_COMPOSE) stop $(ENT_OBS_SVCS)
+
+ent-obs-logs:
+	$(ENT_FULL_COMPOSE) logs -f $(ENT_OBS_SVCS)
+
 ent-ps:
 	$(ENT_COMPOSE) ps
 
