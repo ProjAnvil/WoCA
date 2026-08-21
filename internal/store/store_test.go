@@ -193,3 +193,32 @@ func TestPostgresPlaceholderRewrite(t *testing.T) {
 		t.Fatalf("sqlite val = %v", got)
 	}
 }
+
+// Closed-DB error sweep: every store method surfaces the DB error.
+func TestStoreClosedDBSweep(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "closed.db")
+	db, err := wocadb.Open("sqlite:" + dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewSQL(db.DB, string(db.Dialect), "")
+	ctx := context.Background()
+	_ = s.Put(ctx, "ns", "k", "v")
+	_ = db.Close()
+
+	// Every method must return an error, not panic.
+	if _, _, err := s.Get(ctx, "ns", "k"); err == nil {
+		t.Fatal("Get on closed DB succeeded")
+	}
+	if err := s.Put(ctx, "ns", "k", "v"); err == nil {
+		t.Fatal("Put on closed DB succeeded")
+	}
+	if err := s.Delete(ctx, "ns", "k"); err == nil {
+		t.Fatal("Delete on closed DB succeeded")
+	}
+	if _, err := s.List(ctx, "ns", ""); err == nil {
+		t.Fatal("List on closed DB succeeded")
+	}
+
+}
