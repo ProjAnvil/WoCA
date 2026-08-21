@@ -275,9 +275,6 @@ func TestSummarizeMessagesFields(t *testing.T) {
 		{Role: messages.RoleAI, UsageMetadata: messages.UsageMetadata{TotalTokens: 7, InputTokens: 3, OutputTokens: 4}},
 		{Role: messages.RoleHuman, Content: strings.Repeat("y", 300)},
 	}
-	for i := range msgs {
-		msgs[i].Content = msgs[i].Content
-	}
 	out := summarizeMessages(msgs, 40)
 	if len(out) != 5 {
 		t.Fatalf("summary count = %d", len(out))
