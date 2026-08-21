@@ -103,6 +103,9 @@ ent-obs-up:
 	# up -d (not restart): the overlay changes app env/networks, and only
 	# up recreates containers whose merged configuration drifted.
 	$(ENT_FULL_COMPOSE) up -d gateway woca-server-1 woca-server-2 woca-worker-1 woca-worker-2 $(ENT_OBS_SVCS)
+	# nginx resolves static upstream names once at config load; recreated
+	# app containers get new IPs, so reload the gateway to re-resolve.
+	$(ENT_FULL_COMPOSE) restart gateway
 	@echo "observability up: grafana http://localhost:$${ENT_GRAFANA_PORT:-8085}"
 
 ent-obs-down:

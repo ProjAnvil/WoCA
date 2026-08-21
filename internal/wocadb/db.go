@@ -398,10 +398,59 @@ func (d *DB) migrate() error {
 			)`,
 		}
 	}
-	for _, s := range stmts {
-		if _, err := d.Exec(s); err != nil {
-			return fmt.Errorf("wocadb: migrate: %w", err)
+	return d.WithMigrateLock(func(q Querier) error {
+		for _, s := range stmts {
+			if _, err := q.Exec(s); err != nil {
+				return fmt.Errorf("wocadb: migrate: %w", err)
+			}
 		}
+		return nil
+	})
+}
+
+// migrateLockKey serializes schema migrations across woca processes. PG's
+// CREATE TABLE IF NOT EXISTS is not race-safe (concurrent creators collide
+// on the pg_type rowtype unique index), and server editions start N
+// replicas against one database — the enterprise stack hit exactly that:
+// woca-server ×2 + worker migrating simultaneously failed with
+// "duplicate key value violates unique constraint pg_type_typname_nsp_index".
+const migrateLockKey = 0x776F6361 // "woca"
+
+// Querier is the statement-execution surface shared by *sql.DB and *sql.Tx,
+// so migration callbacks run unchanged inside or outside a transaction.
+type Querier interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// WithMigrateLock runs fn serialized against every other woca process
+// migrating the same database. On Postgres it holds a transaction-scoped
+// advisory lock for the whole callback (lock and DDL on one connection);
+// sqlite runs the callback inline — its single connection serializes
+// writers in-process, and cross-process sqlite is not a supported server
+// deployment.
+func (d *DB) WithMigrateLock(fn func(q Querier) error) error {
+	return WithMigrateLock(d.Dialect, d.DB, fn)
+}
+
+// WithMigrateLock is the package form for stores that hold a raw *sql.DB
+// plus the dialect (tenant, skillsvc): same advisory-lock serialization.
+func WithMigrateLock(dialect Dialect, db *sql.DB, fn func(q Querier) error) error {
+	if dialect != DialectPostgres {
+		return fn(db)
+	}
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("wocadb: migrate lock: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec("SELECT pg_advisory_xact_lock($1)", migrateLockKey); err != nil {
+		return fmt.Errorf("wocadb: migrate lock: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("wocadb: migrate lock commit: %w", err)
 	}
 	return nil
 }

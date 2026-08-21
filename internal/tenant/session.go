@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/projanvil/woca/internal/wocadb"
 )
 
 const (
@@ -41,9 +43,9 @@ type NativeSession struct {
 }
 
 // migrateNativeSessions creates the session table idempotently. Called by
-// Store.migrate.
-func (s *Store) migrateNativeSessions(ts string) error {
-	q := `CREATE TABLE IF NOT EXISTS native_sessions (
+// Store.migrate under the shared migration lock; q is the locked querier.
+func (s *Store) migrateNativeSessions(ts string, q wocadb.Querier) error {
+	stmt := `CREATE TABLE IF NOT EXISTS native_sessions (
 		prefix TEXT PRIMARY KEY,
 		tenant_id TEXT NOT NULL REFERENCES tenants(id),
 		user_id TEXT NOT NULL REFERENCES users(id),
@@ -56,7 +58,7 @@ func (s *Store) migrateNativeSessions(ts string) error {
 		last_validated_at ` + ts + ` NOT NULL DEFAULT 0,
 		revoked_at ` + ts + `
 	)`
-	if _, err := s.db.Exec(q); err != nil {
+	if _, err := q.Exec(stmt); err != nil {
 		return fmt.Errorf("tenant: migrate native_sessions: %w", err)
 	}
 	return nil

@@ -109,12 +109,15 @@ func (s *Store) migrate() error {
 			revoked_at ` + ts + `
 		)`,
 	}
-	for _, q := range stmts {
-		if _, err := s.db.Exec(q); err != nil {
-			return fmt.Errorf("tenant: migrate: %w", err)
+	err := wocadb.WithMigrateLock(s.dialect, s.db, func(qw wocadb.Querier) error {
+		for _, q := range stmts {
+			if _, err := qw.Exec(q); err != nil {
+				return fmt.Errorf("tenant: migrate: %w", err)
+			}
 		}
-	}
-	if err := s.migrateNativeSessions(ts); err != nil {
+		return s.migrateNativeSessions(ts, qw)
+	})
+	if err != nil {
 		return err
 	}
 	// Bootstrap the machine tenant and its default user so credentials can

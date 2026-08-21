@@ -91,26 +91,30 @@ func (s *Store) migrate() error {
 			PRIMARY KEY (asset_id, label)
 		)`,
 	}
-	for _, q := range stmts {
-		if _, err := s.db.Exec(q); err != nil {
-			return fmt.Errorf("skillsvc: migrate: %w", err)
-		}
-	}
-	// On postgres, add tenant_id + RLS like every business table.
-	if s.dialect == wocadb.DialectPostgres {
-		for _, table := range []string{"skill_assets", "skill_versions", "skill_labels"} {
-			if _, err := s.db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), 'local')`); err != nil {
-				return fmt.Errorf("skillsvc: tenant column: %w", err)
-			}
-			if _, err := s.db.Exec(`ALTER TABLE ` + table + ` ENABLE ROW LEVEL SECURITY`); err != nil {
-				return fmt.Errorf("skillsvc: rls: %w", err)
-			}
-			if _, err := s.db.Exec(`ALTER TABLE ` + table + ` FORCE ROW LEVEL SECURITY`); err != nil {
-				return fmt.Errorf("skillsvc: force rls: %w", err)
+	err := wocadb.WithMigrateLock(s.dialect, s.db, func(qw wocadb.Querier) error {
+		for _, q := range stmts {
+			if _, err := qw.Exec(q); err != nil {
+				return fmt.Errorf("skillsvc: migrate: %w", err)
 			}
 		}
-	}
-	return nil
+		// On postgres, add tenant_id + RLS like every business table —
+		// inside the lock: concurrent ALTERs race the same way CREATEs do.
+		if s.dialect == wocadb.DialectPostgres {
+			for _, table := range []string{"skill_assets", "skill_versions", "skill_labels"} {
+				if _, err := qw.Exec(`ALTER TABLE ` + table + ` ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT COALESCE(NULLIF(current_setting('app.tenant_id', true), ''), 'local')`); err != nil {
+					return fmt.Errorf("skillsvc: tenant column: %w", err)
+				}
+				if _, err := qw.Exec(`ALTER TABLE ` + table + ` ENABLE ROW LEVEL SECURITY`); err != nil {
+					return fmt.Errorf("skillsvc: rls: %w", err)
+				}
+				if _, err := qw.Exec(`ALTER TABLE ` + table + ` FORCE ROW LEVEL SECURITY`); err != nil {
+					return fmt.Errorf("skillsvc: force rls: %w", err)
+				}
+			}
+		}
+		return nil
+	})
+	return err
 }
 
 func nowMilli() int64 { return time.Now().UnixMilli() }
