@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync/atomic"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
@@ -179,7 +178,7 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 	if workspace == "" {
 		workspace = s.workdir
 	}
-	id := fmt.Sprintf("run-%d", atomic.AddInt64(&runSeq, 1))
+	id := newRunID()
 	// Same run-scoped memory workspace as startRun: the ctx value feeds
 	// RetainGoal (WithoutCancel preserves it) and the goal graph's prefetch.
 	ctx, cancel := context.WithCancel(agent.WithRunWorkspace(context.Background(), workspace))

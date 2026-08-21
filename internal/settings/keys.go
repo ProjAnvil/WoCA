@@ -239,9 +239,9 @@ func Apply(cfg *Settings, key, value string) error {
 		cfg.CheckpointDir = value
 	case KeyMemoryEngine:
 		switch value {
-		case MemoryEngineLadyM, MemoryEngineNone:
+		case MemoryEngineLadyM, MemoryEngineNone, MemoryEngineRemote:
 		default:
-			return fmt.Errorf("memory-engine must be ladym|none, got %q", value)
+			return fmt.Errorf("memory-engine must be ladym|none|remote, got %q", value)
 		}
 		cfg.MemoryEngine = value
 	case KeyLadyMDBPath:
@@ -288,6 +288,13 @@ func Apply(cfg *Settings, key, value string) error {
 			return fmt.Errorf("ladym-system2-interval must be an integer >= %d, got %q", MinLadyMSystem2Interval, value)
 		}
 		cfg.LadyMSystem2Interval = n
+	case KeyLadyMEndpoint:
+		if value != "" && !strings.Contains(value, "://") {
+			return fmt.Errorf("ladym-endpoint must be scheme://host:port, got %q", value)
+		}
+		cfg.LadyMEndpoint = value
+	case KeyLadyMAPIUsername:
+		cfg.LadyMAPIUsername = value
 	case KeyDebugLog:
 		b, err := ParseBool(value)
 		if err != nil {

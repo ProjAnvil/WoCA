@@ -33,25 +33,25 @@ services:
     environment:
       WOCA_SERVICE_NAME: woca-server-1
       WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-    networks: [woca-edge, woca-data, ladym-data, woca-obs]
+    networks: [woca-edge, woca-pg, ladym-data, woca-obs]
 
   woca-server-2:
     environment:
       WOCA_SERVICE_NAME: woca-server-2
       WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-    networks: [woca-edge, woca-data, ladym-data, woca-obs]
+    networks: [woca-edge, woca-pg, ladym-data, woca-obs]
 
   woca-worker-1:
     environment:
       WOCA_SERVICE_NAME: woca-worker-1
       WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-    networks: [woca-edge, woca-data, woca-obs]
+    networks: [woca-edge, woca-pg, ladym-data, woca-obs]
 
   woca-worker-2:
     environment:
       WOCA_SERVICE_NAME: woca-worker-2
       WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-    networks: [woca-edge, woca-data, woca-obs]
+    networks: [woca-edge, woca-pg, ladym-data, woca-obs]
 
   # ─────────────────── Observability pipeline ───────────────────
   otel-collector:

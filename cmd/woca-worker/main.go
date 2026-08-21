@@ -76,8 +76,11 @@ func newWorkerRoot() *cobra.Command {
 				defer func() { _ = probeSrv.Close() }()
 			}
 
-			// The settings database carries the runstate tables.
-			opts := agentbuild.Options{LogLevel: logLevel}
+			// The settings database carries the runstate tables. The worker
+			// is a server artifact (design §5.1): the embedded ladyM engine
+			// is excluded — memory is remote (ladyM enterprise) or none,
+			// enforced with the same enterprise gate woca-server uses.
+			opts := agentbuild.Options{LogLevel: logLevel, EnterpriseMemory: true}
 			db, err := openWorkerDB(cmd, &opts)
 			if err != nil {
 				return err

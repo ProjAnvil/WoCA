@@ -153,6 +153,9 @@ func (l *Ledger) Enqueue(ctx context.Context, run Run) error {
 		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusQueued+`', 0, 0, `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`)`,
 		run.RunID, run.SessionID, run.ThreadID, run.ConfigSnapshot, now, now)
 	if err != nil && isUniqueViolation(err) {
+		if !isSessionConstraint(err) {
+			return fmt.Errorf("runstate: run id %s already exists (cross-process id collision)", run.RunID)
+		}
 		return fmt.Errorf("runstate: session %s already has an active run", run.SessionID)
 	}
 	return err
@@ -376,6 +379,18 @@ func isUniqueViolation(err error) bool {
 		strings.Contains(msg, "23505")
 }
 
+// isSessionConstraint reports whether a unique violation came from the
+// one_active_run_per_session partial index (as opposed to the run_id
+// primary key — a cross-process id collision).
+func isSessionConstraint(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "one_active_run_per_session") ||
+		strings.Contains(msg, "runs.session_id")
+}
+
 // Row returns the recorded state of one run (read-only accessor).
 func (l *Ledger) Row(ctx context.Context, runID string) (Run, bool, error) {
 	q, finish, err := l.begin(ctx)
@@ -413,6 +428,9 @@ func (l *Ledger) Start(ctx context.Context, run Run, workerID string, lease time
 		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusRunning+`', `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`, `+l.ph(6)+`, `+l.ph(7)+`)`,
 		run.RunID, run.SessionID, workerID, now+lease.Milliseconds(), run.ThreadID, run.ConfigSnapshot, now, now)
 	if err != nil && isUniqueViolation(err) {
+		if !isSessionConstraint(err) {
+			return fmt.Errorf("runstate: run id %s already exists (cross-process id collision)", run.RunID)
+		}
 		return fmt.Errorf("runstate: session %s already has an active run", run.SessionID)
 	}
 	return err

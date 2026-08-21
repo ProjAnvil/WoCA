@@ -93,11 +93,32 @@ ent-down:
 	docker run --rm --privileged --pid=host alpine:3.22 nsenter -t 1 -m -n -- \
 		sh -c 'iptables -D DOCKER-USER -j WOCA-ENT-ISOLATION 2>/dev/null; iptables -F WOCA-ENT-ISOLATION 2>/dev/null; iptables -X WOCA-ENT-ISOLATION 2>/dev/null; echo woca-enterprise: isolation rules removed' 
 
-# Observability overlay (design §12.3): OTel Collector + Prometheus +
-# Alertmanager + Grafana + Jaeger onto the full stack. Requires the full
-# stack to be up (ent-up with the full compose file).
+# Full microservices deployment (design §5.3): every role + data plane +
+# firewall isolation, with the observability stack (§12.3) attached.
 ENT_FULL_COMPOSE = docker compose -f deploy/enterprise/docker-compose.full.yml -f deploy/observability/docker-compose.observability.yml
 ENT_OBS_SVCS = otel-collector jaeger prometheus alertmanager grafana
+
+.PHONY: ent-full-up ent-full-down
+ent-full-up:
+	# up -d (not restart): the overlay changes app env/networks, and only
+	# up recreates containers whose merged configuration drifted.
+	$(ENT_FULL_COMPOSE) up -d
+	# nginx resolves static upstream names once at config load; recreated
+	# app containers get new IPs, so reload the gateway to re-resolve.
+	$(ENT_FULL_COMPOSE) restart gateway
+	@echo "full microservices stack up: business :8080, grafana :8085"
+
+# Down removes the containers/networks AND the DOCKER-USER isolation rules
+# installed by the firewall one-shot (same chain name as the base stack, so
+# the base stack's ent-down cleanup covers it too).
+ent-full-down:
+	$(ENT_FULL_COMPOSE) down
+	docker run --rm --privileged --pid=host alpine:3.22 nsenter -t 1 -m -n -- \
+		sh -c 'iptables -D DOCKER-USER -j WOCA-ENT-ISOLATION 2>/dev/null; iptables -F WOCA-ENT-ISOLATION 2>/dev/null; iptables -X WOCA-ENT-ISOLATION 2>/dev/null; echo woca-enterprise: isolation rules removed'
+
+# Observability overlay (design §12.3): OTel Collector + Prometheus +
+# Alertmanager + Grafana + Jaeger onto the full stack. Requires the full
+# stack to be up (ent-full-up).
 
 ent-obs-up:
 	# up -d (not restart): the overlay changes app env/networks, and only

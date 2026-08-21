@@ -3,6 +3,7 @@ package agentbuild
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -162,11 +163,25 @@ func buildMemoryEngine(ap *App, dbSettings settings.Settings, chatModel language
 		return nil, nil
 	}
 	if dbSettings.MemoryEngine == settings.MemoryEngineRemote {
-		return memory.BuildRemote(memory.RemoteConfig{
+		// The ladyM service address and its data-plane credentials are
+		// infrastructure config (design §12.2): environment values win over
+		// the settings rows so deployments wire the endpoint without
+		// seeding the database, while personal editions keep using settings.
+		rcfg := memory.RemoteConfig{
 			Endpoint: dbSettings.LadyMEndpoint,
 			Username: dbSettings.LadyMAPIUsername,
 			Password: ap.Settings.GetSecret(settings.SecretLadyMAPIPassword),
-		})
+		}
+		if v := os.Getenv("WOCA_LADYM_ENDPOINT"); v != "" {
+			rcfg.Endpoint = v
+		}
+		if v := os.Getenv("WOCA_LADYM_API_USERNAME"); v != "" {
+			rcfg.Username = v
+		}
+		if v := os.Getenv("WOCA_LADYM_API_PASSWORD"); v != "" {
+			rcfg.Password = v
+		}
+		return memory.BuildRemote(rcfg)
 	}
 	if enterprise {
 		// The embedded engine keeps its database inside this process; a

@@ -1040,3 +1040,43 @@ func TestEnterpriseMemoryForbidsEmbeddedEngine(t *testing.T) {
 		t.Fatalf("personal embedded engine = %v", err)
 	}
 }
+
+// The ladyM remote endpoint/credentials are infrastructure config (design
+// §12.2): WOCA_LADYM_* env values must override the (possibly empty)
+// settings rows so deployments wire memory without seeding the database.
+func TestBuildMemoryEngineRemoteEnvFallback(t *testing.T) {
+	isolateEnv(t)
+	st, err := settings.Open(filepath.Join(t.TempDir(), "woca.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	cfg := st.Load()
+	if err := settings.Apply(&cfg, settings.KeyMemoryEngine, settings.MemoryEngineRemote); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without any endpoint the remote build must fail loudly.
+	if _, err := buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}, Settings: st}, cfg, nil, false); err == nil {
+		t.Fatal("remote engine without endpoint should fail")
+	}
+
+	// With the env endpoint it builds (no settings row seeded).
+	t.Setenv("WOCA_LADYM_ENDPOINT", "http://ladym-api-1:8080")
+	t.Setenv("WOCA_LADYM_API_USERNAME", "woca-worker")
+	t.Setenv("WOCA_LADYM_API_PASSWORD", "pw")
+	eng, err := buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}, Settings: st}, cfg, nil, false)
+	if err != nil || eng == nil {
+		t.Fatalf("remote engine via env = %v, %v", eng, err)
+	}
+
+	// Env wins over the settings row (infra layer precedence).
+	if err := settings.Apply(&cfg, settings.KeyLadyMEndpoint, "http://stale-settings:8080"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WOCA_LADYM_ENDPOINT", "http://ladym-api-2:8080")
+	eng, err = buildMemoryEngine(&App{Cfg: config.Config{WorkDir: t.TempDir()}, Settings: st}, cfg, nil, false)
+	if err != nil || eng == nil {
+		t.Fatalf("remote engine env precedence = %v, %v", eng, err)
+	}
+}

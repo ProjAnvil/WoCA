@@ -819,7 +819,7 @@ func (s *Server) registerRun(id string, run *Run) {
 // session workspace while concurrent runs share the agent safely; see
 // agent.WithRunWorkspace and internal/runws).
 func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, string, []messages.Message) {
-	id := fmt.Sprintf("run-%d", atomic.AddInt64(&runSeq, 1))
+	id := newRunID()
 	if workspace == "" {
 		workspace = s.workdir
 	}
@@ -959,6 +959,14 @@ func previewForLog(s string) string {
 // newSessionID returns a unique, restart-safe session identifier.
 func newSessionID() string {
 	return fmt.Sprintf("sess-%x-%d", time.Now().UnixNano(), atomic.AddInt64(&sessionSeq, 1))
+}
+
+// newRunID mints a run id unique across processes: the shared run ledger
+// keys runs by run_id (Phase 2), and a bare per-process counter collides
+// with rows left by previous instances — an enterprise restart used to
+// fail its very first run on the stale primary key.
+func newRunID() string {
+	return fmt.Sprintf("run-%x-%d", time.Now().UnixNano(), atomic.AddInt64(&runSeq, 1))
 }
 
 // stripSystem removes the leading system message from a transcript.
