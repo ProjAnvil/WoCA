@@ -52,13 +52,19 @@ func TestEditorTerminalViaPty(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Skipf("script unavailable: %v", err)
 	}
-	// Keystrokes: type "abc", backspace the c, pull history up, submit.
+	// Keystrokes: type "abc", backspace the c, pull history up, submit; then
+	// exercise Ctrl-C, Ctrl-D EOF, and a closed stdin inside the pty.
 	go func() {
 		time.Sleep(150 * time.Millisecond)
 		_, _ = stdin.Write([]byte("abc"))
 		_, _ = stdin.Write([]byte{0x7f}) // backspace
 		_, _ = stdin.Write([]byte{0x1b, '[', 'A'})
 		_, _ = stdin.Write([]byte("\r"))
+		time.Sleep(150 * time.Millisecond)
+		_, _ = stdin.Write([]byte{0x03}) // Ctrl-C → interrupted
+		time.Sleep(150 * time.Millisecond)
+		_, _ = stdin.Write([]byte("xy"))
+		_, _ = stdin.Write([]byte{0x04}) // Ctrl-D → EOF with buffer
 	}()
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -85,6 +91,16 @@ func innerTerminalEditor(t *testing.T) {
 	// "abc" minus the backspaced c, replaced by the history entry.
 	if line != "history-line" {
 		t.Fatalf("line = %q", line)
+	}
+
+	// Ctrl-C aborts the line with an interrupt error.
+	if _, err = e.ReadLine(); err == nil || !strings.Contains(err.Error(), "interrupted") {
+		t.Fatalf("ctrl-c = %v", err)
+	}
+	// Ctrl-D returns EOF with whatever was buffered.
+	line, err = e.ReadLine()
+	if line != "xy" || err == nil {
+		t.Fatalf("ctrl-d = %q %v", line, err)
 	}
 	os.Exit(0)
 }
