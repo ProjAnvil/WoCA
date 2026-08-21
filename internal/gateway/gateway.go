@@ -143,12 +143,23 @@ func RequireScope(a authz.Authorizer, scope string) func(http.Handler) http.Hand
 // deployment form; the personal edition authenticates as the local tenant
 // and never trips it. The /api/native credential surface is exempt: it is
 // the enterprise client's own session lifecycle, not a host surface.
-func RequireLocalTenant() func(http.Handler) http.Handler {
+//
+// exempt lists additional path prefixes a deployment form may open to
+// remote tenants because those surfaces no longer touch the host: the
+// queue-dispatch form passes "/api/runs" (runs execute on workers, in a
+// sandbox; the gateway only enqueues and streams ledger events).
+func RequireLocalTenant(exempt ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == healthPath || !isAPIPath(r.URL.Path) || strings.HasPrefix(r.URL.Path, nativePrefix) {
 				next.ServeHTTP(w, r)
 				return
+			}
+			for _, p := range exempt {
+				if strings.HasPrefix(r.URL.Path, p) {
+					next.ServeHTTP(w, r)
+					return
+				}
 			}
 			tc, ok := tenancy.FromContext(r.Context())
 			if !ok || tc.TenantID != "local" {

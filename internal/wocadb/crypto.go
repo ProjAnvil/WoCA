@@ -33,20 +33,34 @@ func LoadOrCreateCrypto(keyPath string) (*Crypto, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("wocadb: read key: %w", err)
 	}
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
+		return nil, fmt.Errorf("wocadb: create key dir: %w", err)
+	}
+	// Race-safe creation for multi-role deployments sharing one volume:
+	// create exclusively (O_EXCL); when another role created it first, the
+	// failure path re-reads the winner's key instead of overwriting it —
+	// an overwrite here would silently rotate the key and make every
+	// previously stored secret undecryptable.
 	key = make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
 		return nil, fmt.Errorf("wocadb: generate key: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
-		return nil, fmt.Errorf("wocadb: create key dir: %w", err)
+	f, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			won, rerr := os.ReadFile(keyPath)
+			if rerr == nil {
+				return newCrypto(won)
+			}
+		}
+		return nil, fmt.Errorf("wocadb: create key: %w", err)
 	}
-	// Write via temp file + rename so a partial key is never observed.
-	tmp := keyPath + ".tmp"
-	if err := os.WriteFile(tmp, key, 0o600); err != nil {
+	if _, err := f.Write(key); err != nil {
+		_ = f.Close()
 		return nil, fmt.Errorf("wocadb: write key: %w", err)
 	}
-	if err := os.Rename(tmp, keyPath); err != nil {
-		return nil, fmt.Errorf("wocadb: rename key: %w", err)
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("wocadb: close key: %w", err)
 	}
 	return newCrypto(key)
 }

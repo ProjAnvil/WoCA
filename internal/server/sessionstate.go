@@ -207,14 +207,14 @@ func (s *Server) sessionStateEvent(sessionID, status, runID string) Event {
 // refresh. Each connection is seeded with the current state snapshot, so
 // connecting is itself a resync.
 func (s *Server) handleGlobalEvents(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	flusher := http.NewResponseController(w)
+	if err := flusher.Flush(); err != nil {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
 
 	sub, err := s.hub.Subscribe(r.Context(), sessionStateTopic, -1) // live-only
 	if err != nil {

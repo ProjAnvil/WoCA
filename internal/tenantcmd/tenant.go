@@ -8,9 +8,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/projanvil/woca/internal/msgplane"
 	"github.com/projanvil/woca/internal/platform/authz"
+	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/tenant"
 	"github.com/projanvil/woca/internal/wocadb"
+	"github.com/rs/zerolog"
 )
 
 // newTenantCmd builds `woca tenant …`: manage tenants and API keys on the
@@ -24,6 +27,27 @@ func New() *cobra.Command {
 		Short: "Manage tenants and API keys (platform edition)",
 	}
 	cmd.PersistentFlags().String("db", "", "settings database: sqlite path, postgres:// DSN (env WOCA_DB)")
+
+	// notifyTenant publishes a tenant-plane change notification (design
+	// §16.7) so subscribed roles (the admission layer today, the scheduler
+	// role later) re-read tenant state immediately. Best-effort: the
+	// generation poll in consumers is the correctness net, and pg-mode
+	// deployments (no NATS leg) simply poll.
+	notifyTenant := func(_ *cobra.Command, st *tenant.Store, _ string) {
+		if st.DB() == nil {
+			return
+		}
+		sst, err := settings.OpenFromDB(st.DB())
+		if err != nil || sst == nil {
+			return
+		}
+		plane := msgplane.New(func() msgplane.Config {
+			c := sst.Load()
+			return msgplane.Config{Mode: c.MsgPlaneMode, NATSURL: c.MsgPlaneNATSURL, Subject: c.MsgPlaneSubject}
+		}, zerolog.Nop())
+		defer plane.Close()
+		plane.NotifyTenant(st.Generation())
+	}
 
 	open := func(cmd *cobra.Command) (*tenant.Store, func(), error) {
 		target, _ := cmd.Flags().GetString("db")
@@ -59,6 +83,7 @@ func New() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			notifyTenant(cmd, st, t.ID)
 			fmt.Printf("tenant created: %s (%s)\n", t.ID, t.Name)
 			return nil
 		},
@@ -115,6 +140,7 @@ func New() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			notifyTenant(cmd, st, args[0])
 			fmt.Printf("API key issued (tenant %s, role %s)\n", k.TenantID, k.Role)
 			fmt.Println("Store it now — it is shown exactly once:")
 			fmt.Println(full)
@@ -166,6 +192,7 @@ func New() *cobra.Command {
 			if err := st.RevokeKey(cmd.Context(), args[0]); err != nil {
 				return err
 			}
+			notifyTenant(cmd, st, args[0])
 			fmt.Println("revoked")
 			return nil
 		},

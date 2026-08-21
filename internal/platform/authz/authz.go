@@ -47,6 +47,8 @@ const (
 	ScopePluginsRead   = "plugins:read"
 	ScopePluginsWrite  = "plugins:write"
 	ScopeAgentWrite    = "agent:write"
+	ScopeModelsRead    = "models:read"
+	ScopeModelsWrite   = "models:write"
 )
 
 // Authorizer reports whether the tenancy context grants a scope.
@@ -89,6 +91,7 @@ func ScopesForRole(role string) []string {
 			ScopeMemoryRead, ScopeMemoryWrite,
 			ScopePluginsRead, ScopePluginsWrite,
 			ScopeAgentWrite,
+			ScopeModelsRead, ScopeModelsWrite,
 		}
 	case RoleMember:
 		return []string{
@@ -97,6 +100,10 @@ func ScopesForRole(role string) []string {
 			ScopeWorkspaceRead,
 			ScopeMemoryRead, ScopeMemoryWrite,
 			ScopeAgentWrite,
+			// Model presets: members pick the model their runs use (the
+			// credentials stay server-side); authoring presets stays a
+			// config-plane (admin) duty.
+			ScopeModelsRead, ScopeModelsWrite,
 		}
 	case RoleViewer:
 		return []string{

@@ -6,6 +6,7 @@ package settings
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"reflect"
 	"strconv"
 	"time"
@@ -72,6 +73,8 @@ const (
 	SecretPostgresURL          = "postgres_url"
 	SecretLadyMEmbeddingAPIKey = "ladym_embedding_api_key"
 	SecretLadyMAPIPassword     = "ladym_api_password"
+	SecretCheckpointPGPassword = "checkpoint_pg_password"
+	SecretMemoryPGPassword     = "memory_pg_password"
 )
 
 // Settings is the persisted configuration. Secrets (API keys, the postgres
@@ -107,6 +110,24 @@ type Settings struct {
 	LadyMEndpoint         string `json:"ladym_endpoint"`
 	LadyMAPIUsername      string `json:"ladym_api_username"`
 	DebugLog              bool   `json:"debug_log"`
+	// Message plane (run dispatch): "pg" (default) keeps the PG queue
+	// alone; "pg+nats" adds NATS dispatch notifications on top. Live
+	// reload — resolved per operation by internal/msgplane.
+	MsgPlaneMode    string `json:"msg_plane_mode"`
+	MsgPlaneNATSURL string `json:"msg_plane_nats_url"`
+	MsgPlaneSubject string `json:"msg_plane_subject"`
+	// Per-subsystem postgres connection parts (design: the console
+	// collects host/port/db/user as plain rows and only the password as a
+	// secret; the consumer assembles the DSN). Empty host + a legacy
+	// postgres_url secret falls back to that DSN.
+	CheckpointPGHost string `json:"checkpoint_pg_host"`
+	CheckpointPGPort string `json:"checkpoint_pg_port"`
+	CheckpointPGDB   string `json:"checkpoint_pg_db"`
+	CheckpointPGUser string `json:"checkpoint_pg_user"`
+	MemoryPGHost     string `json:"memory_pg_host"`
+	MemoryPGPort     string `json:"memory_pg_port"`
+	MemoryPGDB       string `json:"memory_pg_db"`
+	MemoryPGUser     string `json:"memory_pg_user"`
 	// ClaudeSkills lists the ~/.claude skill names enabled for the agent
 	// (checkbox selection in settings; JSON array in the DB).
 	ClaudeSkills []string `json:"claude_skills"`
@@ -224,6 +245,37 @@ func Open(target string) (*Store, error) {
 	return &Store{db: db, crypto: crypto}, nil
 }
 
+// Generation returns a cheap change fingerprint of the settings stores:
+// the summed updated_at of every settings and secrets row. The config
+// plane is the sole writer, so business roles compare this value to detect
+// config-plane writes and re-run their build hooks (internal/settingswatch).
+// The empty string means "no database".
+func (s *Store) Generation() string {
+	if s == nil || s.db == nil {
+		return ""
+	}
+	var gen string
+	// Two single-row scans; failures yield the zero fingerprint (the
+	// watcher then simply sees no change).
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(updated_at), 0) FROM settings`).Scan(&gen)
+	var sec string
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(updated_at), 0) FROM secrets`).Scan(&sec)
+	return gen + "/" + sec
+}
+
+// OpenFromDB builds a store over an already-opened wocadb (sharing the
+// connection pool and crypto material with the caller's database).
+func OpenFromDB(db *wocadb.DB) (*Store, error) {
+	if db == nil {
+		return nil, fmt.Errorf("settings: nil database")
+	}
+	crypto, err := wocadb.LoadOrCreateCrypto(wocadb.KeyPath())
+	if err != nil {
+		return nil, err
+	}
+	return &Store{db: db, crypto: crypto}, nil
+}
+
 // DB exposes the underlying database (used by checkpoint/memory backends).
 func (s *Store) DB() *wocadb.DB {
 	if s == nil {
@@ -332,6 +384,39 @@ func applyPairs(out *Settings, pairs map[string]string) {
 	if v, ok := pairs["debug_log"]; ok {
 		out.DebugLog, _ = ParseBool(v)
 	}
+	if v, ok := pairs["msg_plane_mode"]; ok {
+		out.MsgPlaneMode = v
+	}
+	if v, ok := pairs["msg_plane_nats_url"]; ok {
+		out.MsgPlaneNATSURL = v
+	}
+	if v, ok := pairs["msg_plane_subject"]; ok {
+		out.MsgPlaneSubject = v
+	}
+	if v, ok := pairs["checkpoint_pg_host"]; ok {
+		out.CheckpointPGHost = v
+	}
+	if v, ok := pairs["checkpoint_pg_port"]; ok {
+		out.CheckpointPGPort = v
+	}
+	if v, ok := pairs["checkpoint_pg_db"]; ok {
+		out.CheckpointPGDB = v
+	}
+	if v, ok := pairs["checkpoint_pg_user"]; ok {
+		out.CheckpointPGUser = v
+	}
+	if v, ok := pairs["memory_pg_host"]; ok {
+		out.MemoryPGHost = v
+	}
+	if v, ok := pairs["memory_pg_port"]; ok {
+		out.MemoryPGPort = v
+	}
+	if v, ok := pairs["memory_pg_db"]; ok {
+		out.MemoryPGDB = v
+	}
+	if v, ok := pairs["memory_pg_user"]; ok {
+		out.MemoryPGUser = v
+	}
 	if v, ok := pairs["memory_engine"]; ok {
 		out.MemoryEngine = v
 	}
@@ -407,6 +492,21 @@ func (s *Store) Save(cfg Settings) error {
 	fields = append(fields, field{"claude_skills", FormatNameList(cfg.ClaudeSkills)})
 	fields = append(fields, field{"claude_mcp", FormatNameList(cfg.ClaudeMCP)})
 	fields = append(fields, field{"builtin_plugins", FormatNameList(cfg.BuiltinPlugins)})
+	// Message plane keys are always written explicitly (empty included) so
+	// clearing the NATS URL persists, not just setting it.
+	fields = append(fields,
+		field{"msg_plane_mode", orDefaultStr(cfg.MsgPlaneMode, "pg")},
+		field{"msg_plane_nats_url", cfg.MsgPlaneNATSURL},
+		field{"msg_plane_subject", orDefaultStr(cfg.MsgPlaneSubject, "runs.dispatch")},
+		field{"checkpoint_pg_host", cfg.CheckpointPGHost},
+		field{"checkpoint_pg_port", orDefaultStr(cfg.CheckpointPGPort, "5432")},
+		field{"checkpoint_pg_db", orDefaultStr(cfg.CheckpointPGDB, "woca")},
+		field{"checkpoint_pg_user", cfg.CheckpointPGUser},
+		field{"memory_pg_host", cfg.MemoryPGHost},
+		field{"memory_pg_port", orDefaultStr(cfg.MemoryPGPort, "5432")},
+		field{"memory_pg_db", orDefaultStr(cfg.MemoryPGDB, "woca")},
+		field{"memory_pg_user", cfg.MemoryPGUser},
+	)
 	if cfg.MaxTokens != 0 {
 		fields = append(fields, field{"max_tokens", strconv.Itoa(cfg.MaxTokens)})
 	}
@@ -420,6 +520,10 @@ func (s *Store) Save(cfg Settings) error {
 	// observability log off persists, unlike empty-means-skip fields.
 	fields = append(fields, field{"debug_log", strconv.FormatBool(cfg.DebugLog)})
 	fields = append(fields, field{"ladym_autoretain", strconv.FormatBool(cfg.LadyMAutoRetain)})
+	// Endpoint/username ride with the engine keys (the password is a
+	// secret); always written explicitly so clearing them persists.
+	fields = append(fields, field{"ladym_endpoint", cfg.LadyMEndpoint})
+	fields = append(fields, field{"ladym_api_username", cfg.LadyMAPIUsername})
 	fields = append(fields, field{"ladym_system2", strconv.FormatBool(cfg.LadyMSystem2)})
 	if cfg.LadyMTopK != 0 {
 		fields = append(fields, field{"ladym_topk", strconv.Itoa(cfg.LadyMTopK)})
@@ -597,4 +701,36 @@ func (s *Store) UpdatedAt(key string) time.Time {
 		return time.Time{}
 	}
 	return time.UnixMilli(ms)
+}
+
+func orDefaultStr(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+// PostgresDSN assembles a postgres DSN from per-subsystem connection
+// parts, URL-escaping the credential components (the console collects
+// fields; the DSN is assembled here, never stored whole). Empty port/db
+// fall back to 5432/woca.
+func PostgresDSN(host, port, dbname, user, password string) string {
+	if port == "" {
+		port = "5432"
+	}
+	if dbname == "" {
+		dbname = "woca"
+	}
+	u := "postgres://" + url.UserPassword(user, password).String() + "@" + host + ":" + port + "/" + dbname
+	return u + "?sslmode=disable"
+}
+
+// CheckpointPostgresDSN assembles the checkpoint saver's DSN from the
+// per-subsystem settings, falling back to the legacy postgres_url secret
+// when no host is configured (older deployments).
+func CheckpointPostgresDSN(cfg Settings, password string) string {
+	if cfg.CheckpointPGHost == "" {
+		return ""
+	}
+	return PostgresDSN(cfg.CheckpointPGHost, cfg.CheckpointPGPort, cfg.CheckpointPGDB, cfg.CheckpointPGUser, password)
 }

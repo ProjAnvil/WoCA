@@ -150,7 +150,7 @@ func (l *Ledger) Enqueue(ctx context.Context, run Run) error {
 	now := l.nowMilli()
 	_, err := l.db.DB.ExecContext(ctx,
 		`INSERT INTO runs (run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, created_at, updated_at)
-		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusQueued+`', 0, 0, `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`)`,
+		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusQueued+`', '', 0, `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`)`,
 		run.RunID, run.SessionID, run.ThreadID, run.ConfigSnapshot, now, now)
 	if err != nil && isUniqueViolation(err) {
 		if !isSessionConstraint(err) {
@@ -170,12 +170,19 @@ func (l *Ledger) Claim(ctx context.Context, workerID string, lease time.Duration
 	}
 	// Single-statement claim: newest-updated queued row wins; the lease
 	// columns flip in the same write, so two racing workers cannot both win.
+	// The outer WHERE re-checks status = queued: under READ COMMITTED, two
+	// racing UPDATEs can both select the same queued row from the subquery
+	// (each with its own snapshot); the loser then blocks on the winner's
+	// row lock, and without the status re-check EvalPlanQual would let it
+	// steal the already-running row (observed live: two workers claimed one
+	// run in the same millisecond and double-executed it).
 	now := l.nowMilli()
 	expires := now + lease.Milliseconds()
 	q := `UPDATE runs SET status = '` + StatusRunning + `', owner = ` + l.ph(0) +
 		`, lease_expires_at = ` + l.ph(1) + `, updated_at = ` + l.ph(2) +
 		` WHERE run_id = (SELECT run_id FROM runs WHERE status = '` + StatusQueued +
-		`' ORDER BY updated_at, created_at LIMIT 1) RETURNING run_id, session_id, thread_id, config_snapshot, created_at`
+		`' ORDER BY updated_at, created_at LIMIT 1) AND status = '` + StatusQueued +
+		`' RETURNING run_id, session_id, thread_id, config_snapshot, created_at`
 	if l.dialect != wocadb.DialectPostgres {
 		// sqlite has no UPDATE...RETURNING on every driver version used here;
 		// select-then-update inside a transaction is equivalent because the
@@ -216,7 +223,7 @@ func (l *Ledger) claimSQLite(ctx context.Context, workerID string, expires, now 
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE runs SET status = '`+StatusRunning+`', owner = ?, lease_expires_at = ?, updated_at = ? WHERE run_id = ?`,
+		`UPDATE runs SET status = '`+StatusRunning+`', owner = ?, lease_expires_at = ?, updated_at = ? WHERE run_id = ? AND status = '`+StatusQueued+`'`,
 		workerID, expires, now, run.RunID); err != nil {
 		return nil, err
 	}

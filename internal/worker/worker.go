@@ -1,8 +1,3 @@
-// Package worker is the Phase 3 execution role (design §5.3/§13): it
-// claims runs from the runstate ledger's queue, executes them through the
-// agent, mirrors events into run_events, and finishes the ledger row —
-// all state in the shared database, so gateway instances and workers
-// scale independently.
 package worker
 
 import (
@@ -12,11 +7,31 @@ import (
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/rs/zerolog"
 )
+
+// Sessions is the transcript persistence the worker shares with the
+// gateways: load the history a dispatched run continues, save the final
+// transcript back. Implemented over the same session store layout the
+// server uses (JSONL transcripts behind the blobstore seam), so a shared
+// session volume makes gateways and workers one conversation.
+type Sessions interface {
+	Load(id string) []messages.Message
+	Save(id string, msgs []messages.Message, workspace string) error
+}
+
+// SessionStates is the durable per-session busy signal (the session_state
+// table behind the server's listings). The worker marks running on claim
+// and lifts the row on finish — ClearIfRun semantics keep a promoted run's
+// row safe.
+type SessionStates interface {
+	MarkRunning(sessionID, runID string)
+	Clear(sessionID, runID string)
+}
 
 // leaseDuration is how long a claimed run's lease lasts before another
 // worker may reap it; the heartbeat extends it every interval.
@@ -53,16 +68,37 @@ type Config struct {
 	Logger  zerolog.Logger
 	ID      string   // worker identity for lease ownership
 	Metrics *Metrics // optional run-lifecycle hooks (server edition wires obs)
+	// Sessions, when set, persists dispatched-run transcripts so a run
+	// continues its session's history across processes. Nil disables
+	// persistence (the run executes with prompt-only history).
+	Sessions Sessions
+	// States, when set, marks sessions busy while their dispatched runs
+	// execute here, so gateway listings reflect the truth. Nil disables.
+	States SessionStates
+	// Idle blocks between claim attempts on an empty queue. The msgplane
+	// waiter wakes instantly on a NATS dispatch notification (with a poll
+	// safety net); nil sleeps one poll interval.
+	Idle IdleWaiter
 }
+
+// IdleWaiter blocks a worker between empty claim attempts.
+type IdleWaiter interface {
+	Wait(ctx context.Context)
+}
+
+const idlePollEvery = 200 * time.Millisecond
 
 // Worker claims and executes runs from the queue.
 type Worker struct {
-	ledger  *runstate.Ledger
-	agent   *agent.Agent
-	bus     eventbus.Bus
-	log     zerolog.Logger
-	id      string
-	metrics *Metrics
+	ledger   *runstate.Ledger
+	agent    *agent.Agent
+	bus      eventbus.Bus
+	log      zerolog.Logger
+	id       string
+	metrics  *Metrics
+	sessions Sessions
+	states   SessionStates
+	idle     IdleWaiter
 }
 
 // New returns a Worker over cfg.
@@ -70,7 +106,11 @@ func New(cfg Config) *Worker {
 	if cfg.ID == "" {
 		cfg.ID = fmt.Sprintf("worker-%d", time.Now().UnixNano())
 	}
-	return &Worker{ledger: cfg.Ledger, agent: cfg.Agent, bus: cfg.Bus, log: cfg.Logger, id: cfg.ID, metrics: cfg.Metrics}
+	return &Worker{
+		ledger: cfg.Ledger, agent: cfg.Agent, bus: cfg.Bus, log: cfg.Logger,
+		id: cfg.ID, metrics: cfg.Metrics, sessions: cfg.Sessions, states: cfg.States,
+		idle: cfg.Idle,
+	}
 }
 
 // Step claims one queued run and executes it to completion (or returns nil
@@ -99,26 +139,53 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 	defer hbCancel()
 	go w.heartbeat(hbCtx, run.RunID)
 
-	// The prompt rides the run's event stream (the gateway enqueued it as
-	// the first event); for the v1 worker it is the config snapshot's
-	// prompt field. An empty prompt skips the model turn (the run may have
-	// been claimed just for state cleanup).
-	prompt := extractPrompt(run.ConfigSnapshot)
-	if prompt != "" {
+	snap, err := runstate.ParseSnapshot(run.ConfigSnapshot)
+	if err != nil {
+		w.emitAndMirror(ctx, run.RunID, "error", map[string]any{"message": "unreadable run snapshot: " + err.Error()})
+		return w.ledger.Finish(ctx, run.RunID, w.id, "error")
+	}
+	if w.states != nil {
+		w.states.MarkRunning(run.SessionID, run.RunID)
+	}
+	if snap.Prompt != "" {
 		w.emitAndMirror(ctx, run.RunID, "run_started", map[string]any{})
-		history := []messages.Message{messages.Human(prompt)}
+		// Restore the run's execution environment: the session workspace the
+		// gateway recorded (per-run workspace scoping drives the system
+		// prompt environment and every workspace-aware tool), then the
+		// session transcript the run continues.
+		if snap.Workspace != "" {
+			ctx = agent.WithRunWorkspace(ctx, snap.Workspace)
+		}
+		history := []messages.Message{humanMessage(snap)}
+		if w.sessions != nil && snap.SessionID != "" {
+			if prev := w.sessions.Load(snap.SessionID); len(prev) > 0 {
+				history = append(append([]messages.Message(nil), prev...), humanMessage(snap))
+			}
+		}
 		final, err := w.agent.Invoke(ctx, history, run.ThreadID)
 		if err != nil {
 			w.emitAndMirror(ctx, run.RunID, "error", map[string]any{"message": err.Error()})
+			w.metrics.finish("error", time.Since(started))
+			if w.states != nil {
+				w.states.Clear(run.SessionID, run.RunID)
+			}
 			return w.ledger.Finish(ctx, run.RunID, w.id, "error")
 		}
 		if len(final) > 0 {
 			last := final[len(final)-1]
 			w.emitAndMirror(ctx, run.RunID, "delta", map[string]any{"text": last.Content})
+			if w.sessions != nil && snap.SessionID != "" {
+				if err := w.sessions.Save(snap.SessionID, stripSystem(final), snap.Workspace); err != nil {
+					w.log.Warn().Str("session", snap.SessionID).Err(err).Msg("transcript save failed")
+				}
+			}
 		}
 	}
 	w.emitAndMirror(ctx, run.RunID, "done", map[string]any{"cancelled": false})
 	w.metrics.finish("done", time.Since(started))
+	if w.states != nil {
+		w.states.Clear(run.SessionID, run.RunID)
+	}
 	return w.ledger.Finish(ctx, run.RunID, w.id, "done")
 }
 
@@ -151,35 +218,75 @@ func (w *Worker) heartbeat(ctx context.Context, runID string) {
 }
 
 // Run drives Step in a loop until the context is cancelled (the daemon
-// mode workers deploy with).
+// mode workers deploy with). Between empty claims the idle waiter parks the
+// loop (poll cadence, or an instant NATS wake-up when the message plane is
+// pg+nats) instead of spinning on the database.
 func (w *Worker) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
-			if err := w.Step(ctx); err != nil {
+			claimed, err := w.stepAndReport(ctx)
+			if err != nil {
 				w.log.Error().Err(err).Msg("worker step failed")
 				select {
 				case <-ctx.Done():
 					return nil
 				case <-time.After(time.Second):
 				}
+				continue
+			}
+			if !claimed {
+				if w.idle != nil {
+					w.idle.Wait(ctx)
+				} else {
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(idlePollEvery):
+					}
+				}
 			}
 		}
 	}
 }
 
-// extractPrompt pulls the prompt from a config snapshot JSON blob.
-func extractPrompt(snapshot string) string {
-	if snapshot == "" {
-		return ""
+// stepAndReport runs one Step and reports whether a run was claimed.
+func (w *Worker) stepAndReport(ctx context.Context) (bool, error) {
+	run, err := w.ledger.Claim(ctx, w.id, leaseDuration)
+	if err != nil {
+		return false, fmt.Errorf("worker: claim: %w", err)
 	}
-	var cfg struct {
-		Prompt string `json:"prompt"`
+	if run == nil {
+		return false, nil
 	}
-	if err := json.Unmarshal([]byte(snapshot), &cfg); err != nil {
-		return ""
+	w.metrics.claim()
+	return true, w.execute(ctx, run)
+}
+
+// humanMessage rebuilds the prompt message from a dispatched snapshot,
+// upgrading to multimodal content blocks when image attachments rode along
+// (mirroring the gateway's request decoding).
+func humanMessage(snap runstate.RunSnapshot) messages.Message {
+	if len(snap.Attachments) == 0 {
+		return messages.Human(snap.Prompt)
 	}
-	return cfg.Prompt
+	blocks := []messages.ContentBlock{messages.TextBlock{Text: snap.Prompt}}
+	for _, a := range snap.Attachments {
+		blocks = append(blocks, messages.ImageBlock{MimeType: a.MimeType, Base64: a.Data})
+	}
+	return messages.Message{Role: messages.RoleHuman, Content: snap.Prompt, ContentBlocks: blocks}
+}
+
+// stripSystem removes system messages from a transcript before persisting
+// (the session store keeps the conversation, not the assembled prompt).
+func stripSystem(msgs []messages.Message) []messages.Message {
+	out := make([]messages.Message, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role != messages.RoleSystem {
+			out = append(out, m)
+		}
+	}
+	return out
 }

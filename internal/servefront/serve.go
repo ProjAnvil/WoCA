@@ -17,18 +17,21 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/logging"
+	"github.com/projanvil/woca/internal/msgplane"
 	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/settingswatch"
 	"github.com/projanvil/woca/internal/telemetry"
 	"github.com/projanvil/woca/internal/tenant"
 	"github.com/projanvil/woca/internal/webd"
@@ -53,6 +56,9 @@ type Observability interface {
 	Wrap(h http.Handler) http.Handler
 	// Shutdown flushes and stops providers.
 	Shutdown(ctx context.Context) error
+	// SetRunState pushes the role's active/queued run counts into the
+	// service gauges (internal/obs implements it).
+	SetRunState(active, queued int64)
 }
 
 // NewServeCmd builds `woca serve`: run the embedded web UI server.
@@ -181,6 +187,12 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 // ServeWithObs runs the embedded web UI server with an optional server-edition
 // observability assembly (OTel SDK, /healthz + /metrics, RED metrics).
 func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noBrowser bool, authMode string, obs Observability) error {
+	// An unset log level disables zerolog entirely (logging.ParseLevel maps
+	// "" to Disabled) — a server role running silent hides its watcher and
+	// message-plane lifelines from operators. Default server roles to info.
+	if opts.LogLevel == "" {
+		opts.LogLevel = "info"
+	}
 	level, err := logging.ParseLevel(opts.LogLevel)
 	if err != nil {
 		return err
@@ -241,6 +253,14 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 	if authMode != "" && authMode != "local" {
 		opts.EnterpriseMemory = true
 	}
+	// Queue dispatch (Phase 3 wiring): WOCA_RUN_DISPATCH=queue routes runs
+	// to the shared run-queue for woca-worker instances to execute, instead
+	// of in-process. RunsOffHost additionally opens the run surface to
+	// remote tenants — a deployment form whose workers execute sandboxed
+	// (WOCA_SANDBOX_ENDPOINT) may set both.
+	dispatchQueue := strings.EqualFold(os.Getenv("WOCA_RUN_DISPATCH"), "queue")
+	runsOffHost := dispatchQueue && strings.EqualFold(os.Getenv("WOCA_RUNS_OFF_HOST"), "true")
+	opts.Sandbox = agentbuild.SandboxFromEnv()
 	ap, err := agentbuild.BuildAgent(ctx, opts, log)
 	if err != nil {
 		_ = hs.Close()
@@ -248,6 +268,11 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 	}
 	defer ap.PluginMgr.Close()
 	defer ap.Agent.Close()
+	defer func() {
+		for i := len(ap.Teardown) - 1; i >= 0; i-- {
+			ap.Teardown[i]()
+		}
+	}()
 
 	var native *server.NativeAuth
 	if authMode != "" && authMode != "local" {
@@ -264,8 +289,24 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 	}
 
 	sessionDir := ""
-	if d := session.DefaultDir(); d != "" {
+	if d := os.Getenv("WOCA_SESSION_DIR"); d != "" {
+		// Shared-session deployments (queue dispatch with workers persisting
+		// transcripts) point every role at one volume.
+		sessionDir = d
+	} else if d := session.DefaultDir(); d != "" {
 		sessionDir = filepath.Join(d, "sessions")
+	}
+	// Message plane (design §5.4): the resolver reads the settings store
+	// live, so console edits (mode / NATS URL / subject) apply to the very
+	// next dispatch without a restart; the plane is a best-effort overlay
+	// on top of the always-on PG queue.
+	var plane *msgplane.Plane
+	if ap.Settings != nil {
+		plane = msgplane.New(func() msgplane.Config {
+			c := ap.Settings.Load()
+			return msgplane.Config{Mode: c.MsgPlaneMode, NATSURL: c.MsgPlaneNATSURL, Subject: c.MsgPlaneSubject}
+		}, log)
+		defer plane.Close()
 	}
 	var runLedger *runstate.Ledger
 	if st := ap.Settings.DB(); st != nil {
@@ -276,18 +317,21 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 		}
 	}
 	srv := server.New(server.Config{
-		Auth:         authProv,
-		NativeAuth:   native,
-		RunLedger:    runLedger,
-		Agent:        ap.Agent,
-		Static:       webdist.DistFS(),
-		Logger:       log,
-		SessionDir:   sessionDir,
-		WorkDir:      ap.Cfg.WorkDir,
-		GrafanaURL:   os.Getenv("WOCA_GRAFANA_URL"),
-		Settings:     ap.Settings,
-		Memory:       ap.Memory,
-		MemoryEngine: ap.MemEngine,
+		Auth:            authProv,
+		NativeAuth:      native,
+		RunLedger:       runLedger,
+		DispatchToQueue: dispatchQueue,
+		RunsOffHost:     runsOffHost,
+		MsgPlane:        plane,
+		Agent:           ap.Agent,
+		Static:          webdist.DistFS(),
+		Logger:          log,
+		SessionDir:      sessionDir,
+		WorkDir:         ap.Cfg.WorkDir,
+		GrafanaURL:      os.Getenv("WOCA_GRAFANA_URL"),
+		Settings:        ap.Settings,
+		Memory:          ap.Memory,
+		MemoryEngine:    ap.MemEngine,
 		RebuildMemory: func() error {
 			return ap.RebuildMemory()
 		},
@@ -322,7 +366,61 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Config-plane watcher (design §16.3/§16.7): the config service owns
+	// settings writes now; rebuild the model/memory/debug-log hooks when
+	// its writes move the generation fingerprint. The waiter's wake channel
+	// turns the config plane's NATS push into an immediate rebuild; the
+	// poll stays the safety net.
+	var cfgWake <-chan struct{}
+	if plane != nil {
+		cfgWake = msgplane.NewWaiter(plane).Wake()
+	}
+	// Service run-state gauges (design §12.3): push the admission state
+	// into the obs instruments on a short cadence so the series stay live.
+	if obs != nil {
+		go func() {
+			tick := time.NewTicker(5 * time.Second)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+					active, queued := srv.RunStateCounts()
+					obs.SetRunState(int64(active), int64(queued))
+				}
+			}
+		}()
+	}
+
+	go settingswatch.Watch(ctx, ap.Settings, ap.Settings.DB(), settingswatch.Identity{
+		ServiceID: "srv-" + shortHost(), Role: "server",
+	}, log, cfgWake, func() {
+		if err := ap.RebuildModel(); err != nil {
+			log.Warn().Err(err).Msg("model hot-swap after config change failed")
+		}
+		if err := ap.RebuildMemory(); err != nil {
+			log.Warn().Err(err).Msg("memory hot-swap after config change failed")
+		}
+		if ap.Agent != nil && ap.Agent.Obs() != nil {
+			ap.Agent.Obs().SetEnabled(ap.Settings.Load().DebugLog)
+		}
+	})
+
 	return srv.ServeStarted(ctx, hs, serveErr)
+}
+
+// shortHost returns this machine's short hostname for service identities.
+func shortHost() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "unknown"
+	}
+	if i := strings.IndexByte(host, '.'); i > 0 {
+		return host[:i]
+	}
+	return host
 }
 
 // newAPIKeyProvider builds the API-key authn provider over the settings

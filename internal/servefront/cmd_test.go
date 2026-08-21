@@ -60,6 +60,8 @@ type fakeObs struct {
 	shutdowned int
 }
 
+func (*fakeObs) SetRunState(int64, int64) {}
+
 func (f *fakeObs) Install(context.Context) error { f.installed++; return nil }
 func (f *fakeObs) Wrap(h http.Handler) http.Handler {
 	f.wrapped++
@@ -115,3 +117,4 @@ type failingObs struct{ obs fakeObs }
 func (f *failingObs) Install(context.Context) error      { return errors.New("no provider") }
 func (f *failingObs) Wrap(h http.Handler) http.Handler   { return h }
 func (f *failingObs) Shutdown(ctx context.Context) error { return f.obs.Shutdown(ctx) }
+func (f *failingObs) SetRunState(active, queued int64)   { f.obs.SetRunState(active, queued) }

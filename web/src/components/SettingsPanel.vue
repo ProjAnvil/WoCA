@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   Activity,
@@ -9,6 +9,7 @@ import {
   Palette,
   Plug,
   Puzzle,
+  Radio,
   Server,
   Settings2,
   X,
@@ -20,6 +21,7 @@ import ProviderSection from './settings/ProviderSection.vue'
 import ClaudeEnvSection, { resetClaudeEnv } from './settings/ClaudeEnvSection.vue'
 import PluginsSection, { resetPluginState } from './settings/PluginsSection.vue'
 import StorageSection from './settings/StorageSection.vue'
+import MessagePlaneSection from './settings/MessagePlaneSection.vue'
 import MemorySection from './settings/MemorySection.vue'
 import ModelSection from './settings/ModelSection.vue'
 import StatsSection from './settings/StatsSection.vue'
@@ -28,17 +30,27 @@ const { t } = useI18n()
 const settings = useSettingsStore()
 
 // Sidebar navigation: each entry maps to one section of the right pane.
-const sections = [
+const baseSections = [
   { id: 'appearance', label: 'settings.nav.appearance', icon: Palette },
   { id: 'preferences', label: 'settings.nav.preferences', icon: Settings2 },
   { id: 'provider', label: 'settings.nav.provider', icon: Server },
   { id: 'claudeenv', label: 'settings.nav.claudeenv', icon: Plug },
   { id: 'plugins', label: 'settings.nav.plugins', icon: Puzzle },
   { id: 'storage', label: 'settings.nav.storage', icon: Database },
+  { id: 'msgplane', label: 'settings.nav.msgplane', icon: Radio },
   { id: 'memory', label: 'settings.nav.memory', icon: Brain },
   { id: 'model', label: 'settings.nav.model', icon: Cpu },
   { id: 'stats', label: 'settings.nav.stats', icon: Activity },
 ]
+// The message plane is an enterprise feature: the nav entry appears only
+// when the server reports a dispatching deployment.
+const sections = computed(() => [
+  ...baseSections.slice(0, 6), // through storage
+  ...(settings.server?.msg_plane_available
+    ? [{ id: 'msgplane', label: 'settings.nav.msgplane', icon: Radio }]
+    : []),
+  ...baseSections.slice(6),
+])
 
 const active = ref<string>('appearance')
 
@@ -98,6 +110,7 @@ onBeforeUnmount(() => {
           <ClaudeEnvSection v-if="active === 'claudeenv'" />
           <PluginsSection v-if="active === 'plugins'" />
           <StorageSection v-if="active === 'storage'" />
+          <MessagePlaneSection v-if="active === 'msgplane' && settings.server?.msg_plane_available" />
           <MemorySection v-if="active === 'memory'" />
           <ModelSection v-if="active === 'model'" />
           <StatsSection v-if="active === 'stats'" />

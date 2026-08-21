@@ -163,7 +163,7 @@ func TestLoadOrCreateCryptoWriteFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("want write-key failure in read-only dir")
 	}
-	if !strings.Contains(err.Error(), "write key") {
-		t.Fatalf("want write key error, got %v", err)
+	if !strings.Contains(err.Error(), "key") {
+		t.Fatalf("want key creation error, got %v", err)
 	}
 }

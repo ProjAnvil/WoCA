@@ -79,6 +79,9 @@ export const useSettingsStore = defineStore('settings', () => {
   const memoryBackend = ref('sqlite')
   const postgresURL = ref('')
   const debugLog = ref(false)
+  const msgPlaneMode = ref('pg')
+  const msgPlaneNATSURL = ref('')
+  const msgPlaneSubject = ref('runs.dispatch')
 
   // ladyM factual-memory engine (live-applied server-side on save).
   const memoryEngine = ref('ladym')
@@ -155,6 +158,9 @@ export const useSettingsStore = defineStore('settings', () => {
       ladymEmbeddingAPIKey.value = ''
       apiKeys.value = { anthropic: '', openai: '', glm: '', deepseek: '' }
       postgresURL.value = ''
+      msgPlaneMode.value = s.msg_plane_mode || 'pg'
+      msgPlaneNATSURL.value = s.msg_plane_nats_url ?? ''
+      msgPlaneSubject.value = s.msg_plane_subject || 'runs.dispatch'
     } catch (e) {
       serverError.value = e instanceof Error ? e.message : String(e)
     }
@@ -187,6 +193,9 @@ export const useSettingsStore = defineStore('settings', () => {
           ? ladymSystem2Interval.value
           : 300,
       ladym_db_path: ladymDBPath.value,
+      msg_plane_mode: msgPlaneMode.value,
+      msg_plane_nats_url: msgPlaneNATSURL.value,
+      msg_plane_subject: msgPlaneSubject.value,
       ladym_system2: ladymSystem2.value,
     }
     // Secrets: only send what the user actually typed. An empty draft means
@@ -266,6 +275,9 @@ export const useSettingsStore = defineStore('settings', () => {
     memoryBackend,
     postgresURL,
     debugLog,
+    msgPlaneMode,
+    msgPlaneNATSURL,
+    msgPlaneSubject,
     memoryEngine,
     ladymEmbedding,
     ladymEmbeddingModel,

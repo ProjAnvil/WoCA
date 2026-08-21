@@ -16,16 +16,24 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+
+	"github.com/projanvil/langchain-golang/core/messages"
 
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/logging"
+	"github.com/projanvil/woca/internal/msgplane"
 	"github.com/projanvil/woca/internal/obs"
+	"github.com/projanvil/woca/internal/platform/blobstore"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/runstate"
+	"github.com/projanvil/woca/internal/session"
+	"github.com/projanvil/woca/internal/settingswatch"
 	"github.com/projanvil/woca/internal/telemetry"
 	"github.com/projanvil/woca/internal/wocadb"
 	"github.com/projanvil/woca/internal/worker"
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -80,7 +88,7 @@ func newWorkerRoot() *cobra.Command {
 			// is a server artifact (design §5.1): the embedded ladyM engine
 			// is excluded — memory is remote (ladyM enterprise) or none,
 			// enforced with the same enterprise gate woca-server uses.
-			opts := agentbuild.Options{LogLevel: logLevel, EnterpriseMemory: true}
+			opts := agentbuild.Options{LogLevel: logLevel, EnterpriseMemory: true, Sandbox: agentbuild.SandboxFromEnv()}
 			db, err := openWorkerDB(cmd, &opts)
 			if err != nil {
 				return err
@@ -97,21 +105,72 @@ func newWorkerRoot() *cobra.Command {
 			}
 			defer ap.PluginMgr.Close()
 			defer ap.Agent.Close()
+			defer func() {
+				for i := len(ap.Teardown) - 1; i >= 0; i-- {
+					ap.Teardown[i]()
+				}
+			}()
 
 			bus := eventbus.NewLocalWithRetention(1024)
 			defer bus.Close()
 
+			// Message plane (design §5.4): the same live settings resolver
+			// the gateways use, so a console plane switch re-configures the
+			// worker without a restart. Nil settings keep pure-PG polling.
+			var idle worker.IdleWaiter
+			if ap.Settings != nil {
+				plane := msgplane.New(func() msgplane.Config {
+					c := ap.Settings.Load()
+					return msgplane.Config{Mode: c.MsgPlaneMode, NATSURL: c.MsgPlaneNATSURL, Subject: c.MsgPlaneSubject}
+				}, log)
+				defer plane.Close()
+				idle = msgplane.NewWaiter(plane)
+				defer idle.(*msgplane.Waiter).Close()
+			}
+
+			sessions := openWorkerSessions(log)
+			var states worker.SessionStates
+			if sessions != nil {
+				states = &dbSessionStates{db: db}
+			}
+
 			w := worker.New(worker.Config{
-				Ledger:  ledger,
-				Agent:   ap.Agent,
-				Bus:     bus,
-				Logger:  log,
-				ID:      fmt.Sprintf("worker-%d", os.Getpid()),
-				Metrics: workerMetrics(obsInst),
+				Ledger:   ledger,
+				Agent:    ap.Agent,
+				Bus:      bus,
+				Logger:   log,
+				ID:       workerID(),
+				Metrics:  workerMetrics(obsInst),
+				Sessions: sessions,
+				States:   states,
+				Idle:     idle,
 			})
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+
+			// Config-plane watcher (design §16.3/§16.7): pick up config-service
+			// writes without a restart (model + memory rebuild). The idle
+			// waiter's wake channel accelerates the config push into an
+			// immediate rebuild; the poll stays the safety net.
+			var cfgWake <-chan struct{}
+			if idleWaiter, ok := idle.(*msgplane.Waiter); ok {
+				cfgWake = idleWaiter.Wake()
+			}
+			go settingswatch.Watch(ctx, ap.Settings, db, settingswatch.Identity{
+				ServiceID: workerID(), Role: "worker",
+			}, log, cfgWake, func() {
+				if err := ap.RebuildModel(); err != nil {
+					log.Warn().Err(err).Msg("model hot-swap after config change failed")
+				}
+				if err := ap.RebuildMemory(); err != nil {
+					log.Warn().Err(err).Msg("memory hot-swap after config change failed")
+				}
+				if ap.Agent != nil && ap.Agent.Obs() != nil {
+					ap.Agent.Obs().SetEnabled(ap.Settings.Load().DebugLog)
+				}
+			})
+
 			return w.Run(ctx)
 		},
 	}
@@ -162,6 +221,63 @@ func serveProbes(addr string, o *obs.Obs) (*http.Server, error) {
 	return srv, nil
 }
 
+// openWorkerSessions opens the shared session transcript store (the same
+// JSONL-behind-blobstore layout woca-server uses) when WOCA_SESSION_DIR
+// points at a directory shared with the gateways. Nil disables transcript
+// persistence (prompt-only history). Note: the listing index (index.json)
+// stays gateway-owned — the worker updates transcripts only, so a gateway's
+// session title/message-count refresh on its next own save.
+func openWorkerSessions(log zerolog.Logger) worker.Sessions {
+	dir := os.Getenv("WOCA_SESSION_DIR")
+	if dir == "" {
+		return nil
+	}
+	blobs, err := blobstore.NewLocal(dir)
+	if err != nil {
+		log.Warn().Str("dir", dir).Err(err).Msg("session store unavailable; runs execute with prompt-only history")
+		return nil
+	}
+	return &blobSessions{blobs: blobs}
+}
+
+// blobSessions implements worker.Sessions over the shared transcript
+// directory.
+type blobSessions struct {
+	blobs blobstore.Store
+}
+
+func (b *blobSessions) Load(id string) []messages.Message {
+	msgs, err := session.LoadBlob(context.Background(), b.blobs, id+".jsonl")
+	if err != nil {
+		return nil
+	}
+	return msgs
+}
+
+func (b *blobSessions) Save(id string, msgs []messages.Message, _ string) error {
+	return session.SaveBlob(context.Background(), b.blobs, id+".jsonl", msgs)
+}
+
+// dbSessionStates implements worker.SessionStates over the shared
+// session_state table (the same rows the gateways' listings read).
+type dbSessionStates struct {
+	db *wocadb.DB
+}
+
+func (s *dbSessionStates) MarkRunning(sessionID, runID string) {
+	_ = s.db.SetSessionState(wocadb.SessionState{
+		SessionID: sessionID,
+		Status:    wocadb.SessionRunning,
+		RunID:     runID,
+		Owner:     fmt.Sprintf("%d@worker", os.Getpid()),
+		UpdatedAt: wocadb.Now(),
+	})
+}
+
+func (s *dbSessionStates) Clear(sessionID, runID string) {
+	_, _ = s.db.ClearSessionState(sessionID, runID)
+}
+
 // openWorkerDB opens the shared settings/runstate database.
 func openWorkerDB(cmd *cobra.Command, opts *agentbuild.Options) (*wocadb.DB, error) {
 	target, _ := cmd.Flags().GetString("db")
@@ -179,4 +295,18 @@ func openWorkerDB(cmd *cobra.Command, opts *agentbuild.Options) (*wocadb.DB, err
 		return nil, fmt.Errorf("the worker requires a database")
 	}
 	return db, nil
+}
+
+// workerID mints the lease identity: hostname + pid. The pid alone is not
+// unique in containers (every container is pid 1 — the live stack had two
+// workers both leasing as "worker-1", making ledger owner rows ambiguous).
+func workerID() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "unknown"
+	}
+	if i := strings.IndexByte(host, '.'); i > 0 {
+		host = host[:i]
+	}
+	return fmt.Sprintf("worker-%s-%d", host, os.Getpid())
 }

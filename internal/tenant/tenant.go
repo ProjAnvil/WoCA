@@ -66,11 +66,15 @@ var ErrNotFound = errors.New("tenant: not found")
 type Store struct {
 	db      *sql.DB
 	dialect wocadb.Dialect
+	// wdb is the wocadb wrapper the store was opened over (nil when built
+	// directly over a *sql.DB); it lets callers layer other stores (e.g.,
+	// settings for the notification plane) on the same pool.
+	wdb *wocadb.DB
 }
 
 // NewStore migrates the tenant tables on db and returns a Store.
 func NewStore(db *wocadb.DB) (*Store, error) {
-	s := &Store{db: db.DB, dialect: db.Dialect}
+	s := &Store{db: db.DB, dialect: db.Dialect, wdb: db}
 	if err := s.migrate(); err != nil {
 		return nil, err
 	}
@@ -381,3 +385,26 @@ func isUniqueViolation(err error) bool {
 }
 
 func nowMilli() int64 { return time.Now().UnixMilli() }
+
+// DB returns the wocadb wrapper the store was opened over (nil when the
+// store was built over a bare *sql.DB).
+func (s *Store) DB() *wocadb.DB { return s.wdb }
+
+// Generation returns a cheap change fingerprint of the tenant plane: the
+// summed creation timestamps of every tenant, user, and API key plus the
+// revoked-key count. The tables carry no updated_at, but every mutation
+// either inserts a row or flips a key's revoked_at, so this sum is strictly
+// monotonic across mutations — exactly what a scheduler's or server's
+// generation watcher needs (design §16.7).
+func (s *Store) Generation() string {
+	if s == nil || s.db == nil {
+		return ""
+	}
+	var gen, revoked string
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(created_at), 0) FROM tenants`).Scan(&gen)
+	var users, keys string
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(created_at), 0) FROM users`).Scan(&users)
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(created_at), 0) FROM api_keys`).Scan(&keys)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NOT NULL`).Scan(&revoked)
+	return gen + "/" + users + "/" + keys + "/" + revoked
+}

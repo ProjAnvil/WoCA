@@ -28,6 +28,13 @@ func main() {
 		SilenceErrors: true,
 	}
 	agentbuild.RegisterFlags(root.PersistentFlags(), opts)
+	// The agentbuild default (warn) keeps the personal terminal quiet; a
+	// server role must not run silent — its config watcher and message-plane
+	// lifelines are operational signals. Server editions default to info.
+	if f := root.PersistentFlags().Lookup("log-level"); f != nil {
+		f.DefValue = "info"
+		_ = f.Value.Set("info")
+	}
 	root.AddCommand(servefront.NewServeCmdWithObs(opts, func(ctx context.Context) (servefront.Observability, error) {
 		return obs.Setup(ctx, obs.FromEnv())
 	}))

@@ -137,10 +137,21 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	}
 
 	// One executor backs every process side effect below (shell and file
-	// tools, hooks, MCP stdio servers, plugin runtimes). Phase 0 binds the
+	// tools, hooks, MCP stdio servers, plugin runtimes). The default is the
 	// local implementation; the sandboxed remote implementation slots in
-	// here unchanged (design doc §8).
-	x := executor.NewLocal()
+	// here unchanged (design doc §8) — the sandbox session is provisioned
+	// once per process and destroyed at teardown.
+	var teardown []func()
+	x := executor.Executor(executor.NewLocal())
+	if opts.Sandbox != nil {
+		sbx, err := executor.NewSandbox(*opts.Sandbox)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox executor: %w", err)
+		}
+		x = sbx
+		teardown = append(teardown, func() { _ = sbx.Close() })
+		log.Info().Str("endpoint", opts.Sandbox.Endpoint).Msg("process side effects routed to the sandbox executor")
+	}
 
 	// Assemble the system prompt with collected context. The same builder
 	// runs for every run workspace and the active model name (the agent
@@ -225,29 +236,48 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		}))
 	}
 
-	// Storage backends: checkpoint persistence and the memoryStore, selected
-	// from settings (sqlite under ~/.woca is the default). The --checkpoint-dir
-	// flag keeps precedence for the file backend.
-	var pgDB *wocadb.DB
-	openPostgres := func() *wocadb.DB {
-		if pgDB != nil {
-			return pgDB
-		}
+	// Storage backends: checkpoint persistence and the memoryStore, each
+	// with its own postgres connection assembled from per-subsystem
+	// settings (host/port/db/user rows + a password secret — the console
+	// never stores a full DSN). A legacy postgres_url secret still wins
+	// when no per-subsystem host is configured, so older deployments keep
+	// working unchanged.
+	openPostgresFor := func(subsystem, host, port, dbname, user, passwordSecret string) *wocadb.DB {
 		if st == nil {
 			return nil
 		}
-		dsn := st.GetSecret(settings.SecretPostgresURL)
-		if dsn == "" {
-			log.Warn().Msg("postgres backend selected but no postgres_url secret is set")
+		password := st.GetSecret(passwordSecret)
+		if host == "" {
+			if legacy := st.GetSecret(settings.SecretPostgresURL); legacy != "" {
+				db, err := wocadb.Open("pg:" + legacy)
+				if err != nil {
+					log.Warn().Str("subsystem", subsystem).Err(err).Msg("postgres backend unavailable (legacy DSN)")
+					return nil
+				}
+				return db
+			}
+			log.Warn().Str("subsystem", subsystem).Msg("postgres backend selected but no host configured")
 			return nil
 		}
+		dsn := settings.PostgresDSN(host, port, dbname, user, password)
 		db, err := wocadb.Open("pg:" + dsn)
 		if err != nil {
-			log.Warn().Err(err).Msg("postgres backend unavailable")
+			log.Warn().Str("subsystem", subsystem).Err(err).Msg("postgres backend unavailable")
 			return nil
 		}
-		pgDB = db
-		return pgDB
+		return db
+	}
+	// (The checkpoint saver opens its own connection from the assembled
+	// DSN — see CheckpointPostgresDSN — so only the memoryStore needs a
+	// shared handle here.)
+	var memDB *wocadb.DB
+	openMemoryPG := func() *wocadb.DB {
+		if memDB != nil {
+			return memDB
+		}
+		memDB = openPostgresFor("memoryStore", dbSettings.MemoryPGHost, dbSettings.MemoryPGPort,
+			dbSettings.MemoryPGDB, dbSettings.MemoryPGUser, settings.SecretMemoryPGPassword)
+		return memDB
 	}
 	localDB := func() *wocadb.DB {
 		if st == nil {
@@ -287,7 +317,7 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		}
 	case backend == settings.CheckpointPostgres:
 		if st != nil {
-			if dsn := st.GetSecret(settings.SecretPostgresURL); dsn != "" {
+			if dsn := settings.CheckpointPostgresDSN(dbSettings, st.GetSecret(settings.SecretCheckpointPGPassword)); dsn != "" {
 				// The saver's tables live in the lgcp schema (their canonical
 				// name "checkpoints" collides with woca's own KV table in
 				// public; wocadb pre-creates the schema and its RLS
@@ -312,7 +342,7 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	case settings.MemoryInMem:
 		memory = store.NewMemory()
 	case settings.MemoryPostgres:
-		if db := openPostgres(); db != nil {
+		if db := openMemoryPG(); db != nil {
 			memory = store.NewSQL(db.DB, string(db.Dialect), db.Path)
 		}
 	case settings.MemorySQLite:
@@ -408,7 +438,7 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		return nil, err
 	}
 	a.SetMemoryWorkspace(cfg.WorkDir)
-	return &App{Agent: a, Cfg: cfg, Opts: opts, Settings: st, Memory: memory, MemEngine: memEngine, Workdir: workdir, PluginMgr: pluginMgr, Log: log}, nil
+	return &App{Agent: a, Cfg: cfg, Opts: opts, Settings: st, Memory: memory, MemEngine: memEngine, Workdir: workdir, PluginMgr: pluginMgr, Log: log, Teardown: teardown}, nil
 }
 
 // wocaRoot returns ~/.woca (best-effort; ".woca" relative when the home

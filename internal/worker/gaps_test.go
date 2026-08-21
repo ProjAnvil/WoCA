@@ -56,15 +56,19 @@ func TestWorkerExecutesPromptFromSnapshot(t *testing.T) {
 	}
 }
 
-func TestExtractPromptBranches(t *testing.T) {
-	if got := extractPrompt(""); got != "" {
-		t.Fatalf("empty snapshot = %q", got)
+func TestParseSnapshotBranches(t *testing.T) {
+	if got, err := runstate.ParseSnapshot(""); err != nil || got.Prompt != "" {
+		t.Fatalf("empty snapshot = %q, %v", got.Prompt, err)
 	}
-	if got := extractPrompt("{not json"); got != "" {
-		t.Fatalf("bad json = %q", got)
+	if _, err := runstate.ParseSnapshot("{not json"); err == nil {
+		t.Fatal("bad json should error")
 	}
-	if got := extractPrompt(`{"prompt":"hello"}`); got != "hello" {
-		t.Fatalf("prompt = %q", got)
+	snap, err := runstate.ParseSnapshot(`{"prompt":"hello","workspace":"/w","session_id":"s1"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Prompt != "hello" || snap.Workspace != "/w" || snap.SessionID != "s1" {
+		t.Fatalf("snapshot = %+v", snap)
 	}
 }
 

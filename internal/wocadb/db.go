@@ -40,8 +40,16 @@ type DB struct {
 	Path    string
 }
 
-// DefaultDir returns ~/.woca, the root of woca's on-disk state.
+// DefaultDir returns ~/.woca, the root of woca's on-disk state. WOCA_HOME
+// overrides the root — multi-role deployments point every container at one
+// shared volume so the secrets master key (and any other on-disk state)
+// is identical across roles; without it each container would mint its own
+// key and secrets written by one role (e.g. the config plane) could not be
+// decrypted by another.
 func DefaultDir() string {
+	if v := os.Getenv("WOCA_HOME"); v != "" {
+		return v
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ".woca"
@@ -234,6 +242,24 @@ func (d *DB) migrate() error {
 				owner TEXT NOT NULL,
 				updated_at BIGINT NOT NULL
 			)`,
+			`CREATE TABLE IF NOT EXISTS model_presets (
+				id TEXT PRIMARY KEY,
+				name TEXT NOT NULL,
+				provider TEXT NOT NULL,
+				model TEXT NOT NULL,
+				max_tokens BIGINT NOT NULL DEFAULT 0,
+				temperature REAL NOT NULL DEFAULT 0,
+				base_url TEXT NOT NULL DEFAULT '',
+				created_at BIGINT NOT NULL,
+				updated_at BIGINT NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS config_acks (
+				service_id TEXT PRIMARY KEY,
+				role TEXT NOT NULL,
+				generation TEXT NOT NULL,
+				addr TEXT NOT NULL DEFAULT '',
+				updated_at BIGINT NOT NULL
+			)`,
 		}
 		// The lgcp ownership policies (below) judge "which tenant owns this
 		// checkpoint thread" by querying runs; that subquery must see rows of
@@ -394,6 +420,24 @@ func (d *DB) migrate() error {
 				status TEXT NOT NULL,
 				run_id TEXT NOT NULL,
 				owner TEXT NOT NULL,
+				updated_at BIGINT NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS model_presets (
+				id TEXT PRIMARY KEY,
+				name TEXT NOT NULL,
+				provider TEXT NOT NULL,
+				model TEXT NOT NULL,
+				max_tokens BIGINT NOT NULL DEFAULT 0,
+				temperature REAL NOT NULL DEFAULT 0,
+				base_url TEXT NOT NULL DEFAULT '',
+				created_at BIGINT NOT NULL,
+				updated_at BIGINT NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS config_acks (
+				service_id TEXT PRIMARY KEY,
+				role TEXT NOT NULL,
+				generation TEXT NOT NULL,
+				addr TEXT NOT NULL DEFAULT '',
 				updated_at BIGINT NOT NULL
 			)`,
 		}

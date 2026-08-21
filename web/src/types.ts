@@ -232,6 +232,12 @@ export interface AppSettings {
   ladym_topk: number
   ladym_system2: boolean
   ladym_system2_interval: number
+  /** Message plane (run dispatch): pg | pg+nats (live-reloaded). */
+  msg_plane_mode: string
+  /** False on personal editions — the plane section stays hidden. */
+  msg_plane_available: boolean
+  msg_plane_nats_url: string
+  msg_plane_subject: string
 }
 
 /** PUT /api/settings body — absent fields are unchanged; empty strings clear. */
@@ -264,6 +270,9 @@ export interface AppSettingsUpdate {
   ladym_topk?: number
   ladym_system2?: boolean
   ladym_system2_interval?: number
+  msg_plane_mode?: string
+  msg_plane_nats_url?: string
+  msg_plane_subject?: string
 }
 
 // --- memory (mirror /api/memory) ---

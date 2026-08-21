@@ -27,6 +27,7 @@ import (
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/gateway"
 	"github.com/projanvil/woca/internal/memory"
+	"github.com/projanvil/woca/internal/msgplane"
 	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/platform/authz"
 	"github.com/projanvil/woca/internal/platform/dpop"
@@ -59,6 +60,23 @@ type Config struct {
 	// instances sharing one database see each other's runs and adopt
 	// expired leases (Phase 2). Nil keeps the in-process behavior only.
 	RunLedger *runstate.Ledger
+	// DispatchToQueue routes run creation to the shared queue instead of
+	// executing in-process (Phase 3 wiring): the gateway Enqueues the run
+	// (prompt + environment ride the config snapshot) and a woca-worker
+	// claims and executes it; SSE streams replay the ledger's run_events
+	// regardless of which instance executes. Requires RunLedger; when either
+	// is unset the server keeps the in-process posture.
+	DispatchToQueue bool
+	// RunsOffHost opens the /api/runs surface to non-local tenants: runs are
+	// dispatched to workers whose tool execution is sandboxed, so run
+	// creation and event streaming no longer touch the host. All other
+	// host-surface routes (workspaces, settings, memory) stay local-gated.
+	RunsOffHost bool
+	// MsgPlane is the run dispatch message plane (internal/msgplane). Nil
+	// keeps pure-PG queuing; with a plane, dispatched runs additionally
+	// notify NATS so idle workers wake instantly (progressive overlay —
+	// the PG poll fallback stays the correctness net).
+	MsgPlane *msgplane.Plane
 	// Agent is the coding agent that runs each conversation turn.
 	Agent *agent.Agent
 	// Static is the frontend filesystem (embedded or os.DirFS for development).
@@ -132,10 +150,15 @@ type Server struct {
 	nativeAuth *NativeAuth
 	ledger     *runstate.Ledger
 	workerID   string
+	// dispatch enqueues runs for a worker to execute (Phase 3 wiring);
+	// runsOffHost opens the run surface to remote tenants.
+	dispatch    bool
+	runsOffHost bool
 
 	mu             sync.Mutex
 	runs           map[string]*Run
 	runOrder       []string // registration order, backs finished-run pruning
+	msgplane       *msgplane.Plane
 	sessions       *sessionStore
 	admission      *admission
 	state          sessionStateStore // durable per-session run state (running/awaiting)
@@ -202,7 +225,10 @@ func New(cfg Config) *Server {
 		authz:          authorizer,
 		nativeAuth:     cfg.NativeAuth,
 		ledger:         cfg.RunLedger,
+		msgplane:       cfg.MsgPlane,
 		workerID:       newWorkerID(),
+		dispatch:       cfg.DispatchToQueue && cfg.RunLedger != nil,
+		runsOffHost:    cfg.RunsOffHost,
 		runs:           map[string]*Run{},
 		sessions:       store,
 		admission:      newAdmission(),
@@ -277,6 +303,12 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/workspace", authz.ScopeWorkspaceRead, s.handleWorkspace)
 	s.route(mux, "GET /api/workspace/file", authz.ScopeWorkspaceRead, s.handleWorkspaceFile)
 	s.route(mux, "GET /api/completions", authz.ScopeSessionsRead, s.handleCompletions)
+	// Model presets (design §16): the consumer frontend lists the
+	// operator-authored presets and applies one when the user picks it —
+	// the preset's API key is copied server-side and never crosses the
+	// wire. Member-scoped: choosing the model is a user action.
+	s.route(mux, "GET /api/models", authz.ScopeModelsRead, s.handleListModels)
+	s.route(mux, "POST /api/models/{id}/apply", authz.ScopeModelsWrite, s.handleApplyModel)
 	s.route(mux, "GET /api/agent", authz.ScopeSettingsRead, s.handleGetAgent)
 	s.route(mux, "POST /api/agent/permissions", authz.ScopeAgentWrite, s.handleSetPermissionMode)
 	s.route(mux, "POST /api/agent/thinking", authz.ScopeAgentWrite, s.handleSetThinking)
@@ -295,13 +327,21 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/memory", authz.ScopeMemoryWrite, s.handleRememberMemory)
 	s.route(mux, "DELETE /api/memory/{id}", authz.ScopeMemoryWrite, s.handleForgetMemory)
 	mux.Handle("/", s.staticHandler())
+	localGate := gateway.RequireLocalTenant()
+	if s.runsOffHost {
+		// Runs execute on sandboxed workers (queue dispatch), so the run
+		// surface is tenant-safe; the model-preset list/apply is the
+		// consumer frontend's selection surface (keys stay server-side).
+		// Every other host surface stays gated.
+		localGate = gateway.RequireLocalTenant("/api/runs", "/api/models")
+	}
 	if s.nativeAuth != nil {
 		return gateway.Authenticate(s.auth, tenant.NewSessionProvider(s.nativeAuth.tenantStore(), dpop.NewVerifier()))(
-			gateway.RequireLocalTenant()(mux),
+			localGate(mux),
 		)
 	}
 	return gateway.Authenticate(s.auth)(
-		gateway.RequireLocalTenant()(mux),
+		localGate(mux),
 	)
 }
 
@@ -401,6 +441,21 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// RunStateCounts reports the role's run-state for the service gauges:
+// active = registered runs not yet terminal, queued = runs waiting on
+// their session admission gate.
+func (s *Server) RunStateCounts() (active, queued int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, run := range s.runs {
+		if !run.isDone() {
+			active++
+		}
+	}
+	q, _ := s.admission.stats()
+	return active, q
+}
+
 // runAttachment is one image attached to a prompt (base64-encoded).
 type runAttachment struct {
 	Name     string `json:"name"`
@@ -470,7 +525,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	run, sid, pos, err := s.startRun(req.SessionID, human, req.Workspace)
+	run, sid, pos, err := s.startRun(req.SessionID, human, req.Workspace, req.Attachments)
 	if err == errQueueFull {
 		http.Error(w, "session run queue is full", http.StatusConflict)
 		return
@@ -672,15 +727,19 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// http.ResponseController flushes through middleware wrappers that
+	// hide the underlying *http.Flusher (the observability RED middleware
+	// wraps every writer); a direct type assertion would break SSE behind
+	// it. The probe flush only happens after the headers are set so the
+	// stream's content-type survives.
+	flusher := http.NewResponseController(w)
+	if err := flusher.Flush(); err != nil {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
 
 	// Last-Event-ID carries the last seq the client saw; resuming replays
 	// only the missed tail (or signals a gap outside the retention window).
@@ -845,7 +904,12 @@ var errQueueFull = errors.New("session run queue is full")
 // admission gate. It returns the run, the session id and the queue
 // position (0 = running immediately). errQueueFull is returned when the
 // session already has maxQueuedPerSession runs waiting.
-func (s *Server) startRun(sessionID string, human messages.Message, workspace string) (*Run, string, int, error) {
+// In dispatch mode (DispatchToQueue) the run goes to the shared queue
+// instead — see enqueueRun.
+func (s *Server) startRun(sessionID string, human messages.Message, workspace string, atts []runAttachment) (*Run, string, int, error) {
+	if s.dispatch {
+		return s.enqueueRun(sessionID, human, workspace, atts)
+	}
 	run, sid, workspace, _ := s.newRegisteredRun(sessionID, workspace) // preloaded history discarded: reloaded after acquiring the gate so the previous run's persisted reply is visible
 	s.log.Info().Str("run", run.id).Str("session", sid).Msg("run queued")
 	s.refreshDebugLog()
@@ -912,6 +976,68 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 		})
 	}()
 	return run, sid, pos, nil
+}
+
+// enqueueRun dispatches a run to the shared queue for a woca-worker to
+// execute (Phase 3 wiring): the run is born queued with its prompt and
+// execution environment in the config snapshot, the cross-instance
+// one_active_run_per_session constraint is the admission gate, and SSE
+// streams the ledger's run_events (serveLedgerRunEvents) no matter which
+// instance executes. The returned Run is a stub holding only the id — it is
+// deliberately not registered, so run-scoped SSE falls through to the
+// ledger path (a registered run with no local execution would subscribe
+// clients to a stream that never fires).
+func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace string, atts []runAttachment) (*Run, string, int, error) {
+	sid := sessionID
+	if sid == "" {
+		sid = newSessionID()
+	}
+	if workspace == "" {
+		workspace = s.workdir
+	}
+	run := newRun(newRunID(), s.agent, context.Background(), func() {})
+	thread := agent.NewThreadID()
+	run.mu.Lock()
+	run.thread = thread
+	run.mu.Unlock()
+
+	snap := runstate.RunSnapshot{
+		Prompt:    human.Content,
+		Workspace: workspace,
+		SessionID: sid,
+		ThreadID:  thread,
+	}
+	for _, a := range atts {
+		snap.Attachments = append(snap.Attachments, runstate.Attachment{
+			Name: a.Name, MimeType: a.MimeType, Data: a.Data,
+		})
+	}
+	blob, err := runstate.EncodeSnapshot(snap)
+	if err != nil {
+		return nil, sid, 0, err
+	}
+	s.log.Info().Str("run", run.id).Str("session", sid).Msg("run dispatched to queue")
+	if err := s.ledger.Enqueue(context.Background(), runstate.Run{
+		RunID:          run.id,
+		SessionID:      sid,
+		ThreadID:       thread,
+		ConfigSnapshot: blob,
+	}); err != nil {
+		// The session constraint is the cross-instance admission gate; the
+		// run-id collision is a process-wide outage signal.
+		if strings.Contains(err.Error(), "already has an active run") {
+			return nil, sid, -1, errQueueFull
+		}
+		return nil, sid, 0, err
+	}
+	// Wake the workers over the message plane (best-effort: the poll
+	// fallback covers a missed notification).
+	s.msgplane.Notify(run.id)
+	// The session is busy from the client's point of view whether the run
+	// executes here or on a worker; the worker's finish clears the row
+	// (ClearIfRun is compare-and-clear, so it only lifts its own run).
+	s.markSessionState(sid, wocadb.SessionRunning, run.id)
+	return run, sid, 0, nil
 }
 
 // startCommandRun creates a run that completes immediately with a fixed
@@ -1134,8 +1260,8 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 	if !ok {
 		return false
 	}
-	flusher, canFlush := w.(http.Flusher)
-	if !canFlush {
+	flusher := http.NewResponseController(w)
+	if err := flusher.Flush(); err != nil {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return true
 	}

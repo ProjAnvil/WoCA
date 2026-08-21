@@ -39,6 +39,10 @@ type App struct {
 	// Log is the process logger, used by post-build reloads
 	// (ApplyClaudeEnv) for merge-conflict lines.
 	Log zerolog.Logger
+	// Teardown holds build-time resource releases (e.g. destroying the
+	// sandbox session a sandboxed executor provisioned). Entry points run
+	// them at shutdown, after the agent and plugin manager close.
+	Teardown []func()
 
 	memMu     sync.Mutex
 	MemEngine memory.Engine

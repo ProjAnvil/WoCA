@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -108,6 +109,12 @@ type Obs struct {
 	workerClaimed metric.Int64Counter
 	workerRuns    metric.Int64Counter
 	workerRunDur  metric.Float64Histogram
+
+	// svcActive/svcQueued back the always-present service run-state
+	// gauges (observable callbacks — the series exist from boot, unlike
+	// lazy counters which need a first record).
+	svcActive atomic.Int64
+	svcQueued atomic.Int64
 }
 
 // Setup initializes the global OTel providers and returns the Obs handle.
@@ -172,6 +179,24 @@ func Setup(ctx context.Context, cfg Config) (*Obs, error) {
 	o.tracer = tp.Tracer(scopeName)
 
 	// HTTP RED instruments (attribute keys follow the OTel HTTP semconv).
+	// Service run-state gauges (design §12.3): active and queued runs,
+	// reported by the role (servers from their admission state). Observable
+	// callbacks keep the series present from boot.
+	if _, err = meter.Int64ObservableGauge("woca.service.active_runs",
+		metric.WithInt64Callback(func(_ context.Context, obs metric.Int64Observer) error {
+			obs.Observe(o.svcActive.Load())
+			return nil
+		})); err != nil {
+		return nil, fmt.Errorf("obs: active_runs gauge: %w", err)
+	}
+	if _, err = meter.Int64ObservableGauge("woca.service.queued_runs",
+		metric.WithInt64Callback(func(_ context.Context, obs metric.Int64Observer) error {
+			obs.Observe(o.svcQueued.Load())
+			return nil
+		})); err != nil {
+		return nil, fmt.Errorf("obs: queued_runs gauge: %w", err)
+	}
+
 	if o.reqCount, err = meter.Int64Counter("http.server.request.count"); err != nil {
 		return nil, fmt.Errorf("obs: request counter: %w", err)
 	}
@@ -412,6 +437,13 @@ type WorkerMetrics struct {
 	Claimed metric.Int64Counter
 	Runs    metric.Int64Counter
 	RunDur  metric.Float64Histogram
+}
+
+// SetRunState updates the service run-state gauges (active and queued
+// runs). Roles push into it; the observable gauges export the values.
+func (o *Obs) SetRunState(active, queued int64) {
+	o.svcActive.Store(active)
+	o.svcQueued.Store(queued)
 }
 
 // Worker returns the worker instruments, bound to the meter provider the

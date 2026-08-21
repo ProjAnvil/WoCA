@@ -51,8 +51,13 @@ func newWorkerFixture(t *testing.T, reply string) (*Worker, *runstate.Ledger, *e
 
 func enqueueRun(t *testing.T, ledger *runstate.Ledger, runID, sessionID, prompt string) {
 	t.Helper()
+	snap, err := runstate.EncodeSnapshot(runstate.RunSnapshot{Prompt: prompt, SessionID: sessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := ledger.Enqueue(context.Background(), runstate.Run{
 		RunID: runID, SessionID: sessionID, ThreadID: "th-" + runID,
+		ConfigSnapshot: snap,
 	}); err != nil {
 		t.Fatal(err)
 	}

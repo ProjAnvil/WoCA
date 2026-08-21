@@ -12,3 +12,8 @@ web/package.json.md5
 web/wailsjs/
 native-client/build/darwin/Info.dev.plist
 skillsvc-web/node_modules/
+configsvc-web/node_modules/
+/woca-config
+/woca-worker
+/woca-tenant
+/woca-server

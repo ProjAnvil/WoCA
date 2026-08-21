@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func TestLedgerOnPostgres(t *testing.T) {
 	t.Cleanup(func() { _, _ = admin.ExecContext(ctx, `DROP DATABASE `+dbName) })
 	defer admin.Close()
 
-	dsn := fmt.Sprintf("postgres://woca:woca-enterprise-dev@127.0.0.1:35432/%s?sslmode=disable", dbName)
+	dsn := dsnForDatabase(baseDSN, dbName)
 	db, err := wocadb.Open("pg:" + dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -101,4 +102,81 @@ func TestLedgerOnPostgres(t *testing.T) {
 	if _, err := l.Append(ctx, "missing", Event{Kind: "x"}); err == nil {
 		t.Fatal("append to unknown run accepted")
 	}
+}
+
+// TestRacingClaimsOnPostgres is the regression for the double-claim bug
+// observed on the live full stack: two workers racing Claim on one queued
+// row — the loser's subquery snapshot still sees it queued, so without the
+// status re-check in the outer UPDATE WHERE, EvalPlanQual let it steal the
+// already-running row and both executed the run.
+func TestRacingClaimsOnPostgres(t *testing.T) {
+	baseDSN := os.Getenv("WOCA_PG_TEST_DSN")
+	if baseDSN == "" {
+		t.Skip("WOCA_PG_TEST_DSN not set")
+	}
+	ctx := context.Background()
+	admin, err := sql.Open("pgx", baseDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName := fmt.Sprintf("woca_rl_race_%d", os.Getpid())
+	if _, err := admin.ExecContext(ctx, `DROP DATABASE IF EXISTS `+dbName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `CREATE DATABASE `+dbName); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.ExecContext(ctx, `DROP DATABASE `+dbName) })
+	defer admin.Close()
+
+	dsn := dsnForDatabase(baseDSN, dbName)
+	db, err := wocadb.Open("pg:" + dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	l, err := New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Enqueue(ctx, Run{RunID: "race-1", SessionID: "sr", ThreadID: "thr"}); err != nil {
+		t.Fatal(err)
+	}
+
+	const racers = 8
+	start := make(chan struct{})
+	results := make(chan *Run, racers)
+	for i := 0; i < racers; i++ {
+		go func(i int) {
+			<-start
+			run, err := l.Claim(ctx, fmt.Sprintf("w-%d", i), time.Minute)
+			if err != nil {
+				t.Errorf("claim %d: %v", i, err)
+				run = nil
+			}
+			results <- run
+		}(i)
+	}
+	close(start)
+	winners := 0
+	for i := 0; i < racers; i++ {
+		if r := <-results; r != nil {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("%d workers claimed the same queued run (want exactly 1)", winners)
+	}
+}
+
+// dsnForDatabase swaps the database name in the test DSN so the live tests
+// run against any deployment form (host-published base stack, or an
+// in-network address like woca-pg-primary:5432).
+func dsnForDatabase(baseDSN, dbName string) string {
+	u, err := neturl.Parse(baseDSN)
+	if err != nil {
+		return fmt.Sprintf("postgres://woca:woca-enterprise-dev@127.0.0.1:35432/%s?sslmode=disable", dbName)
+	}
+	u.Path = "/" + dbName
+	return u.String()
 }

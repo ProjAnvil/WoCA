@@ -12,7 +12,13 @@
 package agentbuild
 
 import (
+	"os"
+	"strconv"
+	"time"
+
 	"github.com/spf13/pflag"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 // Options carries the agent configuration shared by every frontend. The
@@ -55,6 +61,31 @@ type Options struct {
 	// apikey). The embedded ladyM engine is then forbidden: memory is the
 	// remote ladyM enterprise client or none (design §6.3.2/§6.3.8).
 	EnterpriseMemory bool
+	// Sandbox, when set, routes every process side effect (shell and file
+	// tools, hooks, MCP stdio servers, plugin runtimes) through the remote
+	// sandbox executor instead of the host (design §8). Nil keeps the local
+	// executor — the personal-edition posture. See SandboxFromEnv.
+	Sandbox *executor.SandboxConfig
+}
+
+// SandboxFromEnv resolves the sandbox executor configuration from the
+// environment (WOCA_SANDBOX_ENDPOINT, WOCA_SANDBOX_API_KEY,
+// WOCA_SANDBOX_TIMEOUT_MS). It returns nil — the local-executor posture —
+// unless an endpoint is set, so every entry point can call it
+// unconditionally.
+func SandboxFromEnv() *executor.SandboxConfig {
+	endpoint := os.Getenv("WOCA_SANDBOX_ENDPOINT")
+	if endpoint == "" {
+		return nil
+	}
+	cfg := &executor.SandboxConfig{
+		Endpoint: endpoint,
+		APIKey:   os.Getenv("WOCA_SANDBOX_API_KEY"),
+	}
+	if ms, err := strconv.Atoi(os.Getenv("WOCA_SANDBOX_TIMEOUT_MS")); err == nil && ms > 0 {
+		cfg.Timeout = time.Duration(ms) * time.Millisecond
+	}
+	return cfg
 }
 
 // RegisterFlags binds every option to fl. It is used for the root command's

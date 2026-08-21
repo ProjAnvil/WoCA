@@ -5,8 +5,16 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/projanvil/woca/internal/msgplane"
 	"github.com/projanvil/woca/internal/settings"
 )
+
+func orDefaultStr(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
 
 // appSettings is the settings API payload. Secret fields are write-only:
 // reads expose only whether they are set.
@@ -42,6 +50,15 @@ type appSettings struct {
 	LadyMTopK               int    `json:"ladym_topk"`
 	LadyMSystem2            bool   `json:"ladym_system2"`
 	LadyMSystem2Interval    int    `json:"ladym_system2_interval"`
+
+	// Message plane (run dispatch): pg | pg+nats, live-reloaded.
+	MsgPlaneMode    string `json:"msg_plane_mode"`
+	MsgPlaneNATSURL string `json:"msg_plane_nats_url"`
+	MsgPlaneSubject string `json:"msg_plane_subject"`
+	// MsgPlaneAvailable reports whether this deployment dispatches runs at
+	// all (the enterprise queue-dispatch form). Personal editions keep the
+	// plane section hidden and its keys read-only no-ops.
+	MsgPlaneAvailable bool `json:"msg_plane_available"`
 }
 
 // appSettingsUpdate is the PUT body. Pointer fields distinguish "unchanged"
@@ -76,6 +93,10 @@ type appSettingsUpdate struct {
 	LadyMTopK             *int    `json:"ladym_topk"`
 	LadyMSystem2          *bool   `json:"ladym_system2"`
 	LadyMSystem2Interval  *int    `json:"ladym_system2_interval"`
+
+	MsgPlaneMode    *string `json:"msg_plane_mode"`
+	MsgPlaneNATSURL *string `json:"msg_plane_nats_url"`
+	MsgPlaneSubject *string `json:"msg_plane_subject"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
@@ -121,6 +142,9 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		LadyMTopK:               cfg.LadyMTopK,
 		LadyMSystem2:            cfg.LadyMSystem2,
 		LadyMSystem2Interval:    cfg.LadyMSystem2Interval,
+		MsgPlaneMode:            orDefaultStr(cfg.MsgPlaneMode, "pg"),
+		MsgPlaneNATSURL:         cfg.MsgPlaneNATSURL,
+		MsgPlaneSubject:         orDefaultStr(cfg.MsgPlaneSubject, msgplane.DefaultSubject),
 	})
 }
 
@@ -211,6 +235,35 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		boolPatch(settings.KeyLadyMSystem2, req.LadyMSystem2, 0),
 		intPatch(settings.KeyLadyMSystem2Interval, req.LadyMSystem2Interval, 0),
 		boolPatch(settings.KeyDebugLog, req.DebugLog, effDebugLog),
+	}
+
+	// The message plane is an enterprise feature (design §5.4): it only
+	// exists where runs are dispatched to workers. Requests from a
+	// personal edition (no queue dispatch) are rejected rather than
+	// silently storing keys nothing will read.
+	if !s.dispatch {
+		for _, f := range []struct {
+			set bool
+			k   string
+		}{
+			{req.MsgPlaneMode != nil, settings.KeyMsgPlaneMode},
+			{req.MsgPlaneNATSURL != nil, settings.KeyMsgPlaneNATSURL},
+			{req.MsgPlaneSubject != nil, settings.KeyMsgPlaneSubject},
+		} {
+			if f.set {
+				writeError(w, http.StatusBadRequest, f.k+" is an enterprise message-plane setting; this deployment does not dispatch runs")
+				return
+			}
+		}
+	} else {
+		// Message-plane keys are resolved per dispatch/claim by the plane
+		// (internal/msgplane), so changes apply live — no rebuild, no
+		// restart, and the PG queue keeps executing throughout.
+		patches = append(patches,
+			strPatch(settings.KeyMsgPlaneMode, req.MsgPlaneMode, 0),
+			strPatch(settings.KeyMsgPlaneNATSURL, req.MsgPlaneNATSURL, 0),
+			strPatch(settings.KeyMsgPlaneSubject, req.MsgPlaneSubject, 0),
+		)
 	}
 
 	cfg := st.Load()

@@ -132,7 +132,10 @@ func TestKeyValueAllKeys(t *testing.T) {
 		MemoryEngine: "none", LadyMDBPath: "lp", LadyMEmbedding: "openai",
 		LadyMEmbeddingModel: "em", LadyMEmbeddingBaseURL: "eb", LadyMLLM: "none",
 		LadyMAutoRetain: true, LadyMTopK: 3, LadyMSystem2: true, LadyMSystem2Interval: 61, LadyMEndpoint: "http://ladym:8080", LadyMAPIUsername: "woca-worker",
-		DebugLog: true,
+		DebugLog:     true,
+		MsgPlaneMode: "pg+nats", MsgPlaneNATSURL: "nats://n:4222", MsgPlaneSubject: "runs.dispatch",
+		CheckpointPGHost: "ck", CheckpointPGPort: "5433", CheckpointPGDB: "ckdb", CheckpointPGUser: "cku",
+		MemoryPGHost: "mm", MemoryPGPort: "5434", MemoryPGDB: "mmdb", MemoryPGUser: "mmu",
 	}
 	for _, k := range KeyNames() {
 		if _, ok := SecretFor(k); ok {

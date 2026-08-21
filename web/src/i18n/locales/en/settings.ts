@@ -19,6 +19,7 @@ export default {
     claudeenv: 'Skills & MCP',
     plugins: 'Plugins',
     storage: 'Storage',
+    msgplane: 'Message plane',
     memory: 'Memory',
     model: 'Model',
     stats: 'Status',
@@ -97,6 +98,18 @@ export default {
     reinstallTip:
       'Deletes the environment and reinstalls the pinned version (upgrade / repair); shared runtimes and caches are kept',
     downloadInstall: 'Download & install',
+  },
+  msgplane: {
+    title: 'Message plane (run dispatch)',
+    intro: 'Runs dispatch over the shared PG queue by default; layering NATS wakes idle workers instantly. The PG queue always remains the safety net — switch anytime, no restart needed.',
+    mode: 'Dispatch mode',
+    modeHint: 'pg: PG queue only (default); pg+nats: PG queue + instant NATS wake-up (applies live)',
+    modePG: 'pg (PG queue only, default)',
+    modePGNATS: 'pg+nats (NATS wake-up overlay)',
+    natsURL: 'NATS URL',
+    natsURLHint: 'Required for pg+nats, e.g. nats://host:4222; changes reconnect live',
+    subject: 'Notification subject',
+    subjectHint: 'NATS subject for dispatch notifications (default runs.dispatch)',
   },
   storage: {
     title: 'Storage',

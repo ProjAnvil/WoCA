@@ -45,6 +45,17 @@ const (
 	KeyLadyMAPIUsername      = "ladym-api-username"
 	KeyLadyMAPIPassword      = "ladym-api-password"
 	KeyDebugLog              = "debug-log"
+	KeyMsgPlaneMode          = "msg-plane-mode"
+	KeyCheckpointPGHost      = "checkpoint-pg-host"
+	KeyCheckpointPGPort      = "checkpoint-pg-port"
+	KeyCheckpointPGDB        = "checkpoint-pg-db"
+	KeyCheckpointPGUser      = "checkpoint-pg-user"
+	KeyMemoryPGHost          = "memory-pg-host"
+	KeyMemoryPGPort          = "memory-pg-port"
+	KeyMemoryPGDB            = "memory-pg-db"
+	KeyMemoryPGUser          = "memory-pg-user"
+	KeyMsgPlaneNATSURL       = "msg-plane-nats-url"
+	KeyMsgPlaneSubject       = "msg-plane-subject"
 )
 
 // KeyNames lists all settable keys in display order.
@@ -60,6 +71,9 @@ func KeyNames() []string {
 		KeyLadyMTopK, KeyLadyMSystem2, KeyLadyMSystem2Interval,
 		KeyLadyMEndpoint, KeyLadyMAPIUsername, KeyLadyMAPIPassword,
 		KeyDebugLog,
+		KeyMsgPlaneMode, KeyMsgPlaneNATSURL, KeyMsgPlaneSubject,
+		KeyCheckpointPGHost, KeyCheckpointPGPort, KeyCheckpointPGDB, KeyCheckpointPGUser,
+		KeyMemoryPGHost, KeyMemoryPGPort, KeyMemoryPGDB, KeyMemoryPGUser,
 	}
 }
 
@@ -81,6 +95,10 @@ func SecretFor(key string) (string, bool) {
 		return SecretLadyMEmbeddingAPIKey, true
 	case KeyLadyMAPIPassword:
 		return SecretLadyMAPIPassword, true
+	case "checkpoint-pg-password":
+		return SecretCheckpointPGPassword, true
+	case "memory-pg-password":
+		return SecretMemoryPGPassword, true
 	}
 	return "", false
 }
@@ -158,6 +176,28 @@ func KeyHelp(key string) string {
 		return "ladyM enterprise API password (stored encrypted)"
 	case KeyDebugLog:
 		return "harness observability log (graph/state/session/message traces to ~/.woca/logs): true | false"
+	case KeyMsgPlaneMode:
+		return "run dispatch message plane: pg | pg+nats (default pg; pg+nats adds NATS dispatch notifications on top of the PG queue)"
+	case KeyMsgPlaneNATSURL:
+		return "NATS server URL for pg+nats mode (nats://host:port)"
+	case KeyMsgPlaneSubject:
+		return "dispatch notification subject (default runs.dispatch)"
+	case KeyCheckpointPGHost:
+		return "checkpoint postgres host (shown when checkpoint backend is postgres; password goes in the checkpoint-pg-password secret)"
+	case KeyCheckpointPGPort:
+		return "checkpoint postgres port (default 5432)"
+	case KeyCheckpointPGDB:
+		return "checkpoint postgres database (default woca)"
+	case KeyCheckpointPGUser:
+		return "checkpoint postgres user"
+	case KeyMemoryPGHost:
+		return "memoryStore postgres host (shown when memory backend is postgres; password goes in the memory-pg-password secret)"
+	case KeyMemoryPGPort:
+		return "memoryStore postgres port (default 5432)"
+	case KeyMemoryPGDB:
+		return "memoryStore postgres database (default woca)"
+	case KeyMemoryPGUser:
+		return "memoryStore postgres user"
 	}
 	return "unknown key"
 }
@@ -301,6 +341,46 @@ func Apply(cfg *Settings, key, value string) error {
 			return err
 		}
 		cfg.DebugLog = b
+	case KeyMsgPlaneMode:
+		switch value {
+		case "", "pg", "pg+nats":
+		default:
+			return fmt.Errorf("msg-plane-mode must be pg or pg+nats, got %q", value)
+		}
+		cfg.MsgPlaneMode = value
+	case KeyMsgPlaneNATSURL:
+		if value != "" && !strings.Contains(value, "://") {
+			return fmt.Errorf("msg-plane-nats-url must be nats://host:port, got %q", value)
+		}
+		cfg.MsgPlaneNATSURL = value
+	case KeyMsgPlaneSubject:
+		cfg.MsgPlaneSubject = value
+	case KeyCheckpointPGHost:
+		cfg.CheckpointPGHost = value
+	case KeyCheckpointPGPort:
+		if value != "" {
+			if n, err := strconv.Atoi(value); err != nil || n < 1 || n > 65535 {
+				return fmt.Errorf("checkpoint-pg-port must be an integer in [1,65535], got %q", value)
+			}
+		}
+		cfg.CheckpointPGPort = value
+	case KeyCheckpointPGDB:
+		cfg.CheckpointPGDB = value
+	case KeyCheckpointPGUser:
+		cfg.CheckpointPGUser = value
+	case KeyMemoryPGHost:
+		cfg.MemoryPGHost = value
+	case KeyMemoryPGPort:
+		if value != "" {
+			if n, err := strconv.Atoi(value); err != nil || n < 1 || n > 65535 {
+				return fmt.Errorf("memory-pg-port must be an integer in [1,65535], got %q", value)
+			}
+		}
+		cfg.MemoryPGPort = value
+	case KeyMemoryPGDB:
+		cfg.MemoryPGDB = value
+	case KeyMemoryPGUser:
+		cfg.MemoryPGUser = value
 	default:
 		return fmt.Errorf("unknown settings key %q", key)
 	}
@@ -350,6 +430,17 @@ func Describe(cfg Settings, secretSet func(string) bool, dbPath string) string {
 	fmt.Fprintf(&b, "ladym-system2: %s\n", strconv.FormatBool(cfg.LadyMSystem2))
 	fmt.Fprintf(&b, "ladym-system2-interval: %s\n", orDefault(strconv.Itoa(cfg.LadyMSystem2Interval), strconv.Itoa(DefaultLadyMSystem2Interval)))
 	fmt.Fprintf(&b, "debug-log: %s\n", strconv.FormatBool(cfg.DebugLog))
+	fmt.Fprintf(&b, "msg-plane-mode: %s\n", orDefault(cfg.MsgPlaneMode, "pg"))
+	fmt.Fprintf(&b, "msg-plane-nats-url: %s\n", orDefault(cfg.MsgPlaneNATSURL, "(unset)"))
+	fmt.Fprintf(&b, "msg-plane-subject: %s\n", orDefault(cfg.MsgPlaneSubject, "runs.dispatch"))
+	fmt.Fprintf(&b, "checkpoint-pg-host: %s\n", orDefault(cfg.CheckpointPGHost, "(unset)"))
+	fmt.Fprintf(&b, "checkpoint-pg-port: %s\n", orDefault(cfg.CheckpointPGPort, "5432"))
+	fmt.Fprintf(&b, "checkpoint-pg-db: %s\n", orDefault(cfg.CheckpointPGDB, "woca"))
+	fmt.Fprintf(&b, "checkpoint-pg-user: %s\n", orDefault(cfg.CheckpointPGUser, "(unset)"))
+	fmt.Fprintf(&b, "memory-pg-host: %s\n", orDefault(cfg.MemoryPGHost, "(unset)"))
+	fmt.Fprintf(&b, "memory-pg-port: %s\n", orDefault(cfg.MemoryPGPort, "5432"))
+	fmt.Fprintf(&b, "memory-pg-db: %s\n", orDefault(cfg.MemoryPGDB, "woca"))
+	fmt.Fprintf(&b, "memory-pg-user: %s\n", orDefault(cfg.MemoryPGUser, "(unset)"))
 	return b.String()
 }
 
@@ -413,6 +504,28 @@ func KeyValue(cfg Settings, key string) string {
 		return cfg.LadyMAPIUsername
 	case KeyDebugLog:
 		return strconv.FormatBool(cfg.DebugLog)
+	case KeyMsgPlaneMode:
+		return cfg.MsgPlaneMode
+	case KeyMsgPlaneNATSURL:
+		return cfg.MsgPlaneNATSURL
+	case KeyMsgPlaneSubject:
+		return cfg.MsgPlaneSubject
+	case KeyCheckpointPGHost:
+		return cfg.CheckpointPGHost
+	case KeyCheckpointPGPort:
+		return cfg.CheckpointPGPort
+	case KeyCheckpointPGDB:
+		return cfg.CheckpointPGDB
+	case KeyCheckpointPGUser:
+		return cfg.CheckpointPGUser
+	case KeyMemoryPGHost:
+		return cfg.MemoryPGHost
+	case KeyMemoryPGPort:
+		return cfg.MemoryPGPort
+	case KeyMemoryPGDB:
+		return cfg.MemoryPGDB
+	case KeyMemoryPGUser:
+		return cfg.MemoryPGUser
 	}
 	return ""
 }

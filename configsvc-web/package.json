@@ -1,0 +1,23 @@
+{
+  "name": "woca-config-console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "lucide-vue-next": "^1.0.0",
+    "vue": "^3.5.13",
+    "vue-i18n": "^11.1.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.3",
+    "happy-dom": "^18.0.1",
+    "@vue/test-utils": "^2.4.6",
+    "vitest": "^3.0.5",
+    "vite": "^6.2.0"
+  }
+}
