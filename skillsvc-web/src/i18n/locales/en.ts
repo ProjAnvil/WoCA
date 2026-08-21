@@ -1,0 +1,33 @@
+export default {
+  title: 'Skill Assets',
+  subtitle: 'Versioned skill assets with label-based rollout',
+  assets: {
+    list: 'Assets',
+    create: 'New Asset',
+    name: 'Name',
+    description: 'Description',
+    empty: 'No assets yet — create one to get started.',
+    delete: 'Delete',
+    confirmDelete: 'Delete this asset and all its versions?',
+  },
+  versions: {
+    title: 'Versions',
+    publish: 'Publish New Version',
+    body: 'Content (SKILL.md)',
+    bodyPlaceholder: '# My skill\nInstructions…',
+    version: 'Version',
+    published: 'Published',
+    checksum: 'Checksum',
+    empty: 'No versions yet.',
+  },
+  labels: {
+    title: 'Labels',
+    production: 'production',
+    canary: 'canary',
+    setLabel: 'Set {label} → v{version}',
+    current: 'Current',
+    none: 'Not set',
+  },
+  actions: { save: 'Save', cancel: 'Cancel', publish: 'Publish' },
+  errors: { loadFailed: 'Failed to load', saveFailed: 'Save failed' },
+}

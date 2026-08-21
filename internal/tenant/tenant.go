@@ -114,6 +114,9 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("tenant: migrate: %w", err)
 		}
 	}
+	if err := s.migrateNativeSessions(ts); err != nil {
+		return err
+	}
 	// Bootstrap the machine tenant and its default user so credentials can
 	// be issued for the local machine identity (e.g. a read-only key for a
 	// LAN-exposed personal server).

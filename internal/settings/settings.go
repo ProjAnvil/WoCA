@@ -31,8 +31,9 @@ const (
 
 // Memory-engine selectors (the ladyM factual-memory subsystem).
 const (
-	MemoryEngineLadyM = "ladym"
-	MemoryEngineNone  = "none"
+	MemoryEngineLadyM  = "ladym"
+	MemoryEngineNone   = "none"
+	MemoryEngineRemote = "remote"
 )
 
 // ladyM embedding providers.
@@ -70,6 +71,7 @@ const (
 	SecretDeepSeekAPIKey       = "deepseek_api_key"
 	SecretPostgresURL          = "postgres_url"
 	SecretLadyMEmbeddingAPIKey = "ladym_embedding_api_key"
+	SecretLadyMAPIPassword     = "ladym_api_password"
 )
 
 // Settings is the persisted configuration. Secrets (API keys, the postgres
@@ -102,6 +104,8 @@ type Settings struct {
 	LadyMTopK             int    `json:"ladym_topk"`
 	LadyMSystem2          bool   `json:"ladym_system2"`
 	LadyMSystem2Interval  int    `json:"ladym_system2_interval"`
+	LadyMEndpoint         string `json:"ladym_endpoint"`
+	LadyMAPIUsername      string `json:"ladym_api_username"`
 	DebugLog              bool   `json:"debug_log"`
 	// ClaudeSkills lists the ~/.claude skill names enabled for the agent
 	// (checkbox selection in settings; JSON array in the DB).
@@ -153,7 +157,7 @@ func (s Settings) Normalize() (Settings, error) {
 	switch out.MemoryEngine {
 	case "":
 		out.MemoryEngine = MemoryEngineLadyM
-	case MemoryEngineLadyM, MemoryEngineNone:
+	case MemoryEngineLadyM, MemoryEngineNone, MemoryEngineRemote:
 	default:
 		return out, fmt.Errorf("settings: unknown memory engine %q", out.MemoryEngine)
 	}
@@ -361,6 +365,12 @@ func applyPairs(out *Settings, pairs map[string]string) {
 		if n, err := strconv.Atoi(v); err == nil {
 			out.LadyMSystem2Interval = n
 		}
+	}
+	if v, ok := pairs["ladym_endpoint"]; ok {
+		out.LadyMEndpoint = v
+	}
+	if v, ok := pairs["ladym_api_username"]; ok {
+		out.LadyMAPIUsername = v
 	}
 }
 

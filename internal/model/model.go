@@ -5,6 +5,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"github.com/projanvil/woca/internal/telemetry"
 	"strings"
 	"sync"
 	"time"
@@ -79,6 +80,8 @@ func (r *Router) retryableFn() func(error) bool {
 
 // Invoke retries transient errors, then falls back to the fallback model.
 func (r *Router) Invoke(ctx context.Context, msgs []messages.Message, opts ...runnables.Option) (messages.Message, error) {
+	sp := telemetry.Start(ctx, "chat", telemetry.KindLLM).Set(telemetry.AttrOperationName, "chat")
+	defer func() { sp.End(ctx, nil) }()
 	resp, err := r.primary.Invoke(ctx, msgs, opts...)
 	if err == nil {
 		return resp, nil
@@ -128,6 +131,8 @@ func (r *Router) Batch(ctx context.Context, inputs [][]messages.Message, opts ..
 // it can discard the partial response — the tombstone equivalent for
 // orphaned assistant messages.
 func (r *Router) Stream(ctx context.Context, input []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	sp := telemetry.Start(ctx, "chat", telemetry.KindLLM).Set(telemetry.AttrOperationName, "chat")
+	defer func() { sp.End(ctx, nil) }()
 	return &retryStream{r: r, ctx: ctx, input: input, opts: opts}, nil
 }
 

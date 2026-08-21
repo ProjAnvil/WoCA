@@ -19,6 +19,10 @@ import { useAgentStore } from './agent'
 let seq = 0
 const nid = () => `i${Date.now().toString(36)}${(seq++).toString(36)}`
 
+function isAbortError(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && 'name' in value && value.name === 'AbortError'
+}
+
 // demoReply is a canned assistant answer used when the store runs in demo mode
 // (no backend), so the standalone demo remains interactive.
 function demoReply(prompt: string): string {
@@ -187,7 +191,8 @@ export const useSessionStore = defineStore('sessions', () => {
   // and reflects runs other tabs started, unlike the local status map which
   // only covers streams this tab attached.
   const serverRunState = ref<Record<string, { status: 'running' | 'awaiting'; runId: string }>>({})
-  let eventsSource: EventSource | null = null
+  let eventsSource: api.EventStream | null = null
+  const runStreamControllers = new Map<string, AbortController>()
   const reattaching = new Set<string>()
   // Sessions with a createRun POST in flight. The server's global `running`
   // event races the POST response; without this marker maybeReattach would
@@ -660,6 +665,9 @@ export const useSessionStore = defineStore('sessions', () => {
     claimRunId = true,
   ) {
     if (claimRunId) runId.value[sid] = rid
+    runStreamControllers.get(rid)?.abort()
+    const controller = new AbortController()
+    runStreamControllers.set(rid, controller)
     try {
       await api.streamRun(rid, {
         onDelta: (t) => appendDelta(sid, t),
@@ -730,14 +738,24 @@ export const useSessionStore = defineStore('sessions', () => {
           status.value[sid] = 'error'
           delete queuePosition.value[sid]
         },
-      })
+      }, controller.signal)
     } catch (e) {
+      if (controller.signal.aborted && isAbortError(e)) {
+        if (runStreamControllers.get(rid) === controller) {
+          closeStreaming(sid)
+          closeReasoning(sid)
+          closeGoalNote(sid)
+        }
+        return
+      }
       closeStreaming(sid)
       closeReasoning(sid)
       closeGoalNote(sid)
       error.value[sid] = e instanceof Error ? e.message : String(e)
       status.value[sid] = 'error'
       delete queuePosition.value[sid]
+    } finally {
+      if (runStreamControllers.get(rid) === controller) runStreamControllers.delete(rid)
     }
   }
 
@@ -977,7 +995,10 @@ export const useSessionStore = defineStore('sessions', () => {
     const sid = activeId.value
     if (!sid) return
     const rid = runId.value[sid]
+    if (rid) runStreamControllers.get(rid)?.abort()
     closeStreaming(sid)
+    closeReasoning(sid)
+    closeGoalNote(sid)
     interrupt.value[sid] = null
     if (!rid) {
       status.value[sid] = 'done'

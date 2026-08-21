@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/platform/blobstore"
 	"github.com/projanvil/woca/internal/session"
 )
 
@@ -30,6 +32,11 @@ type sessionStore struct {
 	// (after recordMeta) — a test hook for release-timing assertions; it
 	// must not call back into the store.
 	testAfterSave func(id string)
+	// blobs stores transcript bodies (Phase 2 T5). Nil when persistence is
+	// disabled (dir == "") or the root could not be created (blobsErr then
+	// carries the construction error).
+	blobs    blobstore.Store
+	blobsErr error
 
 	// mu guards mem, tombstones and index ONLY — no file I/O under it.
 	mu         sync.Mutex
@@ -50,6 +57,19 @@ func newSessionStore(dir string) *sessionStore {
 		index:      map[string]sessionMeta{},
 	}
 	if dir != "" {
+		// Transcripts live behind the blobstore seam (Phase 2 T5): the
+		// local directory store keeps the on-disk layout byte-identical,
+		// so existing JSONL files need no migration; an S3-backed store is
+		// a drop-in replacement for multi-instance deployments.
+		blobs, err := blobstore.NewLocal(dir)
+		if err != nil {
+			// The transcript root cannot be created: keep dir set so every
+			// persistence attempt reports the failure (a broken root is an
+			// error, not a silent fallback to memory-only).
+			s.blobsErr = err
+		} else {
+			s.blobs = blobs
+		}
 		s.index = s.loadIndex()
 		s.reconcileOnStartup()
 	}
@@ -64,27 +84,27 @@ func newSessionStore(dir string) *sessionStore {
 // flush leaves them behind; listing them would show sessions that load as
 // nil).
 func (s *sessionStore) reconcileOnStartup() {
-	entries, err := os.ReadDir(s.dir)
+	if s.blobs == nil {
+		return
+	}
+	keys, err := s.blobs.List(context.Background(), "")
 	if err != nil {
 		return
 	}
 	changed := false
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+	for _, key := range keys {
+		if !strings.HasSuffix(key, ".jsonl") || strings.ContainsAny(key, `/\`) {
 			continue
 		}
-		id := strings.TrimSuffix(e.Name(), ".jsonl")
+		id := strings.TrimSuffix(key, ".jsonl")
 		if _, ok := s.index[id]; ok {
 			continue
 		}
-		msgs, err := session.Load(filepath.Join(s.dir, e.Name()))
+		msgs, err := session.LoadBlob(context.Background(), s.blobs, key)
 		if err != nil {
 			continue
 		}
 		updatedAt := ""
-		if info, err := e.Info(); err == nil {
-			updatedAt = info.ModTime().Format(time.RFC3339)
-		}
 		s.index[id] = sessionMeta{
 			ID:           id,
 			UpdatedAt:    updatedAt,
@@ -94,11 +114,13 @@ func (s *sessionStore) reconcileOnStartup() {
 		changed = true
 	}
 	// Prune zombie entries: sessions in the index with no corresponding
-	// .jsonl file (filtered before the index is written back).
-	for id := range s.index {
-		if _, err := os.Stat(s.path(id)); err != nil {
-			delete(s.index, id)
-			changed = true
+	// .jsonl blob (filtered before the index is written back).
+	if s.blobs != nil {
+		for id := range s.index {
+			if _, err := s.blobs.Get(context.Background(), s.key(id)); err != nil {
+				delete(s.index, id)
+				changed = true
+			}
 		}
 	}
 	if changed {
@@ -108,6 +130,12 @@ func (s *sessionStore) reconcileOnStartup() {
 
 func (s *sessionStore) path(id string) string {
 	return filepath.Join(s.dir, id+".jsonl")
+}
+
+// key is the blobstore key of a session transcript (identical filename to
+// the legacy layout).
+func (s *sessionStore) key(id string) string {
+	return id + ".jsonl"
 }
 
 func (s *sessionStore) indexPath() string {
@@ -125,7 +153,7 @@ func (s *sessionStore) load(id string) []messages.Message {
 	if s.dir == "" {
 		return nil
 	}
-	msgs, err := session.Load(s.path(id)) // disk read outside the lock
+	msgs, err := session.LoadBlob(context.Background(), s.blobs, s.key(id)) // blob read outside the lock
 	if err != nil {
 		return nil
 	}
@@ -149,7 +177,10 @@ func (s *sessionStore) save(id string, msgs []messages.Message, workspace string
 	if s.dir == "" {
 		return nil
 	}
-	if err := session.Save(s.path(id), msgs); err != nil {
+	if s.blobs == nil {
+		return s.blobsErr
+	}
+	if err := session.SaveBlob(context.Background(), s.blobs, s.key(id), msgs); err != nil {
 		return err
 	}
 	if workspace != "" {
@@ -246,7 +277,7 @@ func (s *sessionStore) delete(id string) {
 	if s.dir == "" {
 		return
 	}
-	_ = os.Remove(s.path(id))
+	_ = s.blobs.Delete(context.Background(), s.key(id))
 	_ = os.Remove(s.goalPath(id))
 	s.flushIndex()
 }

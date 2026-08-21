@@ -30,6 +30,9 @@ type Renderer func(chunk lggraph.StreamChunk)
 
 // Runner executes an agent while handling interrupts and rendering progress.
 type Runner struct {
+	// thread, when non-empty, overrides the per-run checkpoint thread id
+	// (the server mints it so the externalized run ledger can record it).
+	thread string
 	agent  *agent.Agent
 	handle InterruptHandler
 	render Renderer
@@ -46,6 +49,14 @@ type Runner struct {
 // New creates a runner.
 func New(a *agent.Agent, handle InterruptHandler, render Renderer) *Runner {
 	return &Runner{agent: a, handle: handle, render: render}
+}
+
+// WithThreadID pins the checkpoint thread id instead of minting a fresh
+// one, so callers that record the thread externally (the run ledger) and
+// the graph runtime agree on it.
+func (r *Runner) WithThreadID(id string) *Runner {
+	r.thread = id
+	return r
 }
 
 // chunkInterrupts extracts the pause interrupts from an updates- or
@@ -94,7 +105,10 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 	hist := history
 	// One Run = one turn for the agent's MaxTurns accounting.
 	r.agent.ResetTurnCounter()
-	thread := agent.NewThreadID()
+	thread := r.thread
+	if thread == "" {
+		thread = agent.NewThreadID()
+	}
 	stream := r.agent.Stream(ctx, hist, thread)
 	stopContinuations := 0
 	outputRecoveries := 0

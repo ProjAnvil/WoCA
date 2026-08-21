@@ -7,3 +7,8 @@ web/node_modules/
 .woca/
 gui-test-screenshots/
 .worktrees/
+native-client/build/bin/
+web/package.json.md5
+web/wailsjs/
+native-client/build/darwin/Info.dev.plist
+skillsvc-web/node_modules/

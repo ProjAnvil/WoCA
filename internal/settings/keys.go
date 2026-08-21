@@ -41,6 +41,9 @@ const (
 	KeyLadyMTopK             = "ladym-topk"
 	KeyLadyMSystem2          = "ladym-system2"
 	KeyLadyMSystem2Interval  = "ladym-system2-interval"
+	KeyLadyMEndpoint         = "ladym-endpoint"
+	KeyLadyMAPIUsername      = "ladym-api-username"
+	KeyLadyMAPIPassword      = "ladym-api-password"
 	KeyDebugLog              = "debug-log"
 )
 
@@ -55,6 +58,7 @@ func KeyNames() []string {
 		KeyMemoryEngine, KeyLadyMDBPath, KeyLadyMEmbedding, KeyLadyMEmbeddingModel,
 		KeyLadyMEmbeddingBaseURL, KeyLadyMEmbeddingAPIKey, KeyLadyMLLM, KeyLadyMAutoRetain,
 		KeyLadyMTopK, KeyLadyMSystem2, KeyLadyMSystem2Interval,
+		KeyLadyMEndpoint, KeyLadyMAPIUsername, KeyLadyMAPIPassword,
 		KeyDebugLog,
 	}
 }
@@ -75,6 +79,8 @@ func SecretFor(key string) (string, bool) {
 		return SecretPostgresURL, true
 	case KeyLadyMEmbeddingAPIKey:
 		return SecretLadyMEmbeddingAPIKey, true
+	case KeyLadyMAPIPassword:
+		return SecretLadyMAPIPassword, true
 	}
 	return "", false
 }
@@ -115,7 +121,7 @@ func KeyHelp(key string) string {
 	case KeyBuiltinPlugins:
 		return "enabled built-in tool plugins as a JSON array (browser, pdf; runtime installed from Settings → 插件)"
 	case KeyCheckpoint:
-		return "checkpoint backend: none | file | sqlite | postgres (default sqlite)"
+		return "checkpoint backend: none | file | sqlite | postgres (default sqlite; file keeps a sqlite checkpoints.db inside checkpoint-dir)"
 	case KeyMemory:
 		return "memoryStore backend: none | memory | sqlite | postgres (default sqlite)"
 	case KeyCheckpointDir:
@@ -123,7 +129,7 @@ func KeyHelp(key string) string {
 	case KeyPostgresURL:
 		return "postgres DSN for postgres backends (stored encrypted)"
 	case KeyMemoryEngine:
-		return "factual memory engine: ladym | none (default ladym)"
+		return "factual memory engine: ladym | remote | none (default ladym personal, remote for enterprise deployments)"
 	case KeyLadyMDBPath:
 		return "ladym sqlite db path (default ~/.woca/ladym.db)"
 	case KeyLadyMEmbedding:
@@ -144,6 +150,12 @@ func KeyHelp(key string) string {
 		return "background consolidation after runs (uses LLM): true | false"
 	case KeyLadyMSystem2Interval:
 		return "min seconds between System 2 cycles per workspace (>=60, default 300)"
+	case KeyLadyMEndpoint:
+		return "ladyM enterprise API endpoint (scheme://host:port); required when memory-engine is remote"
+	case KeyLadyMAPIUsername:
+		return "ladyM enterprise API username (Basic auth users table)"
+	case KeyLadyMAPIPassword:
+		return "ladyM enterprise API password (stored encrypted)"
 	case KeyDebugLog:
 		return "harness observability log (graph/state/session/message traces to ~/.woca/logs): true | false"
 	}
@@ -388,6 +400,10 @@ func KeyValue(cfg Settings, key string) string {
 		return strconv.FormatBool(cfg.LadyMSystem2)
 	case KeyLadyMSystem2Interval:
 		return strconv.Itoa(cfg.LadyMSystem2Interval)
+	case KeyLadyMEndpoint:
+		return cfg.LadyMEndpoint
+	case KeyLadyMAPIUsername:
+		return cfg.LadyMAPIUsername
 	case KeyDebugLog:
 		return strconv.FormatBool(cfg.DebugLog)
 	}

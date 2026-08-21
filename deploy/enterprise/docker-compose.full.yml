@@ -1,0 +1,318 @@
+# woca-enterprise: full deployment architecture (design doc §4/§5/§6.3)
+#
+# Combines woca and ladyM microservice editions with multi-instance
+# load balancing, database physical isolation, and network-zone isolation.
+#
+# Topology:
+#
+#   host ports (via gateway only)    edge 172.28.30.0/24     data segments
+#   ─────────────────────────►  gateway ────────────►  woca-pg  172.28.10.0/24
+#      :8080 business entry         │                     woca-mq  172.28.20.0/24
+#      :8081 tenant admin           │                     ladym-pg 172.29.10.0/24
+#      :8082 skill-svc SPA          ├── woca-server ×2              (172.29.20.0/24)
+#      :8083 component discovery    ├── woca-worker ×2
+#      :8084 ladyM console          ├── ladym-api ×2
+#                                 └── ladym-worker
+#
+# Database physical isolation (§6.3.3):
+#   - woca-pg (OLTP: sessions, runs, settings, tenant) ≠ ladym-pg (pgvector HNSW)
+#   - independent fault domains, backup cycles, scaling
+#   - no cross-database joins; consistency by application-level orchestration
+#
+# Network zones (§5.3):
+#   - woca-edge: all stateless services (server/worker) + the gateway
+#   - woca-data: woca PG + NATS (only gateway and data services)
+#   - ladym-data: ladyM PG + API + worker (physically isolated from woca data)
+
+name: woca-enterprise-full
+
+services:
+  # ─────────────────────────── Gateway (edge) ───────────────────────────
+  gateway:
+    image: nginx:1.29-alpine
+    container_name: woca-ent-gateway
+    ports:
+      # Business entry: load-balanced across woca-server instances
+      - "${ENT_BUSINESS_PORT:-8080}:80"
+      # Tenant management: woca-tenant admin surface
+      - "${ENT_TENANT_PORT:-8081}:8081"
+      # Skill-svc management SPA
+      - "${ENT_SKILL_PORT:-8082}:8082"
+      # Component discovery & configuration (health + status)
+      - "${ENT_DISCOVERY_PORT:-8083}:8083"
+      # ladyM management console
+      - "${ENT_LADYM_CONSOLE_PORT:-8084}:8084"
+    volumes:
+      - ./gateway/nginx-full.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - woca-edge
+      - ladym-data
+    depends_on:
+      woca-server-1: { condition: service_started }
+      woca-server-2: { condition: service_started }
+
+  # ─────────────────────────── woca data plane ───────────────────────────
+  woca-pg-primary:
+    image: postgres:16-alpine
+    container_name: woca-ent-pg-primary
+    environment:
+      POSTGRES_USER: woca
+      POSTGRES_PASSWORD: ${WOCA_PG_PASSWORD:?set in .env}
+      POSTGRES_DB: woca
+      WOCA_PG_REPL_PASSWORD: ${WOCA_PG_REPL_PASSWORD:?set in .env}
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U woca -d woca"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - woca-pg-primary-data:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    networks:
+      - woca-data
+
+  woca-pg-replica:
+    image: postgres:16-alpine
+    container_name: woca-ent-pg-replica
+    depends_on:
+      woca-pg-primary: { condition: service_healthy }
+    environment:
+      PGUSER: woca
+      PGPASSWORD: ${WOCA_PG_PASSWORD}
+    entrypoint: /bin/sh -c "
+      until pg_isready -h woca-pg-primary -U woca 2>/dev/null; do sleep 1; done &&
+      pg_basebackup -h woca-pg-primary -U woca_repl -D /var/lib/postgresql/data -R -P &&
+      exec postgres -c hot_standby=on"
+    volumes:
+      - woca-pg-replica-data:/var/lib/postgresql/data
+    networks:
+      - woca-data
+
+  nats-js-1:
+    image: nats:2.11-alpine
+    container_name: woca-ent-nats-1
+    command: >
+      nats-server
+      -js
+      -sd /data
+      --cluster_name WOCA_ENT
+      --cluster nats://0.0.0.0:4222
+      --routes nats://nats-js-1:4222,nats://nats-js-2:4222,nats://nats-js-3:4222
+    volumes:
+      - nats-js-1-data:/data
+    networks:
+      - woca-data
+
+  nats-js-2:
+    image: nats:2.11-alpine
+    container_name: woca-ent-nats-2
+    command: >
+      nats-server
+      -js
+      -sd /data
+      --cluster_name WOCA_ENT
+      --cluster nats://0.0.0.0:4222
+      --routes nats://nats-js-1:4222,nats://nats-js-2:4222,nats://nats-js-3:4222
+    volumes:
+      - nats-js-2-data:/data
+    networks:
+      - woca-data
+
+  nats-js-3:
+    image: nats:2.11-alpine
+    container_name: woca-ent-nats-3
+    command: >
+      nats-server
+      -js
+      -sd /data
+      --cluster_name WOCA_ENT
+      --cluster nats://0.0.0.0:4222
+      --routes nats://nats-js-1:4222,nats://nats-js-2:4222,nats://nats-js-3:4222
+    volumes:
+      - nats-js-3-data:/data
+    networks:
+      - woca-data
+
+  # ─────────────────────────── woca services (edge) ─────────────────────
+  woca-server-1:
+    image: woca-server:local
+    container_name: woca-ent-server-1
+    build:
+      context: ../..
+      dockerfile: deploy/enterprise/Dockerfile.server
+    environment:
+      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+      WOCA_AUTH: apikey
+      WOCA_LADYM_ENDPOINT: "http://ladym-api-1:8080"
+      WOCA_LADYM_API_USERNAME: woca-worker
+      WOCA_LADYM_API_PASSWORD: ${LADYM_API_PASSWORD}
+    depends_on:
+      woca-pg-primary: { condition: service_healthy }
+    networks:
+      - woca-edge
+      - woca-data
+      - ladym-data
+
+  woca-server-2:
+    image: woca-server:local
+    container_name: woca-ent-server-2
+    build:
+      context: ../..
+      dockerfile: deploy/enterprise/Dockerfile.server
+    environment:
+      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+      WOCA_AUTH: apikey
+      WOCA_LADYM_ENDPOINT: "http://ladym-api-2:8080"
+      WOCA_LADYM_API_USERNAME: woca-worker
+      WOCA_LADYM_API_PASSWORD: ${LADYM_API_PASSWORD}
+    depends_on:
+      woca-pg-primary: { condition: service_healthy }
+    networks:
+      - woca-edge
+      - woca-data
+      - ladym-data
+
+  woca-worker-1:
+    image: woca-worker:local
+    container_name: woca-ent-worker-1
+    build:
+      context: ../..
+      dockerfile: deploy/enterprise/Dockerfile.worker
+    environment:
+      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+    depends_on:
+      woca-pg-primary: { condition: service_healthy }
+    networks:
+      - woca-edge
+      - woca-data
+
+  woca-worker-2:
+    image: woca-worker:local
+    container_name: woca-ent-worker-2
+    build:
+      context: ../..
+      dockerfile: deploy/enterprise/Dockerfile.worker
+    environment:
+      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+    depends_on:
+      woca-pg-primary: { condition: service_healthy }
+    networks:
+      - woca-edge
+      - woca-data
+
+  woca-tenant:
+    image: woca-tenant:local
+    container_name: woca-ent-tenant
+    build:
+      context: ../..
+      dockerfile: deploy/enterprise/Dockerfile.tenant
+    environment:
+      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+    depends_on:
+      woca-pg-primary: { condition: service_healthy }
+    networks:
+      - woca-edge
+      - woca-data
+
+  # ─────────────────────────── ladyM (physically isolated) ──────────────
+  ladym-pg:
+    image: pgvector/pgvector:pg17
+    container_name: woca-ent-ladym-pg
+    environment:
+      POSTGRES_USER: ladym
+      POSTGRES_PASSWORD: ${LADYM_PG_PASSWORD:?set in .env}
+      POSTGRES_DB: ladym
+    volumes:
+      - ladym-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ladym"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - ladym-data
+
+  ladym-api-1:
+    image: ladym-enterprise:local
+    container_name: woca-ent-ladym-api-1
+    depends_on:
+      ladym-pg: { condition: service_healthy }
+    environment:
+      LADYM_DB: "postgres://ladym:${LADYM_PG_PASSWORD}@ladym-pg:5432/ladym"
+    command: ["ladym", "serve", "--http", ":8080"]
+    networks:
+      - ladym-data
+
+  ladym-api-2:
+    image: ladym-enterprise:local
+    container_name: woca-ent-ladym-api-2
+    depends_on:
+      ladym-pg: { condition: service_healthy }
+    environment:
+      LADYM_DB: "postgres://ladym:${LADYM_PG_PASSWORD}@ladym-pg:5432/ladym"
+    command: ["ladym", "serve", "--http", ":8080"]
+    networks:
+      - ladym-data
+
+  ladym-worker:
+    image: ladym-enterprise:local
+    container_name: woca-ent-ladym-worker
+    depends_on:
+      ladym-pg: { condition: service_healthy }
+    environment:
+      LADYM_DB: "postgres://ladym:${LADYM_PG_PASSWORD}@ladym-pg:5432/ladym"
+    command: ["ladym", "worker"]
+    networks:
+      - ladym-data
+
+  ladym-console:
+    image: ladym-enterprise:local
+    container_name: woca-ent-ladym-console
+    depends_on:
+      ladym-pg: { condition: service_healthy }
+    environment:
+      LADYM_DB: "postgres://ladym:${LADYM_PG_PASSWORD}@ladym-pg:5432/ladym"
+    command: ["ladymconsole", "serve", "--http", ":8080"]
+    networks:
+      - ladym-data
+
+networks:
+  # Edge: stateless services + the gateway; everything here is horizontally
+  # scalable. Only this segment's gateway publishes host ports.
+  woca-edge:
+    name: woca-ent-edge
+    ipam:
+      config: [{ subnet: 172.28.30.0/24 }]
+
+  # woca data plane: PG primary/replica + NATS cluster. Only woca services
+  # and the gateway (for pg port-forward) attach here.
+  woca-data:
+    name: woca-ent-data
+    ipam:
+      config: [{ subnet: 172.28.10.0/24 }]
+
+  # ladyM data plane: physically isolated from woca data. Only ladyM
+  # services and woca-server (for memory API calls) attach here.
+  ladym-data:
+    name: woca-ent-ladym
+    ipam:
+      config: [{ subnet: 172.29.10.0/24 }]
+
+volumes:
+  woca-pg-primary-data:
+    name: woca-ent-full-pg-primary
+  woca-pg-replica-data:
+    name: woca-ent-full-pg-replica
+  nats-js-1-data:
+    name: woca-ent-full-nats-1
+  nats-js-2-data:
+    name: woca-ent-full-nats-2
+  nats-js-3-data:
+    name: woca-ent-full-nats-3
+  ladym-pg-data:
+    name: woca-ent-full-ladym-pg

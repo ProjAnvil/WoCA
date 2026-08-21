@@ -29,12 +29,16 @@ import (
 	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/platform/authz"
+	"github.com/projanvil/woca/internal/platform/dpop"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/quota"
+	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
+	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tenant"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -48,6 +52,13 @@ type Config struct {
 	// Authz authorizes /api requests against per-route scopes. Nil uses the
 	// local scope-set authorizer.
 	Authz authz.Authorizer
+	// NativeAuth enables the native-client credential surface
+	// (/api/native/*). Nil disables it (personal edition).
+	NativeAuth *NativeAuth
+	// RunLedger externalizes run state (runs + run_events) so multiple
+	// instances sharing one database see each other's runs and adopt
+	// expired leases (Phase 2). Nil keeps the in-process behavior only.
+	RunLedger *runstate.Ledger
 	// Agent is the coding agent that runs each conversation turn.
 	Agent *agent.Agent
 	// Static is the frontend filesystem (embedded or os.DirFS for development).
@@ -109,11 +120,14 @@ type Config struct {
 
 // Server serves the woca web UI and its HTTP API.
 type Server struct {
-	agent  *agent.Agent
-	static fs.FS
-	log    zerolog.Logger
-	auth   authn.Provider
-	authz  authz.Authorizer
+	agent      *agent.Agent
+	static     fs.FS
+	log        zerolog.Logger
+	auth       authn.Provider
+	authz      authz.Authorizer
+	nativeAuth *NativeAuth
+	ledger     *runstate.Ledger
+	workerID   string
 
 	mu             sync.Mutex
 	runs           map[string]*Run
@@ -181,6 +195,9 @@ func New(cfg Config) *Server {
 		log:            cfg.Logger,
 		auth:           auth,
 		authz:          authorizer,
+		nativeAuth:     cfg.NativeAuth,
+		ledger:         cfg.RunLedger,
+		workerID:       newWorkerID(),
 		runs:           map[string]*Run{},
 		sessions:       store,
 		admission:      newAdmission(),
@@ -235,6 +252,9 @@ func New(cfg Config) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	if s.nativeAuth != nil {
+		s.registerNativeAuth(mux)
+	}
 	s.route(mux, "POST /api/runs", authz.ScopeRunsWrite, s.handleCreateRun)
 	s.route(mux, "GET /api/runs/{id}/events", authz.ScopeRunsRead, s.handleEvents)
 	s.route(mux, "POST /api/runs/{id}/answer", authz.ScopeRunsWrite, s.handleAnswer)
@@ -269,6 +289,11 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/memory", authz.ScopeMemoryWrite, s.handleRememberMemory)
 	s.route(mux, "DELETE /api/memory/{id}", authz.ScopeMemoryWrite, s.handleForgetMemory)
 	mux.Handle("/", s.staticHandler())
+	if s.nativeAuth != nil {
+		return gateway.Authenticate(s.auth, tenant.NewSessionProvider(s.nativeAuth.tenantStore(), dpop.NewVerifier()))(
+			gateway.RequireLocalTenant()(mux),
+		)
+	}
 	return gateway.Authenticate(s.auth)(
 		gateway.RequireLocalTenant()(mux),
 	)
@@ -295,6 +320,24 @@ func (s *Server) Serve(ctx context.Context, addr string) error {
 // agent was built): it waits for serveErr or ctx cancellation, then stops
 // admission and shuts the server down gracefully.
 func (s *Server) ServeStarted(ctx context.Context, srv *http.Server, serveErr <-chan error) error {
+	// Periodic lease reconciliation: re-queue runs whose owning instance
+	// died, so another instance (or the Phase 3 worker) can take them over.
+	if s.ledger != nil {
+		go func() {
+			ticker := time.NewTicker(runLeaseDuration / 2)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := s.reconcileRunLeases(context.WithoutCancel(ctx)); err != nil {
+						s.log.Warn().Err(err).Msg("run lease reconcile failed")
+					}
+				}
+			}
+		}()
+	}
 	select {
 	case err := <-serveErr:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -610,6 +653,12 @@ func (s *Server) handleCompletions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	run := s.lookupRun(r.PathValue("id"))
 	if run == nil {
+		// The run may live on another instance sharing the database:
+		// stream it from the run ledger instead (Phase 2 cross-instance
+		// SSE).
+		if s.ledger != nil && s.serveLedgerRunEvents(w, r) {
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}
@@ -766,6 +815,9 @@ func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, st
 	}
 	ctx, cancel := context.WithCancel(agent.WithRunWorkspace(context.Background(), workspace))
 	run := newRun(id, s.agent, ctx, cancel)
+	// Telemetry correlation: every span inside this run (tools, LLM calls,
+	// skill loads) carries the run/session identity.
+	run.ctx = telemetry.WithRun(run.ctx, id, sessionID)
 	s.registerRun(id, run)
 	sid := sessionID
 	if sid == "" {
@@ -812,6 +864,27 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 			// Cancelled while queued (cancelRun cancelled run.ctx) or shutdown.
 			run.finish("done", map[string]any{"cancelled": true})
 			return
+		}
+		// Externalized run state (Phase 2): the database row is created when
+		// the run actually starts executing — the one_active_run_per_session
+		// constraint then holds across instances. A uniqueness failure means
+		// another instance is running this session (crash-leftover rows are
+		// reaped by their lease expiring), so this run errors out instead of
+		// double-executing.
+		if s.ledger != nil {
+			thread := agent.NewThreadID()
+			run.mu.Lock()
+			run.thread = thread
+			run.mu.Unlock()
+			if err := s.ledger.Start(run.ctx, runstate.Run{
+				RunID: run.id, SessionID: sid, ThreadID: thread,
+			}, s.workerID, runLeaseDuration); err != nil {
+				s.log.Warn().Str("run", run.id).Str("session", sid).Err(err).Msg("run rejected by the run ledger")
+				run.finish("error", map[string]any{"message": "session is running on another instance"})
+				s.admission.release(sid)
+				return
+			}
+			s.trackRunLease(run, sid)
 		}
 		run.emit(Event{Type: "run_started", Data: map[string]any{}})
 		s.markSessionState(sid, wocadb.SessionRunning, run.id)
@@ -940,4 +1013,173 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{"error": msg})
+}
+
+// newWorkerID mints this server instance's lease identity for the run
+// ledger (owner of runs it executes; the reconciler re-queues runs whose
+// lease expires).
+func newWorkerID() string {
+	return fmt.Sprintf("srv-%s-%d", shortHost(), os.Getpid())
+}
+
+func shortHost() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "unknown"
+	}
+	if i := strings.IndexByte(host, '.'); i > 0 {
+		host = host[:i]
+	}
+	return host
+}
+
+// runLease is the heartbeat cadence for externalized runs: extend the lease
+// every leaseInterval while the run lives; a lease lost to the reconciler
+// (another instance adopted the run) cancels the local execution.
+const runLeaseDuration = 90 * time.Second
+
+func (s *Server) trackRunLease(run *Run, sid string) {
+	// Mirror every emitted event into run_events so another instance (or a
+	// reconnect after this process dies) can replay the stream. The SSE id
+	// and the ledger seq are the same number.
+	run.mirror = func(ev Event) {
+		payload, err := json.Marshal(ev.Data)
+		if err != nil {
+			payload = []byte(`{}`)
+		}
+		mctx := context.WithoutCancel(run.ctx)
+		if err := s.ledger.PutEvent(mctx, run.id, ev.Seq, ev.Type, string(payload)); err != nil {
+			s.log.Warn().Str("run", run.id).Int64("seq", ev.Seq).Err(err).Msg("run event mirror failed")
+		}
+	}
+	interval := runLeaseDuration / 3
+	stop := make(chan struct{})
+	// Chain the ledger finish onto the terminal event exactly once.
+	prev := run.onFinish
+	var once sync.Once
+	run.onFinish = func() {
+		once.Do(func() {
+			close(stop)
+			if s.ledger != nil {
+				_ = s.ledger.Finish(context.WithoutCancel(run.ctx), run.id, s.workerID, run.finishType())
+			}
+		})
+		if prev != nil {
+			prev()
+		}
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-run.ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.ledger.Heartbeat(context.WithoutCancel(run.ctx), run.id, s.workerID, runLeaseDuration); err != nil {
+					// The lease was reaped (worker death from the ledger's
+					// point of view) or handed to another worker: stop this
+					// execution so the run is not double-run.
+					s.log.Warn().Str("run", run.id).Str("session", sid).Err(err).Msg("run lease lost; cancelling local execution")
+					run.cancel()
+					return
+				}
+			}
+		}
+	}()
+}
+
+// finishType returns the terminal event type ("done" or "error") recorded by
+// finish; "" before the terminal event.
+func (r *Run) finishType() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.finishKind
+}
+
+// ledgerEventPoll is the cross-instance tail interval.
+const ledgerEventPoll = 150 * time.Millisecond
+
+// serveLedgerRunEvents streams a foreign run's events from the run ledger:
+// replay from the Last-Event-ID cursor, then poll for live events until the
+// terminal one arrives. It reports false when the run is unknown (→ 404).
+func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bool {
+	runID := r.PathValue("id")
+	ctx := r.Context()
+	row, ok, err := s.ledger.Row(ctx, runID)
+	if err != nil {
+		http.Error(w, "run ledger unavailable", http.StatusInternalServerError)
+		return true
+	}
+	if !ok {
+		return false
+	}
+	flusher, canFlush := w.(http.Flusher)
+	if !canFlush {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return true
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	sinceSeq, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
+	terminal := row.Status != runstate.StatusQueued && row.Status != runstate.StatusRunning
+	for {
+		events, err := s.ledger.Replay(ctx, runID, sinceSeq, 500)
+		if err != nil {
+			// The stream dies loudly; the client's resync path reloads.
+			fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"ledger_unavailable"}`)
+			flusher.Flush()
+			return true
+		}
+		done := false
+		for _, ev := range events {
+			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Kind, ev.Payload)
+			sinceSeq = ev.Seq
+			if ev.Kind == "done" || ev.Kind == "error" {
+				done = true
+			}
+		}
+		if len(events) > 0 {
+			flusher.Flush()
+		}
+		if done {
+			return true
+		}
+		if terminal {
+			// The row ended without a mirrored terminal event (mirror gap):
+			// tell the client to resync rather than hang.
+			fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"terminal_without_event"}`)
+			flusher.Flush()
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return true
+		case <-time.After(ledgerEventPoll):
+			// Re-check the row so a terminal transition ends the stream.
+			row, ok, err = s.ledger.Row(ctx, runID)
+			if err != nil || !ok {
+				fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"ledger_unavailable"}`)
+				flusher.Flush()
+				return true
+			}
+			terminal = row.Status != runstate.StatusQueued && row.Status != runstate.StatusRunning
+		}
+	}
+}
+
+// reconcileRunLeases re-queues runs whose owning instance lost its lease
+// (process death). Called periodically from ServeStarted when the run
+// ledger is configured; the Phase 3 worker claims what lands back in the
+// queue.
+func (s *Server) reconcileRunLeases(ctx context.Context) error {
+	if s.ledger == nil {
+		return nil
+	}
+	_, err := s.ledger.ReapExpired(ctx)
+	return err
 }

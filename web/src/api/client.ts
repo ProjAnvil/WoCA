@@ -1,5 +1,7 @@
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 import i18n from '../i18n'
+import { getNativeBridge } from '../native/bridge'
+import { nativeRequestCancellation } from '../native/requestCancellation'
 import type {
   AgentState,
   AppSettings,
@@ -300,7 +302,13 @@ export function forgetMemory(id: string): Promise<void> {
  * cancelled) / error (carries message) pair. Every event carries an id: line
  * with its per-run seq for Last-Event-ID resume.
  */
-export function streamRun(runId: string, handlers: StreamHandlers): Promise<void> {
+export function streamRun(
+  runId: string,
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) return Promise.reject(streamAbortError())
+
   let lastSeq: number | null = null
   let attempts = 0
   const maxRetries = 5
@@ -310,10 +318,15 @@ export function streamRun(runId: string, handlers: StreamHandlers): Promise<void
   // missed (or sends `resync` when the gap exceeds its retention window),
   // so reconnecting a live run is now safe — the old "never reconnect"
   // assumption (see git history for the removed comment) no longer holds.
+  const cancellation = nativeRequestCancellation(
+    signal,
+    lastSeq != null ? { 'Last-Event-ID': String(lastSeq) } : {},
+  )
   const connect = (): Promise<void> =>
     fetchEventSource(`/api/runs/${runId}/events`, {
       openWhenHidden: true,
-      headers: lastSeq != null ? { 'Last-Event-ID': String(lastSeq) } : {},
+      headers: cancellation.headers,
+      signal,
       async onopen(resp) {
         const ct = resp.headers.get('content-type') ?? ''
         if (!resp.ok || !ct.includes('text/event-stream')) {
@@ -396,7 +409,45 @@ export function streamRun(runId: string, handlers: StreamHandlers): Promise<void
       },
     })
 
-  return connect()
+  let onAbort: (() => void) | undefined
+  const streaming = new Promise<void>((resolve, reject) => {
+    let settled = false
+    onAbort = () => {
+      if (settled) return
+      settled = true
+      reject(streamAbortError())
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+
+    let transport: Promise<void>
+    try {
+      transport = connect()
+    } catch (error) {
+      settled = true
+      reject(error)
+      return
+    }
+    void transport.then(
+      () => {
+        if (settled) return
+        settled = true
+        resolve()
+      },
+      (error) => {
+        if (settled) return
+        settled = true
+        reject(error)
+      },
+    )
+  })
+  return streaming.finally(() => {
+    if (onAbort) signal?.removeEventListener('abort', onAbort)
+    cancellation.release()
+  })
+}
+
+function streamAbortError(): DOMException {
+  return new DOMException('The stream was aborted.', 'AbortError')
 }
 
 /*
@@ -405,16 +456,49 @@ export function streamRun(runId: string, handlers: StreamHandlers): Promise<void
  * connection is seeded with the current snapshot, so (re)connecting is itself
  * a resync; the browser EventSource reconnects automatically.
  */
+export interface EventStream {
+  close(): void
+}
+
 export function streamEvents(
   onSessionState: (ev: { session_id: string; status: string; run_id?: string }) => void,
-): EventSource {
-  const es = new EventSource('/api/events')
-  es.addEventListener('session_state', (ev) => {
+): EventStream {
+  const handleMessage = (data: string) => {
     try {
-      onSessionState(JSON.parse((ev as MessageEvent).data))
+      onSessionState(JSON.parse(data))
     } catch {
       /* malformed frame — the next one re-syncs */
     }
+  }
+
+  if (!getNativeBridge()) {
+    const es = new EventSource('/api/events')
+    es.addEventListener('session_state', (ev) => handleMessage((ev as MessageEvent).data))
+    return es
+  }
+
+  const controller = new AbortController()
+  const cancellation = nativeRequestCancellation(controller.signal)
+  const streaming = fetchEventSource('/api/events', {
+    openWhenHidden: true,
+    headers: cancellation.headers,
+    signal: controller.signal,
+    async onopen(response) {
+      const contentType = response.headers.get('content-type') ?? ''
+      if (!response.ok || !contentType.includes('text/event-stream')) {
+        throw new Error(i18n.global.t('api.streamConnectFailed', { status: response.status }))
+      }
+    },
+    onmessage(event) {
+      if (event.event === 'session_state' && event.data) handleMessage(event.data)
+    },
+    onclose() {
+      if (!controller.signal.aborted) throw new Error('global event stream closed')
+    },
+    onerror() {
+      return 1000
+    },
   })
-  return es
+  void streaming.catch(() => {}).finally(cancellation.release)
+  return { close: () => controller.abort() }
 }

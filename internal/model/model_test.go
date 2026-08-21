@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -221,4 +222,24 @@ func TestRouterDelegations(t *testing.T) {
 	if _, err := r.Invoke(context.Background(), []messages.Message{messages.Human("x")}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// nextDelay follows the capped exponential ladder.
+func TestNextDelayLadder(t *testing.T) {
+	base := retryBaseDelay
+	for i, want := range []time.Duration{base, 2 * base, 4 * base, 8 * base, 8 * time.Second, 8 * time.Second} {
+		if got := nextDelay(i + 1); got != want {
+			t.Fatalf("nextDelay(%d) = %v want %v", i+1, got, want)
+		}
+	}
+}
+
+// BindTools delegates to the primary model.
+func TestRouterBindTools(t *testing.T) {
+	fake := language.NewFakeChatModel(language.WithResponses(messages.AI("x")))
+	r, err := New(Config{Primary: fake})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.BindTools(nil) // must not panic
 }

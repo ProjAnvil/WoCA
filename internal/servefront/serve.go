@@ -24,9 +24,11 @@ import (
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/pluginrt"
+	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/telemetry"
 	"github.com/projanvil/woca/internal/tenant"
 	"github.com/projanvil/woca/internal/webd"
 	"github.com/projanvil/woca/internal/webgui"
@@ -142,6 +144,9 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 		return err
 	}
 	log := logging.NewConsole(os.Stderr, level)
+	// Observability seam (Phase 2 §6.5): one structured line per tool/LLM/
+	// skill span, correlated by tenant/run/session.
+	telemetry.SetDefault(telemetry.NewLocalSink(log))
 
 	if authMode == "" {
 		authMode = os.Getenv("WOCA_AUTH")
@@ -177,6 +182,12 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- hs.Serve(ln) }()
 
+	// apikey auth is the multi-tenant posture: every tenant-sharing
+	// subsystem must be remote or off. EnterpriseMemory forbids the
+	// embedded ladyM engine (memory-engine must be remote or none).
+	if authMode != "" && authMode != "local" {
+		opts.EnterpriseMemory = true
+	}
 	ap, err := agentbuild.BuildAgent(ctx, opts, log)
 	if err != nil {
 		_ = hs.Close()
@@ -185,8 +196,14 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 	defer ap.PluginMgr.Close()
 	defer ap.Agent.Close()
 
+	var native *server.NativeAuth
 	if authMode != "" && authMode != "local" {
 		authProv, err = newAPIKeyProvider(ap.Settings)
+		if err != nil {
+			_ = hs.Close()
+			return err
+		}
+		native, err = newNativeAuth(ap.Settings, authProv)
 		if err != nil {
 			_ = hs.Close()
 			return err
@@ -197,8 +214,18 @@ func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser 
 	if d := session.DefaultDir(); d != "" {
 		sessionDir = filepath.Join(d, "sessions")
 	}
+	var runLedger *runstate.Ledger
+	if st := ap.Settings.DB(); st != nil {
+		runLedger, err = runstate.New(st)
+		if err != nil {
+			_ = hs.Close()
+			return fmt.Errorf("run ledger: %w", err)
+		}
+	}
 	srv := server.New(server.Config{
 		Auth:         authProv,
+		NativeAuth:   native,
+		RunLedger:    runLedger,
 		Agent:        ap.Agent,
 		Static:       webdist.DistFS(),
 		Logger:       log,
@@ -253,6 +280,19 @@ func newAPIKeyProvider(st *settings.Store) (authn.Provider, error) {
 		return nil, fmt.Errorf("api-key auth: %w", err)
 	}
 	return tenant.NewAPIKeyProvider(ts), nil
+}
+
+// newNativeAuth builds the native-client credential surface over the same
+// tenant store as the API-key provider.
+func newNativeAuth(st *settings.Store, keys authn.Provider) (*server.NativeAuth, error) {
+	if st == nil {
+		return nil, fmt.Errorf("native auth requires a settings database")
+	}
+	ts, err := tenant.NewStore(st.DB())
+	if err != nil {
+		return nil, fmt.Errorf("native auth: %w", err)
+	}
+	return server.NewNativeAuth(ts, keys), nil
 }
 
 // startingHandler serves the window between the port bind and the agent

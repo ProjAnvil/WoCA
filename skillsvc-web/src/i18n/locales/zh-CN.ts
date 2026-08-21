@@ -1,0 +1,33 @@
+export default {
+  title: '技能资产',
+  subtitle: '版本化技能资产,支持标签灰度发布',
+  assets: {
+    list: '资产列表',
+    create: '新建资产',
+    name: '名称',
+    description: '描述',
+    empty: '暂无资产——创建一个开始使用。',
+    delete: '删除',
+    confirmDelete: '确定删除该资产及所有版本?',
+  },
+  versions: {
+    title: '版本历史',
+    publish: '发布新版本',
+    body: '内容 (SKILL.md)',
+    bodyPlaceholder: '# 我的技能\n使用说明…',
+    version: '版本号',
+    published: '发布时间',
+    checksum: '校验和',
+    empty: '暂无版本。',
+  },
+  labels: {
+    title: '标签',
+    production: 'production',
+    canary: 'canary',
+    setLabel: '设置 {label} → v{version}',
+    current: '当前',
+    none: '未设置',
+  },
+  actions: { save: '保存', cancel: '取消', publish: '发布' },
+  errors: { loadFailed: '加载失败', saveFailed: '保存失败' },
+}

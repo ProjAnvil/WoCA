@@ -1,11 +1,11 @@
-.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web install deps-baseline check-deps ent-up ent-down ent-ps ent-logs
+.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web install deps-baseline check-deps native-test native-build native-dev ent-up ent-down ent-ps ent-logs
 
 # Default: build the web frontend, then the binary (frontend is embedded).
 all: web build
 
 # Build the web frontend into web/dist (required before the Go build embeds it).
 web:
-	cd web && npm install && npm run build
+	cd web && bun install && bun run build
 
 build:
 	go build -o build/woca ./cmd/woca
@@ -66,6 +66,17 @@ check-deps: build
 	@go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca | sort -u > build/deps-personal.actual
 	@diff -u ci/deps-personal.txt build/deps-personal.actual && echo "personal-edition deps match baseline"
 
+# Enterprise-only native client commands. These remain independent of the
+# personal-edition default/build targets above.
+native-test:
+	cd native-client && go test ./...
+
+native-build: web
+	cd native-client && wails build -clean
+
+native-dev:
+	cd native-client && wails dev
+
 # woca-enterprise: the microservice (enterprise) edition persistence layer —
 # PostgreSQL primary+replica and a 3-node NATS JetStream cluster, segmented
 # per component class and reachable only through the single gateway on high
@@ -87,3 +98,23 @@ ent-ps:
 
 ent-logs:
 	$(ENT_COMPOSE) logs -f
+
+# Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
+SERVER_ARTIFACTS := woca-server woca-tenant woca-worker
+
+.PHONY: build-server check-server-artifacts
+build-server:
+	@for a in $(SERVER_ARTIFACTS); do \
+		go build -o build/$$a ./cmd/$$a || exit 1; \
+	done
+	@echo "server artifacts: $(SERVER_ARTIFACTS)"
+
+# Dependency hygiene: server artifacts must not link the interactive
+# surfaces (TUI, REPL) or the one-shot CLI's root command wiring.
+check-server-artifacts: build-server
+	@for a in $(SERVER_ARTIFACTS); do \
+		if go list -deps ./cmd/$$a | grep -qE 'internal/(tui|repl)'; then \
+			echo "$$a links interactive surfaces"; exit 1; \
+		fi; \
+	done
+	@echo "server artifacts pass dependency hygiene"

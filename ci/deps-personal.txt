@@ -1,6 +1,7 @@
 github.com/BurntSushi/toml
 github.com/BurntSushi/toml/internal
 github.com/ProjAnvil/LadyM/adapter
+github.com/ProjAnvil/LadyM/client/golang
 github.com/ProjAnvil/LadyM/code
 github.com/ProjAnvil/LadyM/config
 github.com/ProjAnvil/LadyM/engine
@@ -53,6 +54,8 @@ github.com/ncruces/go-strftime
 github.com/odvcencio/gotreesitter
 github.com/odvcencio/gotreesitter/grammars
 github.com/odvcencio/gotreesitter/internal/parsercorephase0
+github.com/pgvector/pgvector-go
+github.com/pgvector/pgvector-go/pgx
 github.com/projanvil/langchain-golang/core/callbacks
 github.com/projanvil/langchain-golang/core/chathistory
 github.com/projanvil/langchain-golang/core/documents
@@ -79,7 +82,9 @@ github.com/projanvil/langchain-golang/core/vectorstores
 github.com/projanvil/langchain-golang/langchain/chatmodels
 github.com/projanvil/langchain-golang/langgraph/channels
 github.com/projanvil/langchain-golang/langgraph/checkpoint
+github.com/projanvil/langchain-golang/langgraph/checkpoint/postgres
 github.com/projanvil/langchain-golang/langgraph/checkpoint/serde
+github.com/projanvil/langchain-golang/langgraph/checkpoint/sqlite
 github.com/projanvil/langchain-golang/langgraph/graph
 github.com/projanvil/langchain-golang/langgraph/runtime
 github.com/projanvil/langchain-golang/langgraph/store
@@ -100,11 +105,12 @@ github.com/projanvil/woca/internal/config
 github.com/projanvil/woca/internal/console
 github.com/projanvil/woca/internal/context
 github.com/projanvil/woca/internal/cost
+github.com/projanvil/woca/internal/cpserde
 github.com/projanvil/woca/internal/gateway
 github.com/projanvil/woca/internal/hooks
-github.com/projanvil/woca/internal/lgcp
 github.com/projanvil/woca/internal/logging
 github.com/projanvil/woca/internal/mcp
+github.com/projanvil/woca/internal/memcmd
 github.com/projanvil/woca/internal/memory
 github.com/projanvil/woca/internal/merge
 github.com/projanvil/woca/internal/model
@@ -114,6 +120,8 @@ github.com/projanvil/woca/internal/obslog
 github.com/projanvil/woca/internal/permissions
 github.com/projanvil/woca/internal/platform/authn
 github.com/projanvil/woca/internal/platform/authz
+github.com/projanvil/woca/internal/platform/blobstore
+github.com/projanvil/woca/internal/platform/dpop
 github.com/projanvil/woca/internal/platform/eventbus
 github.com/projanvil/woca/internal/platform/executor
 github.com/projanvil/woca/internal/platform/tenancy
@@ -123,6 +131,7 @@ github.com/projanvil/woca/internal/prompt
 github.com/projanvil/woca/internal/quota
 github.com/projanvil/woca/internal/repl
 github.com/projanvil/woca/internal/runner
+github.com/projanvil/woca/internal/runstate
 github.com/projanvil/woca/internal/runws
 github.com/projanvil/woca/internal/sdkout
 github.com/projanvil/woca/internal/searchapi
@@ -133,7 +142,9 @@ github.com/projanvil/woca/internal/settings
 github.com/projanvil/woca/internal/skills
 github.com/projanvil/woca/internal/slashcmds
 github.com/projanvil/woca/internal/store
+github.com/projanvil/woca/internal/telemetry
 github.com/projanvil/woca/internal/tenant
+github.com/projanvil/woca/internal/tenantcmd
 github.com/projanvil/woca/internal/tokens
 github.com/projanvil/woca/internal/tools
 github.com/projanvil/woca/internal/tui
@@ -147,6 +158,7 @@ github.com/rs/zerolog
 github.com/rs/zerolog/internal/json
 github.com/spf13/cobra
 github.com/spf13/pflag
+github.com/x448/float16
 github.com/xo/terminfo
 golang.org/x/crypto/blake2b
 golang.org/x/image/draw

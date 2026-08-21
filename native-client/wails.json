@@ -1,0 +1,13 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "woca-native-client",
+  "outputfilename": "woca-native-client",
+  "frontend:dir": "../web",
+  "frontend:install": "bun install",
+  "frontend:build": "bun run build",
+  "frontend:dev:build": "bun run build",
+  "assetdir": "../web/dist",
+  "author": {
+    "name": "ProjAnvil"
+  }
+}

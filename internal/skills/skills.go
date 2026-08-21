@@ -3,7 +3,10 @@
 package skills
 
 import (
+	"context"
+
 	"fmt"
+	"github.com/projanvil/woca/internal/telemetry"
 	"os"
 	"path/filepath"
 	"sort"
@@ -100,7 +103,14 @@ func NewLoader(root string) *Loader {
 
 // Load (re-)reads skills from the loader's root directory from disk each call.
 func (l *Loader) Load() ([]Skill, error) {
-	return Load(l.root)
+	sp := telemetry.Start(context.Background(), "load_skills", telemetry.KindSkill).
+		Set(telemetry.AttrOperationName, "load_skill")
+	skills, err := Load(l.root)
+	if err == nil {
+		sp.Set("woca.skill.count", len(skills))
+	}
+	sp.End(context.Background(), err)
+	return skills, err
 }
 
 // parseSkill parses a SKILL.md with optional YAML frontmatter delimited by

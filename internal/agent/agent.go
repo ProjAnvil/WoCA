@@ -24,6 +24,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
+	lgcpsqlite "github.com/projanvil/langchain-golang/langgraph/checkpoint/sqlite"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 	lgruntime "github.com/projanvil/langchain-golang/langgraph/runtime"
 	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
@@ -33,8 +34,8 @@ import (
 	"github.com/projanvil/woca/internal/bus"
 	"github.com/projanvil/woca/internal/compact"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/cpserde"
 	"github.com/projanvil/woca/internal/hooks"
-	"github.com/projanvil/woca/internal/lgcp"
 	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/model"
 	"github.com/projanvil/woca/internal/obslog"
@@ -58,12 +59,12 @@ const (
 // serde registry covers only langchain core types). Names are persisted —
 // stable across releases.
 func init() {
-	lgcp.RegisterType(PermissionRequest{}, "woca.agent.PermissionRequest")
-	lgcp.RegisterType(AskUserRequest{}, "woca.agent.AskUserRequest")
-	lgcp.RegisterType(AskUserAnswer{}, "woca.agent.AskUserAnswer")
-	lgcp.RegisterType(PlanApprovalRequest{}, "woca.agent.PlanApprovalRequest")
-	lgcp.RegisterType(GoalDelta{}, "woca.agent.GoalDelta")
-	lgcp.RegisterType(ReasoningDelta{}, "woca.agent.ReasoningDelta")
+	cpserde.RegisterType(PermissionRequest{}, "woca.agent.PermissionRequest")
+	cpserde.RegisterType(AskUserRequest{}, "woca.agent.AskUserRequest")
+	cpserde.RegisterType(AskUserAnswer{}, "woca.agent.AskUserAnswer")
+	cpserde.RegisterType(PlanApprovalRequest{}, "woca.agent.PlanApprovalRequest")
+	cpserde.RegisterType(GoalDelta{}, "woca.agent.GoalDelta")
+	cpserde.RegisterType(ReasoningDelta{}, "woca.agent.ReasoningDelta")
 }
 
 // MessagesReducer implements langgraph's add_messages semantics: append a
@@ -245,8 +246,11 @@ type Config struct {
 
 // Agent is the compiled coding-agent graph plus its runtime dependencies.
 type Agent struct {
-	model          language.ChatModel
-	boundModel     language.ChatModel
+	model      language.ChatModel
+	boundModel language.ChatModel
+	// lastThread records the most recent checkpoint thread id so callers
+	// (the one-shot CLI) can tell the user what to pass to --resume-checkpoint.
+	lastThread     atomic.Value
 	registry       *tools.Registry
 	exec           executor.Executor
 	toolList       []coretools.Tool
@@ -517,7 +521,13 @@ func New(cfg Config) (*Agent, error) {
 	case cfg.Checkpointer != nil:
 		a.saver = cfg.Checkpointer
 	case cfg.CheckpointDir != "":
-		a.saver = lgcp.NewFileSaver(cfg.CheckpointDir)
+		// Upstream sqlite saver inside the checkpoint directory (the legacy
+		// per-thread JSON file saver is gone).
+		if s, err := lgcpsqlite.New(filepath.Join(cfg.CheckpointDir, "checkpoints.db"), cpserde.NewSerializer()); err == nil {
+			a.saver = s
+		} else {
+			a.saver = lgcheckpoint.NewMemorySaver()
+		}
 	default:
 		a.saver = lgcheckpoint.NewMemorySaver()
 	}
@@ -878,6 +888,15 @@ func (a *Agent) SetModel(m language.ChatModel) error {
 	return nil
 }
 
+// LastThreadID returns the checkpoint thread id of the most recent turn
+// ("" before the first turn).
+func (a *Agent) LastThreadID() string {
+	if v, ok := a.lastThread.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
 // Invoke runs the agent to completion and returns the full message transcript
 // (system prompt included). A prompt-too-long failure first triggers reactive
 // compaction with a single retry (RecoverPromptTooLong semantics); a truncated
@@ -923,6 +942,7 @@ func (a *Agent) resetThread(ctx context.Context, threadID string) {
 // runTurn compacts history and runs one full graph turn.
 func (a *Agent) runTurn(ctx context.Context, history []messages.Message, threadID string) ([]messages.Message, error) {
 	history = a.CompactHistory(ctx, history)
+	a.lastThread.Store(threadID)
 	a.resetThread(ctx, threadID)
 	res, err := a.graph.InvokeWithOptions(ctx, a.NewState(ctx, history), lggraph.Options{ThreadID: threadID})
 	if err != nil {
@@ -993,6 +1013,7 @@ func (a *Agent) ResumeStream(ctx context.Context, threadID string, resumeValue a
 // budget for this invocation; 0 uses the compiled default. Goal execute
 // cycles run with the doubled goalCycleStepBudget.
 func (a *Agent) streamWithBudget(ctx context.Context, history []messages.Message, threadID string, budget int) iter.Seq2[lggraph.StreamChunk, error] {
+	a.lastThread.Store(threadID)
 	history = a.CompactHistory(ctx, history)
 	a.resetThread(ctx, threadID)
 	return a.graph.Stream(ctx, a.NewState(ctx, history), lggraph.StreamOptions{

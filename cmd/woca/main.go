@@ -40,6 +40,7 @@ import (
 	"github.com/projanvil/woca/internal/console"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/mcp"
+	"github.com/projanvil/woca/internal/memcmd"
 	"github.com/projanvil/woca/internal/oauth"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/plugins"
@@ -50,6 +51,7 @@ import (
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/tenantcmd"
 	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/tui"
 	"github.com/projanvil/woca/internal/webgui"
@@ -120,7 +122,8 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newPluginCmd())
 	root.AddCommand(newMcpAuthCmd())
-	root.AddCommand(newTenantCmd())
+	root.AddCommand(tenantcmd.New())
+	root.AddCommand(memcmd.New())
 	root.AddCommand(servefront.NewWebCmd())
 	return root
 }
@@ -457,6 +460,14 @@ func run(ctx context.Context, opts agentbuild.Options, stdin io.Reader, stdout, 
 		}
 		if endErr := a.RunSessionEnd(ctx, "oneshot"); endErr != nil && err == nil {
 			err = endErr
+		}
+		// Durable checkpoints: tell the user how to resume this turn later
+		// (the thread id is the resume key; the legacy file-name discovery
+		// died with the per-thread JSON saver).
+		if opts.CheckpointDir != "" {
+			if thread := a.LastThreadID(); thread != "" {
+				fmt.Fprintf(stderr, "checkpoint thread: %s\n", thread)
+			}
 		}
 		return err
 	}

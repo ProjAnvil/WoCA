@@ -471,3 +471,26 @@ func TestRotationBySize(t *testing.T) {
 		t.Fatalf("no rotated files; entries: %v", names)
 	}
 }
+
+// Edge-case sweep: nil/empty inputs to logging and formatting paths.
+func TestObslogEdgeCases(t *testing.T) {
+	dir := t.TempDir()
+	s := New(dir, true)
+	_ = s
+
+	// Log with nil data.
+	s.Log("info", "test", nil)
+	s.Log("info", "test", map[string]any{"key": "value"})
+
+	// DumpMessages with nil and empty slices.
+	s.DumpMessages(nil, map[string]any{"test": true})
+	s.DumpMessages([]messages.Message{}, nil)
+	s.DumpMessages([]messages.Message{{Role: messages.RoleAI, Content: "test message"}}, map[string]any{})
+
+	// summarizeMessages with various inputs.
+	_ = summarizeMessages(nil, 10)
+	_ = summarizeMessages([]messages.Message{{Role: messages.RoleAI, Content: "hello world"}}, 10)
+
+	// workspaceDir with an empty workspace.
+	_ = workspaceDir("")
+}

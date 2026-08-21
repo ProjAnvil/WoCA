@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-20
 
-**Status:** Approved in conversation; awaiting written-spec review
+**Status:** Approved; scaffold implemented (production OAuth/DPoP remains a later milestone)
 
 **Target:** Wails v2.14.0
 
@@ -280,6 +280,9 @@ A small native bootstrap layer is added under `web/src/native/`:
   existing stores call `/api`.
 - A session that requires authorization shows the login action while retaining
   the configured URL.
+- A local path, open, or migration failure returns `fatal_local_data`; the gate
+  shows fixed localized recovery guidance and the database path when known,
+  without mounting the application or connection screen.
 - Once ready, the unchanged Woca application shell is mounted.
 
 This gate prevents the current `App.vue` startup hooks from sending API calls
@@ -296,6 +299,14 @@ The transport must:
 
 - Preserve HTTP method, escaped path, query, request body, response status,
   content type, and SSE streaming/flushing behavior.
+- Reject GET paths in the decoded `/api` namespace that end in `/` or
+  `/index.html` with a fixed non-404 JSON error before any asset, profile,
+  credential, or upstream work. Wails v2.14 otherwise treats those paths as
+  application documents, replacing handler 404s or injecting runtime scripts
+  into 200 HTML, and `path.Clean`-resolved traversal aliases such as
+  `/api/../index.html` serve the embedded application without reaching the
+  transport. The rejection runs as an asset-server middleware ahead of Wails'
+  document handling and repeats inside the transport handler.
 - Propagate request cancellation and set bounded connect/header timeouts while
   allowing long-lived SSE response bodies.
 - Reject non-`/api/` paths.

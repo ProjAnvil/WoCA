@@ -7,3 +7,52 @@ declare module '@iconify-json/vscode-icons/icons.json' {
   const icons: { icons: Record<string, { body: string }> }
   export default icons
 }
+
+declare global {
+  interface BootstrapState {
+    state: 'unconfigured' | 'authorization_required' | 'ready' | 'fatal_local_data'
+    server_url?: string
+    message?: string
+    database_path?: string
+  }
+
+  interface ConnectionInput {
+    server_url: string
+    api_key: string
+  }
+
+  interface PreferenceInput {
+    key: string
+    value: string
+    revision: number
+  }
+
+  interface PreferenceValue {
+    value: string
+    found: boolean
+  }
+
+  interface PreferenceWriteResult {
+    revision: number
+    applied: boolean
+  }
+
+  interface NativeAppBridge {
+    Bootstrap(): Promise<BootstrapState>
+    Connect(input: ConnectionInput): Promise<BootstrapState>
+    Logout(): Promise<BootstrapState>
+    Preference(key: string): Promise<PreferenceValue>
+    SetPreference(input: PreferenceInput): Promise<PreferenceWriteResult>
+    CancelRequest(id: string): Promise<boolean>
+  }
+
+  interface Window {
+    go?: {
+      main?: {
+        App?: NativeAppBridge
+      }
+    }
+  }
+}
+
+export {}

@@ -351,11 +351,17 @@ func TestRunResumeCheckpointSuccess(t *testing.T) {
 	if err := run(t.Context(), opts, strings.NewReader(""), &out, &errBuf); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := os.ReadDir(ckptDir)
-	if err != nil || len(entries) == 0 {
-		t.Fatalf("no checkpoint persisted: %v (%d entries)", err, len(entries))
+	// The upstream sqlite saver persists to <dir>/checkpoints.db; the
+	// resumable thread id is printed on stderr when a checkpoint dir is set.
+	var key string
+	for _, line := range strings.Split(errBuf.String(), "\n") {
+		if after, ok := strings.CutPrefix(line, "checkpoint thread: "); ok {
+			key = strings.TrimSpace(after)
+		}
 	}
-	key := strings.TrimSuffix(entries[0].Name(), ".json")
+	if key == "" {
+		t.Fatalf("no checkpoint thread printed (stderr = %q)", errBuf.String())
+	}
 
 	// Run two: resume the checkpoint, approve the write, JSON output. The
 	// model only needs to produce the final text now.

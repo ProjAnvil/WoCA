@@ -296,7 +296,11 @@ function onKeydown(e: KeyboardEvent) {
       return
     }
   }
-  if (e.key === 'Enter' && !e.shiftKey) {
+  // Enter submits — except while an IME composition is active. WebKit keeps
+  // the composing text out of v-model until compositionend, so an unguarded
+  // Enter-to-commit in the Wails WebView sends an empty draft (nothing
+  // happens, no bubble) instead of confirming the candidate.
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
     send()
   }

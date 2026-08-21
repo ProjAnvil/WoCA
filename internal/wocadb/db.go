@@ -176,6 +176,27 @@ func (d *DB) migrate() error {
 				updated_at BIGINT NOT NULL,
 				PRIMARY KEY (namespace, key)
 			)`,
+			`CREATE TABLE IF NOT EXISTS runs (
+				run_id TEXT PRIMARY KEY,
+				session_id TEXT NOT NULL,
+				status TEXT NOT NULL,
+				owner TEXT NOT NULL DEFAULT '',
+				lease_expires_at BIGINT NOT NULL DEFAULT 0,
+				thread_id TEXT NOT NULL DEFAULT '',
+				config_snapshot TEXT NOT NULL DEFAULT '',
+				created_at BIGINT NOT NULL,
+				updated_at BIGINT NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS run_events (
+				run_id TEXT NOT NULL,
+				seq BIGINT NOT NULL,
+				kind TEXT NOT NULL,
+				payload TEXT NOT NULL,
+				at BIGINT NOT NULL,
+				PRIMARY KEY (run_id, seq)
+			)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session
+				ON runs(session_id) WHERE status IN ('queued', 'running')`,
 			`CREATE TABLE IF NOT EXISTS session_state (
 				session_id TEXT PRIMARY KEY,
 				status TEXT NOT NULL,
@@ -184,7 +205,15 @@ func (d *DB) migrate() error {
 				updated_at BIGINT NOT NULL
 			)`,
 		}
-		for _, table := range []string{"settings", "secrets", "checkpoints", "memory", "session_state"} {
+		// The lgcp ownership policies (below) judge "which tenant owns this
+		// checkpoint thread" by querying runs; that subquery must see rows of
+		// every tenant, so runs must not FORCE its policy onto the table
+		// owner (the role non-tenant connections run as). Tenant-scoped
+		// paths still wrap their own queries in SET LOCAL transactions
+		// (store.begin, runstate.begin), so this widens only policy
+		// subqueries, not application reads.
+		stmts = append(stmts, `ALTER TABLE runs NO FORCE ROW LEVEL SECURITY`)
+		for _, table := range []string{"settings", "secrets", "checkpoints", "memory", "session_state", "runs", "run_events"} {
 			stmts = append(stmts,
 				`ALTER TABLE `+table+` ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT `+tenantGUCDefault,
 				// Reset the default every migrate: an earlier Phase 1 build
@@ -209,6 +238,81 @@ func (d *DB) migrate() error {
 					END IF;
 				END $$;`)
 		}
+		// Checkpoint tenant ownership (design §6.3.4 / 2026-08-20 decision): the
+		// upstream langgraph/checkpoint/postgres saver's tables are pre-created
+		// here in a dedicated schema (they share the name "checkpoints" with
+		// woca's own KV table, so schema isolation is mandatory; the saver's
+		// search_path points here). RLS derives each row's owner from the run
+		// ledger: a thread recorded in runs (server-executed turns, T2) belongs
+		// to that run's tenant; threads with no ledger row (subagent and
+		// goal-loop internal threads) are admitted — unguessable scratch.
+		stmts = append(stmts,
+			`CREATE SCHEMA IF NOT EXISTS lgcp`,
+			`CREATE TABLE IF NOT EXISTS lgcp.checkpoint_migrations (
+			v INTEGER PRIMARY KEY
+		)`,
+			`CREATE TABLE IF NOT EXISTS lgcp.checkpoints (
+			thread_id TEXT NOT NULL,
+			checkpoint_ns TEXT NOT NULL DEFAULT '',
+			checkpoint_id TEXT NOT NULL,
+			parent_checkpoint_id TEXT,
+			type TEXT,
+			checkpoint JSONB NOT NULL,
+			metadata JSONB NOT NULL DEFAULT '{}',
+			PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+		)`,
+			`CREATE TABLE IF NOT EXISTS lgcp.checkpoint_blobs (
+			thread_id TEXT NOT NULL,
+			checkpoint_ns TEXT NOT NULL DEFAULT '',
+			channel TEXT NOT NULL,
+			version BIGINT NOT NULL,
+			type TEXT NOT NULL,
+			blob BYTEA,
+			PRIMARY KEY (thread_id, checkpoint_ns, channel, version)
+		)`,
+			`CREATE TABLE IF NOT EXISTS lgcp.checkpoint_writes (
+			thread_id TEXT NOT NULL,
+			checkpoint_ns TEXT NOT NULL DEFAULT '',
+			checkpoint_id TEXT NOT NULL,
+			task_id TEXT NOT NULL,
+			idx INTEGER NOT NULL,
+			channel TEXT NOT NULL,
+			type TEXT,
+			blob BYTEA NOT NULL,
+			PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+		)`,
+			`CREATE INDEX IF NOT EXISTS runs_thread_id_idx ON runs(thread_id)`,
+		)
+		// Ownership lookup: SECURITY DEFINER so the policy sees the true
+		// owner of a thread regardless of the caller's own visibility into
+		// runs (runs is itself RLS-scoped; a plain subquery would silently
+		// see "no owner" for foreign tenants and mis-admit their rows).
+		stmts = append(stmts,
+			`CREATE OR REPLACE FUNCTION lgcp.thread_owner(thread text) RETURNS text
+			LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
+			AS $$ SELECT r.tenant_id FROM runs r WHERE r.thread_id = thread AND r.thread_id <> '' LIMIT 1 $$`,
+		)
+		// Ownership predicate: unowned threads pass; owned threads pass only
+		// for their owner's tenant (the same GUC the business tables use).
+		const lgcpOwner = `(lgcp.thread_owner(__TBL__.thread_id) IS NULL OR lgcp.thread_owner(__TBL__.thread_id) = ` + tenantGUCDefault + `)`
+		for _, table := range []string{"lgcp.checkpoints", "lgcp.checkpoint_blobs", "lgcp.checkpoint_writes"} {
+			policy := strings.ReplaceAll(lgcpOwner, "__TBL__", table)
+			stmts = append(stmts,
+				`ALTER TABLE `+table+` ENABLE ROW LEVEL SECURITY`,
+				`ALTER TABLE `+table+` FORCE ROW LEVEL SECURITY`,
+				`DO $$
+				DECLARE existing text;
+				BEGIN
+					SELECT qual INTO existing FROM pg_policies
+					WHERE schemaname = 'lgcp' AND tablename = '`+strings.TrimPrefix(table, "lgcp.")+`' AND policyname = 'lgcp_tenant_isolation';
+					IF existing IS NULL THEN
+						CREATE POLICY lgcp_tenant_isolation ON `+table+`
+							USING `+policy+`
+							WITH CHECK `+policy+`;
+					END IF;
+				END $$;`)
+		}
+
 	default:
 		stmts = []string{
 			`CREATE TABLE IF NOT EXISTS settings (
@@ -234,12 +338,33 @@ func (d *DB) migrate() error {
 				updated_at INTEGER NOT NULL,
 				PRIMARY KEY (namespace, key)
 			)`,
+			`CREATE TABLE IF NOT EXISTS runs (
+				run_id TEXT PRIMARY KEY,
+				session_id TEXT NOT NULL,
+				status TEXT NOT NULL,
+				owner TEXT NOT NULL DEFAULT '',
+				lease_expires_at BIGINT NOT NULL DEFAULT 0,
+				thread_id TEXT NOT NULL DEFAULT '',
+				config_snapshot TEXT NOT NULL DEFAULT '',
+				created_at BIGINT NOT NULL,
+				updated_at BIGINT NOT NULL
+			)`,
+			`CREATE TABLE IF NOT EXISTS run_events (
+				run_id TEXT NOT NULL,
+				seq BIGINT NOT NULL,
+				kind TEXT NOT NULL,
+				payload TEXT NOT NULL,
+				at BIGINT NOT NULL,
+				PRIMARY KEY (run_id, seq)
+			)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS one_active_run_per_session
+				ON runs(session_id) WHERE status IN ('queued', 'running')`,
 			`CREATE TABLE IF NOT EXISTS session_state (
 				session_id TEXT PRIMARY KEY,
 				status TEXT NOT NULL,
 				run_id TEXT NOT NULL,
 				owner TEXT NOT NULL,
-				updated_at INTEGER NOT NULL
+				updated_at BIGINT NOT NULL
 			)`,
 		}
 	}
