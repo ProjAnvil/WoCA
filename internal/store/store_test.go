@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -192,4 +193,142 @@ func TestPostgresPlaceholderRewrite(t *testing.T) {
 	if got := (&Store{}).val([]byte("{}")); string(got.([]byte)) != "{}" {
 		t.Fatalf("sqlite val = %v", got)
 	}
+}
+
+func TestNilStoreAllOpsRefuse(t *testing.T) {
+	var s *Store
+	ctx := context.Background()
+	if _, _, err := s.Get(ctx, "ns", "k"); err == nil {
+		t.Error("nil store Get should fail")
+	}
+	if _, err := s.List(ctx, "ns", ""); err == nil {
+		t.Error("nil store List should fail")
+	}
+	if err := s.Delete(ctx, "ns", "k"); err == nil {
+		t.Error("nil store Delete should fail")
+	}
+}
+
+func TestPutMarshalFailure(t *testing.T) {
+	s := NewMemory()
+	if err := s.Put(context.Background(), "ns", "k", make(chan int)); err == nil {
+		t.Fatal("unmarshalable value should fail Put")
+	}
+}
+
+func TestMemoryListFilters(t *testing.T) {
+	s := NewMemory()
+	ctx := context.Background()
+	for _, e := range []struct{ ns, key string }{
+		{"alpha", "k1"}, {"alpha", "k2"}, {"beta", "k1"},
+	} {
+		if err := s.Put(ctx, e.ns, e.key, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Namespace filter: beta's entry is skipped while listing alpha.
+	entries, err := s.List(ctx, "alpha", "")
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("alpha list = %v, %v", entries, err)
+	}
+	// Key-prefix filter skips non-matching keys.
+	entries, err = s.List(ctx, "alpha", "k2")
+	if err != nil || len(entries) != 1 || entries[0].Key != "k2" {
+		t.Fatalf("prefix list = %v, %v", entries, err)
+	}
+	// Cross-namespace listing with a prefix only common to some keys.
+	entries, err = s.List(ctx, "", "k2")
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("cross-ns prefix list = %v, %v", entries, err)
+	}
+}
+
+// TestSQLListFilteringAndScanFailure drives the SQL list path's row-level
+// filters plus its Scan error: a NULL namespace column cannot be scanned
+// into the string field.
+func TestSQLListFilteringAndScanFailure(t *testing.T) {
+	db, err := wocadb.Open(filepath.Join(t.TempDir(), "f.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := NewSQL(db.DB, string(db.Dialect), db.Path)
+	ctx := context.Background()
+
+	if err := s.Put(ctx, "facts", "keep-1", 1); err != nil {
+		t.Fatal(err)
+	}
+	// A tenant-prefixed row written out-of-band: invisible to the local tenant.
+	if _, err := db.DB.Exec(`INSERT INTO memory (namespace, key, value, updated_at) VALUES ('tenant:x/facts', 'keep-2', '1', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	// A row whose key does not match the prefix exercises the row-level
+	// prefix skip; the tenant row exercises the visibility skip.
+	if _, err := db.DB.Exec(`INSERT INTO memory (namespace, key, value, updated_at) VALUES ('facts', 'unrelated', '1', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := s.List(ctx, "", "keep")
+	if err != nil || len(entries) != 1 || entries[0].Namespace != "facts" {
+		t.Fatalf("filtered list = %v, %v — tenant row should be invisible", entries, err)
+	}
+
+	if _, err := db.DB.Exec(`INSERT INTO memory (namespace, key, value, updated_at) VALUES ('facts', 'bad', '1', 'not-a-timestamp')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.List(ctx, "", ""); err == nil {
+		t.Fatal("unscannable updated_at row should surface a Scan error")
+	}
+}
+
+// TestPostgresTenantBeginErrors drives the tenant transaction prologue on
+// the postgres path: BeginTx failure (closed pool) and set_config failure
+// (sqlite has no such function), for every entry point that calls begin.
+func TestPostgresTenantBeginErrors(t *testing.T) {
+	newPg := func(t *testing.T) (*Store, *wocadb.DB) {
+		t.Helper()
+		db, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "pg.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { db.Close() })
+		return NewSQL(db.DB, "postgres", db.Path), db
+	}
+	tenant := tenancy.NewContext(context.Background(), tenancy.Context{TenantID: "t_pg", UserID: "u"})
+
+	t.Run("closed pool", func(t *testing.T) {
+		s, db := newPg(t)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Put(tenant, "ns", "k", 1); err == nil {
+			t.Error("Put with failed BeginTx should error")
+		}
+		if _, _, err := s.Get(tenant, "ns", "k"); err == nil {
+			t.Error("Get with failed BeginTx should error")
+		}
+		if _, err := s.List(tenant, "ns", ""); err == nil {
+			t.Error("List with failed BeginTx should error")
+		}
+		if err := s.Delete(tenant, "ns", "k"); err == nil {
+			t.Error("Delete with failed BeginTx should error")
+		}
+	})
+
+	t.Run("set_config unsupported", func(t *testing.T) {
+		s, _ := newPg(t)
+		// BeginTx succeeds on sqlite, but set_config is postgres-only, so the
+		// scoped transaction fails and must roll back.
+		if err := s.Put(tenant, "ns", "k", 1); err == nil {
+			t.Error("Put without tenant GUC should error")
+		}
+		if _, _, err := s.Get(tenant, "ns", "k"); err == nil {
+			t.Error("Get without tenant GUC should error")
+		}
+		if _, err := s.List(tenant, "ns", ""); err == nil {
+			t.Error("List without tenant GUC should error")
+		}
+		if err := s.Delete(tenant, "ns", "k"); err == nil {
+			t.Error("Delete without tenant GUC should error")
+		}
+	})
 }

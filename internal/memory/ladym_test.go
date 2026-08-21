@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/projanvil/langchain-golang/core/language"
 )
 
 func testInput(t *testing.T) BuildInput {
@@ -519,4 +521,119 @@ func TestEngineNilSafety(t *testing.T) {
 	if err := eng.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestDefaultDBPathWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	if got := DefaultDBPath(); got != "" {
+		t.Fatalf("DefaultDBPath without HOME = %q, want empty", got)
+	}
+}
+
+func TestOfficialOpenAIRejectsMalformedURL(t *testing.T) {
+	if officialOpenAI("http://exam\x7fle.com") {
+		t.Fatal("malformed URL should not parse as official OpenAI")
+	}
+}
+
+func TestBuildSetsEmbedKeyEnv(t *testing.T) {
+	t.Setenv(embedKeyEnv, "stale-key")
+	in := testInput(t)
+	in.EmbeddingAPIKey = "fresh-key"
+	eng, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	if got := os.Getenv(embedKeyEnv); got != "fresh-key" {
+		t.Fatalf("%s = %q, want fresh-key", embedKeyEnv, got)
+	}
+	// A later keyless Build must not inherit the stale value.
+	keyless := testInput(t)
+	eng2, err := Build(keyless)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng2.Close()
+	if got := os.Getenv(embedKeyEnv); got != "" {
+		t.Fatalf("%s = %q after keyless Build, want unset", embedKeyEnv, got)
+	}
+}
+
+func TestBuildInheritChatModel(t *testing.T) {
+	in := testInput(t)
+	in.LLM = "inherit"
+	in.ChatModel = stubChatModel{}
+	eng, err := Build(in)
+	if err != nil {
+		t.Fatalf("Build with inherit chat model: %v", err)
+	}
+	defer eng.Close()
+	if _, err := eng.Remember(context.Background(), "/ws/test", "a fact stored via the inherited-model engine", nil, "t"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuildEngineOpenFailure(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := testInput(t)
+	in.DBPath = filepath.Join(blocker, "mem.db")
+	if _, err := Build(in); err == nil {
+		t.Fatal("Build should fail when the engine cannot open its database")
+	}
+}
+
+// TestEngineErrorsAfterClose: once the underlying store is closed every
+// surface returns a wrapped error instead of panicking.
+func TestEngineErrorsAfterClose(t *testing.T) {
+	eng, err := Build(testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	if _, err := eng.Recall(ctx, "q", "/ws/test", 5); err == nil {
+		t.Error("Recall after Close should fail")
+	}
+	if _, err := eng.SearchCode(ctx, "q", "/ws/test", 5); err == nil {
+		t.Error("SearchCode after Close should fail")
+	}
+	if _, err := eng.Remember(ctx, "/ws/test", "late fact", nil, "t"); err == nil {
+		t.Error("Remember after Close should fail")
+	}
+	if err := eng.RecordEvent(ctx, "/ws/test", "a", "b", "c", "d"); err == nil {
+		t.Error("RecordEvent after Close should fail")
+	}
+	if _, err := eng.List(ctx, "/ws/test", "", 10, 0); err == nil {
+		t.Error("List after Close should fail")
+	}
+	if err := eng.Forget(ctx, "some-id"); err == nil {
+		t.Error("Forget after Close should fail")
+	}
+	if _, err := eng.Stats(ctx, "/ws/test"); err == nil {
+		t.Error("Stats after Close should fail")
+	}
+	root := t.TempDir()
+	if err := writeFile(root, "main.go", "package main\nfunc main() {}\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.IndexCode(ctx, root, "/ws/test", true); err == nil {
+		t.Error("IndexCode after Close should fail")
+	}
+	if _, err := eng.Consolidate(ctx, "/ws/test"); err == nil {
+		t.Error("Consolidate after Close should fail")
+	}
+	_ = eng.Close() // second Close stays safe
+}
+
+// stubChatModel satisfies language.ChatModel for Build(LLM=inherit); the
+// adapter only stores the model, so no method is ever invoked.
+type stubChatModel struct {
+	language.ChatModel
 }
