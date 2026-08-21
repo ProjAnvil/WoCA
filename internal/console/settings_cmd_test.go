@@ -231,3 +231,12 @@ func TestSettingsSetRebuildMessages(t *testing.T) {
 	}
 	_ = home
 }
+
+// applyModelChange with a blank model is a no-op.
+func TestApplyModelChangeBlank(t *testing.T) {
+	c, _, _ := newTestConsole(t, nil)
+	err := c.applyModelChange("  ")
+	if err != nil {
+		t.Fatalf("blank model change: %v", err)
+	}
+}
