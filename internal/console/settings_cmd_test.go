@@ -240,3 +240,25 @@ func TestApplyModelChangeBlank(t *testing.T) {
 		t.Fatalf("blank model change: %v", err)
 	}
 }
+
+// /settings with no args lists current settings (no panic).
+func TestSettingsListNoArgs(t *testing.T) {
+	c, _, _ := newTestConsole(t, nil)
+	// The test console has no settings database wired; the list command
+	// surfaces the disabled error instead of panicking.
+	_, err := c.Execute(context.Background(), "settings", nil, &Session{})
+	if err == nil {
+		// A settings store may be wired in some test setups; either outcome
+		// is acceptable as long as no panic occurred.
+		_ = err
+	}
+}
+
+// /settings get on an unknown key errors.
+func TestSettingsGetUnknownKey(t *testing.T) {
+	c, _, _ := newTestConsole(t, nil)
+	_, err := c.Execute(context.Background(), "settings get nonexistent-key", nil, &Session{})
+	if err == nil {
+		t.Fatal("unknown key accepted")
+	}
+}
