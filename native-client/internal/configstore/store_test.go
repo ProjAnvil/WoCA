@@ -880,3 +880,43 @@ func TestStoreSchemaHasNoAPIKeyOrOAuthTokenColumns(t *testing.T) {
 		columns.Close()
 	}
 }
+
+// ProfileBridge round-trip (v1.6 入口②): the per-profile target bridge
+// survives normalization and never bleeds between profiles.
+func TestProfileBridgeRoundTrip(t *testing.T) {
+	ctx := t.Context()
+	s, err := Open(filepath.Join(t.TempDir(), "client.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.SaveProfile(ctx, "https://edge.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveProfile(ctx, "https://other.example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := s.ProfileBridge(ctx, "https://edge.example.com"); got != "" {
+		t.Fatalf("unset by default, got %q", got)
+	}
+	if err := s.SetProfileBridge(ctx, "https://Edge.Example.com:443/", "br_target"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ProfileBridge(ctx, "https://edge.example.com"); got != "br_target" {
+		t.Fatalf("normalized lookup = %q", got)
+	}
+	if got := s.ProfileBridge(ctx, "https://other.example.com"); got != "" {
+		t.Fatalf("no bleed across profiles, got %q", got)
+	}
+
+	if err := s.SetProfileBridge(ctx, "https://edge.example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ProfileBridge(ctx, "https://edge.example.com"); got != "" {
+		t.Fatalf("cleared = %q", got)
+	}
+	if err := s.SetProfileBridge(ctx, "https://edge.example.com", strings.Repeat("b", 129)); err == nil {
+		t.Fatal("oversized id accepted")
+	}
+}

@@ -1,4 +1,5 @@
 export default {
+  yes: 'Yes',
   save: 'Save',
   cancel: 'Cancel',
   close: 'Close',

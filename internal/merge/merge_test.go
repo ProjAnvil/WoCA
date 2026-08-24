@@ -86,3 +86,23 @@ func TestLevelString(t *testing.T) {
 		}
 	}
 }
+
+// TestManagedLayerLoses: the managed (operator-delivered) level is the
+// lowest — a user-level same-name entry wins.
+func TestManagedLayerLoses(t *testing.T) {
+	es := []Entry[string]{
+		{Name: "fetch", Value: "managed", Level: LevelManaged, Source: "managed"},
+		{Name: "fetch", Value: "user", Level: LevelUser, Source: "user"},
+		{Name: "extra", Value: "managed-only", Level: LevelManaged, Source: "managed"},
+	}
+	merged, conflicts := Entries(es)
+	if len(merged) != 2 || merged[0].Value != "user" {
+		t.Fatalf("merged = %+v", merged)
+	}
+	if len(conflicts) != 1 || conflicts[0].Winner != "user" {
+		t.Fatalf("conflicts = %+v", conflicts)
+	}
+	if LevelManaged >= LevelUser {
+		t.Fatal("LevelManaged must sort below LevelUser")
+	}
+}

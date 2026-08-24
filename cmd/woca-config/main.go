@@ -1,8 +1,10 @@
 // woca-config is the standalone settings management plane (design §16):
 // the sole configuration write surface for server deployments, serving the
 // settings API (read/write/export/import) and the embedded ops console
-// SPA. Deployed behind the gateway's admin port; authenticated with a
-// local-tenant admin API key (woca-tenant tenant issue local --role admin).
+// SPA. Deployed behind the gateway's admin port. The console signs in
+// with a username/password when WOCA_CONSOLE_USER/WOCA_CONSOLE_PASSWORD
+// are set at startup; unset credentials leave it open (the operator
+// declared the network the boundary).
 package main
 
 import (
@@ -14,17 +16,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/projanvil/woca/internal/configsvc"
+	"github.com/projanvil/woca/internal/ee/configsvc"
+	"github.com/projanvil/woca/internal/ee/discovery"
+	"github.com/projanvil/woca/internal/ee/msgplane"
+	"github.com/projanvil/woca/internal/ee/obs"
+	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/logging"
-	"github.com/projanvil/woca/internal/msgplane"
-	"github.com/projanvil/woca/internal/obs"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/telemetry"
-	"github.com/projanvil/woca/internal/tenant"
 	"github.com/spf13/cobra"
 )
 
 func main() {
+	discovery.Install()
 	var logLevel, addr, obsAddr string
 	root := &cobra.Command{
 		Use:           "woca-config",
@@ -71,7 +75,10 @@ func main() {
 			}, log)
 			defer plane.Close()
 
-			svc := configsvc.New(st, ts, st.DB(), plane, log)
+			svc, err := configsvc.New(st, ts, st.DB(), plane, log)
+			if err != nil {
+				return err
+			}
 			handler := svc.Handler()
 			if obsAddr != "" && obsAddr != "off" {
 				handler = obsInst.Wrap(handler)

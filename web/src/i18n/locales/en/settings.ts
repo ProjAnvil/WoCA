@@ -1,4 +1,7 @@
 export default {
+  managedBanner: 'The settings below are managed and locked by the config plane — contact the administrator to change them.',
+  managedTooltip: 'Managed by the config plane; contact the administrator',
+  logout: 'Log out',
   appearance: {
     title: 'Appearance',
     light: 'Light',
@@ -23,6 +26,12 @@ export default {
     memory: 'Memory',
     model: 'Model',
     stats: 'Status',
+    admin: 'Admin',
+
+    cloudaccess: 'Cloud access',
+    edge: 'Access point',
+    managed: 'Remote config',
+
   },
   footer: {
     hint: 'Provider/storage settings are saved to the database; keys are stored encrypted',
@@ -55,13 +64,19 @@ export default {
     baseUrlHint: 'Leave blank to use the official default (current: {provider})',
     apiKeyHint: '{status}; enter a new value to update (current: {provider})',
     defaultModel: 'Default model',
+    noCatalog: 'No models configured in the private cloud — ask an operator to add a model preset.',
     defaultTag: ' (default)',
     glmKeyHint: 'Zhipu API Key',
+    managedNotice:
+      'Model providers are governed by the private cloud on this deployment: the catalog in the Models section is the selection surface and keys are delivered by the config plane, never stored here — this section is read-only.',
+    modelCatalogHint: 'Pick from the catalog in the Models section (the private-cloud catalog is the only source)',
   },
   claudeenv: {
     title: 'Skills & MCP (imported from Claude Code)',
     intro:
       'Detects skills in ~/.claude/skills and global MCP config in ~/.claude.json. Selected skills are symlinked into ~/.woca/skills (immediate); MCP servers are written to ~/.woca/mcp.json and connected when the agent starts.',
+    bridgeIntro:
+      'Detects skills in the BRIDGE machine\'s ~/.claude/skills and global MCP config in its ~/.claude.json (whether you browse from the embedded page or the public web, the import happens where the agent runs). Selected skills are symlinked into ~/.woca/skills (immediate); MCP servers connect when the agent starts.',
     detecting: 'Detecting…',
     skillsLabel: 'Skills ({selected}/{total})',
     skillsHint: 'Selected skills are offered to the agent as / commands and completions',
@@ -74,10 +89,44 @@ export default {
     saved:
       'Saved: selected skills are symlinked to ~/.woca/skills and take effect immediately; MCP servers connect on next start',
   },
+  managed: {
+    title: 'Remote config (read-only)',
+    intro:
+      'The skills and MCP below are delivered by the private-cloud config plane and materialize as the lowest merge layer — your own local config always wins.',
+    loading: 'Loading…',
+    skillsLabel: 'Delivered skills ({count})',
+    noSkills: 'No skills delivered by the config plane',
+    mcpLabel: 'Delivered MCP ({count})',
+    noMcp: 'No MCP servers delivered by the config plane',
+    version: 'Config version',
+    lastPull: 'Last sync',
+    stale: 'Cached: cloud channel unreachable, running on local config',
+    readonlyNote: 'Remote content is read-only here; manage it in the config console (woca-config).',
+  },
+  edge: {
+    title: 'Access point (bridge switching)',
+    intro:
+      'You are connected through an edge access point. Click a bridge in the list to switch targets; the page reloads.',
+    live: 'online',
+    offline: 'offline',
+    current: 'current',
+    hint: 'Switching re-routes via /edge/select and fully reloads; sessions and login state live on the target bridge.',
+    refresh: 'Refresh list',
+    addLabel: 'Connect to another bridge / access point',
+    addHint: 'Enter a bridge id registered with this access point, or a full URL of another access point / bridge (http(s)://…)',
+    addPlaceholder: 'br_xxxxxxxx or https://edge.example.com',
+    addButton: 'Connect',
+    addInvalid: 'Unrecognized: enter a bridge id (letters, digits, - _ .) or a URL starting with http(s)://',
+  },
   plugins: {
     title: 'Plugins',
     intro:
       'Built-in capability plugins ship with the woca binary; runtimes (pinchtab / uv+Python) are downloaded on demand to ~/.woca/plugins and SHA-256 verified. Once enabled, tools are injected into the agent immediately.',
+    bridgeIntro:
+      'Built-in capability plugins run on the bridge machine (runtimes are downloaded on demand to the bridge\'s ~/.woca/plugins). Unless the organization pins them, enabling is your own choice; organization-managed plugins carry a badge.',
+    orgManagedIntro:
+      'The enabled plugin set on this deployment is delivered and locked by the private-cloud config plane (the same channel as skills/MCP) — contact an administrator to change it.',
+    orgBadge: 'org-managed',
     kindGolang: 'Built-in Go',
     stateNotInstalled: 'Not installed',
     stateInstalling: 'Installing…',
@@ -122,6 +171,8 @@ export default {
     memoryOption: 'memory (in RAM)',
     postgresHint: '{status}; required when the postgres backend is selected',
     dbLocation: 'Database location',
+    managedNotice:
+      'The storage domain is delivered by the private cloud: checkpoint and memory use the organization\'s infrastructure (connection parameters ride the config package) — this section is read-only; contact an administrator to change it.',
   },
   memory: {
     title: 'Memory',
@@ -130,6 +181,7 @@ export default {
     engine: 'Memory engine',
     engineHint: 'When off, memory is neither read nor written (takes effect immediately)',
     enabledOption: 'Enabled (default)',
+    remoteOption: 'remote (private-cloud memory service)',
     offOption: 'Off',
     autoRetain: 'Auto memory',
     autoRetainHint: 'Automatically retains noteworthy decisions and preferences after a conversation ends',
@@ -174,5 +226,31 @@ export default {
     lsp: 'LSP: {active} active / {broken} tripped',
     opsLink: 'Grafana ops console',
     opsHint: 'Instance status · route traffic · trace search (IT console)',
+  },
+  cloud: {
+    edgeUrl: 'Edge access point URL',
+    edgeUrlPlaceholder: 'https://edge.example.com',
+    enrollToken: 'Enrollment token',
+    tokenPlaceholder: 'one-time enrollment credential…',
+    tokenConsumed: 'consumed (voided after successful registration)',
+    urlHint: 'Empty = standalone mode (behaves like local woca).',
+    envPinned: 'Pinned by the WOCA_EDGE_URL environment variable; read-only here.',
+    tokenEnvPinned: 'The enrollment token is preset via WOCA_ENROLL_TOKEN.',
+    save: 'Save & reconnect',
+    saved: 'Saved; channel restarting…',
+    reset: 'Deregister',
+    resetConfirm: 'Deregistering wipes this machine\'s identity (key pair and tokens). Server-side revocation is the administrator\'s action. Continue?',
+    resetDone: 'Local registration cleared.',
+    state: 'Registration',
+    stateUnregistered: 'not registered',
+    stateRegistered: 'registered',
+    stateStale: 'registered · STALE (serving cache)',
+    bridgeId: 'bridge ID',
+    configVersion: 'Config version',
+    lastSync: 'Last sync',
+    spki: 'Certificate pin (TOFU)',
+    tunnel: 'Remote tunnel',
+    tunnelServing: 'serving ({n} requests)',
+    tunnelOff: 'off',
   },
 }

@@ -64,6 +64,9 @@ func (a *HTTPActivator) Activate(ctx context.Context, req ActivationRequest) (Ac
 		return ActivationResult{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if req.BridgeID != "" {
+		httpReq.Header.Set("X-Woca-Bridge", req.BridgeID)
+	}
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
 		return ActivationResult{}, fmt.Errorf("native activation: connect: %w", err)

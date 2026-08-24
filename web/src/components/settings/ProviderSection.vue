@@ -4,6 +4,8 @@ import { Server } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '../../stores/settings'
 
+defineProps<{ locked?: boolean }>()
+
 const { t } = useI18n()
 const settings = useSettingsStore()
 
@@ -21,18 +23,28 @@ const providerHint = computed(
 
 <template>
   <!-- Provider (persisted server-side; keys encrypted at rest).
-       One Base URL + one API Key field target the selected provider. -->
+       One Base URL + one API Key field target the selected provider.
+       In the managed bridge form the whole domain is cloud-governed: the
+       catalog (模型区) is the selection surface and keys are delivered by
+       the config plane, so the fields gray out instead of failing on save. -->
   <section class="setting-section">
     <div class="setting-section-title">
       <Server :size="13" style="vertical-align: -2px" /> {{ t('settings.provider.title') }}
     </div>
+    <p v-if="locked" class="mem-intro">{{ t('settings.provider.managedNotice') }}</p>
 
     <div class="setting-row">
       <div>
         <div class="row-label">{{ t('settings.provider.provider') }}</div>
         <div class="row-hint">{{ t('settings.provider.providerHint') }}</div>
       </div>
-      <select v-model="settings.provider" class="field" style="max-width: 200px">
+      <select
+        v-model="settings.provider"
+        class="field"
+        style="max-width: 200px"
+        :disabled="locked || settings.isManaged('provider')"
+        :title="locked || settings.isManaged('provider') ? t('settings.managedTooltip') : undefined"
+      >
         <option value="anthropic">anthropic</option>
         <option value="openai">openai</option>
         <option value="glm">{{ t('settings.provider.glmOption') }}</option>
@@ -51,6 +63,7 @@ const providerHint = computed(
         v-model="settings.baseURL"
         class="field"
         style="max-width: 260px"
+        :disabled="locked"
         :placeholder="providerHint.base"
       />
     </div>
@@ -75,6 +88,7 @@ const providerHint = computed(
         style="max-width: 260px"
         type="password"
         autocomplete="off"
+        :disabled="locked"
         :placeholder="providerHint.key"
       />
     </div>
@@ -82,7 +96,7 @@ const providerHint = computed(
     <div class="setting-row">
       <div>
         <div class="row-label">{{ t('settings.provider.defaultModel') }}</div>
-        <div class="row-hint">{{ t('settings.shared.freeModelHint') }}</div>
+        <div class="row-hint">{{ locked ? t('settings.provider.modelCatalogHint') : t('settings.shared.freeModelHint') }}</div>
       </div>
       <input
         v-model="settings.serverModel"
@@ -90,6 +104,7 @@ const providerHint = computed(
         style="max-width: 260px"
         list="woca-model-suggestions"
         placeholder="claude-sonnet-4-5"
+        :disabled="locked"
       />
     </div>
   </section>

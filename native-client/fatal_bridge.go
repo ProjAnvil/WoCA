@@ -32,6 +32,10 @@ func (b *fatalLocalDataBridge) Logout(context.Context) (bridge.BootstrapState, e
 	return b.state, errFatalLocalData
 }
 
+func (b *fatalLocalDataBridge) ConnectEmbedded(context.Context) (bridge.BootstrapState, error) {
+	return b.state, errFatalLocalData
+}
+
 func (b *fatalLocalDataBridge) Preference(context.Context, string) (bridge.PreferenceValue, error) {
 	return bridge.PreferenceValue{}, errFatalLocalData
 }

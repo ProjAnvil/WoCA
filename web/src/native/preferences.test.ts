@@ -16,6 +16,9 @@ function bridgeWithPreferences(overrides: Partial<NativeAppBridge> = {}): Native
     Bootstrap: vi.fn<NativeAppBridge['Bootstrap']>().mockResolvedValue({ state: 'ready' }),
     Connect: vi.fn<NativeAppBridge['Connect']>().mockResolvedValue({ state: 'ready' }),
     Logout: vi.fn<NativeAppBridge['Logout']>().mockResolvedValue({ state: 'authorization_required' }),
+    ConnectEmbedded: vi.fn<NativeAppBridge['ConnectEmbedded']>().mockResolvedValue({ state: 'ready' }),
+    EdgeBridges: vi.fn<NativeAppBridge['EdgeBridges']>().mockResolvedValue([]),
+    StreamCredentials: vi.fn<NativeAppBridge['StreamCredentials']>().mockResolvedValue({ scheme: '', token: '' }),
     Preference: vi.fn(async (key: string) => ({
       value: storedNativePreferences[key] ?? '',
       found: key in storedNativePreferences,

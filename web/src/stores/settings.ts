@@ -1,9 +1,12 @@
 import { defineStore } from 'pinia'
 import { useToggle } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
-import { getSettings, updateSettings } from '../api/client'
+import {
+  listModels,
+  applyModel as applyModelPreset, getSettings, updateSettings } from '../api/client'
 import i18n, { applyLocale, LOCALE_STORAGE_KEY, resolveLocale, type LocaleOption } from '../i18n'
 import type { AppSettings, AppSettingsUpdate } from '../types'
+import type { ModelPreset } from '../api/client'
 import { useAgentStore } from './agent'
 import { usePreference, useThemePreference } from '../native/preferences'
 
@@ -33,6 +36,55 @@ export const useSettingsStore = defineStore('settings', () => {
   const permissionMode = usePreference<'default' | 'acceptEdits' | 'bypassPermissions' | 'readOnly' | 'plan'>(
     'woca.pref.permissionMode',
     'default',
+  )
+
+  // --- model catalog (private-cloud form, product ruling: the bridge
+  // pulls the operator-authored preset list; in the managed form this is
+  // the ONLY selectable source — empty catalog means the deployment
+  // offers no models and the composer must refuse to send) ---
+  const models = ref<ModelPreset[]>([])
+  const modelsLoaded = ref(false)
+  const applyingModel = ref(false)
+
+  async function ensureModels() {
+    if (modelsLoaded.value) return
+    try {
+      models.value = await listModels()
+    } catch {
+      models.value = []
+    } finally {
+      modelsLoaded.value = true
+    }
+  }
+
+  async function applyModel(id: string) {
+    if (applyingModel.value) return
+    applyingModel.value = true
+    serverError.value = ''
+    try {
+      const out = await applyModelPreset(id)
+      if (out.apply_error) serverError.value = out.apply_error
+    } catch (e) {
+      serverError.value = e instanceof Error ? e.message : String(e)
+    } finally {
+      applyingModel.value = false
+    }
+  }
+
+  const noModelsManaged = computed(
+    () => managedFields.value.length > 0 && modelsLoaded.value && models.value.length === 0,
+  )
+
+  // --- managed-settings metadata (product design §3.1) ---
+  // Keys locked by the config plane; the matching fields render read-only
+  // with a lock icon and a Managed banner.
+  const managedFields = computed<string[]>(() => server.value?.managed_fields ?? [])
+  const isManaged = (key: string) => managedFields.value.includes(key)
+  const modelWhitelist = computed<string[]>(() =>
+    (server.value?.model_whitelist ?? '')
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean),
   )
 
   // --- server-backed settings ---
@@ -249,6 +301,15 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     isDark,
     toggleDark,
+    managedFields,
+    isManaged,
+    modelWhitelist,
+    models,
+    modelsLoaded,
+    applyingModel,
+    noModelsManaged,
+    ensureModels,
+    applyModel,
     panelOpen,
     localePref,
     locale,

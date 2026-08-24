@@ -5,7 +5,7 @@
 //
 // Local mode never blocks: the personal edition authenticates as
 // tenancy.Local(), whose unrestricted (nil) scope set grants every scope —
-// the code path is identical to server editions, only the policy differs
+// the code path is identical to enterprise deployments, only the policy differs
 // (design doc §3.3).
 package authz
 
@@ -35,20 +35,21 @@ const (
 // these; new routes must either reuse a scope or add a constant here (and to
 // the role sets below) rather than inventing ad-hoc strings.
 const (
-	ScopeRunsRead      = "runs:read"
-	ScopeRunsWrite     = "runs:write"
-	ScopeSessionsRead  = "sessions:read"
-	ScopeSessionsWrite = "sessions:write"
-	ScopeWorkspaceRead = "workspace:read"
-	ScopeSettingsRead  = "settings:read"
-	ScopeSettingsWrite = "settings:write"
-	ScopeMemoryRead    = "memory:read"
-	ScopeMemoryWrite   = "memory:write"
-	ScopePluginsRead   = "plugins:read"
-	ScopePluginsWrite  = "plugins:write"
-	ScopeAgentWrite    = "agent:write"
-	ScopeModelsRead    = "models:read"
-	ScopeModelsWrite   = "models:write"
+	ScopeRunsRead       = "runs:read"
+	ScopeRunsWrite      = "runs:write"
+	ScopeSessionsRead   = "sessions:read"
+	ScopeSessionsWrite  = "sessions:write"
+	ScopeWorkspaceRead  = "workspace:read"
+	ScopeWorkspaceWrite = "workspace:write"
+	ScopeSettingsRead   = "settings:read"
+	ScopeSettingsWrite  = "settings:write"
+	ScopeMemoryRead     = "memory:read"
+	ScopeMemoryWrite    = "memory:write"
+	ScopePluginsRead    = "plugins:read"
+	ScopePluginsWrite   = "plugins:write"
+	ScopeAgentWrite     = "agent:write"
+	ScopeModelsRead     = "models:read"
+	ScopeModelsWrite    = "models:write"
 )
 
 // Authorizer reports whether the tenancy context grants a scope.
@@ -76,8 +77,41 @@ func (*Local) Authorize(_ context.Context, tc tenancy.Context, scope string) err
 	return ErrForbidden
 }
 
+// The member role is the full interactive user: settings READS carry no
+// secrets (the API exposes only *_set booleans for key material) and the
+// settings page — environment import (claudeenv), plugins, managed-config
+// views, quota/stats — is part of normal usage. Everything that rewrites
+// server settings (settings:write) stays admin-only; reads of the
+// governance surfaces (audit, session inventory, cloud access) are scoped
+// to settings:write by the routes that mount them, so widening
+// settings:read does not widen them.
+
 // ScopesForRole returns the scope set granted to a role. Credential issuance
-// (internal/tenant) materializes scopes from this table so that adding a
+// RoleForScopes maps a scope set back to the strongest role it fully
+// contains (superset wins); unrecognized sets report the viewer role.
+func RoleForScopes(scopes []string) string {
+	for _, role := range []string{RoleAdmin, RoleMember} {
+		if hasAll(scopes, ScopesForRole(role)) {
+			return role
+		}
+	}
+	return RoleViewer
+}
+
+func hasAll(have, want []string) bool {
+	set := make(map[string]bool, len(have))
+	for _, s := range have {
+		set[s] = true
+	}
+	for _, s := range want {
+		if !set[s] {
+			return false
+		}
+	}
+	return true
+}
+
+// (internal/ee/tenant) materializes scopes from this table so that adding a
 // scope updates every role in one place. Unknown roles get no scopes
 // (default deny).
 func ScopesForRole(role string) []string {
@@ -86,7 +120,7 @@ func ScopesForRole(role string) []string {
 		return []string{
 			ScopeRunsRead, ScopeRunsWrite,
 			ScopeSessionsRead, ScopeSessionsWrite,
-			ScopeWorkspaceRead,
+			ScopeWorkspaceRead, ScopeWorkspaceWrite,
 			ScopeSettingsRead, ScopeSettingsWrite,
 			ScopeMemoryRead, ScopeMemoryWrite,
 			ScopePluginsRead, ScopePluginsWrite,
@@ -97,8 +131,10 @@ func ScopesForRole(role string) []string {
 		return []string{
 			ScopeRunsRead, ScopeRunsWrite,
 			ScopeSessionsRead, ScopeSessionsWrite,
-			ScopeWorkspaceRead,
+			ScopeWorkspaceRead, ScopeWorkspaceWrite,
+			ScopeSettingsRead,
 			ScopeMemoryRead, ScopeMemoryWrite,
+			ScopePluginsRead, ScopePluginsWrite,
 			ScopeAgentWrite,
 			// Model presets: members pick the model their runs use (the
 			// credentials stay server-side); authoring presets stays a

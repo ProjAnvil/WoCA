@@ -238,6 +238,8 @@ export interface AppSettings {
   msg_plane_available: boolean
   msg_plane_nats_url: string
   msg_plane_subject: string
+  model_whitelist: string
+  managed_fields?: string[]
 }
 
 /** PUT /api/settings body — absent fields are unchanged; empty strings clear. */

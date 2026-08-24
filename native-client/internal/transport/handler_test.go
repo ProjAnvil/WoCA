@@ -1211,3 +1211,52 @@ func assertJSONError(t *testing.T, response *httptest.ResponseRecorder, wantStat
 		t.Fatal("JSON error is empty")
 	}
 }
+
+// bridgeTarget resolves a per-profile target bridge (edge entries).
+type bridgeTarget struct {
+	staticTarget
+	bridge string
+}
+
+func (b bridgeTarget) ProfileBridge(context.Context, string) string { return b.bridge }
+
+// TestHandlerSendsProfileBridgeHeader: an edge entry's target bridge
+// rides X-Woca-Bridge on every proxied request (v1.6 入口② — native
+// clients hold no cookies, the header is the routing signal).
+func TestHandlerSendsProfileBridgeHeader(t *testing.T) {
+	observed := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed <- r.Header.Get(BridgeHeader)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	withBridge := New(
+		bridgeTarget{staticTarget: staticTarget{profile: configstore.Profile{ID: 1, BaseURL: upstream.URL}, ok: true}, bridge: "br_target"},
+		staticCredentials{},
+		nil,
+	)
+	response := httptest.NewRecorder()
+	withBridge.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://native.local/api/sessions", nil))
+	if got := <-observed; got != "br_target" {
+		t.Fatalf("bridge header = %q, want br_target", got)
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("response = %d", response.Code)
+	}
+
+	// Direct/embedded profiles (no stored bridge) send no header.
+	withoutBridge := New(
+		bridgeTarget{staticTarget: staticTarget{profile: configstore.Profile{ID: 2, BaseURL: upstream.URL}, ok: true}},
+		staticCredentials{},
+		nil,
+	)
+	response2 := httptest.NewRecorder()
+	withoutBridge.ServeHTTP(response2, httptest.NewRequest(http.MethodGet, "http://native.local/api/sessions", nil))
+	if got := <-observed; got != "" {
+		t.Fatalf("bridge header = %q, want empty for direct profiles", got)
+	}
+	if response2.Code != http.StatusOK {
+		t.Fatalf("response = %d", response2.Code)
+	}
+}

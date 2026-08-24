@@ -12,6 +12,7 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/agents"
+	"github.com/projanvil/woca/internal/claudeenv"
 	"github.com/projanvil/woca/internal/hooks"
 	"github.com/projanvil/woca/internal/mcp"
 	"github.com/projanvil/woca/internal/merge"
@@ -79,8 +80,34 @@ func loadPermissions(workdir string) *permissions.Rules {
 // win over the user root ~/.woca/skills. Same-name skills resolve to the
 // higher layer — workspace beats user, which reverses the old first-hit
 // semantics where the user root (loaded first) silently won.
+// managedRoot is the operator-delivered layer's home: the config plane
+// materializes delivered skills and MCP specs here (product design: the
+// admin authors in the config console, bridges pull; user-level config
+// still wins — the managed layer only fills gaps).
+func managedRoot() string {
+	if h := os.Getenv("WOCA_HOME"); h != "" {
+		return filepath.Join(h, "managed")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".woca", "managed")
+}
+
 func loadSkills(workdir string, log zerolog.Logger) []skills.Skill {
 	var es []merge.Entry[skills.Skill]
+	// Managed layer (lowest): operator-delivered skills from the config
+	// plane, materialized by the managed-config apply.
+	if root := managedRoot(); root != "" {
+		if list, err := skills.Load(filepath.Join(root, "skills")); err == nil {
+			for _, s := range list {
+				es = append(es, merge.Entry[skills.Skill]{
+					Name: s.Name, Value: s, Level: merge.LevelManaged, Order: 0, Source: s.Source,
+				})
+			}
+		}
+	}
 	for i, dir := range merge.WorkspaceDirs(workdir) {
 		for j, sub := range []string{".woca", ".claude"} {
 			root := filepath.Join(dir, sub, "skills")
@@ -177,7 +204,27 @@ func loadAgents(workdir string, log zerolog.Logger) []agents.Definition {
 // Same-layer duplicates keep the first occurrence; invalid specs are warned
 // and dropped. Connecting the merged list fixes the same-name
 // double-connect bug.
+// loadManagedMCPSpecs reads the operator-delivered MCP specs (the config
+// plane materializes them as mcp.json inside the managed root).
+func loadManagedMCPSpecs() []string {
+	root := managedRoot()
+	if root == "" {
+		return nil
+	}
+	specs, err := claudeenv.LoadMCPConfig(root)
+	if err != nil {
+		return nil
+	}
+	return specs
+}
+
 func mergeMCPSpecs(flag, workspace, user []string, log zerolog.Logger) []string {
+	return mergeMCPSpecsLayered(flag, workspace, user, loadManagedMCPSpecs(), log)
+}
+
+// mergeMCPSpecsLayered is mergeMCPSpecs with an explicit managed layer
+// (lowest priority — the user's own config wins).
+func mergeMCPSpecsLayered(flag, workspace, user, managed []string, log zerolog.Logger) []string {
 	layer := func(specs []string, lvl merge.Level) []merge.Entry[string] {
 		var es []merge.Entry[string]
 		for i, spec := range specs {
@@ -193,7 +240,7 @@ func mergeMCPSpecs(flag, workspace, user []string, log zerolog.Logger) []string 
 		}
 		return es
 	}
-	es := append(append(layer(flag, merge.LevelFlag), layer(workspace, merge.LevelWorkspace)...), layer(user, merge.LevelUser)...)
+	es := append(append(append(layer(flag, merge.LevelFlag), layer(workspace, merge.LevelWorkspace)...), layer(user, merge.LevelUser)...), layer(managed, merge.LevelManaged)...)
 	merged, conflicts := merge.Entries(es)
 	logMergeConflicts(log, "mcp", conflicts)
 	out := make([]string, 0, len(merged))

@@ -1,4 +1,7 @@
 export default {
+  managedBanner: '以下设置域由配置面下发并锁定（Managed）——修改请联系管理员。',
+  managedTooltip: '由配置面下发，修改请联系管理员',
+  logout: '退出登录',
   appearance: {
     title: '外观',
     light: '浅色',
@@ -23,6 +26,12 @@ export default {
     memory: '记忆',
     model: '模型',
     stats: '运行状态',
+  admin: '管理',
+
+  cloudaccess: '云接入',
+  edge: '接入点',
+  managed: '远端配置',
+
   },
   footer: {
     hint: '服务商/存储设置保存到数据库，密钥加密存储',
@@ -53,13 +62,19 @@ export default {
     baseUrlHint: '留空使用官方默认（当前：{provider}）',
     apiKeyHint: '{status}；输入新值以更新（当前：{provider}）',
     defaultModel: '默认模型',
+    noCatalog: '私有云未配置任何模型——请联系管理员在配置台添加模型预设。',
     defaultTag: '（默认）',
     glmKeyHint: '智谱 API Key',
+    managedNotice:
+      '此部署的模型服务商由私有云统一管理：可用模型以「模型」区的目录为准，密钥经配置面下发、不落本地——本区只读。',
+    modelCatalogHint: '在「模型」区从目录中选择（私有云目录为唯一可选来源）',
   },
   claudeenv: {
     title: '技能与 MCP（导入 Claude Code）',
     intro:
       '检测 ~/.claude/skills 与 ~/.claude.json 的全局 MCP 配置。勾选后技能软链到 ~/.woca/skills（立即生效），MCP 服务器写入 ~/.woca/mcp.json 并在 agent 启动时连接。',
+    bridgeIntro:
+      '检测 bridge 机器上的 ~/.claude/skills 与 ~/.claude.json 全局 MCP（无论从内嵌页面还是公网 web 访问，导入都发生在 agent 运行的那台机器上）。勾选后技能软链到 ~/.woca/skills（立即生效），MCP 服务器写入 ~/.woca/mcp.json 并在 agent 启动时连接。',
     detecting: '检测中…',
     skillsLabel: 'Skill（{selected}/{total}）',
     skillsHint: '勾选的技能通过 / 命令与补全列表提供给 agent',
@@ -72,10 +87,43 @@ export default {
     saved:
       '已保存：选中的技能软链到 ~/.woca/skills 并立即生效；MCP 服务器将在下次启动时连接',
   },
+  managed: {
+    title: '远端配置（只读）',
+    intro:
+      '以下技能与 MCP 由私有云配置面统一下发，物化为最低合并层——本机自己的配置始终优先。',
+    loading: '加载中…',
+    skillsLabel: '下发技能（{count}）',
+    noSkills: '配置面未下发技能',
+    mcpLabel: '下发 MCP（{count}）',
+    noMcp: '配置面未下发 MCP 服务器',
+    version: '配置版本',
+    lastPull: '上次同步',
+    stale: '缓存：云通道不可达，正使用本地配置运行',
+    readonlyNote: '远端内容在本页只读；调整请在配置台（woca-config）操作。',
+  },
+  edge: {
+    title: '接入点（bridge 切换）',
+    intro: '当前经边缘接入点连接。点击列表中的 bridge 切换目标，页面将重新加载。',
+    live: '在线',
+    offline: '离线',
+    current: '当前',
+    hint: '切换经 /edge/select 重设路由并整页重载；会话与登录状态由目标 bridge 保持。',
+    refresh: '刷新列表',
+    addLabel: '连接其他 bridge / 接入点',
+    addHint: '输入本接入点已注册的 bridge id，或另一个接入点/bridge 的完整 URL（http(s)://…）',
+    addPlaceholder: 'br_xxxxxxxx 或 https://edge.example.com',
+    addButton: '连接',
+    addInvalid: '无法识别：请输入 bridge id（字母、数字、- _ .）或以 http(s):// 开头的 URL',
+  },
   plugins: {
     title: '插件',
     intro:
       '内置能力插件随 woca 二进制分发，运行时（pinchtab / uv+Python）按需下载到 ~/.woca/plugins 并校验 SHA-256。启用后工具立即注入 agent。',
+    bridgeIntro:
+      '内置能力插件运行在 bridge 机器上（运行时按需下载到 bridge 的 ~/.woca/plugins）。未受组织管控时，启用与否由你决定；组织管控的插件见下方标识。',
+    orgManagedIntro:
+      '本部署的插件启用集由私有云配置面统一下发并锁定（与技能/MCP 的下发同轨）——如需调整请联系管理员。',
+    orgBadge: '组织下发',
     kindGolang: 'Go 内置',
     stateNotInstalled: '未安装',
     stateInstalling: '安装中…',
@@ -117,6 +165,8 @@ export default {
     memoryOption: 'memory（内存）',
     postgresHint: '{status}；选择 postgres 后端时必填',
     dbLocation: '数据库位置',
+    managedNotice:
+      '存储域由私有云统一下发：checkpoint 与记忆使用组织的基础设施（连接参数随配置包交付），本区只读——调整请联系管理员。',
   },
   memory: {
     title: '记忆',
@@ -124,6 +174,7 @@ export default {
     engine: '记忆引擎',
     engineHint: '关闭后不再读写记忆（实时生效）',
     enabledOption: '启用（默认）',
+    remoteOption: 'remote（私有云记忆服务）',
     offOption: '关闭',
     autoRetain: '自动记忆',
     autoRetainHint: '对话结束后自动沉淀值得记住的决策与偏好',
@@ -165,4 +216,30 @@ export default {
     opsLink: 'Grafana 运维面板',
     opsHint: '实例状态 · 接口流量 · trace 检索（IT 管理台）',
   },
+cloud: {
+  edgeUrl: '边缘接入点地址',
+  edgeUrlPlaceholder: 'https://edge.example.com',
+  enrollToken: '注册令牌（enrollment token）',
+  tokenPlaceholder: '一次性注册凭证…',
+  tokenConsumed: '已消费（注册成功后自动作废）',
+  urlHint: '留空 = 纯单机模式（行为与本地 woca 一致）。',
+  envPinned: '地址由环境变量 WOCA_EDGE_URL 指定，此处只读。',
+  tokenEnvPinned: '注册令牌由环境变量 WOCA_ENROLL_TOKEN 预置。',
+  save: '保存并重连',
+  saved: '已保存，通道重启中…',
+  reset: '注销本机注册',
+  resetConfirm: '注销将清除本机的注册身份（bridge 密钥对与令牌）。服务端吊销需管理员在控制台操作。确定？',
+  resetDone: '已注销本机注册。',
+  state: '注册状态',
+  stateUnregistered: '未注册',
+  stateRegistered: '已注册',
+  stateStale: '已注册 · STALE（使用缓存）',
+  bridgeId: 'bridge ID',
+  configVersion: '配置版本',
+  lastSync: '上次同步',
+  spki: '证书钉住 (TOFU)',
+  tunnel: '远程隧道',
+  tunnelServing: '服务中（已处理 {n} 个请求）',
+  tunnelOff: '未开启',
+},
 }

@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ConnectView from './ConnectView.vue'
 import { getNativeBridge } from './bridge'
+import { setStreamAuth, setStreamBase, setStreamBridge } from '../api/client'
 import { hydrateNativePreferences, readPreference } from './preferences'
 import { applyStoredLocalePreference } from '../i18n'
 
@@ -19,6 +20,7 @@ const { t } = useI18n()
 const state = ref<GateState>(bridge ? 'loading' : 'ready')
 const serverUrl = ref('')
 const databasePath = ref('')
+const embeddedUrl = ref('')
 const error = ref('')
 
 // The pre-paint theme script in index.html deliberately skips native mode
@@ -36,6 +38,24 @@ function applyNativeTheme() {
 async function useBootstrapState(next: BootstrapState) {
   serverUrl.value = next.server_url ?? ''
   databasePath.value = next.database_path ?? ''
+  embeddedUrl.value = next.embedded_url ?? ''
+  // SSE bypasses the Wails asset proxy (WebView2 buffers proxied
+  // streams): stream straight at the bridge origin — edge entries pin
+  // their target bridge on the stream request too (v1.6 入口②).
+  setStreamBase(next.server_url ?? '')
+  setStreamBridge(next.bridge_id ?? '')
+  // Remote profiles: the direct SSE connection needs the session Bearer
+  // (the asset proxy that normally injects it is bypassed for streams).
+  if (next.server_url && bridge) {
+    try {
+      const cred = await bridge.StreamCredentials(next.server_url)
+      setStreamAuth(cred?.scheme ?? '', cred?.token ?? '')
+    } catch {
+      setStreamAuth('', '')
+    }
+  } else {
+    setStreamAuth('', '')
+  }
   if (bridge) {
     if (next.state === 'ready') {
       state.value = 'loading'
@@ -82,6 +102,18 @@ async function connect(input: ConnectionInput) {
   }
 }
 
+// Entry ① (design §6.6): adopt the embedded bridge — no inputs.
+async function connectEmbedded() {
+  if (!bridge) return
+
+  try {
+    await useBootstrapState(await bridge.ConnectEmbedded())
+  } catch {
+    state.value = 'error'
+    error.value = t('native.connectionError')
+  }
+}
+
 onMounted(() => {
   void bootstrap()
 })
@@ -117,7 +149,9 @@ onMounted(() => {
     v-else-if="state === 'unconfigured' || state === 'authorization_required'"
     :server-url="serverUrl"
     :authorization-required="state === 'authorization_required'"
+    :embedded-url="embeddedUrl"
     :connect="connect"
+    @connect-embedded="connectEmbedded"
   />
 
   <main

@@ -1,4 +1,7 @@
 export default {
+  modelChange: 'Switch model (from the console catalog)',
+  modelPick: 'Pick a model',
+
   queued: 'Queued #{position}…',
   running: 'Running…',
   awaitingConfirm: 'Waiting for your confirmation…',

@@ -491,9 +491,9 @@ func TestTeamSpawnToolTypedSubagentAndDuplicate(t *testing.T) {
 		SystemPrompt:   "lead",
 		PermissionMode: config.ModeBypass,
 		Agents: []agents.Definition{{
-			Name:  "coder",
+			Name:   "coder",
 			Prompt: "You write code.",
-			Tools: []string{"Read", "Grep"},
+			Tools:  []string{"Read", "Grep"},
 		}},
 	})
 	if err != nil {
@@ -770,15 +770,15 @@ func TestGoalAssessTrimsLongNotes(t *testing.T) {
 		}}}
 	}
 	a := newGoalAgent(t,
-		messages.AI("cycle one plan"),                       // assess 1
-		progress("n1", "first note"),                        // execute 1
+		messages.AI("cycle one plan"), // assess 1
+		progress("n1", "first note"),  // execute 1
 		progress("n2", "second note"),
 		progress("n3", "third note"),
 		progress("n4", "fourth note"),
-		messages.AI("cycle one work done"),                  // execute 1 final
-		messages.AI(`{"verdict":"continue","gaps":"more"}`), // evaluate 1
-		messages.AI("cycle two plan"),                       // assess 2 (notes > 3)
-		messages.AI("cycle two work"),                       // execute 2
+		messages.AI("cycle one work done"),                           // execute 1 final
+		messages.AI(`{"verdict":"continue","gaps":"more"}`),          // evaluate 1
+		messages.AI("cycle two plan"),                                // assess 2 (notes > 3)
+		messages.AI("cycle two work"),                                // execute 2
 		messages.AI(`{"verdict":"complete","evidence":"all green"}`), // evaluate 2
 	)
 	if _, err := a.SetGoal("trim the notes", "", 5, 1_000_000); err != nil {
@@ -813,9 +813,9 @@ func TestGoalResumeRepausesAndBreaks(t *testing.T) {
 		Model: language.NewFakeChatModel(
 			language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
 			language.WithResponses(
-				messages.AI("plan"),        // assess
-				writeCall("w1", "x.txt"),   // execute: first permission ask
-				writeCall("w2", "y.txt"),   // after resume: second ask
+				messages.AI("plan"),         // assess
+				writeCall("w1", "x.txt"),    // execute: first permission ask
+				writeCall("w2", "y.txt"),    // after resume: second ask
 				messages.AI("done writing"), // after second resume: finish
 				messages.AI(`{"verdict":"complete","evidence":"files written"}`), // evaluate
 			),

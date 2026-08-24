@@ -3,7 +3,7 @@
 # Overlay onto the full deployment; same compose project, so service names
 # resolve and lifecycle is shared:
 #
-#   docker compose -f deploy/enterprise/docker-compose.full.yml \
+#   docker compose -f deploy/selfhosted/docker-compose.full.yml \
 #                  -f deploy/observability/docker-compose.observability.yml up -d
 #
 # NOTE: keep docker-compose.full.yml FIRST — compose resolves relative

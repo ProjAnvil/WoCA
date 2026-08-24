@@ -77,6 +77,15 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 			log.Info().Str("path", managed).Msg("managed settings applied")
 		}
 	}
+	// Edition pre-build hook (the bridge's blocking config pull): the
+	// overlay it installs must be effective before any setting is read
+	// below — the storage backends open build-time connections from these
+	// values.
+	if opts.OnSettingsReady != nil && st != nil {
+		if err := opts.OnSettingsReady(ctx, st); err != nil {
+			log.Warn().Err(err).Msg("pre-build settings hook failed; continuing")
+		}
+	}
 	dbSettings := st.Load()
 
 	provider := opts.Provider

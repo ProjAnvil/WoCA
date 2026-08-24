@@ -2,6 +2,10 @@
 // them into the two message trees passed to vue-i18n. New domains: add a
 // module under zh-CN/ and en/, then import + spread it below.
 import agentEn from './en/agent'
+import adminEn from './en/admin'
+import fsEn from './en/fs'
+import loginEn from './en/login'
+import statusEn from './en/status'
 import apiEn from './en/api'
 import chatEn from './en/chat'
 import commonEn from './en/common'
@@ -14,6 +18,10 @@ import settingsEn from './en/settings'
 import sidebarEn from './en/sidebar'
 import workspaceEn from './en/workspace'
 import agentZh from './zh-CN/agent'
+import adminZh from './zh-CN/admin'
+import fsZh from './zh-CN/fs'
+import loginZh from './zh-CN/login'
+import statusZh from './zh-CN/status'
 import apiZh from './zh-CN/api'
 import chatZh from './zh-CN/chat'
 import commonZh from './zh-CN/common'
@@ -28,6 +36,10 @@ import workspaceZh from './zh-CN/workspace'
 
 export const zhCN = {
   common: commonZh,
+  fs: fsZh,
+  admin: adminZh,
+  login: loginZh,
+  status: statusZh,
   chat: chatZh,
   sidebar: sidebarZh,
   goal: goalZh,
@@ -43,6 +55,10 @@ export const zhCN = {
 
 export const en = {
   common: commonEn,
+  fs: fsEn,
+  admin: adminEn,
+  login: loginEn,
+  status: statusEn,
   chat: chatEn,
   sidebar: sidebarEn,
   goal: goalEn,

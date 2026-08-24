@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -43,6 +44,11 @@ func (f *fakeBridgeAPI) Bootstrap(ctx context.Context) (bridge.BootstrapState, e
 func (f *fakeBridgeAPI) Connect(ctx context.Context, input bridge.ConnectionInput) (bridge.BootstrapState, error) {
 	f.connectCtx = ctx
 	f.connectInput = input
+	return f.connectState, nil
+}
+
+func (f *fakeBridgeAPI) ConnectEmbedded(ctx context.Context) (bridge.BootstrapState, error) {
+	f.connectCtx = ctx
 	return f.connectState, nil
 }
 
@@ -340,5 +346,88 @@ func TestAppShutdownCancelsRequestsBeforeCleanupAndRejectsFutureCancellation(t *
 func TestAppCancelRequestIsHarmlessWithoutRegistry(t *testing.T) {
 	if NewApp(nil).CancelRequest(strings.Repeat("Q", 43)) {
 		t.Fatal("CancelRequest() succeeded without a native cancellation registry")
+	}
+}
+
+// EdgeBridges (v1.6 入口②): the pre-auth inventory call goes to the edge's
+// own route and surfaces its list; garbage URLs are rejected locally.
+func TestEdgeBridges(t *testing.T) {
+	served := make(chan []EdgeBridge, 1)
+	served <- []EdgeBridge{{BridgeID: "br_one", Live: true}, {BridgeID: "br_two"}}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(<-served)
+	}))
+	defer ts.Close()
+
+	app := NewApp(&fakeBridgeAPI{})
+	got, err := app.EdgeBridges(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].BridgeID != "br_one" || !got[0].Live {
+		t.Fatalf("bridges = %+v", got)
+	}
+	if _, err := app.EdgeBridges("not a url"); err == nil {
+		t.Fatal("garbage URL accepted")
+	}
+}
+
+// fakeStreamSource exercises StreamCredentials: remote targets get the
+// session material, loopback targets get nothing.
+type fakeStreamSource struct{}
+
+func (fakeStreamSource) Credentials(_ context.Context, _ string, target *url.URL) (transport.Credentials, error) {
+	return transport.Credentials{Scheme: "Bearer", Session: "sess-" + target.Host}, nil
+}
+
+func TestStreamCredentials(t *testing.T) {
+	app := NewApp(&fakeBridgeAPI{})
+
+	// No source wired: empty material, no error (streams stay relative).
+	cred, err := app.StreamCredentials("https://edge.example.com")
+	if err != nil || cred.Scheme != "" || cred.Token != "" {
+		t.Fatalf("nil source = %+v %v", cred, err)
+	}
+
+	app.streamAuth = fakeStreamSource{}
+	cred, err = app.StreamCredentials("https://edge.example.com")
+	if err != nil || cred.Scheme != "Bearer" || cred.Token != "sess-edge.example.com" {
+		t.Fatalf("remote = %+v %v", cred, err)
+	}
+	cred, err = app.StreamCredentials("http://127.0.0.1:39871")
+	if err != nil || cred.Scheme != "" || cred.Token != "" {
+		t.Fatalf("loopback must stay anonymous: %+v %v", cred, err)
+	}
+	if _, err := app.StreamCredentials("garbage"); err == nil {
+		t.Fatal("garbage URL accepted")
+	}
+}
+
+// Connect persists the API key through the key sink on success (§2.2:
+// the OS credential vault is the only client-side key storage; session
+// expiry re-authenticates from it). The service clears its copy — the
+// sink sees the input before that.
+func TestConnectStoresKeyOnSuccess(t *testing.T) {
+	var stored []string
+	app := NewApp(&fakeBridgeAPI{connectState: bridge.BootstrapState{State: bridge.StateReady}})
+	app.storeKey = func(baseURL, apiKey string) { stored = append(stored, baseURL+"="+apiKey) }
+
+	if _, err := app.Connect(bridge.ConnectionInput{
+		ServerURL: "https://Bridge.Example.com/",
+		APIKey:    "woca_key",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0] != "https://bridge.example.com=woca_key" {
+		t.Fatalf("stored = %v", stored)
+	}
+
+	// Failures and keyless (embedded) connects never persist.
+	app2 := NewApp(&fakeBridgeAPI{connectState: bridge.BootstrapState{State: bridge.StateAuthorizationNeeded}})
+	app2.storeKey = func(baseURL, apiKey string) { stored = append(stored, baseURL) }
+	_, _ = app2.Connect(bridge.ConnectionInput{ServerURL: "https://b.example.com", APIKey: "k"})
+	if len(stored) != 1 {
+		t.Fatalf("failed connect persisted: %v", stored)
 	}
 }

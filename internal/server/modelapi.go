@@ -10,12 +10,16 @@ import (
 // handleListModels serves GET /api/models: the operator-authored model
 // presets (config plane, design §16), without credentials. The consumer
 // frontend offers them for selection or lets the user type freely.
-func (s *Server) handleListModels(w http.ResponseWriter, _ *http.Request) {
-	if s.settings == nil || s.settings.DB() == nil {
-		writeJSON(w, http.StatusOK, []map[string]any{})
-		return
+func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	var presets []wocadb.ModelPreset
+	var err error
+	switch {
+	case s.modelCatalog != nil:
+		// The authoritative catalog lives behind an injected fetcher.
+		presets, err = s.modelCatalog(r.Context())
+	case s.settings != nil && s.settings.DB() != nil:
+		presets, err = s.settings.DB().ListModelPresets()
 	}
-	presets, err := s.settings.DB().ListModelPresets()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -71,21 +75,38 @@ func (s *Server) handleApplyModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	presets, err := s.settings.DB().ListModelPresets()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	var preset *wocadb.ModelPreset
-	for i := range presets {
-		if presets[i].ID == id {
-			preset = &presets[i]
-			break
+	presetKey := ""
+	if s.resolveModel != nil {
+		// The authoritative catalog decides: unknown models are refused
+		// before anything local is touched.
+		p, key, ok := s.resolveModel(r.Context(), id, "", "")
+		if !ok {
+			http.NotFound(w, r)
+			return
 		}
-	}
-	if preset == nil {
-		http.NotFound(w, r)
-		return
+		preset, presetKey = &p, key
+	} else {
+		if s.settings == nil || s.settings.DB() == nil {
+			writeError(w, http.StatusServiceUnavailable, "settings database is disabled")
+			return
+		}
+		presets, err := s.settings.DB().ListModelPresets()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for i := range presets {
+			if presets[i].ID == id {
+				preset = &presets[i]
+				break
+			}
+		}
+		if preset == nil {
+			http.NotFound(w, r)
+			return
+		}
+		presetKey = s.settings.GetSecret(wocadb.ModelPresetKeySecret(preset.ID))
 	}
 
 	cfg := s.settings.Load()
@@ -106,8 +127,8 @@ func (s *Server) handleApplyModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// The preset's key, when stored, becomes the provider's live key.
-	if key := s.settings.GetSecret(wocadb.ModelPresetKeySecret(preset.ID)); key != "" {
+	// The preset's key, when authorized, becomes the provider's live key.
+	if key := presetKey; key != "" {
 		if err := s.settings.SetSecret(providerKeySecret(preset.Provider), key); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

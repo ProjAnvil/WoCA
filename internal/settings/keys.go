@@ -56,7 +56,13 @@ const (
 	KeyMemoryPGUser          = "memory-pg-user"
 	KeyMsgPlaneNATSURL       = "msg-plane-nats-url"
 	KeyMsgPlaneSubject       = "msg-plane-subject"
+	KeyModelWhitelist        = "model-whitelist"
 )
+
+// DefaultMsgPlaneSubject is the default run-dispatch notification subject.
+// It mirrors the message plane's own constant so the settings surface does
+// not depend on the enterprise plane package.
+const DefaultMsgPlaneSubject = "runs.dispatch"
 
 // KeyNames lists all settable keys in display order.
 func KeyNames() []string {
@@ -182,6 +188,8 @@ func KeyHelp(key string) string {
 		return "NATS server URL for pg+nats mode (nats://host:port)"
 	case KeyMsgPlaneSubject:
 		return "dispatch notification subject (default runs.dispatch)"
+	case KeyModelWhitelist:
+		return "config-plane model allowlist (comma-separated model ids; empty = unrestricted; managed-only)"
 	case KeyCheckpointPGHost:
 		return "checkpoint postgres host (shown when checkpoint backend is postgres; password goes in the checkpoint-pg-password secret)"
 	case KeyCheckpointPGPort:
@@ -353,6 +361,8 @@ func Apply(cfg *Settings, key, value string) error {
 			return fmt.Errorf("msg-plane-nats-url must be nats://host:port, got %q", value)
 		}
 		cfg.MsgPlaneNATSURL = value
+	case KeyModelWhitelist:
+		cfg.ModelWhitelist = value
 	case KeyMsgPlaneSubject:
 		cfg.MsgPlaneSubject = value
 	case KeyCheckpointPGHost:

@@ -8,12 +8,17 @@ web/node_modules/
 gui-test-screenshots/
 .worktrees/
 native-client/build/bin/
+native-client/bridgebin/woca-bridge
 web/package.json.md5
 web/wailsjs/
 native-client/build/darwin/Info.dev.plist
-skillsvc-web/node_modules/
-configsvc-web/node_modules/
+ee/skillsvc-web/node_modules/
+ee/configsvc-web/node_modules/
+ee/opsconsole-web/node_modules/
 /woca-config
 /woca-worker
 /woca-tenant
 /woca-server
+
+# IDE
+.idea/

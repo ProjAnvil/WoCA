@@ -25,7 +25,7 @@ deploy/observability/
 | `woca-server` | `/healthz`, `/metrics` on the business port | probes answer from the moment the port binds, before the agent finishes building; nginx blocks `/metrics` on the public entry (Prometheus scrapes inside the network) |
 | `woca-worker` | `/healthz`, `/metrics` on `--obs-addr` (default `:9091`, `off` disables) | dedicated probe port — the worker has no business HTTP surface |
 
-Metrics produced by `internal/obs`:
+Metrics produced by `internal/ee/obs`:
 
 - `http.server.request.count{http_route, http_request_method, http_response_status_code}`
 - `http.server.request.duration_seconds_*` (histogram, same labels)
@@ -53,7 +53,7 @@ this layer — it belongs to tenant-svc (§12.2 separation).
 ## Run it (compose)
 
 ```sh
-# full stack first (deploy/enterprise/README-FULL.md), then:
+# full stack first (deploy/selfhosted/README-FULL.md), then:
 make ent-obs-up     # collector + jaeger + prometheus + alertmanager + grafana,
                     # and recreates app containers with OTLP env
 open http://localhost:8085          # Grafana → dashboards → woca / woca Services

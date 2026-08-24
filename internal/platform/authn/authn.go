@@ -15,6 +15,48 @@ import (
 // ErrUnauthenticated is returned when a credential cannot be authenticated.
 var ErrUnauthenticated = errors.New("authn: unauthenticated")
 
+// Enumerated authentication-failure codes: the 401 body's "code" field,
+// a contract shared by the backend middleware and every client so both
+// sides program against the same enumeration instead of message strings.
+const (
+	// CodeUnauthorized covers missing, malformed, or rejected credentials.
+	CodeUnauthorized = "unauthorized"
+	// CodeRevoked marks a credential an administrator revoked — clients
+	// surface it distinctly ("key revoked") instead of a plain 401.
+	CodeRevoked = "revoked"
+	// CodeForbidden marks an authenticated identity that lacks the route's
+	// scope (the 403 envelope; the gateway middleware owns the write).
+	CodeForbidden = "forbidden"
+)
+
+// Error is an authentication failure carrying its enumerated code.
+type Error struct {
+	Code string
+	Err  error
+}
+
+func (e *Error) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return "authn: " + e.Code
+}
+
+func (e *Error) Unwrap() error { return e.Err }
+
+// CodeOf extracts the enumerated failure code from err; anything without
+// one is a plain CodeUnauthorized.
+func CodeOf(err error) string {
+	var e *Error
+	if errors.As(err, &e) && e.Code != "" {
+		return e.Code
+	}
+	return CodeUnauthorized
+}
+
+// Revoked wraps err as a revoked-credential failure.
+func Revoked(err error) error { return &Error{Code: CodeRevoked, Err: err} }
+
 // Provider authenticates a credential and returns the tenancy context it
 // maps to. The credential is a Bearer token or API key; an empty string
 // means no credential was presented.

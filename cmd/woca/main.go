@@ -4,10 +4,12 @@
 // approval, plan mode, subagents, skills, auto-compaction, and MCP — with a
 // cobra CLI and zerolog logging.
 //
-// It bundles every frontend: the terminal UIs below plus the server roles
-// imported from internal/servefront. Future server-only entries
-// (woca-server, woca-gateway, ...) assemble from internal/agentbuild and
-// internal/servefront without linking this package's terminal frontends.
+// It bundles every frontend: the terminal UIs below plus the serve/web
+// commands from internal/servefront. The enterprise role entries
+// (woca-server, woca-worker, woca-config, woca-tenant) assemble from
+// internal/agentbuild, internal/servefront, and internal/ee without
+// linking this package's terminal frontends — this binary never links the
+// enterprise tree (see make check-editions).
 package main
 
 import (
@@ -40,7 +42,6 @@ import (
 	"github.com/projanvil/woca/internal/console"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/mcp"
-	"github.com/projanvil/woca/internal/memcmd"
 	"github.com/projanvil/woca/internal/oauth"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/plugins"
@@ -51,7 +52,6 @@ import (
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
-	"github.com/projanvil/woca/internal/tenantcmd"
 	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/tui"
 	"github.com/projanvil/woca/internal/webgui"
@@ -122,8 +122,6 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newPluginCmd())
 	root.AddCommand(newMcpAuthCmd())
-	root.AddCommand(tenantcmd.New())
-	root.AddCommand(memcmd.New())
 	root.AddCommand(servefront.NewWebCmd())
 	return root
 }

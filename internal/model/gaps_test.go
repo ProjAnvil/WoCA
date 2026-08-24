@@ -67,9 +67,9 @@ func (m *bindErrModel) Batch(ctx context.Context, in [][]messages.Message, opts 
 func (m *bindErrModel) Stream(ctx context.Context, in []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
 	return m.inner.Stream(ctx, in, opts...)
 }
-func (m *bindErrModel) InputSchema() schema.Schema                              { return m.inner.InputSchema() }
-func (m *bindErrModel) OutputSchema() schema.Schema                             { return m.inner.OutputSchema() }
-func (m *bindErrModel) Capabilities() language.ChatModelCapabilities            { return m.inner.Capabilities() }
+func (m *bindErrModel) InputSchema() schema.Schema                   { return m.inner.InputSchema() }
+func (m *bindErrModel) OutputSchema() schema.Schema                  { return m.inner.OutputSchema() }
+func (m *bindErrModel) Capabilities() language.ChatModelCapabilities { return m.inner.Capabilities() }
 func (m *bindErrModel) BindTools([]tools.Tool) (language.ChatModel, error) {
 	return nil, errors.New("bind: tools not supported")
 }

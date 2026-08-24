@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const { fetchEventSource } = vi.hoisted(() => ({ fetchEventSource: vi.fn() }))
 vi.mock('@microsoft/fetch-event-source', () => ({ fetchEventSource }))
 
-import { streamEvents, streamRun, type StreamHandlers } from './client'
+import { streamEvents, streamRun, getEdgeBridges, type StreamHandlers } from './client'
 import { nativeRequestIDHeader } from '../native/requestCancellation'
 
 function bridge(cancelRequest: NativeAppBridge['CancelRequest']): NativeAppBridge {
@@ -11,6 +11,9 @@ function bridge(cancelRequest: NativeAppBridge['CancelRequest']): NativeAppBridg
     Bootstrap: vi.fn<NativeAppBridge['Bootstrap']>().mockResolvedValue({ state: 'ready' }),
     Connect: vi.fn<NativeAppBridge['Connect']>().mockResolvedValue({ state: 'ready' }),
     Logout: vi.fn<NativeAppBridge['Logout']>().mockResolvedValue({ state: 'authorization_required' }),
+    ConnectEmbedded: vi.fn<NativeAppBridge['ConnectEmbedded']>().mockResolvedValue({ state: 'ready' }),
+    EdgeBridges: vi.fn<NativeAppBridge['EdgeBridges']>().mockResolvedValue([]),
+    StreamCredentials: vi.fn<NativeAppBridge['StreamCredentials']>().mockResolvedValue({ scheme: '', token: '' }),
     Preference: vi.fn(async () => ({ value: '', found: false })),
     SetPreference: vi.fn(async (input) => ({ revision: input.revision, applied: true })),
     CancelRequest: cancelRequest,
@@ -168,5 +171,67 @@ describe('cancellable SSE transport', () => {
     await Promise.resolve()
     await Promise.resolve()
     stream.close()
+  })
+})
+
+describe('edge inventory probe', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function jsonResponse(body: unknown, status = 200) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  it('returns the inventory when the origin is an edge access point', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse([
+          { bridge_id: 'alpha', created_at: 1, last_seen: 5, live: true },
+          { bridge_id: 'beta', created_at: 2, last_seen: 9, live: false },
+        ]),
+      ),
+    )
+    const bridges = await getEdgeBridges()
+    expect(bridges).toEqual([
+      { bridge_id: 'alpha', created_at: 1, last_seen: 5, live: true },
+      { bridge_id: 'beta', created_at: 2, last_seen: 9, live: false },
+    ])
+    expect(fetch).toHaveBeenCalledWith('/api/edge/bridges', {
+      headers: { Accept: 'application/json' },
+    })
+  })
+
+  it('rejects the SPA fallback: 200 HTML is not an inventory', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('<!doctype html><html></html>', { headers: { 'Content-Type': 'text/html' } })),
+    )
+    expect(await getEdgeBridges()).toBeNull()
+  })
+
+  it('returns null on non-2xx, bad shapes, and network errors', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: 'core plane unreachable' }, 502)))
+    expect(await getEdgeBridges()).toBeNull()
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ bridges: [] })))
+    expect(await getEdgeBridges()).toBeNull()
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')))
+    expect(await getEdgeBridges()).toBeNull()
+  })
+
+  it('drops rows without a bridge id instead of failing the probe', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse([{ bridge_id: 'alpha', live: true }, { live: true }])),
+    )
+    expect(await getEdgeBridges()).toEqual([
+      { bridge_id: 'alpha', created_at: 0, last_seen: 0, live: true },
+    ])
   })
 })

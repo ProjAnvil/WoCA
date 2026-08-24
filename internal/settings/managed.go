@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 )
 
@@ -80,6 +81,9 @@ func (m *managedState) applyOverlay(out *Settings) {
 	if o.MemoryEngine != "" {
 		out.MemoryEngine = o.MemoryEngine
 	}
+	if o.ModelWhitelist != "" {
+		out.ModelWhitelist = o.ModelWhitelist
+	}
 	if o.LadyMDBPath != "" {
 		out.LadyMDBPath = o.LadyMDBPath
 	}
@@ -101,9 +105,81 @@ func (m *managedState) applyOverlay(out *Settings) {
 	if o.LadyMSystem2Interval != 0 {
 		out.LadyMSystem2Interval = o.LadyMSystem2Interval
 	}
+	// Private-cloud storage/memory wiring (product §3 storage domain): the
+	// config plane delivers the per-subsystem postgres coordinates and the
+	// remote ladyM endpoint so bridges checkpoint and remember against the
+	// organization's infrastructure — never a local file the user picked.
+	if o.CheckpointPGHost != "" {
+		out.CheckpointPGHost = o.CheckpointPGHost
+		out.CheckpointPGPort = o.CheckpointPGPort
+		out.CheckpointPGDB = o.CheckpointPGDB
+		out.CheckpointPGUser = o.CheckpointPGUser
+	}
+	if o.MemoryPGHost != "" {
+		out.MemoryPGHost = o.MemoryPGHost
+		out.MemoryPGPort = o.MemoryPGPort
+		out.MemoryPGDB = o.MemoryPGDB
+		out.MemoryPGUser = o.MemoryPGUser
+	}
+	if o.LadyMEndpoint != "" {
+		out.LadyMEndpoint = o.LadyMEndpoint
+	}
+	if o.LadyMAPIUsername != "" {
+		out.LadyMAPIUsername = o.LadyMAPIUsername
+	}
+	// BuiltinPlugins rides the overlay as the enterprise plugin set: an
+	// empty/absent list means "not managed" (same zero-value constraint as
+	// the bool fields above), so an org cannot force plugins OFF via the
+	// overlay — only pin a minimum set. Passwords stay secrets (the
+	// encrypted store), never overlay fields.
+	if len(o.BuiltinPlugins) > 0 {
+		out.BuiltinPlugins = o.BuiltinPlugins
+	}
 	// Bool fields (LadyMAutoRetain, LadyMSystem2 — like DebugLog) cannot be
 	// overlay-managed: false == unset, so a managed "false" is indistinguishable
 	// from an unmanaged field and therefore cannot be locked either.
+}
+
+// lockedFields lists the setting keys the overlay currently manages. The
+// settings API surfaces them so the frontend can render read-only fields
+// with their source (product design §3.1: source = "managed", locked).
+func (m *managedState) lockedFields() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.overlay == nil {
+		return nil
+	}
+	o := m.overlay
+	var out []string
+	add := func(key, v string) {
+		if v != "" {
+			out = append(out, key)
+		}
+	}
+	add("provider", o.Provider)
+	add("model", o.Model)
+	add("anthropic_base_url", o.AnthropicBaseURL)
+	add("openai_base_url", o.OpenAIBaseURL)
+	add("checkpoint_backend", o.CheckpointBackend)
+	add("memory_backend", o.MemoryBackend)
+	add("checkpoint_dir", o.CheckpointDir)
+	add("output_style", o.OutputStyle)
+	add("memory_engine", o.MemoryEngine)
+	add("model_whitelist", o.ModelWhitelist)
+	add("checkpoint-pg-host", o.CheckpointPGHost)
+	add("memory-pg-host", o.MemoryPGHost)
+	add("ladym-endpoint", o.LadyMEndpoint)
+	add("ladym-api-username", o.LadyMAPIUsername)
+	if len(o.BuiltinPlugins) > 0 {
+		out = append(out, "builtin-plugins")
+	}
+	if o.MaxTokens != 0 {
+		out = append(out, "max_tokens")
+	}
+	if o.Temperature != 0 {
+		out = append(out, "temperature")
+	}
+	return out
 }
 
 // checkWritable rejects saves that would change a locked field.
@@ -128,6 +204,11 @@ func (m *managedState) checkWritable(cfg Settings) error {
 		{"checkpoint_dir", o.CheckpointDir, cfg.CheckpointDir},
 		{"output_style", o.OutputStyle, cfg.OutputStyle},
 		{"memory_engine", o.MemoryEngine, cfg.MemoryEngine},
+		{"model_whitelist", o.ModelWhitelist, cfg.ModelWhitelist},
+		{"checkpoint-pg-host", o.CheckpointPGHost, cfg.CheckpointPGHost},
+		{"memory-pg-host", o.MemoryPGHost, cfg.MemoryPGHost},
+		{"ladym-endpoint", o.LadyMEndpoint, cfg.LadyMEndpoint},
+		{"ladym-api-username", o.LadyMAPIUsername, cfg.LadyMAPIUsername},
 		{"ladym_db_path", o.LadyMDBPath, cfg.LadyMDBPath},
 		{"ladym_embedding", o.LadyMEmbedding, cfg.LadyMEmbedding},
 		{"ladym_embedding_model", o.LadyMEmbeddingModel, cfg.LadyMEmbeddingModel},
@@ -153,6 +234,9 @@ func (m *managedState) checkWritable(cfg Settings) error {
 	}
 	if o.LadyMSystem2Interval != 0 && cfg.LadyMSystem2Interval != 0 && cfg.LadyMSystem2Interval != o.LadyMSystem2Interval {
 		return fmt.Errorf("settings: ladym_system2_interval is managed and locked (set to %d)", o.LadyMSystem2Interval)
+	}
+	if len(o.BuiltinPlugins) > 0 && len(cfg.BuiltinPlugins) > 0 && !slices.Equal(o.BuiltinPlugins, cfg.BuiltinPlugins) {
+		return fmt.Errorf("settings: builtin-plugins is managed and locked (set to %v)", o.BuiltinPlugins)
 	}
 	// LadyMAutoRetain and LadyMSystem2 (bools, like DebugLog) are not
 	// lockable here: a managed false is indistinguishable from unset.

@@ -33,8 +33,8 @@ deployments (see `deploy/observability/README.md`).
 
 ```sh
 # images are built from the repo root (adjust the tag/registry):
-docker build -f deploy/enterprise/Dockerfile.server -t woca-server:local .
-docker build -f deploy/enterprise/Dockerfile.worker -t woca-worker:local .
+docker build -f deploy/selfhosted/Dockerfile.server -t woca-server:local .
+docker build -f deploy/selfhosted/Dockerfile.worker -t woca-worker:local .
 # load into your cluster (kind):
 kind load docker-image woca-server:local woca-worker:local
 

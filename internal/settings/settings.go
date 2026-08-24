@@ -6,6 +6,7 @@ package settings
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -110,9 +111,13 @@ type Settings struct {
 	LadyMEndpoint         string `json:"ladym_endpoint"`
 	LadyMAPIUsername      string `json:"ladym_api_username"`
 	DebugLog              bool   `json:"debug_log"`
+	// ModelWhitelist is the config-plane model allowlist (comma-separated
+	// model ids; empty means unrestricted). Managed-only: the bridge
+	// validates model choices against it (product design §3.1).
+	ModelWhitelist string `json:"model_whitelist"`
 	// Message plane (run dispatch): "pg" (default) keeps the PG queue
 	// alone; "pg+nats" adds NATS dispatch notifications on top. Live
-	// reload — resolved per operation by internal/msgplane.
+	// reload — resolved per operation by internal/ee/msgplane.
 	MsgPlaneMode    string `json:"msg_plane_mode"`
 	MsgPlaneNATSURL string `json:"msg_plane_nats_url"`
 	MsgPlaneSubject string `json:"msg_plane_subject"`
@@ -214,6 +219,12 @@ type Store struct {
 
 // SetManaged installs the enterprise managed-settings overlay: its values
 // override database reads and are locked against writes.
+// ManagedFields lists the keys locked by the managed overlay (nil when
+// no overlay is installed).
+func (s *Store) ManagedFields() []string {
+	return s.managed.lockedFields()
+}
+
 func (s *Store) SetManaged(m Settings) {
 	if s == nil {
 		return
@@ -246,9 +257,12 @@ func Open(target string) (*Store, error) {
 }
 
 // Generation returns a cheap change fingerprint of the settings stores:
-// the summed updated_at of every settings and secrets row. The config
-// plane is the sole writer, so business roles compare this value to detect
-// config-plane writes and re-run their build hooks (internal/settingswatch).
+// the summed updated_at of every settings and secrets row, plus the managed
+// overlay. The config plane is the sole writer, so business roles compare
+// this value to detect config-plane writes and re-run their build hooks
+// (internal/settingswatch); the overlay rides the fingerprint because a
+// package that changes only plaintext managed values (no secrets rows)
+// must still wake the rebuild.
 // The empty string means "no database".
 func (s *Store) Generation() string {
 	if s == nil || s.db == nil {
@@ -260,7 +274,23 @@ func (s *Store) Generation() string {
 	_ = s.db.QueryRow(`SELECT COALESCE(SUM(updated_at), 0) FROM settings`).Scan(&gen)
 	var sec string
 	_ = s.db.QueryRow(`SELECT COALESCE(SUM(updated_at), 0) FROM secrets`).Scan(&sec)
-	return gen + "/" + sec
+	var ov string
+	s.managed.mu.Lock()
+	if s.managed.overlay != nil {
+		if raw, err := json.Marshal(s.managed.overlay); err == nil {
+			ov = fmt.Sprintf("%x", fnv64(raw))
+		}
+	}
+	s.managed.mu.Unlock()
+	return gen + "/" + sec + "/" + ov
+}
+
+// fnv64 is a cheap stable digest for the overlay fingerprint (contents are
+// not secret: the overlay struct carries no key material by construction).
+func fnv64(b []byte) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write(b)
+	return h.Sum64()
 }
 
 // OpenFromDB builds a store over an already-opened wocadb (sharing the
@@ -393,6 +423,9 @@ func applyPairs(out *Settings, pairs map[string]string) {
 	if v, ok := pairs["msg_plane_subject"]; ok {
 		out.MsgPlaneSubject = v
 	}
+	if v, ok := pairs["model_whitelist"]; ok {
+		out.ModelWhitelist = v
+	}
 	if v, ok := pairs["checkpoint_pg_host"]; ok {
 		out.CheckpointPGHost = v
 	}
@@ -497,7 +530,8 @@ func (s *Store) Save(cfg Settings) error {
 	fields = append(fields,
 		field{"msg_plane_mode", orDefaultStr(cfg.MsgPlaneMode, "pg")},
 		field{"msg_plane_nats_url", cfg.MsgPlaneNATSURL},
-		field{"msg_plane_subject", orDefaultStr(cfg.MsgPlaneSubject, "runs.dispatch")},
+		field{"msg_plane_subject", orDefaultStr(cfg.MsgPlaneSubject, DefaultMsgPlaneSubject)},
+		field{"model_whitelist", cfg.ModelWhitelist},
 		field{"checkpoint_pg_host", cfg.CheckpointPGHost},
 		field{"checkpoint_pg_port", orDefaultStr(cfg.CheckpointPGPort, "5432")},
 		field{"checkpoint_pg_db", orDefaultStr(cfg.CheckpointPGDB, "woca")},

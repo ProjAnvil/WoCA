@@ -15,6 +15,9 @@ var ErrServerContractUnavailable = errors.New("native activation endpoint is not
 type ActivationRequest struct {
 	BaseURL string
 	APIKey  string
+	// BridgeID targets one bridge behind an edge access point ("" for
+	// direct connections); it rides the X-Woca-Bridge header.
+	BridgeID string
 }
 
 type ActivationResult struct {

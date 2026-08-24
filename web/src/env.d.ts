@@ -14,11 +14,30 @@ declare global {
     server_url?: string
     message?: string
     database_path?: string
+    /** Target bridge for edge entries (v1.6 入口②; empty for direct). */
+    bridge_id?: string
+    /** The embedded bridge's base URL (wails only; entry ① of the page). */
+    embedded_url?: string
   }
 
   interface ConnectionInput {
     server_url: string
     api_key: string
+    bridge_id?: string
+  }
+
+  /** One bridge behind an edge access point (pre-auth inventory). */
+  interface EdgeBridge {
+    bridge_id: string
+    created_at: number
+    last_seen: number
+    live: boolean
+  }
+
+  /** Session material for direct SSE connections (native only). */
+  interface StreamCredential {
+    scheme: string
+    token: string
   }
 
   interface PreferenceInput {
@@ -41,6 +60,9 @@ declare global {
     Bootstrap(): Promise<BootstrapState>
     Connect(input: ConnectionInput): Promise<BootstrapState>
     Logout(): Promise<BootstrapState>
+    ConnectEmbedded(): Promise<BootstrapState>
+    EdgeBridges(serverURL: string): Promise<EdgeBridge[]>
+    StreamCredentials(serverURL: string): Promise<StreamCredential>
     Preference(key: string): Promise<PreferenceValue>
     SetPreference(input: PreferenceInput): Promise<PreferenceWriteResult>
     CancelRequest(id: string): Promise<boolean>

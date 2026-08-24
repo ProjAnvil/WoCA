@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../i18n'
 
@@ -134,5 +134,108 @@ describe('ConnectView', () => {
     )
     expect((wrapper.get('[data-testid="api-key-input"]').element as HTMLInputElement).value).toBe('')
     expect(wrapper.get('[role="alert"]').text()).not.toContain('activation failed')
+  })
+})
+
+describe('ConnectView three-entry model (design §6.6)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('go', undefined)
+    vi.unstubAllGlobals()
+  })
+
+  function nativeApp(edgeBridges?: () => Promise<EdgeBridge[]>) {
+    return {
+      Bootstrap: vi.fn(async () => ({ state: 'ready' as const })),
+      Connect: vi.fn(async () => ({ state: 'ready' as const })),
+      Logout: vi.fn(async () => ({ state: 'authorization_required' as const })),
+      ConnectEmbedded: vi.fn(async () => ({ state: 'ready' as const })),
+      EdgeBridges: edgeBridges ?? vi.fn(async () => [] as EdgeBridge[]),
+      StreamCredentials: vi.fn(async () => ({ scheme: '', token: '' })),
+      Preference: vi.fn(async () => ({ value: '', found: false })),
+      SetPreference: vi.fn(async () => ({ revision: 1, applied: true })),
+      CancelRequest: vi.fn(async () => true),
+    }
+  }
+
+  it('shows the embedded entry only when an embedded bridge is running', async () => {
+    const { wrapper } = mountConnect()
+    expect(wrapper.find('[data-testid="embedded-entry"]').exists()).toBe(false)
+
+    const withEmbedded = mount(ConnectView, {
+      props: { connect: vi.fn().mockResolvedValue({ state: 'ready' }), embeddedUrl: 'http://127.0.0.1:39871' },
+      global: { plugins: [i18n] },
+    })
+    expect(withEmbedded.find('[data-testid="embedded-entry"]').exists()).toBe(true)
+    await withEmbedded.find('[data-testid="embedded-connect"]').trigger('click')
+    expect(withEmbedded.emitted('connect-embedded')).toHaveLength(1)
+  })
+
+  it('switches URL label and placeholder between the private-cloud and direct tabs', async () => {
+    const { wrapper } = mountConnect()
+    expect(wrapper.get('[data-testid="tab-private"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('[data-testid="url-input"]').attributes('placeholder')).toBe('https://edge.example.com')
+
+    await wrapper.get('[data-testid="tab-direct"]').trigger('click')
+    expect(wrapper.get('[data-testid="tab-direct"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('[data-testid="url-input"]').attributes('placeholder')).toBe('https://bridge.example.com')
+  })
+
+  it('asks the edge for its bridges on the private tab and shows a selection step when several are registered', async () => {
+    const app = nativeApp(vi.fn(async () => [
+      { bridge_id: 'br_one', created_at: 1, last_seen: 2, live: true },
+      { bridge_id: 'br_two', created_at: 1, last_seen: 2, live: false },
+    ]))
+    vi.stubGlobal('go', { main: { App: app } })
+    const connect = vi.fn().mockResolvedValue({ state: 'ready' })
+    const { wrapper } = mountConnect(connect)
+    await wrapper.get('[data-testid="url-input"]').setValue('https://edge.example.com')
+    await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(app.EdgeBridges).toHaveBeenCalledWith('https://edge.example.com')
+    expect(connect).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="bridge-step"]').exists()).toBe(true)
+
+    const buttons = wrapper.findAll('.gate-bridge')
+    expect(buttons).toHaveLength(2)
+    await buttons[1].trigger('click')
+    await flushPromises()
+    expect(connect).toHaveBeenCalledWith({
+      server_url: 'https://edge.example.com',
+      api_key: 'woca_test_key',
+      bridge_id: 'br_two',
+    })
+  })
+
+  it('reports an error when the edge has no registered bridges', async () => {
+    const app = nativeApp()
+    vi.stubGlobal('go', { main: { App: app } })
+    const connect = vi.fn().mockResolvedValue({ state: 'ready' })
+    const { wrapper } = mountConnect(connect)
+    await wrapper.get('[data-testid="url-input"]').setValue('https://edge.example.com')
+    await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
+    await wrapper.get('form').trigger('submit')
+
+    expect(connect).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('No bridge is registered at this edge.')
+  })
+
+  it('skips the inventory when the URL carries a direct bridge link', async () => {
+    const app = nativeApp()
+    vi.stubGlobal('go', { main: { App: app } })
+    const connect = vi.fn().mockResolvedValue({ state: 'ready' })
+    const { wrapper } = mountConnect(connect)
+    await wrapper.get('[data-testid="url-input"]').setValue('https://edge.example.com/?bridge=br_pinned')
+    await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(app.EdgeBridges).not.toHaveBeenCalled()
+    expect(connect).toHaveBeenCalledWith({
+      server_url: 'https://edge.example.com/',
+      api_key: 'woca_test_key',
+      bridge_id: 'br_pinned',
+    })
   })
 })

@@ -25,12 +25,11 @@ import (
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/fsb"
 	"github.com/projanvil/woca/internal/gateway"
 	"github.com/projanvil/woca/internal/memory"
-	"github.com/projanvil/woca/internal/msgplane"
 	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/platform/authz"
-	"github.com/projanvil/woca/internal/platform/dpop"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/quota"
@@ -39,7 +38,6 @@ import (
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
 	"github.com/projanvil/woca/internal/telemetry"
-	"github.com/projanvil/woca/internal/tenant"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -55,7 +53,7 @@ type Config struct {
 	Authz authz.Authorizer
 	// NativeAuth enables the native-client credential surface
 	// (/api/native/*). Nil disables it (personal edition).
-	NativeAuth *NativeAuth
+	NativeAuth NativeAuth
 	// RunLedger externalizes run state (runs + run_events) so multiple
 	// instances sharing one database see each other's runs and adopt
 	// expired leases (Phase 2). Nil keeps the in-process behavior only.
@@ -72,11 +70,11 @@ type Config struct {
 	// creation and event streaming no longer touch the host. All other
 	// host-surface routes (workspaces, settings, memory) stay local-gated.
 	RunsOffHost bool
-	// MsgPlane is the run dispatch message plane (internal/msgplane). Nil
+	// MsgPlane is the run dispatch message plane (internal/ee/msgplane). Nil
 	// keeps pure-PG queuing; with a plane, dispatched runs additionally
 	// notify NATS so idle workers wake instantly (progressive overlay —
 	// the PG poll fallback stays the correctness net).
-	MsgPlane *msgplane.Plane
+	MsgPlane MsgPlane
 	// Agent is the coding agent that runs each conversation turn.
 	Agent *agent.Agent
 	// Static is the frontend filesystem (embedded or os.DirFS for development).
@@ -138,6 +136,42 @@ type Config struct {
 	// neither is present (database disabled, tests) an in-memory store
 	// keeps the state API functional for this process only.
 	RunStateDB *wocadb.DB
+	// FS is the workspace folder-browser service (product design §4.1):
+	// directory-only listing, mkdir, watch, and validation jailed to the
+	// configured roots. Nil disables the /api/fs/* routes.
+	FS *fsb.Service
+	// Extras mounts additional routes on the API mux before the gateway
+	// middleware wraps it (edition-specific surfaces such as the bridge
+	// login routes). Nil mounts nothing.
+	Extras func(mux *http.ServeMux)
+	// AnonymousAPIPaths are exact /api routes the deployment form mounts
+	// as bootstrap exchanges (login, activation): exempt from
+	// authentication beyond the health probe. The form that mounts the
+	// route declares it — core learns no route names.
+	AnonymousAPIPaths []string
+	// HostGateExemptPrefixes are path prefixes the deployment form opens
+	// past the local-tenant gate: its anonymous bootstrap routes and
+	// session-lifecycle surfaces that carry no host data.
+	HostGateExemptPrefixes []string
+	// StreamReauth periodically revalidates a stream's credential after
+	// connect (revocation closing): on error the stream emits an
+	// auth_revoked event carrying the enumerated code and closes. Nil
+	// keeps connect-time-only validation.
+	StreamReauth func(credential string) error
+	// Audit records a local audit event for sensitive operations (run
+	// creation, workspace writes) with the acting identity; the bridge
+	// wires it to its audit table (product design R5). Nil skips auditing.
+	Audit func(actor, action, detail string)
+	// ModelCatalog overrides the local preset list for deployments whose
+	// authoritative model catalog lives behind another plane (nil = the
+	// local database; the selection surface reads whatever this returns).
+	ModelCatalog func(ctx context.Context) ([]wocadb.ModelPreset, error)
+	// ResolveModel resolves a preferred model against the authoritative
+	// catalog: (preset, its credential, ok). Deployments whose catalog is
+	// remote inject a fetcher; nil resolves against the local database.
+	// The credential travels only between the catalog authority and this
+	// process — it never appears on a client surface.
+	ResolveModel func(ctx context.Context, id, provider, model string) (wocadb.ModelPreset, string, bool)
 }
 
 // Server serves the woca web UI and its HTTP API.
@@ -147,30 +181,44 @@ type Server struct {
 	log        zerolog.Logger
 	auth       authn.Provider
 	authz      authz.Authorizer
-	nativeAuth *NativeAuth
-	ledger     *runstate.Ledger
-	workerID   string
+	nativeAuth NativeAuth
+	fs         *fsb.Service
+	extras     func(mux *http.ServeMux)
+	audit      func(actor, action, detail string)
+	// anonymousAPI / hostGateExempt carry the deployment form's declared
+	// exemptions: bootstrap exchanges (login, activation) the form mounts
+	// and prefixes its session surfaces need past the local-tenant gate.
+	// Core never hardcodes an edition's route names.
+	anonymousAPI   []string
+	hostGateExempt []string
+	streamReauth   func(string) error
+	ledger         *runstate.Ledger
+	workerID       string
 	// dispatch enqueues runs for a worker to execute (Phase 3 wiring);
 	// runsOffHost opens the run surface to remote tenants.
 	dispatch    bool
 	runsOffHost bool
 
-	mu             sync.Mutex
-	runs           map[string]*Run
-	runOrder       []string // registration order, backs finished-run pruning
-	msgplane       *msgplane.Plane
-	sessions       *sessionStore
-	admission      *admission
-	state          sessionStateStore // durable per-session run state (running/awaiting)
-	owner          string            // "pid@host" stamped on state rows
-	hub            eventbus.Bus      // global SSE broadcast (/api/events)
-	workdir        string
-	grafanaURL     string // ops console link from WOCA_GRAFANA_URL (design §12.3)
-	settings       *settings.Store
-	memory         *store.Store
-	memEngine      memory.Engine
-	rebuildMemory  func() error
-	rebuildModel   func() error
+	mu            sync.Mutex
+	runs          map[string]*Run
+	runOrder      []string // registration order, backs finished-run pruning
+	msgplane      MsgPlane
+	sessions      *sessionStore
+	admission     *admission
+	state         sessionStateStore // durable per-session run state (running/awaiting)
+	owner         string            // "pid@host" stamped on state rows
+	hub           eventbus.Bus      // global SSE broadcast (/api/events)
+	workdir       string
+	grafanaURL    string // ops console link from WOCA_GRAFANA_URL (design §12.3)
+	settings      *settings.Store
+	memory        *store.Store
+	memEngine     memory.Engine
+	rebuildMemory func() error
+	rebuildModel  func() error
+	// modelCatalog/resolveModel: the authoritative model catalog seam
+	// (nil = the local database; see Config).
+	modelCatalog   func(ctx context.Context) ([]wocadb.ModelPreset, error)
+	resolveModel   func(ctx context.Context, id, provider, model string) (wocadb.ModelPreset, string, bool)
 	cfgLive        func() config.Config
 	setThinking    func(budget int) error
 	quotaFetch     func(ctx context.Context) (quota.Info, error)
@@ -224,6 +272,12 @@ func New(cfg Config) *Server {
 		auth:           auth,
 		authz:          authorizer,
 		nativeAuth:     cfg.NativeAuth,
+		anonymousAPI:   cfg.AnonymousAPIPaths,
+		hostGateExempt: cfg.HostGateExemptPrefixes,
+		streamReauth:   cfg.StreamReauth,
+		fs:             cfg.FS,
+		extras:         cfg.Extras,
+		audit:          cfg.Audit,
 		ledger:         cfg.RunLedger,
 		msgplane:       cfg.MsgPlane,
 		workerID:       newWorkerID(),
@@ -242,6 +296,8 @@ func New(cfg Config) *Server {
 		memEngine:      cfg.MemoryEngine,
 		rebuildMemory:  cfg.RebuildMemory,
 		rebuildModel:   cfg.RebuildModel,
+		modelCatalog:   cfg.ModelCatalog,
+		resolveModel:   cfg.ResolveModel,
 		cfgLive:        cfg.CfgLive,
 		setThinking:    cfg.SetThinkingBudget,
 		quotaFetch:     cfg.Quota,
@@ -285,7 +341,13 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 	if s.nativeAuth != nil {
-		s.registerNativeAuth(mux)
+		s.nativeAuth.RegisterRoutes(mux)
+	}
+	if s.fs != nil {
+		s.registerFS(mux)
+	}
+	if s.extras != nil {
+		s.extras(mux)
 	}
 	s.route(mux, "POST /api/runs", authz.ScopeRunsWrite, s.handleCreateRun)
 	s.route(mux, "GET /api/runs/{id}/events", authz.ScopeRunsRead, s.handleEvents)
@@ -314,7 +376,10 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/agent/thinking", authz.ScopeAgentWrite, s.handleSetThinking)
 	s.route(mux, "GET /api/quota", authz.ScopeSettingsRead, s.handleQuota)
 	s.route(mux, "GET /api/claudeenv", authz.ScopeSettingsRead, s.handleGetClaudeEnv)
-	s.route(mux, "PUT /api/claudeenv", authz.ScopeSettingsWrite, s.handlePutClaudeEnv)
+	// Importing ~/.claude skills/MCP is user extensibility — the same trust
+	// class as enabling a plugin (touching ~/.woca on the execution machine),
+	// not a server-settings rewrite: members can curate their environment.
+	s.route(mux, "PUT /api/claudeenv", authz.ScopePluginsWrite, s.handlePutClaudeEnv)
 	s.route(mux, "GET /api/plugins", authz.ScopePluginsRead, s.handleGetPlugins)
 	s.route(mux, "PUT /api/plugins", authz.ScopePluginsWrite, s.handlePutPlugins)
 	s.route(mux, "POST /api/plugins/{name}/install", authz.ScopePluginsWrite, s.handleInstallPlugin)
@@ -327,23 +392,27 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/memory", authz.ScopeMemoryWrite, s.handleRememberMemory)
 	s.route(mux, "DELETE /api/memory/{id}", authz.ScopeMemoryWrite, s.handleForgetMemory)
 	mux.Handle("/", s.staticHandler())
-	localGate := gateway.RequireLocalTenant()
+	localGate := gateway.RequireLocalTenant(s.hostGateExempt...)
 	if s.runsOffHost {
 		// Runs execute on sandboxed workers (queue dispatch), so the run
 		// surface is tenant-safe; the model-preset list/apply is the
 		// consumer frontend's selection surface (keys stay server-side).
 		// Every other host surface stays gated.
-		localGate = gateway.RequireLocalTenant("/api/runs", "/api/models")
+		localGate = gateway.RequireLocalTenant(append(s.hostGateExempt, "/api/runs", "/api/models")...)
 	}
 	if s.nativeAuth != nil {
-		return gateway.Authenticate(s.auth, tenant.NewSessionProvider(s.nativeAuth.tenantStore(), dpop.NewVerifier()))(
+		return gateway.Authenticate(s.auth, s.nativeAuth.SessionAuthenticator(), s.anonymousAPI)(
 			localGate(mux),
 		)
 	}
-	return gateway.Authenticate(s.auth)(
+	return gateway.Authenticate(s.auth, nil, s.anonymousAPI)(
 		localGate(mux),
 	)
 }
+
+// streamReauthInterval bounds how long a revoked credential can keep an
+// open SSE stream alive.
+const streamReauthInterval = 5 * time.Second
 
 // route registers h at pattern with a required scope (gateway.RequireScope).
 func (s *Server) route(mux *http.ServeMux, pattern, scope string, h http.HandlerFunc) {
@@ -525,6 +594,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	s.auditEvent(r, "run_create", req.SessionID)
 	run, sid, pos, err := s.startRun(req.SessionID, human, req.Workspace, req.Attachments)
 	if err == errQueueFull {
 		http.Error(w, "session run queue is full", http.StatusConflict)
@@ -730,6 +800,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// The credential captured here is what the periodic revalidator
+	// re-checks (Authorization header or the declared session cookie).
+	cred := gateway.ExtractCredential(s.auth, r)
 	// http.ResponseController flushes through middleware wrappers that
 	// hide the underlying *http.Flusher (the observability RED middleware
 	// wraps every writer); a direct type assertion would break SSE behind
@@ -757,9 +830,24 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
+	// Revocation closing: open streams revalidate their credential, so
+	// an administrator's revocation breaks active SSE within one
+	// interval instead of lingering to the stream's natural end.
+	var reauth <-chan time.Time
+	if s.streamReauth != nil {
+		t := time.NewTicker(streamReauthInterval)
+		defer t.Stop()
+		reauth = t.C
+	}
 	ctx := r.Context()
 	for {
 		select {
+		case <-reauth:
+			if err := s.streamReauth(cred); err != nil {
+				fmt.Fprintf(w, "event: auth_revoked\ndata: %s\n\n", `{"code":"`+authn.CodeOf(err)+`"}`)
+				flusher.Flush()
+				return
+			}
 		case ev := <-sub.ch:
 			data, err := json.Marshal(ev.Data)
 			if err != nil {
@@ -1031,8 +1119,10 @@ func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace 
 		return nil, sid, 0, err
 	}
 	// Wake the workers over the message plane (best-effort: the poll
-	// fallback covers a missed notification).
-	s.msgplane.Notify(run.id)
+	// fallback covers a missed notification). Nil plane = pure-PG posture.
+	if s.msgplane != nil {
+		s.msgplane.Notify(run.id)
+	}
 	// The session is busy from the client's point of view whether the run
 	// executes here or on a worker; the worker's finish clears the row
 	// (ClearIfRun is compare-and-clear, so it only lifts its own run).

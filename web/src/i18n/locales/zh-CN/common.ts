@@ -1,4 +1,5 @@
 export default {
+  yes: '是',
   save: '保存',
   cancel: '取消',
   close: '关闭',

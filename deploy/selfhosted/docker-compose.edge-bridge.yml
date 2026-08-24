@@ -1,0 +1,68 @@
+# The bridge as an INDEPENDENT container group (product design v1.5
+# §6.3): separate compose project from the control plane — same machine
+# or a different one, NAT-hidden is the point. It reaches the control
+# plane only through the host-published edge port (outbound-only), the
+# way a home bridge behind NAT reaches a VPS-hosted edge.
+#
+# The bridge carries NO key management (v1.7): users sign in with an
+# ORGANIZATION key issued by the tenant ops console (127.0.0.1:9091 on
+# the control-plane group), and the bridge verifies it offline against
+# the core-issued session (validated at the core) — so first enrollment must
+# happen before anyone can sign in.
+#
+#   make edge-up (control plane) → ops console: issue a tenant key +
+#   an enrollment token, then:
+#   make edge-bridge  (set EDGE_ENROLL_TOKEN=<token> in .env — the
+#     apikey posture cannot serve the web-config page before enrollment)
+#   → registered: browse the bridge through the edge at
+#     http://127.0.0.1:8443 and sign in with the tenant key
+#     (scenario four, dev posture)
+#
+# On a Linux host set EDGE_HOST=host.docker.internal explicitly via
+# extra_hosts (docker desktop provides it out of the box).
+
+name: woca-edge-dev-bridge
+
+services:
+  bridge:
+    image: woca-bridge-dev:edge
+    container_name: woca-edge-dev-bridge
+    build:
+      context: ../..
+      dockerfile: deploy/selfhosted/Dockerfile.bridge-dev
+    restart: unless-stopped
+    ports:
+      # The bridge's own SPA + web config page (direct entry ③).
+      - "${EDGE_BRIDGE_PORT:-3490}:8080"
+    environment:
+      WOCA_AUTH: apikey
+      WOCA_HOME: /var/lib/woca
+      WOCA_SESSION_DIR: /var/lib/woca/sessions
+      # Outbound-only control-plane link through the published edge port
+      # (design §6.3: bridge 独立容器，通过宿主入口连控制面). The
+      # enrollment token comes from the tenant ops console; the env path
+      # is the headless first-boot default under the apikey posture
+      # (v1.7 §6.5 path ① — the web config page needs an enrolled admin
+      # key to write).
+      WOCA_EDGE_URL: ${EDGE_URL:-http://host.docker.internal:8443}
+      WOCA_ENROLL_TOKEN: ${EDGE_ENROLL_TOKEN:-}
+      WOCA_FS_ROOTS: /workspace:/root
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - edge-bridge-home:/var/lib/woca
+      - ${EDGE_WORKSPACE_DIR:-./edge-workspace}:/workspace
+      # Optional: expose the host's Claude environment so the settings
+      # page's 技能与 MCP import can scan it (the bridge scans its own
+      # $HOME/.claude — see BRIDGE.md §二·五).
+      # - ~/.claude:/root/.claude:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  edge-bridge-home:
+    name: woca-edge-dev-bridge-home

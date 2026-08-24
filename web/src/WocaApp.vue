@@ -8,6 +8,8 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import GoalPanel from './components/GoalPanel.vue'
 import MemoryPanel from './components/MemoryPanel.vue'
 import InterruptModal from './components/InterruptModal.vue'
+import LoginGate from './components/LoginGate.vue'
+import { useAuthStore } from './stores/auth'
 import { useSettingsStore } from './stores/settings'
 import { useWorkspaceStore } from './stores/workspace'
 import { useSessionStore } from './stores/sessions'
@@ -20,8 +22,10 @@ const workspace = useWorkspaceStore()
 const sessions = useSessionStore()
 const memory = useMemoryStore()
 const completions = useCompletionsStore()
+const auth = useAuthStore()
 
 onMounted(() => {
+  void auth.probe()
   void sessions.init()
   void workspace.load()
   // Server-backed settings must load at startup too: chat features gated on
@@ -57,5 +61,6 @@ watch(
     <GoalPanel v-if="sessions.goalPanelOpen" />
     <MemoryPanel v-if="memory.panelOpen" />
     <InterruptModal v-if="sessions.activeInterrupt" />
+    <LoginGate v-if="auth.gateOpen" :revoked="auth.gateCode === 'revoked'" @authenticated="auth.onAuthenticated" />
   </div>
 </template>

@@ -1,4 +1,4 @@
-.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web install deps-baseline check-deps native-test native-build native-dev ent-up ent-down ent-ps ent-logs
+.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web ee-web install deps-baseline check-deps native-test native-build native-dev ent-up ent-down ent-ps ent-logs
 
 # Default: build the web frontend, then the binary (frontend is embedded).
 all: web build
@@ -6,6 +6,20 @@ all: web build
 # Build the web frontend into web/dist (required before the Go build embeds it).
 web:
 	cd web && bun install && bun run build
+
+# Build the enterprise console SPAs and sync their dist into the go:embed
+# directories (required before building the server roles — the embedded
+# consoles are committed, so this must run whenever ee/*-web changes).
+ee-web:
+	cd ee/configsvc-web && bun install && bun run build
+	rm -rf internal/ee/configsvc/spa && mkdir -p internal/ee/configsvc/spa
+	cp -R ee/configsvc-web/dist/ internal/ee/configsvc/spa/
+	cd ee/opsconsole-web && bun install && bun run build
+	rm -rf internal/ee/opsconsole/spa && mkdir -p internal/ee/opsconsole/spa
+	cp -R ee/opsconsole-web/dist/ internal/ee/opsconsole/spa/
+	cd ee/skillsvc-web && bun install && bun run build
+	rm -rf internal/ee/skillsvc/spa && mkdir -p internal/ee/skillsvc/spa
+	cp -R ee/skillsvc-web/dist/ internal/ee/skillsvc/spa/
 
 build:
 	go build -o build/woca ./cmd/woca
@@ -71,17 +85,21 @@ check-deps: build
 native-test:
 	cd native-client && go test ./...
 
-native-build: web
-	cd native-client && wails build -clean
+native-build: web build-server
+	# Bundle the bridge binary into the native client (embeddedbridge tag):
+	# the app embeds it, installs to ~/.woca/native/bin on first run, and
+	# spawns it as the zero-login local bridge (product design §5.1).
+	cp build/woca-bridge native-client/bridgebin/woca-bridge
+	cd native-client && wails build -clean -tags embeddedbridge
 
 native-dev:
 	cd native-client && wails dev
 
-# woca-enterprise: the microservice (enterprise) edition persistence layer —
-# PostgreSQL primary+replica and a 3-node NATS JetStream cluster, segmented
-# per component class and reachable only through the single gateway on high
-# ports. See deploy/enterprise/README.md.
-ENT_COMPOSE = docker compose -f deploy/enterprise/docker-compose.yml
+# Self-hosted enterprise stack: the persistence layer — PostgreSQL
+# primary+replica and a 3-node NATS JetStream cluster, segmented per
+# component class and reachable only through the single gateway on high
+# ports. See deploy/selfhosted/README.md.
+ENT_COMPOSE = docker compose -f deploy/selfhosted/docker-compose.yml
 
 ent-up:
 	$(ENT_COMPOSE) up -d
@@ -95,7 +113,7 @@ ent-down:
 
 # Full microservices deployment (design §5.3): every role + data plane +
 # firewall isolation, with the observability stack (§12.3) attached.
-ENT_FULL_COMPOSE = docker compose -f deploy/enterprise/docker-compose.full.yml -f deploy/observability/docker-compose.observability.yml
+ENT_FULL_COMPOSE = docker compose -f deploy/selfhosted/docker-compose.full.yml -f deploy/observability/docker-compose.observability.yml
 ENT_OBS_SVCS = otel-collector jaeger prometheus alertmanager grafana
 
 .PHONY: ent-full-up ent-full-down
@@ -141,10 +159,71 @@ ent-ps:
 ent-logs:
 	$(ENT_COMPOSE) logs -f
 
-# Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
-SERVER_ARTIFACTS := woca-server woca-tenant woca-worker woca-config
+# Dev environment: the minimal twin of the full stack — one of every
+# microservice role, a single PG and NATS node, no observability. Built
+# for development 联调; data lives in woca-dev-* volumes (never touches
+# full's). The full stack must be down first — host ports are shared by
+# design, so the two are drop-in replacements.
+DEV_COMPOSE = docker compose -f deploy/selfhosted/docker-compose.dev.yml
 
-.PHONY: build-server check-server-artifacts
+.PHONY: dev-up dev-down dev-ps dev-logs
+dev-up:
+	# --build: dev runs the current source (the committed :local images
+	# may predate the working tree).
+	$(DEV_COMPOSE) up -d --build
+	# nginx resolves upstream names once at config load; rebuilt app
+	# containers get new IPs, so reload the gateway after --build.
+	$(DEV_COMPOSE) restart gateway
+	$(DEV_COMPOSE) ps
+	@echo "dev stack up: gateway :8080 business, :9086 config console (single instances, no monitoring)"
+
+# The dev bridge toolbox (profile: bridge): python/node/npm/bun container
+# running woca-bridge — the browser drives :3490, tools execute inside.
+dev-bridge:
+	$(DEV_COMPOSE) --profile bridge up -d --build bridge
+	@echo "dev bridge: http://localhost:$${DEV_BRIDGE_PORT:-3490} (enroll via DEV_ENROLL_TOKEN from the ops console, then sign in with an org key)"
+
+dev-down:
+	$(DEV_COMPOSE) --profile bridge down
+
+dev-ps:
+	$(DEV_COMPOSE) ps
+
+dev-logs:
+	$(DEV_COMPOSE) logs -f
+
+# ─────────── edge topology dev group (product design v1.5 §6.3) ───────────
+# Control plane as ONE container group (edge + config + server + pg) with
+# public/internal network layering standing in for the DMZ, plus the
+# bridge as an independent group reaching in through the published edge
+# port — scenario four's minimal twin.
+EDGE_COMPOSE = docker compose -f deploy/selfhosted/docker-compose.edge.yml
+EDGE_BRIDGE_COMPOSE = docker compose -f deploy/selfhosted/docker-compose.edge-bridge.yml
+
+.PHONY: edge-up edge-down edge-bridge edge-bridge-down
+edge-up:
+	$(EDGE_COMPOSE) up -d --build
+	$(EDGE_COMPOSE) ps
+	@echo "edge group up: edge :8443 (public), tenant ops console 127.0.0.1:9091, config console 127.0.0.1:9086 (dev-only loopback publishes)"
+	@echo "consoles: open by default; set WOCA_CONSOLE_USER/WOCA_CONSOLE_PASSWORD to require a username/password sign-in"
+
+edge-down:
+	$(EDGE_BRIDGE_COMPOSE) down || true
+	$(EDGE_COMPOSE) down
+
+edge-bridge:
+	$(EDGE_BRIDGE_COMPOSE) up -d --build
+	@echo "dev bridge: http://localhost:$${EDGE_BRIDGE_PORT:-3490} — set EDGE_ENROLL_TOKEN (ops console → bridge 注册) for first enrollment, then sign in with an org key (ops console → 租户与 key)"
+
+edge-bridge-down:
+	$(EDGE_BRIDGE_COMPOSE) down
+
+# Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
+# woca-edge joins the set with the v1.5 topology split (stateless public
+# entry; still a role artifact — thin, no interactive surfaces).
+SERVER_ARTIFACTS := woca-server woca-tenant woca-worker woca-config woca-bridge woca-edge
+
+.PHONY: build-server check-server-artifacts check-editions
 build-server:
 	@for a in $(SERVER_ARTIFACTS); do \
 		go build -o build/$$a ./cmd/$$a || exit 1; \
@@ -160,3 +239,27 @@ check-server-artifacts: build-server
 		fi; \
 	done
 	@echo "server artifacts pass dependency hygiene"
+
+# Edition boundary hygiene (open-core discipline): exactly two editions —
+# personal (`woca`) and enterprise (the server roles under internal/ee).
+# The personal binary never links the enterprise tree; the enterprise tree
+# (and every server artifact) never links the interactive/personal
+# frontends; and no core package (outside internal/ee and the server-role
+# entry points) imports internal/ee at all — enterprise capabilities reach
+# the core only through the seams (server.MsgPlane, server.NativeAuth,
+# servefront.Edition, wocadb.DSNResolver).
+.PHONY: check-editions
+check-editions: build build-server
+	@if go list -deps ./cmd/woca | grep -q 'woca/internal/ee/'; then \
+		echo "personal binary links the enterprise tree (internal/ee)"; exit 1; \
+	fi
+	@if go list -deps ./internal/ee/... | grep -qE 'internal/(tui|repl|console|notify|oauth|sdkout)'; then \
+		echo "enterprise tree links personal/interactive packages"; exit 1; \
+	fi
+	@out=$$(go list -f '{{.ImportPath}} {{join .Imports " "}} {{join .TestImports " "}}' ./internal/... ./web/... ./cmd/woca 2>/dev/null \
+		| grep 'woca/internal/ee/' | grep -v '^github.com/projanvil/woca/internal/ee/'); \
+	if [ -n "$$out" ]; then \
+		echo "core code imports internal/ee (enterprise belongs behind the seams):"; \
+		echo "$$out"; exit 1; \
+	fi
+	@echo "edition boundaries pass dependency hygiene"

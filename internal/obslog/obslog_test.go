@@ -314,7 +314,7 @@ func TestLogUsageTokenDetails(t *testing.T) {
 	s.LogUsage("m", messages.UsageMetadata{
 		TotalTokens: 20,
 		InputTokenDetails: &messages.InputTokenDetails{
-			CacheReadInputTokens:      5,
+			CacheReadInputTokens:     5,
 			CacheCreationInputTokens: 2,
 		},
 	})

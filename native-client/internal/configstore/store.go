@@ -169,6 +169,50 @@ func (s *Store) ActiveProfile(ctx context.Context) (Profile, bool, error) {
 	return profile, true, nil
 }
 
+// SetProfileBridge records the target bridge for an edge entry (v1.6
+// 入口②: an edge may front several bridges; the choice belongs to the
+// connection profile). Stored as an internal preference row keyed by the
+// base URL — deliberately outside the Wails preference surface.
+func (s *Store) SetProfileBridge(ctx context.Context, rawURL, bridgeID string) error {
+	baseURL, err := NormalizeBaseURL(rawURL)
+	if err != nil {
+		return err
+	}
+	if bridgeID != "" && len(bridgeID) > 128 {
+		return fmt.Errorf("bridge id too long")
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO preferences (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		profileBridgeKey(baseURL), bridgeID, time.Now().Unix())
+	if err != nil {
+		return fmt.Errorf("set profile bridge: %w", err)
+	}
+	return nil
+}
+
+// ProfileBridge returns the profile's target bridge ("" when unset —
+// direct-bridge entries and embedded profiles).
+func (s *Store) ProfileBridge(ctx context.Context, rawURL string) string {
+	baseURL, err := NormalizeBaseURL(rawURL)
+	if err != nil {
+		return ""
+	}
+	var value string
+	err = s.db.QueryRowContext(ctx, `SELECT value FROM preferences WHERE key = ?`, profileBridgeKey(baseURL)).Scan(&value)
+	if err != nil {
+		return ""
+	}
+	if len(value) > 128 {
+		return ""
+	}
+	return value
+}
+
+func profileBridgeKey(baseURL string) string {
+	return "connection.bridge." + baseURL
+}
+
 func (s *Store) Preference(ctx context.Context, key string) (string, bool, error) {
 	var value string
 	err := s.db.QueryRowContext(ctx, `SELECT value FROM preferences WHERE key = ?`, key).Scan(&value)

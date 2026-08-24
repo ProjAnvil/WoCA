@@ -32,6 +32,17 @@ type Credentials struct {
 
 const RequestIDHeader = "X-Woca-Native-Request-ID"
 
+// BridgeHeader routes requests to one target bridge behind an edge
+// access point (mirrors internal/ee/edgegw.BridgeHeader; v1.6 入口② —
+// native clients hold no cookies by design).
+const BridgeHeader = "X-Woca-Bridge"
+
+// BridgeResolver supplies the active profile's target bridge ("" for
+// direct-bridge and embedded profiles).
+type BridgeResolver interface {
+	ProfileBridge(ctx context.Context, baseURL string) string
+}
+
 type handler struct {
 	targets       TargetProvider
 	credentials   CredentialProvider
@@ -115,6 +126,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusServiceUnavailable, "service unavailable")
 		return
 	}
+	var targetBridge string
+	if resolver, ok := h.targets.(BridgeResolver); ok {
+		targetBridge = resolver.ProfileBridge(r.Context(), profile.BaseURL)
+	}
 	destination := cloneURL(r.URL)
 	destination.Scheme = target.Scheme
 	destination.Host = target.Host
@@ -141,6 +156,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if credentials.Proof != "" {
 				out.Header.Set("DPoP", credentials.Proof)
+			}
+			if targetBridge != "" {
+				out.Header.Set(BridgeHeader, targetBridge)
 			}
 		},
 		Transport:     h.transport,

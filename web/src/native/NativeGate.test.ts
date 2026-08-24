@@ -28,6 +28,9 @@ function nativeBridge(bootstrap: NativeBridge['Bootstrap'], theme?: string): Nat
   return {
     Bootstrap: bootstrap,
     Connect: vi.fn(),
+    ConnectEmbedded: vi.fn(),
+    EdgeBridges: vi.fn(async () => []),
+    StreamCredentials: vi.fn(async () => ({ scheme: '', token: '' })),
     Logout: vi.fn(),
     Preference: vi.fn(async (key?: string) =>
       key === 'woca-theme' && theme !== undefined

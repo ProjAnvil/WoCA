@@ -12,6 +12,7 @@
 package agentbuild
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/settings"
 )
 
 // Options carries the agent configuration shared by every frontend. The
@@ -61,6 +63,14 @@ type Options struct {
 	// apikey). The embedded ladyM engine is then forbidden: memory is the
 	// remote ladyM enterprise client or none (design §6.3.2/§6.3.8).
 	EnterpriseMemory bool
+	// OnSettingsReady runs once the settings store exists but before any
+	// setting is read or any build-time connection opens — the bridge form
+	// installs its managed overlay here with a blocking initial config
+	// pull, so the postgres/remote-memory coordinates the config plane
+	// delivers are already effective when the storage backends build. An
+	// error is logged and never fatal: standalone operation must survive a
+	// dead channel.
+	OnSettingsReady func(ctx context.Context, st *settings.Store) error
 	// Sandbox, when set, routes every process side effect (shell and file
 	// tools, hooks, MCP stdio servers, plugin runtimes) through the remote
 	// sandbox executor instead of the host (design §8). Nil keeps the local

@@ -7,6 +7,7 @@ package servefront
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -19,12 +20,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/fsb"
 	"github.com/projanvil/woca/internal/logging"
-	"github.com/projanvil/woca/internal/msgplane"
 	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/runstate"
@@ -33,15 +35,15 @@ import (
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/settingswatch"
 	"github.com/projanvil/woca/internal/telemetry"
-	"github.com/projanvil/woca/internal/tenant"
 	"github.com/projanvil/woca/internal/webd"
 	"github.com/projanvil/woca/internal/webgui"
+	"github.com/projanvil/woca/internal/wocadb"
 	webdist "github.com/projanvil/woca/web"
 )
 
-// Observability is the server-edition observability seam (design §12.3):
+// Observability is the enterprise-edition observability seam (design §12.3):
 // OTel providers, /healthz + /metrics endpoints, and RED recording around
-// the HTTP handler. It is implemented by internal/obs (OTel SDK) and linked
+// the HTTP handler. It is implemented by internal/ee/obs (OTel SDK) and linked
 // only by server entry points; the personal edition passes nil and keeps
 // the zero-dependency local telemetry sink (§5.2).
 type Observability interface {
@@ -57,20 +59,97 @@ type Observability interface {
 	// Shutdown flushes and stops providers.
 	Shutdown(ctx context.Context) error
 	// SetRunState pushes the role's active/queued run counts into the
-	// service gauges (internal/obs implements it).
+	// service gauges (internal/ee/obs implements it).
 	SetRunState(active, queued int64)
+}
+
+// Edition bundles the enterprise subsystems a server-role entry point
+// (woca-server) attaches to the shared serve path. Every field is
+// optional; the personal edition (cmd/woca) runs with the zero Edition and
+// each nil keeps the corresponding personal-edition posture. The
+// enterprise implementations live under internal/ee — this package (and
+// the whole core tree) never imports them.
+type Edition struct {
+	// Obs builds the observability assembly at command time, so provider
+	// setup errors surface as normal command errors. Nil keeps the
+	// zero-dependency local telemetry sink (§5.2).
+	Obs func(ctx context.Context) (Observability, error)
+	// Authn builds the API-key authn provider plus the native-client
+	// credential surface over the settings store (the multi-tenant
+	// posture). Required for --auth apikey; nil makes that mode an error.
+	Authn func(st *settings.Store) (authn.Provider, server.NativeAuth, error)
+	// Plane builds the run-dispatch message plane reading its config live
+	// from the settings store, including the config-plane wake channel.
+	// Nil keeps pure-PG dispatch (poll-only, no NATS overlay).
+	Plane func(st *settings.Store, log zerolog.Logger) server.MsgPlane
+	// FS overrides the workspace folder-browser service (product design
+	// §4.1). Nil wires the default: roots from WOCA_FS_ROOTS (home when
+	// unset), permissive — whole-filesystem browsing — only on loopback
+	// binds (§4.3: the loopback posture keeps today's local behavior).
+	FS *fsb.Service
+	// Routes mounts edition-specific routes onto the API mux after the
+	// authn provider is built (the bridge login/logout routes need it).
+	// Nil mounts nothing.
+	Routes func(mux *http.ServeMux, provider authn.Provider)
+	// Handler receives the fully-built server handler (auth middleware
+	// and all) once the agent build completes — the bridge's scenario-
+	// four tunnel executes edge-parked client requests against exactly
+	// this stack. Nil ignores it.
+	Handler func(h http.Handler)
+	// OnSettings receives the settings store right before the server is
+	// assembled — in every auth posture (local included), so edition
+	// subsystems that are not auth-dependent (the bridge's cloud-access
+	// channel) exist even on loopback-trust bridges. Nil ignores it.
+	OnSettings func(st *settings.Store)
+	// PreBuildConfig runs inside the agent build, after the settings store
+	// opens but before any setting is read or any build-time connection
+	// opens — the bridge installs its managed overlay here with one
+	// blocking initial config pull, so config-delivered storage/memory
+	// coordinates are effective when the backends build. The hook's own
+	// failures are logged, never fatal. Nil does nothing.
+	PreBuildConfig func(ctx context.Context, st *settings.Store, log zerolog.Logger)
+	// AnonymousAPIPaths / HostGateExemptPrefixes declare the form's
+	// bootstrap exchanges and session surfaces (see server.Config). The
+	// entry point that assembles the edition states them next to the
+	// routes it mounts; core and servefront stay vocabulary-free.
+	AnonymousAPIPaths      []string
+	HostGateExemptPrefixes []string
+	// StreamReauth revalidates open streams' credentials (revocation
+	// closing; see server.Config). Entry points whose auth provider can
+	// distinguish revocations supply it.
+	StreamReauth func(credential string) error
+	// Start runs edition-specific background loops once the agent build
+	// finished and the settings store is open (the bridge's gateway
+	// channel: enrollment, config pull, heartbeats). It runs in its own
+	// goroutine until the serve context ends; nil does nothing.
+	Start func(ctx context.Context, st *settings.Store, log zerolog.Logger)
+	// Audit receives sensitive-operation events (run creation, workspace
+	// writes) with the acting identity — the bridge wires it to its local
+	// audit trail (product design R5). Nil skips auditing.
+	Audit func(actor, action, detail string)
+	// ModelCatalog overrides the local preset list for deployments whose
+	// authoritative model catalog lives behind another plane (nil = the
+	// local database).
+	ModelCatalog func(ctx context.Context) ([]wocadb.ModelPreset, error)
+	// ResolveModel resolves a preferred model against the authoritative
+	// catalog, returning the preset and its credential when authorized
+	// (nil = resolve against the local database).
+	ResolveModel func(ctx context.Context, id, provider, model string) (wocadb.ModelPreset, string, bool)
+
+	// obs carries the built Observability from the cobra RunE into
+	// ServeWithEdition (unexported; callers pass only the factories).
+	obs Observability
 }
 
 // NewServeCmd builds `woca serve`: run the embedded web UI server.
 func NewServeCmd(opts *agentbuild.Options) *cobra.Command {
-	return NewServeCmdWithObs(opts, nil)
+	return NewServeCmdWithEdition(opts, Edition{})
 }
 
-// NewServeCmdWithObs builds the serve command with a server-edition
-// observability assembly attached (nil factory keeps the personal-edition
-// posture). The factory runs at command time so provider setup errors
-// surface as normal command errors.
-func NewServeCmdWithObs(opts *agentbuild.Options, makeObs func(ctx context.Context) (Observability, error)) *cobra.Command {
+// NewServeCmdWithEdition builds the serve command with an enterprise
+// edition assembly attached (see Edition; the zero value keeps the
+// personal-edition posture).
+func NewServeCmdWithEdition(opts *agentbuild.Options, ed Edition) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the embedded web UI server (frontend + SSE API)",
@@ -78,19 +157,19 @@ func NewServeCmdWithObs(opts *agentbuild.Options, makeObs func(ctx context.Conte
 			addr, _ := cmd.Flags().GetString("addr")
 			noBrowser, _ := cmd.Flags().GetBool("no-browser")
 			authMode, _ := cmd.Flags().GetString("auth")
-			var obsrv Observability
-			if makeObs != nil {
-				var err error
-				if obsrv, err = makeObs(cmd.Context()); err != nil {
+			if ed.Obs != nil {
+				obsrv, err := ed.Obs(cmd.Context())
+				if err != nil {
 					return err
 				}
+				ed.obs = obsrv
 			}
-			return ServeWithObs(cmd.Context(), *opts, addr, noBrowser, authMode, obsrv)
+			return ServeWithEdition(cmd.Context(), *opts, addr, noBrowser, authMode, ed)
 		},
 	}
 	cmd.Flags().String("addr", webgui.DefaultAddr, "listen address for the web server")
 	cmd.Flags().Bool("no-browser", false, "do not open the browser on startup")
-	cmd.Flags().String("auth", "", "authentication mode: local (default, trust the machine) or apikey (woca_ API keys, managed via `woca tenant`; env WOCA_AUTH)")
+	cmd.Flags().String("auth", "", "authentication mode: local (default, trust the machine) or apikey (woca_ API keys, enterprise deployments; managed via `woca-tenant tenant`; env WOCA_AUTH)")
 	return cmd
 }
 
@@ -181,12 +260,13 @@ func NewWebCmd() *cobra.Command {
 // Serve runs the embedded web UI server (personal-edition posture: local
 // telemetry only).
 func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser bool, authMode string) error {
-	return ServeWithObs(ctx, opts, addr, noBrowser, authMode, nil)
+	return ServeWithEdition(ctx, opts, addr, noBrowser, authMode, Edition{})
 }
 
-// ServeWithObs runs the embedded web UI server with an optional server-edition
-// observability assembly (OTel SDK, /healthz + /metrics, RED metrics).
-func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noBrowser bool, authMode string, obs Observability) error {
+// ServeWithEdition runs the embedded web UI server with an enterprise
+// edition assembly attached (observability, API-key auth, message plane);
+// the zero Edition keeps the personal-edition posture.
+func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string, noBrowser bool, authMode string, ed Edition) error {
 	// An unset log level disables zerolog entirely (logging.ParseLevel maps
 	// "" to Disabled) — a server role running silent hides its watcher and
 	// message-plane lifelines from operators. Default server roles to info.
@@ -199,9 +279,10 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 	}
 	log := logging.NewConsole(os.Stderr, level)
 	// Observability seam (Phase 2 §6.5): one structured line per tool/LLM/
-	// skill span, correlated by tenant/run/session. The server edition
+	// skill span, correlated by tenant/run/session. The enterprise edition
 	// chains the OTel sink behind it (design §6.5.3).
 	telemetry.SetDefault(telemetry.NewLocalSink(log))
+	obs := ed.obs
 	if obs != nil {
 		if err := obs.Install(ctx); err != nil {
 			return fmt.Errorf("observability: %w", err)
@@ -218,6 +299,9 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 		case "apikey", "api-key", "api-keys", "keys":
 		default:
 			return fmt.Errorf("unknown --auth mode %q (want local or apikey)", authMode)
+		}
+		if ed.Authn == nil {
+			return fmt.Errorf("apikey auth requires an enterprise server binary (woca-server); the personal edition trusts the local machine")
 		}
 	}
 
@@ -245,11 +329,43 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 		(*handler.Load()).ServeHTTP(w, r)
 	})}
 	serveErr := make(chan error, 1)
+	// Direct TLS (product design §5.3 path C): WOCA_TLS_CERT/WOCA_TLS_KEY
+	// terminate TLS on the business listener itself — for public bridges
+	// without a reverse proxy. (The reverse-proxy paths keep using plain
+	// HTTP on loopback behind Caddy/Tailscale.)
+	tlsCert, tlsKey := os.Getenv("WOCA_TLS_CERT"), os.Getenv("WOCA_TLS_KEY")
+	scheme := "http"
+	if tlsCert != "" && tlsKey != "" {
+		cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
+		if err != nil {
+			_ = hs.Close()
+			return fmt.Errorf("tls: load keypair: %w", err)
+		}
+		ln = tls.NewListener(ln, &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{cert},
+		})
+		scheme = "https"
+	}
+	// Ready file (native client embedding): when WOCA_READY_FILE is set,
+	// the bound URL lands there atomically right after listen — the
+	// embedding process polls this file to discover the random port.
+	if f := os.Getenv("WOCA_READY_FILE"); f != "" && scheme == "http" {
+		_ = os.WriteFile(f, []byte("http://"+ln.Addr().String()), 0o600)
+	}
 	go func() { serveErr <- hs.Serve(ln) }()
 
 	// apikey auth is the multi-tenant posture: every tenant-sharing
 	// subsystem must be remote or off. EnterpriseMemory forbids the
 	// embedded ladyM engine (memory-engine must be remote or none).
+	//
+	// This reads like edition knowledge but is a product invariant on a
+	// shared flag, and it cannot ride the Edition.Authn seam: the option
+	// must reach BuildAgent, while the authn factory (and thus any
+	// provider-existence signal) only runs afterwards, on ap.Settings.
+	// "local" is servefront's own flag vocabulary, not an edition term —
+	// a static Edition capability would regress local-auth bridges that
+	// legitimately keep the embedded engine.
 	if authMode != "" && authMode != "local" {
 		opts.EnterpriseMemory = true
 	}
@@ -261,6 +377,13 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 	dispatchQueue := strings.EqualFold(os.Getenv("WOCA_RUN_DISPATCH"), "queue")
 	runsOffHost := dispatchQueue && strings.EqualFold(os.Getenv("WOCA_RUNS_OFF_HOST"), "true")
 	opts.Sandbox = agentbuild.SandboxFromEnv()
+	if ed.PreBuildConfig != nil {
+		hook := ed.PreBuildConfig
+		opts.OnSettingsReady = func(ctx context.Context, st *settings.Store) error {
+			hook(ctx, st, log)
+			return nil
+		}
+	}
 	ap, err := agentbuild.BuildAgent(ctx, opts, log)
 	if err != nil {
 		_ = hs.Close()
@@ -274,14 +397,9 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 		}
 	}()
 
-	var native *server.NativeAuth
+	var native server.NativeAuth
 	if authMode != "" && authMode != "local" {
-		authProv, err = newAPIKeyProvider(ap.Settings)
-		if err != nil {
-			_ = hs.Close()
-			return err
-		}
-		native, err = newNativeAuth(ap.Settings, authProv)
+		authProv, native, err = ed.Authn(ap.Settings)
 		if err != nil {
 			_ = hs.Close()
 			return err
@@ -296,17 +414,19 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 	} else if d := session.DefaultDir(); d != "" {
 		sessionDir = filepath.Join(d, "sessions")
 	}
-	// Message plane (design §5.4): the resolver reads the settings store
+	// Message plane (design §5.4): the enterprise edition injects the
+	// plane through Edition.Plane — its resolver reads the settings store
 	// live, so console edits (mode / NATS URL / subject) apply to the very
 	// next dispatch without a restart; the plane is a best-effort overlay
-	// on top of the always-on PG queue.
-	var plane *msgplane.Plane
-	if ap.Settings != nil {
-		plane = msgplane.New(func() msgplane.Config {
-			c := ap.Settings.Load()
-			return msgplane.Config{Mode: c.MsgPlaneMode, NATSURL: c.MsgPlaneNATSURL, Subject: c.MsgPlaneSubject}
-		}, log)
+	// on top of the always-on PG queue. Personal deployments keep the
+	// poll-only PG queue.
+	var plane server.MsgPlane
+	if ed.Plane != nil && ap.Settings != nil {
+		plane = ed.Plane(ap.Settings, log)
 		defer plane.Close()
+	}
+	if ed.OnSettings != nil {
+		ed.OnSettings(ap.Settings)
 	}
 	var runLedger *runstate.Ledger
 	if st := ap.Settings.DB(); st != nil {
@@ -316,27 +436,43 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 			return fmt.Errorf("run ledger: %w", err)
 		}
 	}
+	fsSvc := ed.FS
+	if fsSvc == nil {
+		fsSvc = defaultFS(addr)
+	}
 	srv := server.New(server.Config{
-		Auth:            authProv,
-		NativeAuth:      native,
-		RunLedger:       runLedger,
-		DispatchToQueue: dispatchQueue,
-		RunsOffHost:     runsOffHost,
-		MsgPlane:        plane,
-		Agent:           ap.Agent,
-		Static:          webdist.DistFS(),
-		Logger:          log,
-		SessionDir:      sessionDir,
-		WorkDir:         ap.Cfg.WorkDir,
-		GrafanaURL:      os.Getenv("WOCA_GRAFANA_URL"),
-		Settings:        ap.Settings,
-		Memory:          ap.Memory,
-		MemoryEngine:    ap.MemEngine,
+		Auth:                   authProv,
+		ModelCatalog:           ed.ModelCatalog,
+		ResolveModel:           ed.ResolveModel,
+		AnonymousAPIPaths:      ed.AnonymousAPIPaths,
+		HostGateExemptPrefixes: ed.HostGateExemptPrefixes,
+		StreamReauth:           ed.StreamReauth,
+		NativeAuth:             native,
+		RunLedger:              runLedger,
+		DispatchToQueue:        dispatchQueue,
+		RunsOffHost:            runsOffHost,
+		MsgPlane:               plane,
+		Agent:                  ap.Agent,
+		Static:                 webdist.DistFS(),
+		Logger:                 log,
+		SessionDir:             sessionDir,
+		WorkDir:                ap.Cfg.WorkDir,
+		GrafanaURL:             os.Getenv("WOCA_GRAFANA_URL"),
+		Settings:               ap.Settings,
+		Memory:                 ap.Memory,
+		MemoryEngine:           ap.MemEngine,
 		RebuildMemory: func() error {
 			return ap.RebuildMemory()
 		},
 		RebuildModel: func() error {
 			return ap.RebuildModel()
+		},
+		FS:    fsSvc,
+		Audit: ed.Audit,
+		Extras: func(mux *http.ServeMux) {
+			if ed.Routes != nil {
+				ed.Routes(mux, authProv)
+			}
 		},
 		CfgLive:           func() config.Config { return ap.CurrentCfg() },
 		SetThinkingBudget: ap.SetThinkingBudget,
@@ -357,8 +493,11 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 		real = obs.Wrap(real)
 	}
 	handler.Store(&real)
+	if ed.Handler != nil {
+		ed.Handler(real)
+	}
 
-	url := "http://" + addr
+	url := scheme + "://" + addr
 	if !noBrowser {
 		agentbuild.OpenBrowser(url)
 	}
@@ -367,6 +506,10 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if ed.Start != nil {
+		go ed.Start(ctx, ap.Settings, log)
+	}
+
 	// Config-plane watcher (design §16.3/§16.7): the config service owns
 	// settings writes now; rebuild the model/memory/debug-log hooks when
 	// its writes move the generation fingerprint. The waiter's wake channel
@@ -374,7 +517,7 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 	// poll stays the safety net.
 	var cfgWake <-chan struct{}
 	if plane != nil {
-		cfgWake = msgplane.NewWaiter(plane).Wake()
+		cfgWake = plane.Wake()
 	}
 	// Service run-state gauges (design §12.3): push the admission state
 	// into the obs instruments on a short cadence so the series stay live.
@@ -411,6 +554,35 @@ func ServeWithObs(ctx context.Context, opts agentbuild.Options, addr string, noB
 	return srv.ServeStarted(ctx, hs, serveErr)
 }
 
+// defaultFS wires the folder-browser service for a serve bind: loopback
+// binds keep the permissive whole-filesystem posture (§4.3 — the local
+// single-user experience stays unchanged); any wider bind jails browsing
+// to WOCA_FS_ROOTS or the home directory.
+func defaultFS(addr string) *fsb.Service {
+	roots := []string{}
+	if v := os.Getenv("WOCA_FS_ROOTS"); v != "" {
+		roots = filepath.SplitList(v)
+	}
+	return fsb.New(roots, isLoopbackBind(addr))
+}
+
+func isLoopbackBind(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return false // ":port" binds every interface
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
 // shortHost returns this machine's short hostname for service identities.
 func shortHost() string {
 	host, err := os.Hostname()
@@ -421,33 +593,6 @@ func shortHost() string {
 		return host[:i]
 	}
 	return host
-}
-
-// newAPIKeyProvider builds the API-key authn provider over the settings
-// database (the same database the agent build opened, so tenant tables and
-// credentials live next to settings).
-func newAPIKeyProvider(st *settings.Store) (authn.Provider, error) {
-	if st == nil {
-		return nil, fmt.Errorf("api-key auth requires a settings database (set --db; it cannot be \"none\")")
-	}
-	ts, err := tenant.NewStore(st.DB())
-	if err != nil {
-		return nil, fmt.Errorf("api-key auth: %w", err)
-	}
-	return tenant.NewAPIKeyProvider(ts), nil
-}
-
-// newNativeAuth builds the native-client credential surface over the same
-// tenant store as the API-key provider.
-func newNativeAuth(st *settings.Store, keys authn.Provider) (*server.NativeAuth, error) {
-	if st == nil {
-		return nil, fmt.Errorf("native auth requires a settings database")
-	}
-	ts, err := tenant.NewStore(st.DB())
-	if err != nil {
-		return nil, fmt.Errorf("native auth: %w", err)
-	}
-	return server.NewNativeAuth(ts, keys), nil
 }
 
 // startingHandler serves the window between the port bind and the agent

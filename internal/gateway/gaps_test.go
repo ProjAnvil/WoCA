@@ -32,7 +32,7 @@ func TestAuthenticateDPoPScheme(t *testing.T) {
 
 	t.Run("dpop scheme without session authenticator", func(t *testing.T) {
 		h := &okHandler{}
-		handler := Authenticate(authn.NewLocal())(h)
+		handler := Authenticate(authn.NewLocal(), nil, nil)(h)
 		r := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
 		r.Header.Set("Authorization", "DPoP wsess_tok")
 		w := httptest.NewRecorder()
@@ -48,7 +48,7 @@ func TestAuthenticateDPoPScheme(t *testing.T) {
 	t.Run("dpop scheme session rejects token", func(t *testing.T) {
 		sess := &fakeSession{err: errors.New("no such session")}
 		h := &okHandler{}
-		handler := Authenticate(authn.NewLocal(), sess)(h)
+		handler := Authenticate(authn.NewLocal(), sess, nil)(h)
 		r := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
 		r.Header.Set("Authorization", "DPoP wsess_bad")
 		w := httptest.NewRecorder()
@@ -70,7 +70,7 @@ func TestAuthenticateDPoPScheme(t *testing.T) {
 	t.Run("dpop scheme session accepts and injects context", func(t *testing.T) {
 		sess := &fakeSession{tc: sessionCtx}
 		h := &okHandler{}
-		handler := Authenticate(authn.NewLocal(), sess)(h)
+		handler := Authenticate(authn.NewLocal(), sess, nil)(h)
 		r := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
 		r.Header.Set("Authorization", "dpop wsess_ok") // scheme is case-insensitive
 		w := httptest.NewRecorder()
@@ -93,7 +93,7 @@ func TestAuthenticateDPoPScheme(t *testing.T) {
 func TestAuthenticateDPoPProofWithoutToken(t *testing.T) {
 	sess := &fakeSession{tc: tenancy.Local()}
 	h := &okHandler{}
-	handler := Authenticate(authn.NewLocal(), sess)(h)
+	handler := Authenticate(authn.NewLocal(), sess, nil)(h)
 
 	// A bare DPoP proof header cannot authenticate: there is no access token
 	// to bind it to.
@@ -114,7 +114,7 @@ func TestAuthenticateDPoPProofWithoutToken(t *testing.T) {
 	// A DPoP proof alongside a Bearer token is a normal Bearer request: the
 	// provider authenticates it, the proof is the handler's business.
 	h2 := &okHandler{}
-	handler2 := Authenticate(authn.NewStatic("tok", tenancy.Local()), sess)(h2)
+	handler2 := Authenticate(authn.NewStatic("tok", tenancy.Local()), sess, nil)(h2)
 	r2 := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
 	r2.Header.Set("Authorization", "Bearer tok")
 	r2.Header.Set("DPoP", "proof")

@@ -25,3 +25,6 @@ jobs:
 
       - name: Test with race detector
         run: go test -race ./...
+
+      - name: Edition boundaries and dependency hygiene
+        run: make check-deps check-server-artifacts check-editions

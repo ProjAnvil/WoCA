@@ -32,6 +32,11 @@ import { Plug } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { getClaudeEnv, putClaudeEnv } from '../../api/client'
 
+// bridge=true on the private-cloud execution plane: the ~/.claude that gets
+// scanned is the BRIDGE machine's own (this page also works through the
+// edge tunnel from the public web — the import runs where the agent runs).
+defineProps<{ bridge?: boolean }>()
+
 const { t } = useI18n()
 const claudeEnv = sharedClaudeEnv
 
@@ -94,7 +99,7 @@ async function saveClaudeEnv() {
     <div class="setting-section-title">
       <Plug :size="13" style="vertical-align: -2px" /> {{ t('settings.claudeenv.title') }}
     </div>
-    <p class="mem-intro">{{ t('settings.claudeenv.intro') }}</p>
+    <p class="mem-intro">{{ bridge ? t('settings.claudeenv.bridgeIntro') : t('settings.claudeenv.intro') }}</p>
 
     <div v-if="claudeEnv.loading" class="row-hint">{{ t('settings.claudeenv.detecting') }}</div>
     <div v-else-if="claudeEnv.error" class="row-hint" style="color: var(--danger, #e5484d)">

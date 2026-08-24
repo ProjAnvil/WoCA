@@ -3,7 +3,9 @@ package gateway
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/projanvil/woca/internal/platform/authn"
@@ -86,7 +88,7 @@ func TestAuthenticate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := &okHandler{}
-			srv := httptest.NewServer(Authenticate(tt.provider)(h))
+			srv := httptest.NewServer(Authenticate(tt.provider, nil, nil)(h))
 			defer srv.Close()
 
 			req, err := http.NewRequest(http.MethodGet, srv.URL+tt.path, nil)
@@ -125,7 +127,7 @@ func TestAuthenticate(t *testing.T) {
 }
 
 func TestAuthenticateWWWAuthenticateHeader(t *testing.T) {
-	srv := httptest.NewServer(Authenticate(authn.NewStatic("tok", tenancy.Context{TenantID: "t"}))(http.NotFoundHandler()))
+	srv := httptest.NewServer(Authenticate(authn.NewStatic("tok", tenancy.Context{TenantID: "t"}), nil, nil)(http.NotFoundHandler()))
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/runs", nil)
@@ -201,7 +203,7 @@ func TestChainLocalProvider(t *testing.T) {
 	h := &okHandler{}
 	handler := http.Handler(h)
 	handler = RequireScope(authz.NewLocal(), authz.ScopeSettingsWrite)(handler)
-	handler = Authenticate(authn.NewLocal())(handler)
+	handler = Authenticate(authn.NewLocal(), nil, nil)(handler)
 
 	r := httptest.NewRequest(http.MethodPut, "/api/settings", nil)
 	w := httptest.NewRecorder()
@@ -250,11 +252,21 @@ func TestRequireLocalTenantGatesAPI(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("foreign tenant = %d", w.Code)
 	}
-	// The native credential surface is exempt (session lifecycle).
+	// Session-lifecycle surfaces are exempt only when the deployment
+	// form declares the prefix — core no longer hardcodes any.
+	hDeclared := RequireLocalTenant("/api/native/")(next)
 	r3 := httptest.NewRequest(http.MethodGet, "/api/native/session", nil)
 	r3 = r3.WithContext(tenancy.NewContext(r3.Context(), tenancy.Context{TenantID: "tX"}))
 	w = httptest.NewRecorder()
-	h.ServeHTTP(w, r3)
+	hDeclared.ServeHTTP(w, r3)
+	// ... and stay gated when it does not.
+	r3b := httptest.NewRequest(http.MethodGet, "/api/native/session", nil)
+	r3b = r3b.WithContext(tenancy.NewContext(r3b.Context(), tenancy.Context{TenantID: "tX"}))
+	w3b := httptest.NewRecorder()
+	h.ServeHTTP(w3b, r3b)
+	if w3b.Code != http.StatusForbidden {
+		t.Fatalf("undeclared native prefix = %d, want 403", w3b.Code)
+	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("native surface for foreign tenant = %d", w.Code)
 	}
@@ -264,5 +276,32 @@ func TestRequireLocalTenantGatesAPI(t *testing.T) {
 	h.ServeHTTP(w, r4)
 	if w.Code != http.StatusOK {
 		t.Fatalf("health = %d", w.Code)
+	}
+}
+
+// TestCoreStaysVocabularyFree is the knowledge-level companion of
+// check-editions: import-direction checks cannot see route names and
+// cookie strings baked into core, so this pins the contract directly —
+// the middleware package must not mention any edition's surface
+// vocabulary. Bootstrap exchanges and cookie names are declared by the
+// deployment forms that own them.
+func TestCoreStaysVocabularyFree(t *testing.T) {
+	src, err := os.ReadFile("gateway.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	banned := []string{
+		"/api/auth/login", // bridge login (declared by cmd/woca-bridge)
+		"/api/native",     // native-client surface (cmd/woca-server)
+		"woca_session",    // bridge session cookie (ee/bridge owns it)
+		"activatePath",    // removed constant names
+		"loginPath",
+		"nativePrefix",
+		"SessionCookie",
+	}
+	for _, token := range banned {
+		if strings.Contains(string(src), token) {
+			t.Errorf("core middleware knows edition vocabulary: %q", token)
+		}
 	}
 }

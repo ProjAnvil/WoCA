@@ -30,11 +30,20 @@ type BootstrapState struct {
 	ServerURL    string `json:"server_url,omitempty"`
 	Message      string `json:"message,omitempty"`
 	DatabasePath string `json:"database_path,omitempty"`
+	// BridgeID is the active profile's target bridge (edge entries,
+	// v1.6 入口②; "" for direct/embedded profiles).
+	BridgeID string `json:"bridge_id,omitempty"`
+	// EmbeddedURL exposes the embedded bridge's base URL so the connect
+	// page can offer entry ① (wails only; "" when not running).
+	EmbeddedURL string `json:"embedded_url,omitempty"`
 }
 
 type ConnectionInput struct {
 	ServerURL string `json:"server_url"`
 	APIKey    string `json:"api_key"`
+	// BridgeID selects the target bridge when ServerURL is an edge
+	// access point (optional: the edge auto-routes single-bridge setups).
+	BridgeID string `json:"bridge_id,omitempty"`
 }
 
 type PreferenceInput struct {
@@ -56,6 +65,8 @@ type PreferenceWriteResult struct {
 type nativeStore interface {
 	SaveProfile(context.Context, string) (configstore.Profile, error)
 	ActiveProfile(context.Context) (configstore.Profile, bool, error)
+	SetProfileBridge(context.Context, string, string) error
+	ProfileBridge(context.Context, string) string
 	PutPreferenceVersioned(context.Context, string, string, uint64) (bool, error)
 	Preference(context.Context, string) (string, bool, error)
 }
@@ -84,6 +95,7 @@ type Service struct {
 
 	mu           sync.RWMutex
 	readyBaseURL string
+	embeddedURL  string
 }
 
 func NewService(store nativeStore, activator auth.Activator, opts ...ServiceOption) *Service {
@@ -110,20 +122,26 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapState, error) {
 	if err != nil {
 		return BootstrapState{}, err
 	}
+	state := BootstrapState{EmbeddedURL: s.embeddedBaseURL()}
 	if !configured {
-		return BootstrapState{State: StateUnconfigured}, nil
+		return BootstrapState{State: StateUnconfigured, EmbeddedURL: state.EmbeddedURL}, nil
 	}
+	state.ServerURL = profile.BaseURL
+	state.BridgeID = s.store.ProfileBridge(ctx, profile.BaseURL)
 	if s.isReadyFor(profile.BaseURL) {
-		return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
+		state.State = StateReady
+		return state, nil
 	}
 	// A stored, unexpired session re-opens the app without asking again.
 	if s.vault != nil {
 		if sessionID, ok := s.vault.Load(ctx, profile.ID); ok && sessionID != "" {
 			s.markReady(profile.BaseURL)
-			return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
+			state.State = StateReady
+			return state, nil
 		}
 	}
-	return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, nil
+	state.State = StateAuthorizationNeeded
+	return state, nil
 }
 
 func (s *Service) Connect(ctx context.Context, input ConnectionInput) (state BootstrapState, err error) {
@@ -144,24 +162,87 @@ func (s *Service) Connect(ctx context.Context, input ConnectionInput) (state Boo
 	if err != nil {
 		return BootstrapState{}, err
 	}
+	if err := s.store.SetProfileBridge(ctx, input.ServerURL, input.BridgeID); err != nil {
+		return BootstrapState{}, err
+	}
 
 	result, err := s.activator.Activate(ctx, auth.ActivationRequest{
-		BaseURL: profile.BaseURL,
-		APIKey:  input.APIKey,
+		BaseURL:  profile.BaseURL,
+		APIKey:   input.APIKey,
+		BridgeID: input.BridgeID,
 	})
 	if err != nil {
-		return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, err
+		return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL, BridgeID: input.BridgeID}, err
 	}
 	if result.Ready {
 		if s.vault != nil && result.SessionID != "" {
 			if err := s.vault.Save(ctx, profile.ID, result.SessionID, result.ExpiresAt); err != nil {
-				return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, err
+				return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL, BridgeID: input.BridgeID}, err
 			}
 		}
 		s.markReady(profile.BaseURL)
-		return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
+		return BootstrapState{State: StateReady, ServerURL: profile.BaseURL, BridgeID: input.BridgeID}, nil
 	}
-	return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, nil
+	return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL, BridgeID: input.BridgeID}, nil
+}
+
+// ConnectLoopback adopts the embedded bridge (product design §5.1): the
+// loopback bind is trusted, so the profile needs no activation — the
+// default experience is zero-login.
+func (s *Service) ConnectLoopback(ctx context.Context, baseURL string) (BootstrapState, error) {
+	if s.store == nil {
+		return BootstrapState{}, errors.New("connection profile store is required")
+	}
+	if !isLoopbackURL(baseURL) {
+		return BootstrapState{}, errors.New("loopback connect requires a loopback URL")
+	}
+	s.clearReady()
+	profile, err := s.store.SaveProfile(ctx, baseURL)
+	if err != nil {
+		return BootstrapState{}, err
+	}
+	// The embedded bridge is its own target — no edge routing applies.
+	if err := s.store.SetProfileBridge(ctx, baseURL, ""); err != nil {
+		return BootstrapState{}, err
+	}
+	s.markReady(profile.BaseURL)
+	return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
+}
+
+// SetEmbeddedBaseURL records the embedded bridge's current base URL (the
+// connect page's entry ① needs it whenever the user re-connects).
+func (s *Service) SetEmbeddedBaseURL(rawURL string) {
+	s.mu.Lock()
+	s.embeddedURL = rawURL
+	s.mu.Unlock()
+}
+
+func (s *Service) embeddedBaseURL() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.embeddedURL
+}
+
+// ConnectEmbedded is entry ① of the connection page (design §6.6): adopt
+// the embedded bridge — auto-launched, loopback-trusted, no inputs.
+func (s *Service) ConnectEmbedded(ctx context.Context) (BootstrapState, error) {
+	base := s.embeddedBaseURL()
+	if base == "" {
+		return BootstrapState{}, errors.New("the embedded bridge is not running")
+	}
+	state, err := s.ConnectLoopback(ctx, base)
+	state.EmbeddedURL = base
+	return state, err
+}
+
+// isLoopbackURL reports whether the URL host is a loopback address.
+func isLoopbackURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || net.ParseIP(host).IsLoopback()
 }
 
 func (s *Service) Logout(ctx context.Context) (BootstrapState, error) {
@@ -181,7 +262,9 @@ func (s *Service) Logout(ctx context.Context) (BootstrapState, error) {
 		}
 		_ = s.vault.Delete(ctx, profile.ID)
 	}
-	return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, nil
+	// The connect page's entry ① must survive logout — the embedded
+	// bridge is still running and re-adoptable.
+	return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL, EmbeddedURL: s.embeddedBaseURL()}, nil
 }
 
 func (s *Service) Preference(ctx context.Context, key string) (PreferenceValue, error) {

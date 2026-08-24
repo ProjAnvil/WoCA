@@ -19,12 +19,14 @@
     "lucide-vue-next": "^1.0.0",
     "marked": "^18.0.9",
     "pinia": "^4.0.3",
+    "qrcode": "^1.5.4",
     "shiki": "^4.4.3",
     "vue": "^3.5.41",
     "vue-i18n": "^11.4.8"
   },
   "devDependencies": {
     "@iconify-json/vscode-icons": "^1.2.73",
+    "@types/qrcode": "^1.5.6",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/test-utils": "^2.4.11",
     "happy-dom": "^20.11.6",

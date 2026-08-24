@@ -8,6 +8,7 @@ import { useWorkspaceStore } from '../stores/workspace'
 import { useCompletionsStore } from '../stores/completions'
 import { useMemoryStore } from '../stores/memory'
 import { useAgentStore, MODE_DESCRIPTIONS, MODE_LABELS, THINKING_BUDGETS, THINKING_LABELS } from '../stores/agent'
+import { useSettingsStore } from '../stores/settings'
 import { fmtTokens } from '../lib/format'
 import type { Attachment, CompletionEntry, ContextCategory } from '../types'
 
@@ -17,28 +18,61 @@ const workspace = useWorkspaceStore()
 const completions = useCompletionsStore()
 const memory = useMemoryStore()
 const agent = useAgentStore()
+const settingsStore = useSettingsStore()
 const draft = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 
 const busy = computed(() => ['running', 'awaiting', 'queued'].includes(store.activeStatus))
+// Private-cloud form with an empty model catalog: the deployment offers
+// no models — sending is refused until an operator configures one.
 const canSend = computed(
-  () => (draft.value.trim().length > 0 || attachments.value.length > 0) && !busy.value,
+  () =>
+    (draft.value.trim().length > 0 || attachments.value.length > 0) &&
+    !busy.value &&
+    !settingsStore.noModelsManaged,
 )
 
 onMounted(() => {
+  if (!preferredId.value && settingsStore.models.length) {
+    preferredId.value = settingsStore.models[0].id
+  }
   void completions.load()
   void agent.load()
   void agent.refreshQuota()
+  void settingsStore.ensureModels()
 })
 
 /* ------------------------- input toolbar (mode/thinking/quota) ------------ */
 
-type CtlPop = '' | 'mode' | 'thinking' | 'quota'
+type CtlPop = '' | 'mode' | 'thinking' | 'quota' | 'model'
 const pop = ref<CtlPop>('')
 
 function togglePop(which: CtlPop) {
   pop.value = pop.value === which ? '' : which
+}
+
+/* ----------------------- preferred model (catalog pick) ------------------ */
+
+// The preferred model: picked from the console-configured catalog only
+// (the bridge is never hard-bound to one provider — switching verifies
+// with the catalog authority and applies from the next model call).
+const preferredId = ref(localStorage.getItem('woca.pref.modelPreset') ?? '')
+
+const currentModelName = computed(
+  () =>
+    settingsStore.models.find((m) => m.id === preferredId.value)?.name ||
+    settingsStore.models[0]?.name ||
+    agent.state?.model ||
+    '',
+)
+
+async function pickModel(id: string) {
+  preferredId.value = id
+  localStorage.setItem('woca.pref.modelPreset', id)
+  pop.value = ''
+  await settingsStore.applyModel(id)
+  await agent.load()
 }
 
 async function pickMode(mode: string) {
@@ -397,6 +431,32 @@ function send() {
             >
               <span class="ctl-opt-name">{{ label }}<span class="ctl-opt-key">{{ m }}</span></span>
               <span class="ctl-opt-desc">{{ MODE_DESCRIPTIONS[m] }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div v-if="settingsStore.models.length" class="ctl-wrap">
+          <button
+            class="ctl-chip"
+            :class="{ open: pop === 'model' }"
+            :title="t('chat.modelChange')"
+            @click="togglePop('model')"
+          >
+            <Bot :size="13" />
+            <span>{{ currentModelName }}</span>
+          </button>
+          <div v-if="pop === 'model'" class="ctl-pop">
+            <div class="ctl-pop-header">{{ t('chat.modelPick') }}</div>
+            <button
+              v-for="m in settingsStore.models"
+              :key="m.id"
+              class="ctl-opt"
+              :class="{ active: (preferredId || settingsStore.models[0]?.id) === m.id }"
+              type="button"
+              @click="pickModel(m.id)"
+            >
+              <span class="ctl-opt-name">{{ m.name }}<span class="ctl-opt-key">{{ m.model }}</span></span>
+              <span class="ctl-opt-desc">{{ m.provider }}</span>
             </button>
           </div>
         </div>

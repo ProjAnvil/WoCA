@@ -17,11 +17,9 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/settings"
-	"github.com/projanvil/woca/internal/worker"
 	"github.com/rs/zerolog"
 )
 
@@ -185,46 +183,6 @@ func TestRunsOffHostGate(t *testing.T) {
 			t.Fatalf("offHost=%v: /api/settings status = %d want %d", tc.offHost, settingsResp.StatusCode, tc.setStatus)
 		}
 		srv.Close()
-	}
-}
-
-// TestDispatchWorkerEndToEnd proves the Phase 3 wiring acceptance shape: a
-// run created on the gateway lands in the queue, a worker (separate
-// process role, same database) claims and executes it, and a client
-// attached to the gateway follows the whole stream over ledger SSE.
-func TestDispatchWorkerEndToEnd(t *testing.T) {
-	_, ledger, srv := newDispatchServer(t, false)
-	resp := dispatchPost(t, srv.URL, "s-e2e", "run on the worker")
-	var out struct {
-		RunID string `json:"run_id"`
-	}
-	_ = json.NewDecoder(resp.Body).Decode(&out)
-	resp.Body.Close()
-
-	a := newScriptedAgent(t, "worker executed this")
-	bus := eventbus.NewLocalWithRetention(16)
-	t.Cleanup(func() { _ = bus.Close() })
-	w := worker.New(worker.Config{
-		Ledger: ledger, Agent: a, Bus: bus, Logger: zerolog.Nop(), ID: "w-e2e",
-	})
-	go func() { _ = w.Step(context.Background()) }()
-
-	frames := followSSE(t, srv.URL+"/api/runs/"+out.RunID+"/events", "")
-	var delta, done bool
-	for _, f := range frames {
-		switch f.event {
-		case "delta":
-			delta = true
-		case "done":
-			done = true
-		}
-	}
-	if !delta || !done {
-		t.Fatalf("frames = delta:%v done:%v", delta, done)
-	}
-	row, _, _ := ledger.Row(context.Background(), out.RunID)
-	if row.Status != "done" || row.Owner != "w-e2e" {
-		t.Fatalf("terminal row = %+v", row)
 	}
 }
 

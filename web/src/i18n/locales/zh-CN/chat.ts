@@ -1,4 +1,7 @@
 export default {
+  modelChange: '切换模型（从配置台目录中选择）',
+  modelPick: '选择模型',
+
   queued: '排队中 #{position}…',
   running: '运行中…',
   awaitingConfirm: '等待你的确认…',

@@ -93,6 +93,22 @@ func TestScopesForRole(t *testing.T) {
 	if got := ScopesForRole("no-such-role"); got != nil {
 		t.Errorf("ScopesForRole(unknown) = %v, want nil (default deny)", got)
 	}
+	// Member is the full interactive user: the settings page's read
+	// surfaces (settings:read carries no secrets — the API exposes only
+	// *_set booleans) and plugin management are part of normal usage,
+	// while rewriting server settings stays administrative.
+	memberSet := make(map[string]bool, len(member))
+	for _, s := range member {
+		memberSet[s] = true
+	}
+	for _, s := range []string{ScopeSettingsRead, ScopePluginsRead, ScopePluginsWrite} {
+		if !memberSet[s] {
+			t.Errorf("member role lacks interactive surface scope %q", s)
+		}
+	}
+	if memberSet[ScopeSettingsWrite] {
+		t.Error("member role grants settings:write (server-settings rewrite must stay admin-only)")
+	}
 	// Returned slices must be safe to mutate by callers.
 	member[0] = "mutated"
 	if reflect.DeepEqual(ScopesForRole(RoleMember), member) {

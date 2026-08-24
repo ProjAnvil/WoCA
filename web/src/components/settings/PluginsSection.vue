@@ -38,9 +38,18 @@ import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { Puzzle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { getPlugins, installPlugin, putPlugins } from '../../api/client'
+import { useSettingsStore } from '../../stores/settings'
+
+// bridge=true on the private-cloud form: the same dual track as skills/MCP
+// applies — the organization can pin the enabled set via the config plane
+// (the builtin-plugins managed lock), and whatever it leaves open stays
+// the user's own choice.
+defineProps<{ bridge?: boolean }>()
 
 const { t } = useI18n()
+const settings = useSettingsStore()
 const pluginState = sharedPluginState
+const orgLocked = computed(() => settings.isManaged('builtin-plugins'))
 
 async function loadPlugins() {
   if (pluginState.loading) return
@@ -148,7 +157,15 @@ const stateLabels = computed<Record<string, string>>(() => ({
     <div class="setting-section-title">
       <Puzzle :size="13" style="vertical-align: -2px" /> {{ t('settings.plugins.title') }}
     </div>
-    <p class="mem-intro">{{ t('settings.plugins.intro') }}</p>
+    <p class="mem-intro">
+      {{
+        bridge
+          ? orgLocked
+            ? t('settings.plugins.orgManagedIntro')
+            : t('settings.plugins.bridgeIntro')
+          : t('settings.plugins.intro')
+      }}
+    </p>
 
     <div v-if="pluginState.loading && !pluginState.loaded" class="row-hint">{{ t('common.loading') }}</div>
     <div v-else-if="pluginState.error" class="row-hint" style="color: var(--danger, #e5484d)">
@@ -164,6 +181,9 @@ const stateLabels = computed<Record<string, string>>(() => ({
           <span class="env-check-name">{{ p.name }}</span>
           <span class="plugin-badge">{{ kindLabels[p.kind] ?? p.kind }}</span>
           <span v-if="p.version" class="plugin-badge plugin-badge-dim">{{ p.version }}</span>
+          <span v-if="orgLocked && p.enabled" class="plugin-badge plugin-badge-org">
+            {{ t('settings.plugins.orgBadge') }}
+          </span>
           <span class="plugin-state" :data-state="p.state">
             {{ stateLabels[p.state] ?? p.state }}
           </span>
@@ -171,8 +191,8 @@ const stateLabels = computed<Record<string, string>>(() => ({
         <button
           class="switch"
           :class="{ on: p.enabled }"
-          :disabled="pluginState.toggling === p.name"
-          :title="p.enabled ? t('settings.plugins.disableTip') : t('settings.plugins.enableTip')"
+          :disabled="pluginState.toggling === p.name || orgLocked"
+          :title="orgLocked ? t('settings.managedTooltip') : p.enabled ? t('settings.plugins.disableTip') : t('settings.plugins.enableTip')"
           @click="togglePlugin(p)"
         ></button>
       </div>
@@ -241,6 +261,10 @@ const stateLabels = computed<Record<string, string>>(() => ({
 }
 .plugin-badge-dim {
   color: var(--faint);
+}
+.plugin-badge-org {
+  border-color: var(--focus);
+  color: var(--focus);
 }
 .plugin-state {
   margin-left: 8px;

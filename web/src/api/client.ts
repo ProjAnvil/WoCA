@@ -1,5 +1,6 @@
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 import i18n from '../i18n'
+import { useAuthStore } from '../stores/auth'
 import { getNativeBridge } from '../native/bridge'
 import { nativeRequestCancellation } from '../native/requestCancellation'
 import type {
@@ -48,8 +49,59 @@ export interface StreamHandlers {
 // over the bare status code, prefixed with a human-readable label so callers
 // never surface a context-free number. Success bodies are always JSON; an
 // empty body decodes to undefined for the void endpoints.
+// Streaming base: inside the native client, SSE must bypass the Wails
+// asset proxy (WebView2 buffers proxied streams) and hit the bridge
+// directly; browsers keep same-origin relative paths ('').
+let streamBase = ''
+let streamBridge = ''
+let streamAuth: { scheme: string; token: string } | null = null
+
+/** setStreamBase points streaming requests at an absolute origin. */
+export function setStreamBase(base: string) {
+  streamBase = base ? base.replace(/\/$/, '') : ''
+}
+
+/**
+ * setStreamBridge pins the target bridge for streaming requests aimed at
+ * an edge access point (v1.6 入口②): native SSE bypasses the transport
+ * proxy, so the routing header rides along explicitly.
+ */
+export function setStreamBridge(bridgeId: string) {
+  streamBridge = bridgeId
+}
+
+/**
+ * setStreamAuth carries the session material onto direct stream
+ * connections: the native WebView's SSE bypasses the asset proxy (and
+ * with it the proxy's Authorization injection), so remote profiles need
+ * the Bearer here or the event stream answers 401.
+ */
+export function setStreamAuth(scheme: string, token: string) {
+  streamAuth = scheme && token ? { scheme, token } : null
+}
+
+/** Raised on 401 so the app can raise the bridge login gate. */
+export class UnauthorizedError extends Error {
+  /** Enumerated failure code from the 401 body (backend authn codes):
+   * "unauthorized" | "revoked". */
+  code: string
+
+  constructor(code = 'unauthorized') {
+    super('unauthorized')
+    this.name = 'UnauthorizedError'
+    this.code = code
+  }
+}
+
 async function request<T>(url: string, init?: RequestInit, label?: string): Promise<T> {
   const resp = await fetch(url, init)
+  if (resp.status === 401) {
+    const code = await resp
+      .json()
+      .then((d) => (d as { code?: string }).code ?? 'unauthorized')
+      .catch(() => 'unauthorized')
+    throw new UnauthorizedError(code)
+  }
   if (!resp.ok) {
     const detail = await resp
       .json()
@@ -276,6 +328,8 @@ export function memoryStats(workspace?: string): Promise<MemoryStatsResponse> {
   return request(`/api/memory/stats${params}`, undefined, i18n.global.t('api.loadMemoryStatsFailed'))
 }
 
+export type { StatsResponse } from '../types'
+
 export function stats(): Promise<StatsResponse> {
   return request<StatsResponse>('/api/stats')
 }
@@ -328,10 +382,13 @@ export function streamRun(
     signal,
     lastSeq != null ? { 'Last-Event-ID': String(lastSeq) } : {},
   )
+  const streamHeaders: Record<string, string> = { ...cancellation.headers }
+  if (streamBridge) streamHeaders['X-Woca-Bridge'] = streamBridge
+  if (streamAuth) streamHeaders.Authorization = `${streamAuth.scheme} ${streamAuth.token}`
   const connect = (): Promise<void> =>
-    fetchEventSource(`/api/runs/${runId}/events`, {
+    fetchEventSource(`${streamBase}/api/runs/${runId}/events`, {
       openWhenHidden: true,
-      headers: cancellation.headers,
+      headers: streamHeaders,
       signal,
       async onopen(resp) {
         const ct = resp.headers.get('content-type') ?? ''
@@ -394,6 +451,16 @@ export function streamRun(
           case 'resync':
             handlers.onResync?.((data as { reason?: string }).reason ?? 'unknown')
             break
+          case 'auth_revoked': {
+            // Revocation closed the stream: surface the enumerated code
+            // through the error channel; the next API probe raises the
+            // login gate with the revoked message.
+            terminal = true
+            const code = (data as { code?: string }).code ?? 'unauthorized'
+            handlers.onError(code === 'revoked' ? i18n.global.t('api.revoked') : i18n.global.t('api.streamConnectFailed', { status: 401 }))
+            useAuthStore().raise()
+            break
+          }
           case 'done':
             terminal = true
             handlers.onDone((data as { cancelled?: boolean }).cancelled ?? false)
@@ -507,4 +574,248 @@ export function streamEvents(
   })
   void streaming.catch(() => {}).finally(cancellation.release)
   return { close: () => controller.abort() }
+}
+
+// --- bridge product surface (login, folder browser, status) ---
+
+export interface LoginResponse {
+  token: string
+  expires_at: number
+  tenant_id: string
+  user_id: string
+  role: string
+}
+
+export function login(apiKey: string): Promise<LoginResponse> {
+  return postJSON('/api/auth/login', { api_key: apiKey })
+}
+
+export function logout(): Promise<void> {
+  return postJSON('/api/auth/logout', {})
+}
+
+export interface FsEntry {
+  name: string
+  path: string
+  mtime: number
+  writable: boolean
+}
+
+export interface FsListing {
+  path: string
+  parent: string
+  dirs: FsEntry[]
+  roots: string[]
+}
+
+export function fsList(path?: string): Promise<FsListing> {
+  const q = path ? `?path=${encodeURIComponent(path)}` : ''
+  return request(`/api/fs/list${q}`, undefined, i18n.global.t('api.fsListFailed'))
+}
+
+export function fsMkdir(parent: string, name: string): Promise<{ path: string }> {
+  return postJSON('/api/fs/mkdir', { parent, name })
+}
+
+export interface FsValidate {
+  exists: boolean
+  isDir: boolean
+  writable: boolean
+}
+
+export function fsValidate(path: string): Promise<FsValidate> {
+  return request(`/api/fs/validate?path=${encodeURIComponent(path)}`, undefined, i18n.global.t('api.fsValidateFailed'))
+}
+
+export interface GatewayStatus {
+  enrolled: boolean
+  bridge_id?: string
+  last_version?: string
+  last_pull?: string
+  stale: boolean
+}
+
+export interface TunnelStatus {
+  serving: boolean
+  served: number
+}
+
+export interface CloudAccessStatus {
+  url: string
+  url_source: string
+  token_source: string
+  token_set: boolean
+  enrolled: boolean
+  bridge_id?: string
+  last_version?: string
+  last_pull?: string
+  stale: boolean
+  spki_pin?: string
+  spki_pinned: boolean
+  tunnel: TunnelStatus
+}
+
+export interface BridgeStatus {
+  edition: string
+  /** Auth posture: "local" (loopback trust) or "apikey". */
+  auth?: string
+  /** Cloud-channel snapshot; absent on editions without the channel. */
+  cloud?: CloudAccessStatus
+  managed: boolean
+}
+
+export function getStatus(): Promise<BridgeStatus> {
+  return request('/api/status', undefined, i18n.global.t('api.statusFailed'))
+}
+
+// --- bridge cloud access (design §6.5: the bridge-local config layer) ---
+
+export function getCloudAccess(): Promise<CloudAccessStatus> {
+  return request('/api/cloudaccess', undefined, i18n.global.t('api.requestFailed'))
+}
+
+export function updateCloudAccess(url: string, enrollmentToken: string): Promise<CloudAccessStatus> {
+  return request(
+    '/api/cloudaccess',
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, enrollment_token: enrollmentToken }),
+    },
+    i18n.global.t('api.requestFailed'),
+  )
+}
+
+export function resetCloudAccess(): Promise<CloudAccessStatus> {
+  return request(
+    '/api/cloudaccess/reset',
+    { method: 'POST' },
+    i18n.global.t('api.requestFailed'),
+  )
+}
+
+// --- edge access point (scenario ④: browser bridge switching) ---
+
+export interface EdgeBridge {
+  bridge_id: string
+  created_at: number
+  last_seen: number
+  live: boolean
+}
+
+/**
+ * Probes the same-origin edge inventory (GET /api/edge/bridges — the
+ * edge's own pre-auth route, never parked into a tunnel). Returns null
+ * unless the origin really is an edge access point: direct-bridge and
+ * personal deployments answer an unknown /api path with the SPA shell
+ * (200 HTML), which must not pass for an inventory.
+ */
+export async function getEdgeBridges(): Promise<EdgeBridge[] | null> {
+  try {
+    const resp = await fetch('/api/edge/bridges', {
+      headers: { Accept: 'application/json' },
+    })
+    if (!resp.ok) return null
+    const ct = resp.headers.get('Content-Type') ?? ''
+    if (!ct.includes('application/json')) return null
+    const data = (await resp.json()) as unknown
+    if (!Array.isArray(data)) return null
+    const out: EdgeBridge[] = []
+    for (const item of data) {
+      const b = item as Partial<EdgeBridge>
+      if (typeof b.bridge_id !== 'string' || !b.bridge_id) continue
+      out.push({
+        bridge_id: b.bridge_id,
+        created_at: typeof b.created_at === 'number' ? b.created_at : 0,
+        last_seen: typeof b.last_seen === 'number' ? b.last_seen : 0,
+        live: b.live === true,
+      })
+    }
+    return out
+  } catch {
+    return null
+  }
+}
+
+// --- managed delivery (远端配置: config-plane skills & MCP) ---
+
+export interface ManagedSkill {
+  name: string
+  description?: string
+}
+
+export interface ManagedMCPServer {
+  name: string
+  type: string
+  url?: string
+  command?: string
+}
+
+export interface ManagedDelivery {
+  skills: ManagedSkill[]
+  mcp: ManagedMCPServer[]
+}
+
+/**
+ * The operator-delivered skill/MCP set (read-only view of the managed
+ * layer's materialized files; env values never cross the wire).
+ */
+export function getManagedDelivery(): Promise<ManagedDelivery> {
+  return request('/api/managed', undefined, i18n.global.t('api.requestFailed'))
+}
+
+// --- model catalog (private-cloud form: pulled via the bridge) ---
+
+export interface ModelPreset {
+  id: string
+  name: string
+  provider: string
+  model: string
+  max_tokens?: number
+  temperature?: number
+  base_url?: string
+}
+
+export function listModels(): Promise<ModelPreset[]> {
+  return request('/api/models', undefined, i18n.global.t('api.requestFailed'))
+}
+
+export function applyModel(id: string): Promise<{ ok: boolean; provider: string; model: string; apply_error?: string }> {
+  return postJSON(`/api/models/${encodeURIComponent(id)}/apply`, {})
+}
+
+// --- bridge admin surface ---
+
+export interface Me {
+  user_id: string
+  remark: string
+  role: string
+}
+
+export function getMe(): Promise<Me> {
+  return request('/api/auth/me', undefined, i18n.global.t('api.requestFailed'))
+}
+
+export interface BridgeSession {
+  key_prefix: string
+  remark: string
+  role: string
+  created_at: number
+  last_seen: number
+  expires_at: number
+}
+
+export function listBridgeSessions(): Promise<BridgeSession[]> {
+  return request('/api/sessions/admin', undefined, i18n.global.t('api.requestFailed'))
+}
+
+export interface AuditRow {
+  at: number
+  actor: string
+  action: string
+  detail: string
+}
+
+export function listAudit(limit = 100): Promise<AuditRow[]> {
+  return request(`/api/audit?limit=${limit}`, undefined, i18n.global.t('api.requestFailed'))
 }

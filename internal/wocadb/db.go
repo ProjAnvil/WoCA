@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/projanvil/woca/internal/discovery"
-
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver name "pgx"
 	_ "modernc.org/sqlite"             // database/sql driver name "sqlite"
 )
@@ -79,12 +77,23 @@ func Disabled(target string) bool {
 //	"sqlite:/path/to.db"      → sqlite at path
 //	"/path/to.db" | "a.db"    → sqlite at path
 //	"postgres://…" | "pg:…"   → PostgreSQL via pgx
-//	nacos://… | consul://…    → resolved via internal/discovery first
+//	nacos://… | consul://…    → resolved via the installed DSN resolver first
 //	                          (VM private deployments, design §12.1)
+
+// DSNResolver expands registry-backed DSN references (nacos://…,
+// consul://…) into concrete DSNs (design §12.1: registration and discovery
+// are deployment-layer duties). Server-role entry points install the
+// resolver from internal/ee/discovery; while unset, registry references
+// fail with a clear error — the personal edition links no resolver.
+var DSNResolver func(ctx context.Context, ref string) (string, error)
+
 func Open(target string) (*DB, error) {
 	target = strings.TrimSpace(target)
 	if isDiscoveryRef(target) {
-		resolved, err := discovery.Resolve(context.Background(), target)
+		if DSNResolver == nil {
+			return nil, fmt.Errorf("wocadb: registry reference %s requires the discovery resolver (server-role entry points install it; the personal edition never sees registry DSNs)", redactRef(target))
+		}
+		resolved, err := DSNResolver(context.Background(), target)
 		if err != nil {
 			return nil, fmt.Errorf("wocadb: resolve %s: %w", redactRef(target), err)
 		}
@@ -122,6 +131,15 @@ func Open(target string) (*DB, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// Placeholder returns the dialect's positional parameter marker for the
+// zero-based index: "?..."-style for sqlite, "$N" for postgres.
+func (d Dialect) Placeholder(i int) string {
+	if d == DialectPostgres {
+		return fmt.Sprintf("$%d", i+1)
+	}
+	return "?"
 }
 
 // isDiscoveryRef reports whether a target references an external registry
@@ -454,7 +472,7 @@ func (d *DB) migrate() error {
 
 // migrateLockKey serializes schema migrations across woca processes. PG's
 // CREATE TABLE IF NOT EXISTS is not race-safe (concurrent creators collide
-// on the pg_type rowtype unique index), and server editions start N
+// on the pg_type rowtype unique index), and enterprise deployments start N
 // replicas against one database — the enterprise stack hit exactly that:
 // woca-server ×2 + worker migrating simultaneously failed with
 // "duplicate key value violates unique constraint pg_type_typname_nsp_index".

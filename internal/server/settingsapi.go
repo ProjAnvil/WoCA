@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
-	"github.com/projanvil/woca/internal/msgplane"
 	"github.com/projanvil/woca/internal/settings"
 )
 
@@ -55,6 +55,14 @@ type appSettings struct {
 	MsgPlaneMode    string `json:"msg_plane_mode"`
 	MsgPlaneNATSURL string `json:"msg_plane_nats_url"`
 	MsgPlaneSubject string `json:"msg_plane_subject"`
+	// ModelWhitelist is the config-plane model allowlist (empty =
+	// unrestricted). Read-only: it is only set through the managed
+	// overlay (product design §3.1).
+	ModelWhitelist string `json:"model_whitelist"`
+	// ManagedFields lists settings keys locked by the managed overlay
+	// (nil when none); the frontend renders those read-only with a
+	// "Managed" banner.
+	ManagedFields []string `json:"managed_fields,omitempty"`
 	// MsgPlaneAvailable reports whether this deployment dispatches runs at
 	// all (the enterprise queue-dispatch form). Personal editions keep the
 	// plane section hidden and its keys read-only no-ops.
@@ -144,7 +152,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		LadyMSystem2Interval:    cfg.LadyMSystem2Interval,
 		MsgPlaneMode:            orDefaultStr(cfg.MsgPlaneMode, "pg"),
 		MsgPlaneNATSURL:         cfg.MsgPlaneNATSURL,
-		MsgPlaneSubject:         orDefaultStr(cfg.MsgPlaneSubject, msgplane.DefaultSubject),
+		MsgPlaneSubject:         orDefaultStr(cfg.MsgPlaneSubject, settings.DefaultMsgPlaneSubject),
+		MsgPlaneAvailable:       s.dispatch,
+		ModelWhitelist:          cfg.ModelWhitelist,
+		ManagedFields:           st.ManagedFields(),
 	})
 }
 
@@ -257,7 +268,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// Message-plane keys are resolved per dispatch/claim by the plane
-		// (internal/msgplane), so changes apply live — no rebuild, no
+		// (internal/ee/msgplane), so changes apply live — no rebuild, no
 		// restart, and the PG queue keeps executing throughout.
 		patches = append(patches,
 			strPatch(settings.KeyMsgPlaneMode, req.MsgPlaneMode, 0),
@@ -268,6 +279,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 
 	cfg := st.Load()
 	var applied uint8
+	// Model whitelist (config plane): the model choice must stay inside
+	// the managed allowlist when one is installed (§3.1 — list-free
+	// choices fail closed).
+	if req.Model != nil && *req.Model != "" && cfg.ModelWhitelist != "" &&
+		!modelAllowed(*req.Model, cfg.ModelWhitelist) {
+		writeError(w, http.StatusBadRequest, "model not in the configured allowlist")
+		return
+	}
 	for _, p := range patches {
 		if !p.set {
 			continue
@@ -279,6 +298,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		applied |= p.effects
 	}
 	if err := st.Save(cfg); err != nil {
+		if strings.Contains(err.Error(), "managed and locked") {
+			// Managed domains are read-only from the client (§3.1):
+			// the config plane is the authority.
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -331,3 +356,14 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
+
+// modelAllowed reports whether model is listed in the comma-separated
+// whitelist.
+func modelAllowed(model, whitelist string) bool {
+	for _, m := range strings.Split(whitelist, ",") {
+		if strings.TrimSpace(m) == model {
+			return true
+		}
+	}
+	return false
+}

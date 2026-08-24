@@ -1,0 +1,40 @@
+# woca-bridge dev toolbox: the bridge as a container with a full dev tool
+# chain — python3 + pip, node + npm, bun — so the agent's tool calls
+# (Bash, plugins, project builds) execute inside this container while the
+# browser drives it from the host. The control-plane link (enrollment,
+# managed config, tunnel) points at the dev stack's edge access point
+# (WOCA_EDGE_URL) — the same single-peer topology as production.
+#
+# Build context: repository root. Base is nikolaik/python-nodejs (the
+# widely-used python+node image); bun rides the official installer.
+
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /woca-bridge ./cmd/woca-bridge
+
+FROM nikolaik/python-nodejs:python3.12-nodejs22
+
+# Dev toolbox beyond the base: bun, ripgrep, git, ca-certs.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ripgrep git ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://bun.sh/install | bash \
+    && ln -s /root/.bun/bin/bun /usr/local/bin/bun \
+    && ln -s /root/.bun/bin/bunx /usr/local/bin/bunx
+
+COPY --from=build /woca-bridge /usr/local/bin/woca-bridge
+COPY deploy/selfhosted/bridge-dev-entrypoint.sh /usr/local/bin/bridge-dev-entrypoint.sh
+RUN chmod +x /usr/local/bin/bridge-dev-entrypoint.sh
+
+# The workspace the agent operates on (mount a volume or a host dir here).
+VOLUME ["/workspace"]
+WORKDIR /workspace
+
+ENV WOCA_HOME=/var/lib/woca \
+    WOCA_WORKDIR=/workspace
+
+ENTRYPOINT ["bridge-dev-entrypoint.sh"]
+CMD ["serve", "--addr", "0.0.0.0:8080", "--auth", "apikey"]

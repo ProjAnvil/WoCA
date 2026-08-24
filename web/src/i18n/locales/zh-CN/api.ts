@@ -1,4 +1,7 @@
 export default {
+  fsListFailed: '读取目录失败',
+  fsValidateFailed: '校验路径失败',
+  statusFailed: '读取状态失败',
   requestFailed: '请求失败',
   loadSessionsFailed: '加载会话失败',
   deleteSessionFailed: '删除会话失败',
@@ -21,4 +24,5 @@ export default {
   deleteFailed: '删除失败',
   streamConnectFailed: '流连接失败：{status}',
   unknownError: '未知错误',
+  revoked: '凭证已被吊销',
 }

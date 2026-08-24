@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projanvil/woca/internal/platform/dpop"
+	"github.com/projanvil/woca/internal/ee/dpop"
 	"github.com/projanvil/woca/native-client/internal/devicekey"
 )
 

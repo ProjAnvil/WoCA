@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/projanvil/woca/internal/memcmd"
-	"github.com/projanvil/woca/internal/tenantcmd"
+	"github.com/projanvil/woca/internal/ee/discovery"
+	"github.com/projanvil/woca/internal/ee/memcmd"
+	"github.com/projanvil/woca/internal/ee/tenantcmd"
 	"github.com/spf13/cobra"
 )
 
 func main() {
+	discovery.Install()
 	root := &cobra.Command{
 		Use:           "woca-tenant",
 		Short:         "woca tenant administration",

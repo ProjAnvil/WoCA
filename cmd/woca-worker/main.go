@@ -22,9 +22,11 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 
 	"github.com/projanvil/woca/internal/agentbuild"
+	"github.com/projanvil/woca/internal/ee/discovery"
+	"github.com/projanvil/woca/internal/ee/msgplane"
+	"github.com/projanvil/woca/internal/ee/obs"
+	"github.com/projanvil/woca/internal/ee/worker"
 	"github.com/projanvil/woca/internal/logging"
-	"github.com/projanvil/woca/internal/msgplane"
-	"github.com/projanvil/woca/internal/obs"
 	"github.com/projanvil/woca/internal/platform/blobstore"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/runstate"
@@ -32,7 +34,6 @@ import (
 	"github.com/projanvil/woca/internal/settingswatch"
 	"github.com/projanvil/woca/internal/telemetry"
 	"github.com/projanvil/woca/internal/wocadb"
-	"github.com/projanvil/woca/internal/worker"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel/attribute"
@@ -43,6 +44,7 @@ import (
 const obsAddrEnv = "WOCA_OBS_ADDR"
 
 func main() {
+	discovery.Install()
 	root := newWorkerRoot()
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

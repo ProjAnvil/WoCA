@@ -5,6 +5,10 @@ import { useSettingsStore } from '../../stores/settings'
 
 const { t } = useI18n()
 const settings = useSettingsStore()
+// The memory domain is operator-owned in the private-cloud form: when the
+// engine key rides the managed overlay the whole section locks (the
+// domain is configured in the config console, not on the bridge).
+const locked = () => settings.isManaged('memory_engine')
 </script>
 
 <template>
@@ -18,8 +22,11 @@ const settings = useSettingsStore()
         <div class="row-label">{{ t('settings.memory.engine') }}</div>
         <div class="row-hint">{{ t('settings.memory.engineHint') }}</div>
       </div>
-      <select v-model="settings.memoryEngine" class="field" style="max-width: 200px">
+      <select v-model="settings.memoryEngine" class="field" style="max-width: 200px" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined">
         <option value="ladym">{{ t('settings.memory.enabledOption') }}</option>
+        <!-- remote: the private cloud's ladyM service (config-plane wired;
+             the effective engine on managed bridges). -->
+        <option value="remote">{{ t('settings.memory.remoteOption') }}</option>
         <option value="none">{{ t('settings.memory.offOption') }}</option>
       </select>
     </div>
@@ -33,7 +40,7 @@ const settings = useSettingsStore()
         <button
           class="switch"
           :class="{ on: settings.ladymAutoRetain }"
-          @click="settings.ladymAutoRetain = !settings.ladymAutoRetain"
+          @click="!locked() && (settings.ladymAutoRetain = !settings.ladymAutoRetain)"
         ></button>
       </div>
 
@@ -45,7 +52,7 @@ const settings = useSettingsStore()
         <button
           class="switch"
           :class="{ on: settings.ladymSystem2 }"
-          @click="settings.ladymSystem2 = !settings.ladymSystem2"
+          @click="!locked() && (settings.ladymSystem2 = !settings.ladymSystem2)"
         ></button>
       </div>
 
@@ -55,7 +62,7 @@ const settings = useSettingsStore()
           <div class="row-hint">{{ t('settings.memory.intervalHint') }}</div>
         </div>
         <input
-          v-model.number="settings.ladymSystem2Interval"
+          v-model.number="settings.ladymSystem2Interval" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined"
           class="field"
           style="max-width: 100px"
           type="number"
@@ -88,7 +95,7 @@ const settings = useSettingsStore()
             <div class="row-label">Embedding</div>
             <div class="row-hint">{{ t('settings.memory.embeddingHint') }}</div>
           </div>
-          <select v-model="settings.ladymEmbedding" class="field" style="max-width: 200px">
+          <select v-model="settings.ladymEmbedding" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined" class="field" style="max-width: 200px">
             <option value="inherit">{{ t('settings.memory.inheritOption') }}</option>
             <option value="hashing">{{ t('settings.memory.hashingOption') }}</option>
             <option value="openai">openai</option>
@@ -103,7 +110,7 @@ const settings = useSettingsStore()
             <div class="row-hint">{{ t('settings.memory.embeddingModelHint') }}</div>
           </div>
           <input
-            v-model="settings.ladymEmbeddingModel"
+            v-model="settings.ladymEmbeddingModel" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined"
             class="field"
             style="max-width: 260px"
             placeholder="text-embedding-3-small"
@@ -116,7 +123,7 @@ const settings = useSettingsStore()
             <div class="row-hint">{{ t('settings.memory.embeddingBaseHint') }}</div>
           </div>
           <input
-            v-model="settings.ladymEmbeddingBaseURL"
+            v-model="settings.ladymEmbeddingBaseURL" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined"
             class="field"
             style="max-width: 260px"
             :placeholder="t('settings.memory.inheritOpenAIBase')"
@@ -135,7 +142,7 @@ const settings = useSettingsStore()
             </div>
           </div>
           <input
-            v-model="settings.ladymEmbeddingAPIKey"
+            v-model="settings.ladymEmbeddingAPIKey" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined"
             class="field"
             style="max-width: 260px"
             type="password"

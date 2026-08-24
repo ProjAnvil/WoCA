@@ -43,6 +43,7 @@ every conversation is persisted as a resumable transcript.
 - [Providers & models](#providers--models)
 - [Permissions](#permissions)
 - [Architecture](#architecture)
+- [Editions & repository layout](#editions--repository-layout)
 - [Configuration](#configuration)
 - [Sessions, memory & undo](#sessions-memory--undo)
 - [Multi-agent](#multi-agent)
@@ -283,6 +284,105 @@ internal/settings        settings database + encrypted secrets
 internal/quota           provider quota/usage display
 internal/merge           layered configuration merge
 ```
+
+### Editions & repository layout
+
+woca ships as **two editions** built from one repository:
+
+- **Personal edition** — the `woca` binary: CLI/TUI/REPL plus the local
+  `woca serve` web UI, zero external dependencies (sqlite, in-process
+  everything). This is what individual users install.
+- **Enterprise edition** — the server roles (`woca-server`, `woca-worker`,
+  `woca-config`, `woca-tenant`) assembled from the same core plus the
+  enterprise tree: multi-tenant auth (API keys, native-client DPoP
+  sessions), queue dispatch with the NATS message plane, the standalone
+  config service, observability (OTel/Prometheus/Grafana), and registry
+  DSN discovery.
+
+The delivery axis is orthogonal to the edition axis: today both editions
+are **self-hosted** (see `deploy/selfhosted/`, `deploy/k8s/`,
+`deploy/vm/`); a managed cloud form is a future packaging of the same
+enterprise code, not a third edition.
+
+```
+internal/        core, shared by both editions (agent, tools, server, fsb, …)
+internal/ee/     enterprise-only: msgplane, tenant, configsvc, worker, obs,
+                 discovery, nativeauth, dpop, tenantcmd, memcmd, skillsvc,
+                 bridge (the private-cloud bridge service), entrygw (the
+                 private-core machine registry), edgegw (the stateless edge
+                 access point), edition (woca-server's composition root)
+internal/platform/machineid  shared machine identity (enrollment tokens,
+                 Ed25519 identities, opaque access tokens)
+web/             shared web UI (personal + enterprise web surface)
+ee/              enterprise web consoles (configsvc-web, opsconsole-web,
+                 skillsvc-web)
+deploy/selfhosted/  enterprise docker-compose stack (data plane + full)
+deploy/k8s/         Kubernetes manifests     deploy/vm/  registry verify
+cmd/woca         personal entry (everything)
+cmd/woca-*       enterprise role entries (no interactive surfaces)
+```
+
+### The bridge (private-cloud form)
+
+`woca-bridge` is the productized private-cloud execution plane: the same
+serve surface plus the product identity model — organization credentials
+issued by the tenant ops console on the private core (the bridge itself
+carries no key management, v1.7; an unenrolled bridge keeps loopback
+trust only), URL+key login with cookie sessions (revocation cascades
+from the ops console through the config generation), the
+workspace folder browser (`/api/fs/*`, jailed with `os.OpenRoot`), and a
+fail-closed bind check (an unauthenticated non-loopback bind refuses to
+start). Registered bridges see exactly one control-plane peer — the
+stateless edge access point (`cmd/woca-edge`, `internal/ee/edgegw`; R7:
+no database, no files, every machine-token check calls home to the
+service plane). Behind it the private core splits in two: the registry
+routes (`/gw/enroll|renew|heartbeat|resolve|bridges`, mounted on
+woca-server's `WOCA_GW_ADDR` listener) and the config pull (`/gw/config`
+on woca-config). A one-time enrollment token exchanges for a local
+Ed25519 identity plus short-TTL opaque access tokens; pulled settings
+install as the managed overlay (locked, `managed_fields` in
+`/api/settings`), and a control-plane outage keeps the bridge running
+with a STALE flag on the status page. The same outbound channel carries
+scenario four's data plane: client traffic parks at the edge until the
+bridge's tunnel picks it up and answers against its own handler stack
+(SSE streams pass with flushes intact), so any-place web commands a
+NAT-hidden bridge with zero inbound ports. Loopback bridges keep the
+zero-login personal experience; the personal `woca` binary links none of
+this.
+
+The full private-cloud stage ships with it: TLS direct termination
+(`WOCA_TLS_CERT/KEY`), the long-poll config channel (push semantics over
+pull), worker-led enrollment (fingerprint approval — no token pasting),
+the bridge's read-only operations view (live sessions + audit over HTTP +
+SPA; user credentials are organization keys issued by the tenant ops
+console — the bridge itself carries no key management, v1.7), a global
+health lamp and Markdown diagnostics export, QR pairing on the login
+page, and the native client's embedded bridge (bundled binary, zero-login
+loopback profile, org-key login with TOFU pinning and OS-keychain key
+storage),
+the three-entry connection page (embedded / private cloud via the edge
+with target-bridge selection / direct bridge — one profile mechanism
+underneath), the bridge-local cloud-access settings (`edge.*` keys in the
+settings database, SPKI TOFU pin, env override with source labels, page
+at Settings → Cloud access), and the two dev compose groups (the
+microservices twin plus the §6.3 edge group with `public`/`internal`
+network layering and the bridge as an independent container — see
+`deploy/selfhosted/BRIDGE.md` for the deployment runbook).
+
+The boundary is enforced, not aspirational: the personal binary never links
+`internal/ee` (its dependency baseline is pinned in `ci/deps-personal.txt`),
+the enterprise tree never links the interactive frontends, and core
+packages reach enterprise capabilities only through seams —
+`server.MsgPlane`, `server.NativeAuth`, `servefront.Edition`, and
+`wocadb.DSNResolver`. `make check-editions` guards all three directions.
+
+> **Layout changes (2026-08-22).** The enterprise packages moved under
+> `internal/ee/` (import paths changed accordingly — e.g.
+> `internal/msgplane` → `internal/ee/msgplane`; the enterprise web consoles
+> moved to `ee/`); `deploy/enterprise/` is now `deploy/selfhosted/`. The
+> personal binary no longer ships the `tenant` and `memory` subcommands
+> (use `woca-tenant`), and `woca serve --auth apikey` now requires the
+> `woca-server` binary — multi-tenant auth is an enterprise capability.
 
 ### The agent graph
 

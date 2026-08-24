@@ -2,10 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/projanvil/woca/native-client/internal/bridge"
+	"github.com/projanvil/woca/native-client/internal/configstore"
+	"github.com/projanvil/woca/native-client/internal/transport"
 )
 
 // bridgeAPI is deliberately the entire Wails-facing backend surface. Storage,
@@ -14,6 +23,7 @@ type bridgeAPI interface {
 	Bootstrap(context.Context) (bridge.BootstrapState, error)
 	Connect(context.Context, bridge.ConnectionInput) (bridge.BootstrapState, error)
 	Logout(context.Context) (bridge.BootstrapState, error)
+	ConnectEmbedded(context.Context) (bridge.BootstrapState, error)
 	Preference(context.Context, string) (bridge.PreferenceValue, error)
 	SetPreference(context.Context, bridge.PreferenceInput) (bridge.PreferenceWriteResult, error)
 }
@@ -23,10 +33,32 @@ type requestCancellationRegistry interface {
 	CancelAll()
 }
 
+// StreamCredential is the auth header material for direct streaming
+// requests (SSE bypasses the asset proxy; the WebView cannot reach the
+// in-process credential chain any other way).
+type StreamCredential struct {
+	Scheme string `json:"scheme"`
+	Token  string `json:"token"`
+}
+
+// streamCredentialSource supplies credentials for a target URL (the
+// transport's provider; nil disables the bound method).
+type streamCredentialSource interface {
+	Credentials(ctx context.Context, method string, target *url.URL) (transport.Credentials, error)
+}
+
+// keySink persists a bridge API key per server URL (the OS keychain
+// store; product design §2.2: keys live in the credential vault so
+// session expiry re-authenticates silently). Receives the normalized
+// base URL.
+type keySink func(baseURL, apiKey string)
+
 type App struct {
 	ctx           context.Context
 	bridge        bridgeAPI
 	cancellations requestCancellationRegistry
+	streamAuth    streamCredentialSource
+	storeKey      keySink
 	onShutdown    func()
 	shutdownOnce  sync.Once
 
@@ -91,7 +123,16 @@ func (a *App) Connect(input bridge.ConnectionInput) (bridge.BootstrapState, erro
 	if a.bridge == nil {
 		return bridge.BootstrapState{}, errors.New("native bridge is required")
 	}
-	return a.bridge.Connect(a.context(), input)
+	state, err := a.bridge.Connect(a.context(), input)
+	// Persist the key on success (§2.2: the credential vault is the only
+	// client-side key storage). Failures stay silent — a full keychain is
+	// an convenience, never a precondition for connecting.
+	if err == nil && state.State == bridge.StateReady && a.storeKey != nil && input.APIKey != "" {
+		if baseURL, nerr := configstore.NormalizeBaseURL(input.ServerURL); nerr == nil {
+			a.storeKey(baseURL, input.APIKey)
+		}
+	}
+	return state, err
 }
 
 func (a *App) Logout() (bridge.BootstrapState, error) {
@@ -99,6 +140,78 @@ func (a *App) Logout() (bridge.BootstrapState, error) {
 		return bridge.BootstrapState{}, errors.New("native bridge is required")
 	}
 	return a.bridge.Logout(a.context())
+}
+
+// ConnectEmbedded is connection-page entry ① (design §6.6): adopt the
+// embedded bridge — auto-launched, loopback-trusted, zero inputs.
+func (a *App) ConnectEmbedded() (bridge.BootstrapState, error) {
+	if a.bridge == nil {
+		return bridge.BootstrapState{}, errors.New("native bridge is required")
+	}
+	return a.bridge.ConnectEmbedded(a.context())
+}
+
+// EdgeBridge is one bridge behind an edge access point.
+type EdgeBridge struct {
+	BridgeID  string `json:"bridge_id"`
+	CreatedAt int64  `json:"created_at"`
+	LastSeen  int64  `json:"last_seen"`
+	Live      bool   `json:"live"`
+}
+
+// StreamCredentials hands the WebView the session material for direct
+// streaming requests: the run-events SSE connection bypasses the asset
+// proxy (WebView2 buffers proxied streams), so it needs the same Bearer
+// the proxy would inject. Loopback targets need nothing; failures return
+// empty material and the stream authenticates the way it used to.
+func (a *App) StreamCredentials(serverURL string) (StreamCredential, error) {
+	if a.streamAuth == nil {
+		return StreamCredential{}, nil
+	}
+	base := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return StreamCredential{}, errors.New("a valid server URL is required")
+	}
+	if host := parsed.Hostname(); host == "localhost" || (net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()) {
+		return StreamCredential{}, nil
+	}
+	ctx, cancel := context.WithTimeout(a.context(), 15*time.Second)
+	defer cancel()
+	creds, err := a.streamAuth.Credentials(ctx, http.MethodGet, parsed)
+	if err != nil || creds.Session == "" {
+		return StreamCredential{}, nil
+	}
+	return StreamCredential{Scheme: creds.Scheme, Token: creds.Session}, nil
+}
+
+// EdgeBridges lists the bridges registered at an edge (connection page
+// entry ② target selection, design §6.6). Pre-auth by design: the choice
+// happens before login; the edge's own inventory route answers.
+func (a *App) EdgeBridges(serverURL string) ([]EdgeBridge, error) {
+	base := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if parsed, err := url.Parse(base); err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil, errors.New("a valid edge URL is required")
+	}
+	ctx, cancel := context.WithTimeout(a.context(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/edge/bridges", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("edge returned " + resp.Status)
+	}
+	var bridges []EdgeBridge
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&bridges); err != nil {
+		return nil, err
+	}
+	return bridges, nil
 }
 
 func (a *App) Preference(key string) (bridge.PreferenceValue, error) {

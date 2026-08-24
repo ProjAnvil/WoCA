@@ -84,8 +84,8 @@ func TestServeWithObservabilitySeam(t *testing.T) {
 	obs := &fakeObs{}
 	ctx, cancel := context.WithTimeout(t.Context(), 700*time.Millisecond)
 	defer cancel()
-	if err := ServeWithObs(ctx, opts, "127.0.0.1:0", true, "", obs); err != nil {
-		t.Fatalf("ServeWithObs = %v", err)
+	if err := ServeWithEdition(ctx, opts, "127.0.0.1:0", true, "", Edition{obs: obs}); err != nil {
+		t.Fatalf("ServeWithEdition = %v", err)
 	}
 	if obs.installed != 1 {
 		t.Errorf("installed = %d, want 1", obs.installed)
@@ -104,7 +104,7 @@ func TestServeWithObsInstallError(t *testing.T) {
 	url := fakeOpenAI(t, "hi")
 	opts := baseOpts(t, url)
 	failing := &failingObs{}
-	if err := ServeWithObs(t.Context(), opts, "127.0.0.1:0", true, "", failing); err == nil {
+	if err := ServeWithEdition(t.Context(), opts, "127.0.0.1:0", true, "", Edition{obs: failing}); err == nil {
 		t.Fatal("expected install error to abort Serve")
 	}
 	if failing.obs.shutdowned != 0 {

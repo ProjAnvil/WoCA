@@ -1,4 +1,7 @@
 export default {
+  fsListFailed: 'Failed to list directories',
+  fsValidateFailed: 'Failed to validate path',
+  statusFailed: 'Failed to load status',
   requestFailed: 'Request failed',
   loadSessionsFailed: 'Failed to load sessions',
   deleteSessionFailed: 'Failed to delete session',
@@ -21,4 +24,5 @@ export default {
   deleteFailed: 'Delete failed',
   streamConnectFailed: 'Stream connection failed: {status}',
   unknownError: 'Unknown error',
+  revoked: 'credential revoked',
 }
