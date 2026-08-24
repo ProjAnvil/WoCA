@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -298,7 +299,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		applied |= p.effects
 	}
 	if err := st.Save(cfg); err != nil {
-		if strings.Contains(err.Error(), "managed and locked") {
+		if errors.Is(err, settings.ErrManagedLocked) {
 			// Managed domains are read-only from the client (§3.1):
 			// the config plane is the authority.
 			writeError(w, http.StatusForbidden, err.Error())

@@ -1,18 +1,20 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
-import { useI18n } from "vue-i18n";
-import { Activity, FolderOpen, Plus, Settings, X } from "lucide-vue-next";
+import { nextTick, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { Activity, FolderOpen, Plus, Settings, X } from 'lucide-vue-next'
 import FolderPicker from "./FolderPicker.vue";
 import StatusModal from "./StatusModal.vue";
 import SessionList from "./SessionList.vue";
 import { useSessionStore } from "../stores/sessions";
 import { useSettingsStore } from "../stores/settings";
-import { getStatus } from "../api/client";
+import { useStatusStore } from "../stores/status";
+import { usePolling } from "../lib/interval";
 import { baseName } from "../lib/format";
 
 const { t } = useI18n();
 const sessions = useSessionStore();
 const settings = useSettingsStore();
+const statusStore = useStatusStore();
 
 // The header "+" adds a new workspace (a directory path; the workspace
 // materializes in the list via its first session). Adding a session to an
@@ -22,25 +24,13 @@ const wsPath = ref("");
 const wsInput = ref<HTMLInputElement | null>(null);
 const pickerOpen = ref(false);
 const statusOpen = ref(false);
-// Global health lamp (product design §6.3): green = synced, yellow =
-// STALE cache, grey = standalone; red surfaces on the login gate.
-const lamp = ref<"ok" | "stale" | "off" | "err">("off");
-let lampTimer: number | undefined;
-
-async function refreshLamp() {
-  try {
-    const st = await getStatus();
-    lamp.value = !st.cloud?.enrolled ? "off" : st.cloud.stale ? "stale" : "ok";
-  } catch {
-    lamp.value = "err";
-  }
-}
+// One shared poll keeps the lamp (and the settings panel's edition
+// snapshot) fresh every 20s.
+const lampPoll = usePolling(() => statusStore.refresh(), 20000);
 
 onMounted(() => {
-  void refreshLamp();
-  lampTimer = window.setInterval(refreshLamp, 20000);
+  lampPoll.start();
 });
-onBeforeUnmount(() => window.clearInterval(lampTimer));
 
 function openWorkspaceDialog() {
   wsPath.value = "";
@@ -87,7 +77,7 @@ async function pickWorkspace(path: string) {
 
     <div class="footer-bar">
       <button class="footer-settings-btn" @click="statusOpen = true">
-        <span class="status-lamp" :class="'lamp-' + lamp" />
+        <span class="status-lamp" :class="'lamp-' + statusStore.lamp" />
         <Activity :size="15" />
         <span>{{ t("status.entry") }}</span>
       </button>

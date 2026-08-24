@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createPinia } from 'pinia'
 import i18n from '../../i18n'
 
 const getManagedDelivery = vi.fn()
@@ -8,7 +9,7 @@ vi.mock('../../api/client', async (importOriginal) => {
   return { ...orig, getManagedDelivery: (...a: Parameters<typeof getManagedDelivery>) => getManagedDelivery(...a) }
 })
 
-import ManagedSection, { resetManagedState } from './ManagedSection.vue'
+import ManagedSection from './ManagedSection.vue'
 import type { BridgeStatus } from '../../api/client'
 
 function enrolledStatus(over: Partial<BridgeStatus['cloud']> = {}): BridgeStatus {
@@ -35,7 +36,7 @@ function enrolledStatus(over: Partial<BridgeStatus['cloud']> = {}): BridgeStatus
 function mountSection(status?: BridgeStatus | null) {
   return mount(ManagedSection, {
     props: { status: status ?? null },
-    global: { plugins: [i18n] },
+    global: { plugins: [i18n, createPinia()] },
   })
 }
 
@@ -43,7 +44,6 @@ describe('ManagedSection', () => {
   beforeEach(() => {
     i18n.global.locale.value = 'en'
     getManagedDelivery.mockReset()
-    resetManagedState()
   })
 
   it('renders the delivered skills and MCP with the sync line', async () => {

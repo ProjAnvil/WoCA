@@ -109,6 +109,20 @@ func SecretFor(key string) (string, bool) {
 	return "", false
 }
 
+// ManagedSecretKeys maps the config-package wire keys to the secret names
+// they deliver. One table, two consumers: the config plane (sender) and
+// the bridge's applyManaged (receiver) — a secret that exists on only one
+// side would silently drop from deliveries, so the vocabulary lives here.
+var ManagedSecretKeys = map[string]string{
+	"anthropic-api-key":      SecretAnthropicAPIKey,
+	"openai-api-key":         SecretOpenAIAPIKey,
+	"glm-api-key":            SecretGLMAPIKey,
+	"deepseek-api-key":       SecretDeepSeekAPIKey,
+	"checkpoint-pg-password": SecretCheckpointPGPassword,
+	"memory-pg-password":     SecretMemoryPGPassword,
+	"ladym-api-password":     SecretLadyMAPIPassword,
+}
+
 // KeyHelp returns a short usage line for a key.
 func KeyHelp(key string) string {
 	switch key {

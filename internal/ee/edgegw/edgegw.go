@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -735,18 +736,6 @@ func bearer(r *http.Request) string {
 	return ""
 }
 
-// forwardableHeaders strips hop-by-hop headers before the payload ride.
-func forwardableHeaders(h http.Header) map[string][]string {
-	out := map[string][]string{}
-	for k, vs := range h {
-		if isHopHeader(k) {
-			continue
-		}
-		out[k] = vs
-	}
-	return out
-}
-
 // tunnelableHeaders additionally strips the X-Woca-* signalling family:
 // those headers are edge vocabulary (routing, native request ids) and are
 // consumed here — a client must not be able to forge internal signalling
@@ -798,7 +787,5 @@ func requestID() string {
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, code, v)
 }

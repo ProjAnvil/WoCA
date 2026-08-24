@@ -70,7 +70,7 @@ func TestGatewayClientEnrollPullApply(t *testing.T) {
 		StatePath: filepath.Join(home, "bridge-gateway.json"),
 	}, zerolog.Nop())
 
-	if err := g.Enroll(context.Background()); err != nil {
+	if err := g.Enroll(context.Background(), enroll); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := g.Pull(context.Background())
@@ -137,7 +137,7 @@ func TestGatewayClientStorageMemoryDelivery(t *testing.T) {
 		URL: url, EnrollmentToken: enroll,
 		StatePath: filepath.Join(home, "bridge-gateway.json"),
 	}, zerolog.Nop())
-	if err := g.Enroll(context.Background()); err != nil {
+	if err := g.Enroll(context.Background(), enroll); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := g.Pull(context.Background())
@@ -196,7 +196,7 @@ func TestGatewayClientStaleKeepsCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	live := NewGatewayClient(GatewayConfig{URL: url, EnrollmentToken: enroll, StatePath: state}, zerolog.Nop())
-	if err := live.Enroll(context.Background()); err != nil {
+	if err := live.Enroll(context.Background(), enroll); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := live.Pull(context.Background())
@@ -260,7 +260,7 @@ func TestGatewayClientInsecureSelfSigned(t *testing.T) {
 	}
 
 	// Verified client: the self-signed handshake fails.
-	if err := NewGatewayClient(cfg, zerolog.Nop()).Enroll(context.Background()); err == nil {
+	if err := NewGatewayClient(cfg, zerolog.Nop()).Enroll(context.Background(), enroll); err == nil {
 		t.Fatal("self-signed gateway accepted with verification on")
 	}
 
@@ -273,7 +273,7 @@ func TestGatewayClientInsecureSelfSigned(t *testing.T) {
 	g := NewGatewayClient(cfg, zerolog.Nop())
 	g.cfg.Insecure = true
 	g.hc = insecureClient()
-	if err := g.Enroll(context.Background()); err != nil {
+	if err := g.Enroll(context.Background(), enroll); err != nil {
 		t.Fatalf("insecure enroll: %v", err)
 	}
 	if pulled, err := g.Pull(context.Background()); err != nil || pulled == nil {

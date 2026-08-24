@@ -15,7 +15,7 @@ const settings = useSettingsStore()
     </div>
 
     <div v-if="!settings.server?.msg_plane_available" class="setting-row" style="display: block">
-      <div class="row-hint" style="max-width: 520px">Enterprise-only: this deployment does not dispatch runs to workers.</div>
+      <div class="row-hint" style="max-width: 520px">{{ t('settings.msgplane.unavailable') }}</div>
     </div>
     <div v-else class="setting-row" style="display: block">
       <div class="row-hint" style="max-width: 520px">{{ t('settings.msgplane.intro') }}</div>

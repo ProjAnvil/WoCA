@@ -1,3 +1,4 @@
+import { toErrorMessage } from '../lib/errors'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { WorkspaceFile } from '../types'
@@ -113,7 +114,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       const full = await getWorkspaceFile(file.path, root.value || undefined)
       preview.value = full
     } catch (e) {
-      previewError.value = e instanceof Error ? e.message : String(e)
+      previewError.value = toErrorMessage(e)
       preview.value = null
     } finally {
       previewLoading.value = false

@@ -4,6 +4,7 @@ export default {
   sessionsTitle: '在线会话',
   auditTitle: '审计日志',
   remark: '备注',
+  role: '角色',
   lastSeen: '最近活跃',
   expires: '过期时间',
   when: '时间',

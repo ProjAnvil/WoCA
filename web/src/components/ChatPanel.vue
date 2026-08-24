@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toErrorMessage } from '../lib/errors'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Bot, Brain, Gauge, Layers, Lightbulb, PanelRight, Paperclip, Send, ShieldCheck, Sparkles, Square, Target, X } from 'lucide-vue-next'
@@ -79,7 +80,7 @@ async function pickMode(mode: string) {
   try {
     await agent.setMode(mode)
   } catch (e) {
-    alert(e instanceof Error ? e.message : String(e))
+    alert(toErrorMessage(e))
     return
   }
   pop.value = ''
@@ -89,7 +90,7 @@ async function pickThinking(level: string) {
   try {
     await agent.setThinking(level)
   } catch (e) {
-    alert(e instanceof Error ? e.message : String(e))
+    alert(toErrorMessage(e))
     return
   }
   pop.value = ''

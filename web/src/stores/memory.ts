@@ -1,3 +1,4 @@
+import { toErrorMessage } from '../lib/errors'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { forgetMemory, listMemory, memoryStats, rememberMemory } from '../api/client'
@@ -66,7 +67,7 @@ export const useMemoryStore = defineStore('memory', () => {
       lastBatchSize = list.items.length
       stats.value = st.stats
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
+      error.value = toErrorMessage(e)
     } finally {
       loading.value = false
     }
@@ -92,7 +93,7 @@ export const useMemoryStore = defineStore('memory', () => {
       offset += list.items.length
       lastBatchSize = list.items.length
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
+      error.value = toErrorMessage(e)
     } finally {
       loading.value = false
     }

@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -78,7 +79,9 @@ type StatePersist interface {
 type GatewayClient struct {
 	cfg GatewayConfig
 	hc  *http.Client
-	log zerolog.Logger
+	// logPtr holds the effective logger; WithLogger may swap it while the
+	// Run loop is logging (construction happens before logging is wired).
+	logPtr atomic.Pointer[zerolog.Logger]
 
 	mu          sync.Mutex
 	bridgeID    string
@@ -135,12 +138,37 @@ func NewGatewayClient(cfg GatewayConfig, log zerolog.Logger) *GatewayClient {
 	if cfg.Insecure || cfg.PinSource != nil {
 		transport = PinnedTransport(cfg.Insecure, cfg.PinSource, cfg.OnPin)
 	}
-	return &GatewayClient{cfg: cfg, log: log, hc: &http.Client{Timeout: 20 * time.Second, Transport: transport}}
+	g := &GatewayClient{cfg: cfg, hc: &http.Client{Timeout: 20 * time.Second, Transport: transport}}
+	g.logPtr.Store(&log)
+	return g
 }
 
 // WithLogger swaps the channel logger (the serve path installs its
-// structured logger once available).
-func (g *GatewayClient) WithLogger(log zerolog.Logger) { g.log = log }
+// structured logger once available). Stored atomically: the Run loop and
+// the serve wiring race otherwise.
+func (g *GatewayClient) WithLogger(log zerolog.Logger) { g.logPtr.Store(&log) }
+
+// logger returns the effective logger (Nop until installed).
+func (g *GatewayClient) logger() zerolog.Logger {
+	if p := g.logPtr.Load(); p != nil {
+		return *p
+	}
+	return zerolog.Nop()
+}
+
+// hasPrivateKey reports whether a machine identity exists (locked read).
+func (g *GatewayClient) hasPrivateKey() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.privateKey != nil
+}
+
+// id snapshots the enrolled bridge id (locked read).
+func (g *GatewayClient) id() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.bridgeID
+}
 
 // SetAccessTokenForTest arms the machine token for handler-stub tests
 // (production tokens arrive via enrollment).
@@ -161,8 +189,8 @@ type stateFile struct {
 // Enroll registers this bridge with the gateway: a local Ed25519 identity
 // is generated once (the private key never leaves the device) and the
 // one-time enrollment token is exchanged for bridge id + access token.
-func (g *GatewayClient) Enroll(ctx context.Context) error {
-	if !machineid.ValidEnrollment(g.cfg.EnrollmentToken) {
+func (g *GatewayClient) Enroll(ctx context.Context, enrollmentToken string) error {
+	if !machineid.ValidEnrollment(enrollmentToken) {
 		return fmt.Errorf("bridge: invalid enrollment token shape")
 	}
 	st, err := g.loadState()
@@ -183,7 +211,7 @@ func (g *GatewayClient) Enroll(ctx context.Context) error {
 	// before the first dial so the enrollment handshake itself verifies
 	// the edge — the one-time credential never travels to a lookalike.
 	// A pin that contradicts the one already on record is a hard reject.
-	base, tokenPin := machineid.SplitEnrollment(g.cfg.EnrollmentToken)
+	base, tokenPin := machineid.SplitEnrollment(enrollmentToken)
 	if tokenPin != "" {
 		if g.cfg.PinSource != nil {
 			if existing := g.cfg.PinSource(); existing != "" && existing != tokenPin {
@@ -241,8 +269,8 @@ func (g *GatewayClient) Enroll(ctx context.Context) error {
 // register this machine's key, print the fingerprint for the
 // administrator, then poll until the console approves — no token pasting.
 func (g *GatewayClient) RequestEnrollment(ctx context.Context, onFingerprint func(fp string)) error {
-	if g.privateKey == nil {
-		if err := g.resume(); err != nil || g.privateKey == nil {
+	if !g.hasPrivateKey() {
+		if err := g.resume(); err != nil || !g.hasPrivateKey() {
 			priv, err := machineid.GenerateIdentity()
 			if err != nil {
 				return err
@@ -302,8 +330,7 @@ func (g *GatewayClient) RequestEnrollment(ctx context.Context, onFingerprint fun
 			}
 			_ = json.NewDecoder(io.LimitReader(resp2.Body, 4<<10)).Decode(&approved)
 			resp2.Body.Close()
-			g.cfg.EnrollmentToken = approved.EnrollmentToken
-			return g.Enroll(ctx)
+			return g.Enroll(ctx, approved.EnrollmentToken)
 		}
 		resp2.Body.Close()
 		select {
@@ -323,13 +350,30 @@ type ConfigPayload struct {
 // Pull fetches the config payload (304 on unchanged version yields
 // (nil, nil)); every failure keeps the local cache untouched (§3.2).
 func (g *GatewayClient) Pull(ctx context.Context) (*ConfigPayload, error) {
+	return g.pull(ctx, 0)
+}
+
+// PullWait is the blocking-query form of Pull (product design §2.3: the
+// push channel is the long poll — a config change returns immediately, an
+// unchanged config parks until the wait elapses and yields (nil, nil)).
+func (g *GatewayClient) PullWait(ctx context.Context, wait time.Duration) (*ConfigPayload, error) {
+	return g.pull(ctx, wait)
+}
+
+// pull is the one implementation behind Pull and PullWait: wait == 0 is
+// the plain pull, a positive wait parks server-side until the config
+// generation moves. The long-poll client outlives the wait window but
+// keeps the pinned (or explicitly insecure) transport — TOFU must hold on
+// the steady pull path, and self-signed 联调 edges must answer long polls
+// too.
+func (g *GatewayClient) pull(ctx context.Context, wait time.Duration) (*ConfigPayload, error) {
 	g.mu.Lock()
 	token, version := g.access, g.lastVersion
 	resumed := g.bridgeID != ""
 	g.mu.Unlock()
 	if token == "" {
 		// Lazily resume a persisted identity once (Run does this eagerly;
-		// direct Pull callers get the same treatment).
+		// direct pull callers get the same treatment).
 		if !resumed {
 			if err := g.resume(); err == nil {
 				g.mu.Lock()
@@ -341,74 +385,18 @@ func (g *GatewayClient) Pull(ctx context.Context) (*ConfigPayload, error) {
 			return nil, fmt.Errorf("bridge: gateway channel not enrolled")
 		}
 	}
-	url := g.cfg.URL + "/gw/config?version=" + version
+	query := ""
+	hc := g.hc
+	if wait > 0 {
+		query = "&wait=" + wait.String()
+		hc = &http.Client{Timeout: wait + 15*time.Second, Transport: g.hc.Transport}
+	}
+	url := g.cfg.URL + "/gw/config?version=" + version + query
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := g.hc.Do(req)
-	if err != nil {
-		g.markStale(err)
-		return nil, err
-	}
-	defer resp.Body.Close()
-	switch {
-	case resp.StatusCode == http.StatusNotModified:
-		g.mu.Lock()
-		g.lastPull = time.Now()
-		g.stale = false
-		g.mu.Unlock()
-		return nil, nil
-	case resp.StatusCode == http.StatusOK:
-	default:
-		err := fmt.Errorf("bridge: config pull: gateway returned %d", resp.StatusCode)
-		g.markStale(err)
-		return nil, err
-	}
-	var out ConfigPayload
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		// 解析失败绝不清缓存：坏包只标记 STALE，旧配置继续生效。
-		g.markStale(err)
-		return nil, err
-	}
-	g.mu.Lock()
-	g.lastPull = time.Now()
-	g.lastVersion = out.Version
-	g.stale = false
-	g.mu.Unlock()
-	return &out, nil
-}
-
-// PullWait is the blocking-query form of Pull (product design §2.3: the
-// push channel is the long poll — a config change returns immediately, an
-// unchanged config parks until the wait elapses and yields (nil, nil)).
-func (g *GatewayClient) PullWait(ctx context.Context, wait time.Duration) (*ConfigPayload, error) {
-	g.mu.Lock()
-	token, version := g.access, g.lastVersion
-	resumed := g.bridgeID != ""
-	g.mu.Unlock()
-	if token == "" {
-		if !resumed {
-			_ = g.resume()
-			g.mu.Lock()
-			token, version = g.access, g.lastVersion
-			g.mu.Unlock()
-		}
-		if token == "" {
-			return nil, fmt.Errorf("bridge: gateway channel not enrolled")
-		}
-	}
-	url := g.cfg.URL + "/gw/config?version=" + version + "&wait=" + time.Duration.String(wait)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	// The long-poll client outlives the wait window but keeps the pinned
-	// (or explicitly insecure) transport — TOFU must hold on the steady
-	// pull path, and self-signed 联调 edges must answer long polls too.
-	hc := &http.Client{Timeout: wait + 15*time.Second, Transport: g.hc.Transport}
 	resp, err := hc.Do(req)
 	if err != nil {
 		g.markStale(err)
@@ -688,26 +676,27 @@ func (g *GatewayClient) Renew(ctx context.Context) error {
 // failure-tolerant by design — gateway outages mark STALE and never stop
 // the bridge.
 func (g *GatewayClient) Run(ctx context.Context, st *settings.Store) {
+	lg := g.logger()
 	if st != nil && g.Apply == nil {
 		g.Apply = func(kv map[string]string) error { return applyManaged(st, kv) }
 	}
 	// Resume an enrolled state if present.
 	if err := g.resume(); err != nil {
-		g.log.Warn().Err(err).Msg("bridge: gateway state resume failed")
+		lg.Warn().Err(err).Msg("bridge: gateway state resume failed")
 	}
 	if !g.enrolled() {
 		if g.cfg.EnrollmentToken == "" {
-			g.log.Info().Msg("bridge: no gateway configured — running standalone")
+			lg.Info().Msg("bridge: no gateway configured — running standalone")
 			return
 		}
-		if err := g.Enroll(ctx); err != nil {
-			g.log.Error().Err(err).Msg("bridge: gateway enrollment failed (run `woca-bridge gateway enroll` with a fresh token)")
+		if err := g.Enroll(ctx, g.cfg.EnrollmentToken); err != nil {
+			lg.Error().Err(err).Msg("bridge: gateway enrollment failed (run `woca-bridge gateway enroll` with a fresh token)")
 			return
 		}
-		g.log.Info().Str("bridge", g.bridgeID).Msg("bridge: enrolled with the entry gateway")
+		lg.Info().Str("bridge", g.id()).Msg("bridge: enrolled with the entry gateway")
 	}
 	if cfg, err := g.Pull(ctx); err != nil {
-		g.log.Warn().Err(err).Msg("bridge: initial config pull failed; running on cache")
+		lg.Warn().Err(err).Msg("bridge: initial config pull failed; running on cache")
 	} else if cfg != nil {
 		g.applyConfig(cfg)
 	}
@@ -723,7 +712,7 @@ func (g *GatewayClient) Run(ctx context.Context, st *settings.Store) {
 		// park comes first so a change right after boot lands instantly
 		// instead of waiting out a whole interval.
 		if cfg, err := g.PullWait(ctx, gwInterval); err != nil {
-			g.log.Warn().Err(err).Msg("bridge: config poll failed (cache stays authoritative)")
+			lg.Warn().Err(err).Msg("bridge: config poll failed (cache stays authoritative)")
 		} else if cfg != nil {
 			g.applyConfig(cfg)
 		}
@@ -742,13 +731,15 @@ func (g *GatewayClient) renewIfNeeded(ctx context.Context) {
 	exp := g.accessExp
 	g.mu.Unlock()
 	if exp != 0 && time.Until(time.UnixMilli(exp)) < gwRenewMargin {
+		lg := g.logger()
 		if err := g.Renew(ctx); err != nil {
-			g.log.Warn().Err(err).Msg("bridge: token renewal failed")
+			lg.Warn().Err(err).Msg("bridge: token renewal failed")
 		}
 	}
 }
 
 func (g *GatewayClient) heartbeatOnce(ctx context.Context) {
+	lg := g.logger()
 	status := json.RawMessage(`{}`)
 	if g.StatusFn != nil {
 		if s := g.StatusFn(); len(s) > 0 {
@@ -756,11 +747,12 @@ func (g *GatewayClient) heartbeatOnce(ctx context.Context) {
 		}
 	}
 	if err := g.Heartbeat(ctx, status); err != nil {
-		g.log.Warn().Err(err).Msg("bridge: heartbeat failed")
+		lg.Warn().Err(err).Msg("bridge: heartbeat failed")
 	}
 }
 
 func (g *GatewayClient) applyConfig(cfg *ConfigPayload) {
+	lg := g.logger()
 	if g.Apply == nil {
 		return
 	}
@@ -774,17 +766,18 @@ func (g *GatewayClient) applyConfig(cfg *ConfigPayload) {
 		return
 	}
 	if err := g.Apply(cfg.Settings); err != nil {
-		g.log.Error().Err(err).Msg("bridge: applying managed config failed (dropping offending keys)")
+		lg.Error().Err(err).Msg("bridge: applying managed config failed (dropping offending keys)")
 		return
 	}
-	g.log.Info().Str("version", cfg.Version).Msg("bridge: managed config applied")
+	lg.Info().Str("version", cfg.Version).Msg("bridge: managed config applied")
 }
 
 func (g *GatewayClient) markStale(err error) {
+	lg := g.logger()
 	g.mu.Lock()
 	g.stale = true
 	g.mu.Unlock()
-	g.log.Warn().Err(err).Msg("bridge: config marked STALE (cache stays authoritative)")
+	lg.Warn().Err(err).Msg("bridge: config marked STALE (cache stays authoritative)")
 }
 
 // GatewayStatus is the status-page view of the channel.
@@ -972,15 +965,7 @@ func applyManaged(st *settings.Store, kv map[string]string) error {
 	// Provider API keys are secrets: they land in the encrypted store,
 	// never in the overlay struct (R4 — they do not travel past the
 	// bridge's server process).
-	for key, secret := range map[string]string{
-		"anthropic-api-key":      settings.SecretAnthropicAPIKey,
-		"openai-api-key":         settings.SecretOpenAIAPIKey,
-		"glm-api-key":            settings.SecretGLMAPIKey,
-		"deepseek-api-key":       settings.SecretDeepSeekAPIKey,
-		"checkpoint-pg-password": settings.SecretCheckpointPGPassword,
-		"memory-pg-password":     settings.SecretMemoryPGPassword,
-		"ladym-api-password":     settings.SecretLadyMAPIPassword,
-	} {
+	for key, secret := range settings.ManagedSecretKeys {
 		known[key] = true
 		if v := strings.TrimSpace(kv[key]); v != "" {
 			if err := st.SetSecret(secret, v); err != nil {

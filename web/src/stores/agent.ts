@@ -1,3 +1,4 @@
+import { toErrorMessage } from '../lib/errors'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type { PermissionMode, QuotaResponse, ThinkingLevel } from '../types'
@@ -228,7 +229,7 @@ export const useAgentStore = defineStore('agent', () => {
     try {
       quota.value = await api.getQuota()
     } catch (e) {
-      quotaError.value = e instanceof Error ? e.message : String(e)
+      quotaError.value = toErrorMessage(e)
     } finally {
       quotaLoading.value = false
     }

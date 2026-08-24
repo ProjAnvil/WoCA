@@ -1,44 +1,9 @@
-<script lang="ts">
-import { reactive } from 'vue'
-import type { PluginStatus } from '../../types'
-
-// The section component itself is v-if'd per tab switch, but the plugin list
-// and status messages must survive switching away and back while the panel is
-// open (otherwise every revisit would flash the loading placeholder). Module
-// scope gives it exactly the lifetime this state had inside the settings
-// panel's setup scope before the split; SettingsPanel calls resetPluginState()
-// when the panel closes.
-const sharedPluginState = reactive({
-  loaded: false,
-  loading: false,
-  error: '',
-  message: '',
-  plugins: [] as PluginStatus[],
-  toggling: '',
-})
-
-let pluginTimer: ReturnType<typeof setInterval> | null = null
-
-export function resetPluginState() {
-  if (pluginTimer != null) {
-    clearInterval(pluginTimer)
-    pluginTimer = null
-  }
-  sharedPluginState.loaded = false
-  sharedPluginState.loading = false
-  sharedPluginState.error = ''
-  sharedPluginState.message = ''
-  sharedPluginState.plugins = []
-  sharedPluginState.toggling = ''
-}
-</script>
-
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { Puzzle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
-import { getPlugins, installPlugin, putPlugins } from '../../api/client'
 import { useSettingsStore } from '../../stores/settings'
+import { usePluginsStore } from '../../stores/sections'
 
 // bridge=true on the private-cloud form: the same dual track as skills/MCP
 // applies — the organization can pin the enabled set via the config plane
@@ -48,95 +13,16 @@ defineProps<{ bridge?: boolean }>()
 
 const { t } = useI18n()
 const settings = useSettingsStore()
-const pluginState = sharedPluginState
+const plugins = usePluginsStore()
+const pluginState = plugins.state
 const orgLocked = computed(() => settings.isManaged('builtin-plugins'))
 
-async function loadPlugins() {
-  if (pluginState.loading) return
-  pluginState.loading = true
-  pluginState.error = ''
-  try {
-    const res = await getPlugins()
-    pluginState.plugins = res.plugins
-    pluginState.loaded = true
-    scheduleInstallPolling()
-  } catch (e) {
-    pluginState.error = e instanceof Error ? e.message : String(e)
-  } finally {
-    pluginState.loading = false
-  }
-}
-
-// While any runtime is installing, poll for progress; stop when idle.
-function scheduleInstallPolling() {
-  const installing = pluginState.plugins.some((p) => p.state === 'installing')
-  if (installing && pluginTimer == null) {
-    pluginTimer = setInterval(() => void loadPlugins(), 2000)
-  } else if (!installing && pluginTimer != null) {
-    clearInterval(pluginTimer)
-    pluginTimer = null
-  }
-}
-
-// Entering the section always refreshes (not just the first visit):
-// unmounting cleared the install-poll timer, and loadPlugins' internal
-// `loaded` gate would leave "installing" stuck at its stale state.
-// scheduleInstallPolling covers the case where a fetch is already in
-// flight and the guard skips the refresh — the stale state still says
-// installing, so polling must resume right away.
+// Entering the section always refreshes (not just the first visit): the
+// install-progress poller pauses while the section is unmounted, and the
+// store's loading guard would leave "installing" stuck at its stale state.
 onMounted(() => {
-  void loadPlugins()
-  scheduleInstallPolling()
+  void plugins.load()
 })
-
-// Leaving the section (or closing the panel) stops the polling.
-onBeforeUnmount(() => {
-  if (pluginTimer != null) clearInterval(pluginTimer)
-})
-
-async function togglePlugin(p: PluginStatus) {
-  if (pluginState.toggling) return
-  const enable = !p.enabled
-  pluginState.toggling = p.name
-  pluginState.error = ''
-  pluginState.message = ''
-  const names = pluginState.plugins
-    .filter((x) => (x.name === p.name ? enable : x.enabled))
-    .map((x) => x.name)
-  try {
-    await putPlugins(names)
-    p.enabled = enable
-    pluginState.message = enable
-      ? t('settings.plugins.enabled', {
-          name: p.name,
-          note:
-            p.state !== 'ready'
-              ? t('settings.plugins.enabledRuntimeMissing')
-              : t('settings.plugins.toolsInstant'),
-        })
-      : t('settings.plugins.disabled', { name: p.name })
-  } catch (e) {
-    pluginState.error = e instanceof Error ? e.message : String(e)
-  } finally {
-    pluginState.toggling = ''
-  }
-}
-
-async function installOne(p: PluginStatus, reinstall = false) {
-  pluginState.error = ''
-  pluginState.message = ''
-  try {
-    await installPlugin(p.name, reinstall)
-    p.state = 'installing'
-    p.log = []
-    pluginState.message = reinstall
-      ? t('settings.plugins.upgradeStarted', { name: p.name })
-      : t('settings.plugins.installStarted', { name: p.name })
-    scheduleInstallPolling()
-  } catch (e) {
-    pluginState.error = e instanceof Error ? e.message : String(e)
-  }
-}
 
 const kindLabels = computed<Record<string, string>>(() => ({
   golang: t('settings.plugins.kindGolang'),
@@ -193,7 +79,7 @@ const stateLabels = computed<Record<string, string>>(() => ({
           :class="{ on: p.enabled }"
           :disabled="pluginState.toggling === p.name || orgLocked"
           :title="orgLocked ? t('settings.managedTooltip') : p.enabled ? t('settings.plugins.disableTip') : t('settings.plugins.enableTip')"
-          @click="togglePlugin(p)"
+          @click="plugins.toggle(p)"
         ></button>
       </div>
       <div class="row-hint">{{ p.description }}</div>
@@ -214,7 +100,7 @@ const stateLabels = computed<Record<string, string>>(() => ({
           v-if="p.state === 'ready' && p.runtime"
           class="btn"
           :title="t('settings.plugins.reinstallTip')"
-          @click="installOne(p, true)"
+          @click="plugins.install(p, true)"
         >
           {{ t('settings.plugins.reinstall') }}
         </button>
@@ -222,7 +108,7 @@ const stateLabels = computed<Record<string, string>>(() => ({
           v-if="p.state !== 'ready' && p.runtime"
           class="btn"
           :disabled="p.state === 'installing'"
-          @click="installOne(p)"
+          @click="plugins.install(p, false)"
         >
           {{ p.state === 'installing' ? t('settings.plugins.stateInstalling') : t('settings.plugins.downloadInstall') }}
         </button>

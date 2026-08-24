@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toErrorMessage } from '../../lib/errors'
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CloudUpload, KeyRound, Loader2, ShieldOff, Unplug } from 'lucide-vue-next'
@@ -33,7 +34,7 @@ async function reload() {
     url.value = st.value.url
     if (st.value.url_source === 'env') note.value = t('settings.cloud.envPinned')
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = toErrorMessage(e)
   } finally {
     loading.value = false
   }
@@ -52,7 +53,7 @@ async function save() {
     token.value = ''
     note.value = t('settings.cloud.saved')
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = toErrorMessage(e)
   } finally {
     saving.value = false
   }
@@ -70,7 +71,7 @@ async function deregister() {
     token.value = ''
     note.value = t('settings.cloud.resetDone')
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = toErrorMessage(e)
   } finally {
     resetting.value = false
   }
@@ -263,13 +264,5 @@ async function deregister() {
   gap: 6px;
   border-color: #a33;
   color: #e88;
-}
-.spin {
-  animation: cloud-spin 1s linear infinite;
-}
-@keyframes cloud-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 </style>

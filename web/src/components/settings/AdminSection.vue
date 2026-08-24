@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toErrorMessage } from '../../lib/errors'
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Loader2, ScrollText, Users } from 'lucide-vue-next'
@@ -21,7 +22,7 @@ async function reload() {
   try {
     ;[sessions.value, audit.value] = await Promise.all([listBridgeSessions(), listAudit(50)])
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = toErrorMessage(e)
   } finally {
     loading.value = false
   }
@@ -46,7 +47,7 @@ function fmtTime(ms: number): string {
         <div class="admin-card-title"><Users :size="14" /> {{ t('admin.sessionsTitle') }}</div>
         <table class="admin-table">
           <thead>
-            <tr><th>{{ t('admin.remark') }}</th><th>role</th><th>{{ t('admin.lastSeen') }}</th><th>{{ t('admin.expires') }}</th></tr>
+            <tr><th>{{ t('admin.remark') }}</th><th>{{ t('admin.role') }}</th><th>{{ t('admin.lastSeen') }}</th><th>{{ t('admin.expires') }}</th></tr>
           </thead>
           <tbody>
             <tr v-for="s in sessions" :key="s.key_prefix">
@@ -120,7 +121,4 @@ function fmtTime(ms: number): string {
   max-width: 220px;
 }
 .admin-error { color: #e5534b; font-size: 12.5px; }
-.admin-loading { display: flex; justify-content: center; padding: 16px; }
-.spin { animation: adminspin 1s linear infinite; }
-@keyframes adminspin { to { transform: rotate(360deg); } }
-</style>
+.admin-loading { display: flex; justify-content: center; padding: 16px; }</style>

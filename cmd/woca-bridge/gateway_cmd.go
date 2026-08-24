@@ -45,7 +45,7 @@ func newGatewayCmd() *cobra.Command {
 				StatePath: filepath.Join(home, ".woca", "bridge-gateway.json"),
 				Insecure:  insecure,
 			}, zerolog.Nop())
-			if err := g.Enroll(cmd.Context()); err != nil {
+			if err := g.Enroll(cmd.Context(), token); err != nil {
 				return err
 			}
 			if insecure {

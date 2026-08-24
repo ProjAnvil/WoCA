@@ -1,3 +1,4 @@
+import { toErrorMessage } from '../lib/errors'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type {
@@ -456,7 +457,7 @@ export const useSessionStore = defineStore('sessions', () => {
     try {
       contextInfo.value = await api.getSessionContext(sid)
     } catch (e) {
-      contextError.value = e instanceof Error ? e.message : String(e)
+      contextError.value = toErrorMessage(e)
     } finally {
       contextLoading.value = false
     }
@@ -751,7 +752,7 @@ export const useSessionStore = defineStore('sessions', () => {
       closeStreaming(sid)
       closeReasoning(sid)
       closeGoalNote(sid)
-      error.value[sid] = e instanceof Error ? e.message : String(e)
+      error.value[sid] = toErrorMessage(e)
       status.value[sid] = 'error'
       delete queuePosition.value[sid]
     } finally {
@@ -858,7 +859,7 @@ export const useSessionStore = defineStore('sessions', () => {
     } catch (e) {
       sending.delete(sid)
       closeStreaming(sid)
-      error.value[sid] = e instanceof Error ? e.message : String(e)
+      error.value[sid] = toErrorMessage(e)
       status.value[sid] = 'error'
     }
   }
@@ -922,7 +923,7 @@ export const useSessionStore = defineStore('sessions', () => {
     } catch (e) {
       // Failures must also leave feedback in the chat (a banner disappears
       // when the state flips again; a chat bubble does not).
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = toErrorMessage(e)
       push(sid, {
         id: nid(),
         kind: 'assistant',
@@ -963,7 +964,7 @@ export const useSessionStore = defineStore('sessions', () => {
         status.value[sid] = 'done'
       }
     } catch (e) {
-      error.value[sid] = e instanceof Error ? e.message : String(e)
+      error.value[sid] = toErrorMessage(e)
       status.value[sid] = 'error'
     }
   }
@@ -985,7 +986,7 @@ export const useSessionStore = defineStore('sessions', () => {
       interrupt.value[sid] = null
       status.value[sid] = 'running'
     } catch (e) {
-      error.value[sid] = e instanceof Error ? e.message : String(e)
+      error.value[sid] = toErrorMessage(e)
       status.value[sid] = 'error'
       interrupt.value[sid] = null
     }
@@ -1012,7 +1013,7 @@ export const useSessionStore = defineStore('sessions', () => {
         status.value[sid] = 'done'
       },
       (e) => {
-        error.value[sid] = e instanceof Error ? e.message : String(e)
+        error.value[sid] = toErrorMessage(e)
         status.value[sid] = 'error'
       },
     )

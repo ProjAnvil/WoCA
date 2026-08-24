@@ -2777,3 +2777,37 @@ html.dark .shiki-host span {
 .status-lamp.lamp-stale { background: #d29922; }
 .status-lamp.lamp-off { background: #6e7681; }
 .status-lamp.lamp-err { background: #e5534b; }
+
+/* Shared modal + indicator utilities (previously duplicated as scoped
+   copies in StatusModal / FolderPicker / CloudAccessSection / AdminSection). */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.spin {
+  animation: woca-spin 1s linear infinite;
+}
+@keyframes woca-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.lamp {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.lamp.ok {
+  background: var(--ok, #3fb950);
+}
+.lamp.warn {
+  background: var(--warn, #d29922);
+}
+.lamp.off {
+  background: var(--muted, #6e7681);
+}

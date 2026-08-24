@@ -2,11 +2,16 @@ package settings
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
 	"sync"
 )
+
+// ErrManagedLocked rejects a save that would change an overlay-locked
+// field; the settings API maps it to 403 by identity, never by message.
+var ErrManagedLocked = errors.New("settings: managed and locked")
 
 // Managed settings (an enterprise tier): a settings file that overrides
 // user/database values AND locks every field it sets against further changes
@@ -220,23 +225,23 @@ func (m *managedState) checkWritable(cfg Settings) error {
 			continue // not managed
 		}
 		if c.desired != "" && c.desired != c.managed {
-			return fmt.Errorf("settings: %s is managed and locked (set to %s)", c.key, c.managed)
+			return fmt.Errorf("%w: %s is managed and locked (set to %s)", ErrManagedLocked, c.key, c.managed)
 		}
 	}
 	if o.MaxTokens != 0 && cfg.MaxTokens != 0 && cfg.MaxTokens != o.MaxTokens {
-		return fmt.Errorf("settings: max_tokens is managed and locked (set to %d)", o.MaxTokens)
+		return fmt.Errorf("%w: max_tokens (set to %d)", ErrManagedLocked, o.MaxTokens)
 	}
 	if o.Temperature != 0 && cfg.Temperature != 0 && cfg.Temperature != o.Temperature {
-		return fmt.Errorf("settings: temperature is managed and locked (set to %v)", o.Temperature)
+		return fmt.Errorf("%w: temperature (set to %v)", ErrManagedLocked, o.Temperature)
 	}
 	if o.LadyMTopK != 0 && cfg.LadyMTopK != 0 && cfg.LadyMTopK != o.LadyMTopK {
-		return fmt.Errorf("settings: ladym_topk is managed and locked (set to %d)", o.LadyMTopK)
+		return fmt.Errorf("%w: ladym_topk (set to %d)", ErrManagedLocked, o.LadyMTopK)
 	}
 	if o.LadyMSystem2Interval != 0 && cfg.LadyMSystem2Interval != 0 && cfg.LadyMSystem2Interval != o.LadyMSystem2Interval {
-		return fmt.Errorf("settings: ladym_system2_interval is managed and locked (set to %d)", o.LadyMSystem2Interval)
+		return fmt.Errorf("%w: ladym_system2_interval (set to %d)", ErrManagedLocked, o.LadyMSystem2Interval)
 	}
 	if len(o.BuiltinPlugins) > 0 && len(cfg.BuiltinPlugins) > 0 && !slices.Equal(o.BuiltinPlugins, cfg.BuiltinPlugins) {
-		return fmt.Errorf("settings: builtin-plugins is managed and locked (set to %v)", o.BuiltinPlugins)
+		return fmt.Errorf("%w: builtin-plugins (set to %v)", ErrManagedLocked, o.BuiltinPlugins)
 	}
 	// LadyMAutoRetain and LadyMSystem2 (bools, like DebugLog) are not
 	// lockable here: a managed false is indistinguishable from unset.

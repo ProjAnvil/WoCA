@@ -801,3 +801,13 @@ func TestServeStartedShutdown(t *testing.T) {
 		t.Fatal("server still running after ServeStarted returned")
 	}
 }
+
+// previewForLog bounds a prompt preview in observability events; it lives
+// with its only caller (this test).
+func previewForLog(s string) string {
+	r := []rune(s)
+	if len(r) > 200 {
+		return string(r[:200]) + "…"
+	}
+	return s
+}

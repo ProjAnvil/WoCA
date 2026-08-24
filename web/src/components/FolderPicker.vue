@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toErrorMessage } from '../lib/errors'
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ArrowUp, Check, FolderPlus, Loader2, RefreshCw } from 'lucide-vue-next'
@@ -23,7 +24,7 @@ async function load(path?: string) {
   try {
     listing.value = await fsList(path)
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = toErrorMessage(e)
   } finally {
     loading.value = false
   }
@@ -39,7 +40,7 @@ async function mkdir() {
     newDirName.value = ''
     await load(listing.value.path)
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    error.value = toErrorMessage(e)
   }
 }
 
@@ -118,15 +119,6 @@ function choose(path: string) {
 </template>
 
 <style scoped>
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 150;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
 .folder-picker {
   width: min(560px, 92vw);
   max-height: 76vh;
@@ -206,7 +198,4 @@ function choose(path: string) {
   padding: 6px 8px;
   color: inherit;
   font: inherit;
-}
-.spin { animation: fpspin 1s linear infinite; }
-@keyframes fpspin { to { transform: rotate(360deg); } }
-</style>
+}</style>

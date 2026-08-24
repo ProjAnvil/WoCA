@@ -2,27 +2,26 @@
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { Activity, Download, X } from "lucide-vue-next";
-import { getStatus, stats, type BridgeStatus, type StatsResponse } from "../api/client";
+import { stats, type StatsResponse } from "../api/client";
 import { useSettingsStore } from "../stores/settings";
+import { useStatusStore } from "../stores/status";
 
 // The status health page (product design §6.3): connection zones — the
 // gateway channel with its config version and freshness — plus the
 // bridge's own identity. On un-managed deployments every zone reads
-// "standalone".
+// "standalone". The snapshot comes from the shared status store (the
+// sidebar poll keeps it warm); the runtime zone is local and best-effort.
 const { t } = useI18n();
 defineEmits<{ close: [] }>();
 
-const st = ref<BridgeStatus | null>(null);
+const statusStore = useStatusStore();
+const st = computed(() => statusStore.status);
+const failed = computed(() => statusStore.failed);
 const runtime = ref<StatsResponse | null>(null);
-const error = ref("");
 const settings = useSettingsStore();
 
 onMounted(async () => {
-  try {
-    st.value = await getStatus();
-  } catch {
-    error.value = t("status.unavailable");
-  }
+  await statusStore.refresh();
   // The runtime zone is best-effort: local/personal deployments answer
   // both, so a failing stats call never masks the connection zones.
   try {
@@ -106,7 +105,7 @@ function exportDiagnostics() {
         </div>
       </div>
 
-      <div v-if="error" class="status-error">{{ error }}</div>
+      <div v-if="failed" class="status-error">{{ t("status.unavailable") }}</div>
       <template v-else-if="st">
         <div v-if="cloud" class="status-zone">
           <div class="zone-title">
@@ -190,15 +189,6 @@ function exportDiagnostics() {
 </template>
 
 <style scoped>
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 150;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
 .status-modal {
   width: min(480px, 92vw);
   border: 1px solid var(--border, #2a2e37);
@@ -232,11 +222,6 @@ function exportDiagnostics() {
   font-weight: 600;
   margin-bottom: 8px;
   font-size: 13px;
-}
-.lamp {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
 }
 dl {
   display: grid;

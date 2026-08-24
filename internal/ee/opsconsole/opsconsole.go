@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"io/fs"
 	"net/http"
 	"os"
@@ -614,7 +615,5 @@ func spaWithFallback(root fs.FS) http.Handler {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, status, v)
 }

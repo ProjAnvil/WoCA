@@ -57,6 +57,10 @@ type Event struct {
 // ErrLeaseHeld reports an owner/lease mismatch.
 var ErrLeaseHeld = errors.New("runstate: run is leased by another owner")
 
+// ErrActiveRun reports a session that already has a live run (admission
+// gate); callers classify with errors.Is, never message matching.
+var ErrActiveRun = errors.New("runstate: session already has an active run")
+
 // Ledger reads and writes run state on a woca database. It is safe for
 // concurrent use.
 type Ledger struct {
@@ -156,7 +160,7 @@ func (l *Ledger) Enqueue(ctx context.Context, run Run) error {
 		if !isSessionConstraint(err) {
 			return fmt.Errorf("runstate: run id %s already exists (cross-process id collision)", run.RunID)
 		}
-		return fmt.Errorf("runstate: session %s already has an active run", run.SessionID)
+		return fmt.Errorf("%w (session %s)", ErrActiveRun, run.SessionID)
 	}
 	return err
 }
@@ -438,7 +442,7 @@ func (l *Ledger) Start(ctx context.Context, run Run, workerID string, lease time
 		if !isSessionConstraint(err) {
 			return fmt.Errorf("runstate: run id %s already exists (cross-process id collision)", run.RunID)
 		}
-		return fmt.Errorf("runstate: session %s already has an active run", run.SessionID)
+		return fmt.Errorf("%w (session %s)", ErrActiveRun, run.SessionID)
 	}
 	return err
 }

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -558,7 +559,5 @@ func (c *CloudAccess) handleReset(w http.ResponseWriter, _ *http.Request) {
 }
 
 func writeJSONBridge(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, code, v)
 }

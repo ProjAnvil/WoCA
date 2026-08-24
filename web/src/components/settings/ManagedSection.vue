@@ -1,55 +1,21 @@
-<script lang="ts">
-import { reactive } from 'vue'
-import type { ManagedDelivery } from '../../api/client'
-
-// Same lifetime convention as the claudeenv section: fetched state lives
-// at module scope so it survives switching sections while the panel is
-// open; SettingsPanel calls resetManagedState() when the panel closes.
-const sharedManaged = reactive({
-  loaded: false,
-  loading: false,
-  error: '',
-  delivery: null as ManagedDelivery | null,
-})
-
-export function resetManagedState() {
-  sharedManaged.loaded = false
-  sharedManaged.loading = false
-  sharedManaged.error = ''
-  sharedManaged.delivery = null
-}
-</script>
-
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { CloudDownload } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
-import { getManagedDelivery, type BridgeStatus } from '../../api/client'
+import type { BridgeStatus } from '../../api/client'
+import { useManagedStore } from '../../stores/sections'
 
 const { t } = useI18n()
-const managed = sharedManaged
+const managedStore = useManagedStore()
+const managed = managedStore.state
 
 // The cloud-channel snapshot rides along for the sync line (config
 // version, last pull, STALE lamp) — it is the same data the cloud
 // access page shows, read from /api/status by the panel.
 defineProps<{ status?: BridgeStatus | null }>()
 
-async function loadManaged() {
-  if (managed.loading) return
-  managed.loading = true
-  managed.error = ''
-  try {
-    managed.delivery = await getManagedDelivery()
-    managed.loaded = true
-  } catch (e) {
-    managed.error = e instanceof Error ? e.message : String(e)
-  } finally {
-    managed.loading = false
-  }
-}
-
 onMounted(() => {
-  if (!managed.loaded) void loadManaged()
+  if (!managed.loaded) void managedStore.load()
 })
 </script>
 

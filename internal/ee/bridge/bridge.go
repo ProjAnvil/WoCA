@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"net"
 	"net/http"
 	"sort"
@@ -449,9 +450,7 @@ func hashToken(token string) string {
 }
 
 func writeJSONAuth(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, code, v)
 }
 
 func writeAuthError(w http.ResponseWriter, code int, msg string) {

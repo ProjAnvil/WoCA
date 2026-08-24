@@ -13,6 +13,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"net/http"
 	"os"
 	"strings"
@@ -112,9 +113,7 @@ func (g *Gate) drop(token string) {
 
 // writeJSON keeps the wire envelope identical across consoles.
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, status, v)
 }
 
 // Login exchanges username/password for the session cookie. Anonymous by

@@ -144,6 +144,7 @@ export default {
   },
   msgplane: {
     title: '消息面（运行分发）',
+    unavailable: '企业版专属：此部署不向 worker 分发运行。',
     intro: '运行队列默认走共享 PG 队列；叠加 NATS 后空闲 worker 即时唤醒，PG 队列始终兜底，可随时切换、无需重启。',
     mode: '分发模式',
     modeHint: 'pg：仅 PG 队列（默认）；pg+nats：PG 队列 + NATS 即时唤醒（实时生效）',

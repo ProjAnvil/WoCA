@@ -235,3 +235,38 @@ describe('edge inventory probe', () => {
     ])
   })
 })
+
+describe('request error envelope', () => {
+  beforeEach(() => {
+    vi.stubGlobal('go', undefined)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('raises UnauthorizedError with the enumerated code on 401', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'unauthorized', code: 'revoked' }), { status: 401 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { listSessions } = await import('./client')
+    await expect(listSessions()).rejects.toMatchObject({ name: 'UnauthorizedError', code: 'revoked' })
+  })
+
+  it('labels non-2xx failures with the JSON error detail', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { getSettings } = await import('./client')
+    await expect(getSettings()).rejects.toThrow(/forbidden/)
+  })
+
+  it('falls back to the bare status code when the body is not JSON', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('nope', { status: 502 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { getSettings } = await import('./client')
+    await expect(getSettings()).rejects.toThrow(/502/)
+  })
+})

@@ -20,18 +20,20 @@ import {
 } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth'
 import { useSettingsStore } from '../stores/settings'
+import { useStatusStore } from '../stores/status'
+import { useClaudeEnvStore, useManagedStore, usePluginsStore } from '../stores/sections'
 import { logout as apiLogout } from '../api/client'
 import AppearanceSection from './settings/AppearanceSection.vue'
 import PreferencesSection from './settings/PreferencesSection.vue'
 import ProviderSection from './settings/ProviderSection.vue'
-import ClaudeEnvSection, { resetClaudeEnv } from './settings/ClaudeEnvSection.vue'
-import PluginsSection, { resetPluginState } from './settings/PluginsSection.vue'
+import ClaudeEnvSection from './settings/ClaudeEnvSection.vue'
+import PluginsSection from './settings/PluginsSection.vue'
 import StorageSection from './settings/StorageSection.vue'
 import AdminSection from './settings/AdminSection.vue'
 import CloudAccessSection from './settings/CloudAccessSection.vue'
 import EdgeSwitchSection from './settings/EdgeSwitchSection.vue'
-import ManagedSection, { resetManagedState } from './settings/ManagedSection.vue'
-import { getStatus, getEdgeBridges, type BridgeStatus, type EdgeBridge } from '../api/client'
+import ManagedSection from './settings/ManagedSection.vue'
+import { getEdgeBridges, type EdgeBridge } from '../api/client'
 import MessagePlaneSection from './settings/MessagePlaneSection.vue'
 import MemorySection from './settings/MemorySection.vue'
 import ModelSection from './settings/ModelSection.vue'
@@ -114,20 +116,14 @@ async function doLogout() {
 // The cloud-access section follows the auth posture (§6.6): admin keys on
 // apikey bridges, and every local-trust bridge — the embedded default is
 // configured from the wails app by its owner.
-const statusAuth = ref<string>('')
-const statusInfo = ref<BridgeStatus | null>(null)
+const statusStore = useStatusStore()
+const statusInfo = computed(() => statusStore.status)
+const statusAuth = computed(() => statusStore.status?.auth ?? '')
 // Edge inventory probe: non-null only when this origin is an edge access
 // point (the bridge-switch section's gate).
 const edgeBridges = ref<EdgeBridge[] | null>(null)
 onMounted(async () => {
-  try {
-    const st = await getStatus()
-    statusAuth.value = st.auth ?? ''
-    statusInfo.value = st
-  } catch {
-    statusAuth.value = ''
-    statusInfo.value = null
-  }
+  await statusStore.refresh()
   edgeBridges.value = await getEdgeBridges()
 })
 
@@ -150,13 +146,12 @@ const modelSuggestions = [
   'deepseek-reasoner',
 ]
 
-// The claudeenv / plugins sections keep their fetch state at module scope so
-// it survives section switches; closing the panel must reset it, matching the
-// lifetime that state had when it lived in this component's setup scope.
+// Closing the panel resets the section stores: their fetched state is
+// only meant to survive section switches while the panel stays open.
 onBeforeUnmount(() => {
-  resetClaudeEnv()
-  resetPluginState()
-  resetManagedState()
+  useClaudeEnvStore().reset()
+  usePluginsStore().reset()
+  useManagedStore().reset()
 })
 </script>
 

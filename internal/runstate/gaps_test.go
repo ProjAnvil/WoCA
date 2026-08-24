@@ -5,6 +5,7 @@ package runstate
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -80,7 +81,7 @@ func TestStartDuplicateSessionSurfacesConstraint(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := l.Start(ctx, Run{RunID: "r2", SessionID: "s1"}, "w1", time.Minute)
-	if err == nil || err.Error() != "runstate: session s1 already has an active run" {
+	if !errors.Is(err, ErrActiveRun) {
 		t.Fatalf("duplicate Start = %v", err)
 	}
 }

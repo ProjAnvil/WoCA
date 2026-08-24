@@ -5,6 +5,7 @@ export default {
   sessionsTitle: 'Live sessions',
   auditTitle: 'Audit trail',
   remark: 'Remark',
+  role: 'Role',
   lastSeen: 'Last seen',
   expires: 'Expires',
   when: 'When',

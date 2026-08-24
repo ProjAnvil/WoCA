@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"io"
 	"io/fs"
 	"net/http"
@@ -1113,7 +1114,7 @@ func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace 
 	}); err != nil {
 		// The session constraint is the cross-instance admission gate; the
 		// run-id collision is a process-wide outage signal.
-		if strings.Contains(err.Error(), "already has an active run") {
+		if errors.Is(err, runstate.ErrActiveRun) {
 			return nil, sid, -1, errQueueFull
 		}
 		return nil, sid, 0, err
@@ -1161,15 +1162,6 @@ func (s *Server) logObsRunEnd(sid, runID, workspace string, final []messages.Mes
 		"sessions_dir": s.sessions.dir,
 		"workdir":      workspace,
 	})
-}
-
-// previewForLog bounds a prompt preview in observability events.
-func previewForLog(s string) string {
-	r := []rune(s)
-	if len(r) > 200 {
-		return string(r[:200]) + "…"
-	}
-	return s
 }
 
 // newSessionID returns a unique, restart-safe session identifier.
@@ -1238,15 +1230,11 @@ func (s *Server) fileExists(path string) bool {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	// charset=utf-8 is explicit so any client (not just fetch) decodes the
-	// Chinese descriptions/detail strings correctly.
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, status, v)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]any{"error": msg})
+	httpx.WriteError(w, status, msg)
 }
 
 // newWorkerID mints this server instance's lease identity for the run

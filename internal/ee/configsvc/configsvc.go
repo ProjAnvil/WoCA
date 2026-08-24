@@ -20,6 +20,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"io/fs"
 	"net/http"
 	"sort"
@@ -154,15 +155,7 @@ func (s *Service) bridgeConfig(_ context.Context, _ string) (string, map[string]
 			kv["builtin-plugins"] = string(raw)
 		}
 	}
-	for key, secret := range map[string]string{
-		"anthropic-api-key":      settings.SecretAnthropicAPIKey,
-		"openai-api-key":         settings.SecretOpenAIAPIKey,
-		"glm-api-key":            settings.SecretGLMAPIKey,
-		"deepseek-api-key":       settings.SecretDeepSeekAPIKey,
-		"checkpoint-pg-password": settings.SecretCheckpointPGPassword,
-		"memory-pg-password":     settings.SecretMemoryPGPassword,
-		"ladym-api-password":     settings.SecretLadyMAPIPassword,
-	} {
+	for key, secret := range settings.ManagedSecretKeys {
 		if v := s.settings.GetSecret(secret); v != "" {
 			kv[key] = v
 		}
@@ -597,11 +590,11 @@ func (u *update) patches() []patch {
 		{settings.KeyLadyMEmbeddingModel, u.LadyMEmbeddingModel},
 		{settings.KeyLadyMEmbeddingBaseURL, u.LadyMEmbeddingBaseURL},
 		{settings.KeyLadyMLLM, u.LadyMLLM},
-		{settings.KeyLadyMAutoRetain, u.BoolPtr(u.LadyMAutoRetain)},
+		{settings.KeyLadyMAutoRetain, u.boolPtr(u.LadyMAutoRetain)},
 		{settings.KeyLadyMTopK, intPtr(u.LadyMTopK)},
-		{settings.KeyLadyMSystem2, u.BoolPtr(u.LadyMSystem2)},
+		{settings.KeyLadyMSystem2, u.boolPtr(u.LadyMSystem2)},
 		{settings.KeyLadyMSystem2Interval, intPtr(u.LadyMSystem2Interval)},
-		{settings.KeyDebugLog, u.BoolPtr(u.DebugLog)},
+		{settings.KeyDebugLog, u.boolPtr(u.DebugLog)},
 		{settings.KeyLadyMEndpoint, u.LadyMEndpoint},
 		{settings.KeyLadyMAPIUsername, u.LadyMAPIUsername},
 		{settings.KeyCheckpointPGHost, u.CheckpointPGHost},
@@ -667,7 +660,7 @@ func floatPtr(p *float64) *string {
 	return ptr(strconv.FormatFloat(*p, 'f', -1, 64))
 }
 
-func (u *update) BoolPtr(p *bool) *string {
+func (u *update) boolPtr(p *bool) *string {
 	if p == nil {
 		return nil
 	}
@@ -1056,13 +1049,11 @@ func spaWithFallback(root fs.FS) http.Handler {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, status, v)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+	httpx.WriteError(w, status, msg)
 }
 
 func formatFloat(f float64) string {

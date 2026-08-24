@@ -150,6 +150,7 @@ export default {
   },
   msgplane: {
     title: 'Message plane (run dispatch)',
+    unavailable: 'Enterprise-only: this deployment does not dispatch runs to workers.',
     intro: 'Runs dispatch over the shared PG queue by default; layering NATS wakes idle workers instantly. The PG queue always remains the safety net — switch anytime, no restart needed.',
     mode: 'Dispatch mode',
     modeHint: 'pg: PG queue only (default); pg+nats: PG queue + instant NATS wake-up (applies live)',

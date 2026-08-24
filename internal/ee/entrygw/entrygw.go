@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,10 +30,10 @@ import (
 
 // AccessTTL bounds machine access tokens (design: 1–24h; short TTL is the
 // worst-case leak window when a bridge is revoked while offline).
-var AccessTTL = 6 * time.Hour
+const AccessTTL = 6 * time.Hour
 
 // EnrollmentTTL bounds one-time enrollment tokens (design: 30min–24h).
-var EnrollmentTTL = 12 * time.Hour
+const EnrollmentTTL = 12 * time.Hour
 
 // Store is the wocadb-backed machineid.Registry plus the service-plane
 // heartbeat record.
@@ -852,7 +853,5 @@ func writeGW(w http.ResponseWriter, code int, msg string) {
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, code, v)
 }

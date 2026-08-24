@@ -1,3 +1,4 @@
+import { toErrorMessage } from '../lib/errors'
 import { defineStore } from 'pinia'
 import { useToggle } from '@vueuse/core'
 import { computed, ref, watch } from 'vue'
@@ -65,7 +66,7 @@ export const useSettingsStore = defineStore('settings', () => {
       const out = await applyModelPreset(id)
       if (out.apply_error) serverError.value = out.apply_error
     } catch (e) {
-      serverError.value = e instanceof Error ? e.message : String(e)
+      serverError.value = toErrorMessage(e)
     } finally {
       applyingModel.value = false
     }
@@ -214,7 +215,7 @@ export const useSettingsStore = defineStore('settings', () => {
       msgPlaneNATSURL.value = s.msg_plane_nats_url ?? ''
       msgPlaneSubject.value = s.msg_plane_subject || 'runs.dispatch'
     } catch (e) {
-      serverError.value = e instanceof Error ? e.message : String(e)
+      serverError.value = toErrorMessage(e)
     }
   }
 
@@ -273,7 +274,7 @@ export const useSettingsStore = defineStore('settings', () => {
       const agentStore = useAgentStore()
       void agentStore.load()
     } catch (e) {
-      serverError.value = e instanceof Error ? e.message : String(e)
+      serverError.value = toErrorMessage(e)
     } finally {
       saving.value = false
     }
@@ -286,7 +287,7 @@ export const useSettingsStore = defineStore('settings', () => {
       debugLog.value = next
       await loadServer()
     } catch (e) {
-      serverError.value = e instanceof Error ? e.message : String(e)
+      serverError.value = toErrorMessage(e)
     }
   }
 

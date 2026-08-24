@@ -228,13 +228,11 @@ func (e *Edge) handleClientLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status != http.StatusOK {
-		code := ""
-		if strings.Contains(err.Error(), "revoked") || out.Code == "revoked" {
-			code = "revoked"
-		}
+		// The enumerated wire code is the contract (the core's authn
+		// codes); there is no message string to match.
 		body := map[string]string{"error": "unauthorized"}
-		if code != "" {
-			body["code"] = code
+		if out.Code == "revoked" {
+			body["code"] = "revoked"
 		}
 		writeJSON(w, http.StatusUnauthorized, body)
 		return
