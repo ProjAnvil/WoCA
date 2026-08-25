@@ -123,6 +123,7 @@ services:
     networks:
       - woca-edge
       - ladym-data
+      - woca-mgmt
 
   # ─────────────────── woca roles (stateless, edge) ──────────────────────
   woca-server-1:
@@ -132,7 +133,8 @@ services:
       context: ../..
       dockerfile: deploy/selfhosted/Dockerfile.server
     environment:
-      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_AUTH: apikey
       WOCA_RUN_DISPATCH: "queue"
       WOCA_RUNS_OFF_HOST: "true"
@@ -151,11 +153,6 @@ services:
       # gateway posture is seeded by the SERVER role (it owns the
       # registry), not the config plane.
       WOCA_INSECURE_BRIDGES: "1"
-    # Dev only: the tenant ops console (v1.7 §6.7) on the host loopback —
-    # tenants & keys, enrollment tokens, bridge inventory, audit. Prod
-    # keeps it strictly on the private network.
-    ports:
-      - "127.0.0.1:${DEV_OPS_PORT:-9091}:8090"
     volumes:
       - woca-sessions:/var/lib/woca/sessions
       - woca-crypto:/var/lib/woca/home
@@ -168,11 +165,45 @@ services:
     restart: unless-stopped
     depends_on:
       woca-pg-primary: { condition: service_healthy }
+      nacos-init: { condition: service_completed_successfully }
     networks:
       - woca-edge
       - woca-pg
       - ladym-data
       - woca-mq
+      - woca-mgmt
+
+  # The console as its own service (v1.7 §6.7, split). The dev stack uses
+  # the direct assembly: the console runs self-contained over the shared
+  # database (like the config console — both consoles stay direct-PG here),
+  # no woca-server hop. The full stack uses the proxy assembly instead.
+  ops:
+    image: woca-ops:dev
+    container_name: woca-dev-ops
+    build:
+      context: ../..
+      dockerfile: deploy/selfhosted/Dockerfile.ops
+    environment:
+      WOCA_OPS_ADDR: ":8091"
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_HOME: "/var/lib/woca/home"
+      WOCA_CONSOLE_USER: ${WOCA_CONSOLE_USER:-}
+      WOCA_CONSOLE_PASSWORD: ${WOCA_CONSOLE_PASSWORD:-}
+    volumes:
+      - woca-crypto:/var/lib/woca/home
+    restart: unless-stopped
+    depends_on:
+      woca-pg-primary: { condition: service_healthy }
+      # WOCA_DB is a nacos reference — the entries must exist first.
+      nacos-init: { condition: service_completed_successfully }
+    # Dev only: the tenant ops console (v1.7 §6.7) on the host loopback —
+    # tenants & keys, enrollment tokens, bridge inventory, audit. Prod
+    # keeps it strictly on the private network.
+    ports:
+      - "127.0.0.1:${DEV_OPS_PORT:-9091}:8091"
+    networks:
+      - woca-mgmt
+      - woca-pg
 
   woca-worker-1:
     image: woca-worker:local
@@ -181,7 +212,8 @@ services:
       context: ../..
       dockerfile: deploy/selfhosted/Dockerfile.worker
     environment:
-      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_OBS_ADDR: ":9091"
       WOCA_SESSION_DIR: "/var/lib/woca/sessions"
       WOCA_HOME: "/var/lib/woca/home"
@@ -197,11 +229,13 @@ services:
     restart: unless-stopped
     depends_on:
       woca-pg-primary: { condition: service_healthy }
+      nacos-init: { condition: service_completed_successfully }
     networks:
       - woca-edge
       - woca-pg
       - ladym-data
       - woca-mq
+      - woca-mgmt
 
   # Config plane (design §16): settings management + its console (woca
   # settings domains only — tenant/bridge governance lives on the server
@@ -217,8 +251,10 @@ services:
     restart: unless-stopped
     depends_on:
       woca-pg-primary: { condition: service_healthy }
+      nacos-init: { condition: service_completed_successfully }
     environment:
-      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_OBS_ADDR: ":9093"
       WOCA_HOME: "/var/lib/woca/home"
       # Console sign-in (optional): set BOTH to require username/password
@@ -233,6 +269,7 @@ services:
       start_period: 10s
     networks:
       - woca-edge
+      - woca-mgmt
       - woca-pg
       - woca-mq
     volumes:
@@ -251,9 +288,11 @@ services:
     depends_on:
       woca-server-1: { condition: service_started }
       woca-config: { condition: service_started }
+      nacos-init: { condition: service_completed_successfully }
     environment:
-      WOCA_SERVICE_URL: http://woca-server-1:8090
-      WOCA_CONFIGSVC_URL: http://woca-config:8080
+      WOCA_NACOS_URL: "http://nacos:8848"
+      WOCA_SERVICE_URL: "nacos://nacos:8848/DEFAULT_GROUP/woca-edge.service"
+      WOCA_CONFIGSVC_URL: "nacos://nacos:8848/DEFAULT_GROUP/woca-edge.config"
       WOCA_EDGE_ADDR: ":8080"
       WOCA_EDGE_DEV_HTTP: "1"
     healthcheck:
@@ -265,6 +304,7 @@ services:
       - "${ENT_EDGE_PORT:-8453}:8080"
     networks:
       - woca-edge
+      - woca-mgmt
 
   # Admin toolbox: tenant/key commands via `docker exec woca-dev-tenant`
   # (business-plane API keys; the config console itself no longer uses keys).
@@ -278,10 +318,10 @@ services:
     depends_on:
       woca-pg-primary: { condition: service_healthy }
     environment:
-      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_HOME: "/var/lib/woca/home"
     networks:
-      - woca-edge
+      - woca-mgmt
       - woca-pg
       - woca-mq
     volumes:
@@ -382,6 +422,59 @@ services:
     networks:
       - ladym-data
 
+  # ─────────────────── nacos: discovery + config delivery ────────────────
+  # Same posture as the full stack: the registry carries the service
+  # addresses and the delivered configuration pack (sole source of
+  # truth). The dev consoles (ops direct, config) stay direct-PG by
+  # design; the business roles register and subscribe here.
+  nacos:
+    image: nacos/nacos-server:v2.4.3
+    container_name: woca-dev-nacos
+    environment:
+      MODE: standalone
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8848/nacos/v1/console/health/readiness || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - woca-mgmt
+
+  nacos-init:
+    image: curlimages/curl:8.10.1
+    container_name: woca-dev-nacos-init
+    depends_on:
+      nacos: { condition: service_healthy }
+    environment:
+      WOCA_PG_PASSWORD: ${WOCA_PG_PASSWORD:?set in .env}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        publish() {  # dataId content
+          curl -sf -X POST "http://nacos:8848/nacos/v1/cs/configs" \
+            --data-urlencode "dataId=$$1" \
+            --data-urlencode "group=DEFAULT_GROUP" \
+            --data-urlencode "content=$$2"
+          i=0
+          until [ "$$(curl -sf "http://nacos:8848/nacos/v1/cs/configs?dataId=$$1&group=DEFAULT_GROUP")" = "$$2" ]; do
+            i=$$((i+1)); [ $$i -gt 30 ] && { echo "nacos read-back of $$1 never settled"; exit 1; }
+            sleep 1
+          done
+          echo "published $$1"
+        }
+        publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+        publish woca-ops.upstream "http://woca-server-1:8090"
+        publish woca-edge.service "http://woca-server-1:8090"
+        publish woca-edge.config "http://woca-config:8080"
+        publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
+        echo "nacos entries ready"
+    restart: "no"
+    networks:
+      - woca-mgmt
+
 networks:
   # Distinct names + subnets from full (172.28.x): a stale full container
   # cannot silently collide with dev networking.
@@ -401,6 +494,11 @@ networks:
     name: woca-dev-ladym
     ipam:
       config: [{ subnet: 172.29.110.0/24 }]
+  # Management plane: the registry (nacos) and the consoles.
+  woca-mgmt:
+    name: woca-dev-mgmt
+    ipam:
+      config: [{ subnet: 172.28.140.0/24 }]
 
 volumes:
   woca-sessions:

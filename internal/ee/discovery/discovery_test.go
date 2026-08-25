@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -28,16 +29,22 @@ func TestPlainValuesPassThrough(t *testing.T) {
 }
 
 func TestNacosResolution(t *testing.T) {
-	var gotPath, gotGroup, gotDataID, gotToken string
+	var gotGroup, gotDataID, gotTenant string
+	var authorized atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/nacos/v1/auth/login":
 			_ = json.NewEncoder(w).Encode(map[string]string{"accessToken": "tok-1"})
 		case "/nacos/v1/cs/configs":
-			gotPath = r.URL.Path
+			if r.URL.Query().Get("accessToken") == "" {
+				// Auth-enabled registry: anonymous reads are rejected.
+				http.Error(w, "unknown user", http.StatusForbidden)
+				return
+			}
+			authorized.Store(true)
 			gotGroup = r.URL.Query().Get("group")
 			gotDataID = r.URL.Query().Get("dataId")
-			gotToken = r.URL.Query().Get("accessToken")
+			gotTenant = r.URL.Query().Get("tenant")
 			_, _ = w.Write([]byte("postgres://woca:pw@pg-primary:5432/woca?sslmode=disable\n"))
 		default:
 			http.NotFound(w, r)
@@ -55,11 +62,11 @@ func TestNacosResolution(t *testing.T) {
 	if got != "postgres://woca:pw@pg-primary:5432/woca?sslmode=disable" {
 		t.Errorf("resolved = %q", got)
 	}
-	if gotGroup != "DEFAULT_GROUP" || gotDataID != "woca-db.dsn" || gotToken != "tok-1" {
-		t.Errorf("query = group %q dataId %q token %q", gotGroup, gotDataID, gotToken)
+	if !authorized.Load() {
+		t.Fatal("read went through without the login token (403 retry missing)")
 	}
-	if gotPath != "/nacos/v1/cs/configs" {
-		t.Errorf("path = %q", gotPath)
+	if gotGroup != "DEFAULT_GROUP" || gotDataID != "woca-db.dsn" || gotTenant != "prod" {
+		t.Errorf("query = group %q dataId %q tenant %q", gotGroup, gotDataID, gotTenant)
 	}
 }
 

@@ -129,7 +129,10 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.log.Info().Strs("keys", updateKeys(&u)).Msg("settings updated via config plane")
-	s.notifyConfig()
+	if err := s.notifyConfig(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -200,7 +203,10 @@ func (s *Service) handleImport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.log.Info().Int("values", len(doc.Values)).Int("secrets", len(doc.Secrets)).Msg("settings imported via config plane")
-	s.notifyConfig()
+	if err := s.notifyConfig(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "values": len(doc.Values), "secrets": len(doc.Secrets)})
 }
 

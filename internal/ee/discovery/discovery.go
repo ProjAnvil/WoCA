@@ -24,6 +24,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/projanvil/woca/internal/ee/nacosrt"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -65,87 +67,28 @@ func Resolve(ctx context.Context, value string) (string, error) {
 	}
 }
 
-// resolveNacos reads one config entry from the Nacos v1 config API.
-// The reference layout is nacos://<host>[:port]/<group>/<dataId>, with an
-// optional ?namespace=<id> query.
+// resolveNacos reads one config entry through the shared nacos protocol
+// client (internal/ee/nacosrt — the same login/token handshake the
+// runtime uses). The reference layout is
+// nacos://<host>[:port]/<group>/<dataId>, with an optional
+// ?namespace=<id> query.
 func resolveNacos(ctx context.Context, u *url.URL) (string, error) {
 	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		return "", fmt.Errorf("discovery: nacos reference wants nacos://<addr>/<group>/<dataId>, got %q", u.String())
 	}
-	base := "http://" + u.Host
-	token, err := nacosLogin(ctx, base)
+	value, err := nacosrt.NewClientInNamespace("http://"+u.Host, u.Query().Get("namespace")).
+		Get(ctx, parts[0], parts[1])
+	if errors.Is(err, nacosrt.ErrNoConfig) {
+		return "", fmt.Errorf("discovery: nacos config %s/%s does not exist", parts[0], parts[1])
+	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("discovery: nacos fetch %s/%s: %w", parts[0], parts[1], err)
 	}
-	q := url.Values{}
-	q.Set("group", parts[0])
-	q.Set("dataId", parts[1])
-	if ns := u.Query().Get("namespace"); ns != "" {
-		q.Set("tenant", ns)
-	}
-	if token != "" {
-		q.Set("accessToken", token)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		base+"/nacos/v1/cs/configs?"+q.Encode(), nil)
-	if err != nil {
-		return "", fmt.Errorf("discovery: nacos request: %w", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("discovery: nacos fetch %s: %w", u.Host, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", fmt.Errorf("discovery: nacos read: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("discovery: nacos fetch %s/%s: HTTP %d: %s",
-			parts[0], parts[1], resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	value := strings.TrimSpace(string(body))
 	if value == "" {
 		return "", fmt.Errorf("discovery: nacos config %s/%s is empty", parts[0], parts[1])
 	}
 	return value, nil
-}
-
-// nacosLogin exchanges credentials for an access token when
-// WOCA_DISCOVERY_USERNAME is set; unauthenticated Nacos returns "".
-func nacosLogin(ctx context.Context, base string) (string, error) {
-	user := os.Getenv("WOCA_DISCOVERY_USERNAME")
-	if user == "" {
-		return "", nil
-	}
-	q := url.Values{}
-	q.Set("username", user)
-	q.Set("password", os.Getenv("WOCA_DISCOVERY_PASSWORD"))
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		base+"/nacos/v1/auth/login?"+q.Encode(), nil)
-	if err != nil {
-		return "", fmt.Errorf("discovery: nacos login request: %w", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("discovery: nacos login: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", fmt.Errorf("discovery: nacos login read: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("discovery: nacos login: HTTP %d", resp.StatusCode)
-	}
-	var out struct {
-		AccessToken string `json:"accessToken"`
-	}
-	if err := json.Unmarshal(body, &out); err != nil || out.AccessToken == "" {
-		return "", fmt.Errorf("discovery: nacos login: no accessToken in response")
-	}
-	return out.AccessToken, nil
 }
 
 // resolveConsul reads one KV entry from the Consul HTTP API. The reference

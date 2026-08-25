@@ -18,7 +18,7 @@ import (
 
 	"github.com/projanvil/woca/internal/ee/configsvc"
 	"github.com/projanvil/woca/internal/ee/discovery"
-	"github.com/projanvil/woca/internal/ee/msgplane"
+	"github.com/projanvil/woca/internal/ee/nacosrt"
 	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/logging"
@@ -66,17 +66,19 @@ func main() {
 				return fmt.Errorf("tenant store: %w", err)
 			}
 
-			// Message-plane publisher (design §16.7): the resolver reads the
-			// store live, so plane-mode changes apply to the next write's
-			// notification without restarting this service.
-			plane := msgplane.New(func() msgplane.Config {
-				c := st.Load()
-				return msgplane.Config{Mode: c.MsgPlaneMode, NATSURL: c.MsgPlaneNATSURL, Subject: c.MsgPlaneSubject}
-			}, log)
-			defer plane.Close()
-
-			svc, err := configsvc.New(st, ts, st.DB(), plane, log)
+			svc, err := configsvc.New(st, ts, st.DB(), log)
 			if err != nil {
+				return err
+			}
+			// Delivery channel (full-stack posture): every save publishes
+			// the pack to nacos — the sole source of truth. WOCA_NACOS_URL
+			// is required; a config plane that cannot reach its registry
+			// refuses to start.
+			nacosBase := nacosrt.ServerFromEnv()
+			if nacosBase == "" {
+				return fmt.Errorf("config plane requires WOCA_NACOS_URL (the nacos registry); refusing to start without it")
+			}
+			if err := svc.AttachNacos(cmd.Context(), nacosBase); err != nil {
 				return err
 			}
 			handler := svc.Handler()

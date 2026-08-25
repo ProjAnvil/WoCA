@@ -15,6 +15,7 @@
 package configsvc
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -28,7 +29,7 @@ import (
 
 	"github.com/projanvil/woca/internal/ee/consoleauth"
 	"github.com/projanvil/woca/internal/ee/entrygw"
-	"github.com/projanvil/woca/internal/ee/msgplane"
+	"github.com/projanvil/woca/internal/ee/nacosrt"
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/platform/authz"
 	"github.com/projanvil/woca/internal/settings"
@@ -44,10 +45,13 @@ type Service struct {
 	settings *settings.Store
 	tenants  *tenant.Store
 	db       *wocadb.DB
-	plane    *msgplane.Plane
 	log      zerolog.Logger
 	entrygw  *entrygw.ConfigHandler
 	console  *consoleauth.Gate
+	// publisher is the delivery channel (AttachNacos / AttachPublisher):
+	// the pack it receives on every write is the configuration's sole
+	// source of truth. A service without one refuses writes.
+	publisher nacosrt.Publisher
 
 	// wakeMu/wakeCh implement the config-write broadcast: every notify
 	// closes the current channel and installs a fresh one (close-to-
@@ -80,9 +84,8 @@ func (s *Service) broadcast() {
 }
 
 // New builds the service (both stores over the same shared database). db
-// backs the config-ack inventory; plane, when non-nil, pushes change
-// notifications over the message plane (design §16.7).
-func New(st *settings.Store, ts *tenant.Store, db *wocadb.DB, plane *msgplane.Plane, log zerolog.Logger) (*Service, error) {
+// backs the config-ack inventory and the pack's shared tables.
+func New(st *settings.Store, ts *tenant.Store, db *wocadb.DB, log zerolog.Logger) (*Service, error) {
 	// Timestamp columns hold unix milliseconds — BIGINT on postgres
 	// (int4 overflows; the house convention).
 	tsCol := "INTEGER"
@@ -123,20 +126,43 @@ func New(st *settings.Store, ts *tenant.Store, db *wocadb.DB, plane *msgplane.Pl
 	if err != nil {
 		return nil, fmt.Errorf("configsvc: entry gateway: %w", err)
 	}
-	svc := &Service{settings: st, tenants: ts, db: db, plane: plane, log: log}
+	svc := &Service{settings: st, tenants: ts, db: db, log: log}
 	svc.entrygw = entrygw.NewConfigHandler(gwStore, svc.bridgeConfig)
 	svc.entrygw.Wake = svc.Wake
 	svc.console = consoleauth.New()
 	return svc, nil
 }
 
-// notifyConfig publishes the new generation after every write so
-// subscribed roles rebuild immediately instead of waiting for the poll.
-func (s *Service) notifyConfig() {
-	s.broadcast()
-	if s.plane != nil {
-		s.plane.NotifyConfig(s.settings.Generation())
+// AttachNacos wires the delivery channel over the real registry (the
+// production entry always calls it; failing the ping aborts startup —
+// the config plane cannot run without its registry).
+func (s *Service) AttachNacos(ctx context.Context, baseURL string) error {
+	c := nacosrt.NewClient(baseURL)
+	if err := c.Ping(ctx); err != nil {
+		return fmt.Errorf("configsvc: nacos %s: %w", baseURL, err)
 	}
+	s.AttachPublisher(c)
+	s.log.Info().Str("nacos", baseURL).Msg("configsvc: config delivery attached to nacos (sole source of truth)")
+	return nil
+}
+
+// AttachPublisher wires a delivery-channel implementation (tests inject
+// fakes; production goes through AttachNacos).
+func (s *Service) AttachPublisher(p nacosrt.Publisher) { s.publisher = p }
+
+// notifyConfig delivers the pack after every write — the single
+// delivery path. A publish failure fails the save (the operator retries;
+// the pack never half-advances). Without a channel the write fails
+// outright: an undeliverable configuration is not a saved configuration.
+func (s *Service) notifyConfig() error {
+	if s.publisher == nil {
+		return fmt.Errorf("configsvc: no delivery channel attached (AttachNacos)")
+	}
+	if err := nacosrt.PublishPack(context.Background(), s.publisher, s.settings, s.db); err != nil {
+		return fmt.Errorf("nacos publish: %w", err)
+	}
+	s.broadcast()
+	return nil
 }
 
 // Handler returns the full HTTP handler: the console gate (open or
@@ -349,7 +375,10 @@ func (s *Service) handleSaveModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.log.Info().Str("preset", p.ID).Str("name", p.Name).Msg("model preset saved via config plane")
-	s.notifyConfig()
+	if err := s.notifyConfig(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, modelPayload{
 		ID: p.ID, Name: p.Name, Provider: p.Provider, Model: p.Model,
 		MaxTokens: p.MaxTokens, Temperature: p.Temperature, BaseURL: p.BaseURL,

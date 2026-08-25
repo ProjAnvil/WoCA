@@ -15,8 +15,8 @@ ee-web:
 	rm -rf internal/ee/configsvc/spa && mkdir -p internal/ee/configsvc/spa
 	cp -R ee/configsvc-web/dist/ internal/ee/configsvc/spa/
 	cd ee/opsconsole-web && bun install && bun run build
-	rm -rf internal/ee/opsconsole/spa && mkdir -p internal/ee/opsconsole/spa
-	cp -R ee/opsconsole-web/dist/ internal/ee/opsconsole/spa/
+	rm -rf internal/ee/opsui/spa && mkdir -p internal/ee/opsui/spa
+	cp -R ee/opsconsole-web/dist/ internal/ee/opsui/spa/
 	cd ee/skillsvc-web && bun install && bun run build
 	rm -rf internal/ee/skillsvc/spa && mkdir -p internal/ee/skillsvc/spa
 	cp -R ee/skillsvc-web/dist/ internal/ee/skillsvc/spa/
@@ -221,7 +221,7 @@ edge-bridge-down:
 # Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
 # woca-edge joins the set with the v1.5 topology split (stateless public
 # entry; still a role artifact — thin, no interactive surfaces).
-SERVER_ARTIFACTS := woca-server woca-tenant woca-worker woca-config woca-bridge woca-edge
+SERVER_ARTIFACTS := woca-server woca-tenant woca-worker woca-config woca-bridge woca-edge woca-ops
 
 .PHONY: build-server check-server-artifacts check-editions
 build-server:
@@ -236,6 +236,11 @@ check-server-artifacts: build-server
 	@for a in $(SERVER_ARTIFACTS); do \
 		if go list -deps ./cmd/$$a | grep -qE 'internal/(tui|repl)'; then \
 			echo "$$a links interactive surfaces"; exit 1; \
+		fi; \
+	done
+	@for p in woca/web internal/ee/opsui internal/ee/configsvc internal/ee/skillsvc; do \
+		if go list -deps ./cmd/woca-server | grep -q "projanvil/woca/$$p$$"; then \
+			echo "woca-server links a web/frontend package ($$p): it must stay pageless"; exit 1; \
 		fi; \
 	done
 	@echo "server artifacts pass dependency hygiene"

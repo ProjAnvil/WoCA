@@ -41,7 +41,7 @@ func TestServeCmdNoBrowser(t *testing.T) {
 	root := &cobra.Command{Use: "woca"}
 	opts := &agentbuild.Options{}
 	agentbuild.RegisterFlags(root.PersistentFlags(), opts)
-	root.AddCommand(NewServeCmd(opts))
+	root.AddCommand(NewServeCmdWithEdition(opts, Edition{}))
 	root.SetArgs([]string{"serve", "--addr", "127.0.0.1:0", "--no-browser",
 		"--provider", "openai", "--model", "m", "--api-key", "k", "--base-url", url,
 		"--workdir", t.TempDir(), "--db", filepath.Join(home, "woca.db")})

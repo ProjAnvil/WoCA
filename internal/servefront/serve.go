@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -36,7 +37,6 @@ import (
 	"github.com/projanvil/woca/internal/webd"
 	"github.com/projanvil/woca/internal/webgui"
 	"github.com/projanvil/woca/internal/wocadb"
-	webdist "github.com/projanvil/woca/web"
 )
 
 // Observability is the enterprise-edition observability seam (design §12.3):
@@ -106,6 +106,20 @@ type Edition struct {
 	// coordinates are effective when the backends build. The hook's own
 	// failures are logged, never fatal. Nil does nothing.
 	PreBuildConfig func(ctx context.Context, st *settings.Store, log zerolog.Logger)
+	// Nacos states the enterprise registry assembly (the full-stack
+	// posture): when set, the serve path registers with nacos and takes
+	// its configuration from the delivered pack — fail-closed, the
+	// process does not start without the registry, and the PG settings
+	// watcher is replaced by the pack subscription. Nil keeps the
+	// personal/bridge posture (local settings watcher).
+	Nacos *NacosAssembly
+
+	// Static is the frontend filesystem the entry point injects: the
+	// personal edition and the bridge embed web/dist; headless API roles
+	// (woca-server) pass nil and serve a pageless API. This package never
+	// imports the embedded frontend — the form split happens at assembly.
+	Static fs.FS
+
 	// AnonymousAPIPaths / HostGateExemptPrefixes declare the form's
 	// bootstrap exchanges and session surfaces (see server.Config). The
 	// entry point that assembles the edition states them next to the
@@ -139,14 +153,40 @@ type Edition struct {
 	obs Observability
 }
 
-// NewServeCmd builds `woca serve`: run the embedded web UI server.
-func NewServeCmd(opts *agentbuild.Options) *cobra.Command {
-	return NewServeCmdWithEdition(opts, Edition{})
+// NacosAssembly is what a server-role entry point declares to join the
+// full-stack registry: where nacos is, who this process is, and how to
+// build the runtime (the entry closes over internal/ee/nacosrt; this
+// package stays enterprise-free like the Observability seam).
+type NacosAssembly struct {
+	Server    string // nacos base URL, e.g. http://nacos:8848
+	Service   string // nacos service name, e.g. woca-server
+	Advertise string // optional host:port override (default: the serve addr)
+	// Build constructs the runtime over the wiring the serve path
+	// completes (settings store, ack identity, rebuild hooks). Required.
+	Build func(a NacosAssembly, w NacosWiring, log zerolog.Logger) (NacosRuntime, error)
+}
+
+// NacosWiring is the serve path's half of the assembly.
+type NacosWiring struct {
+	St        *settings.Store
+	DB        *wocadb.DB
+	Identity  settingswatch.Identity
+	OnChange  func()
+	Advertise string
+}
+
+// NacosRuntime is the registry runtime's lifecycle as the serve path
+// uses it: Start is the fail-closed startup gate; Loop owns heartbeat
+// and config subscription until ctx ends.
+type NacosRuntime interface {
+	Start(ctx context.Context) error
+	Loop(ctx context.Context)
 }
 
 // NewServeCmdWithEdition builds the serve command with an enterprise
-// edition assembly attached (see Edition; the zero value keeps the
-// personal-edition posture).
+// edition assembly attached (see Edition). The entry point states its
+// form explicitly — Static carries the frontend for UI roles (personal
+// woca, bridge), nil keeps a pageless API for headless roles.
 func NewServeCmdWithEdition(opts *agentbuild.Options, ed Edition) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -405,7 +445,7 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 		RunsOffHost:            runsOffHost,
 		MsgPlane:               plane,
 		Agent:                  ap.Agent,
-		Static:                 webdist.DistFS(),
+		Static:                 ed.Static,
 		Logger:                 log,
 		SessionDir:             sessionDir,
 		WorkDir:                ap.Cfg.WorkDir,
@@ -450,7 +490,7 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 	}
 
 	url := scheme + "://" + addr
-	if !noBrowser {
+	if !noBrowser && ed.Static != nil {
 		agentbuild.OpenBrowser(url)
 	}
 	fmt.Fprintf(os.Stderr, "woca web: %s\n", url)
@@ -489,9 +529,7 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 		}()
 	}
 
-	go settingswatch.Watch(ctx, ap.Settings, ap.Settings.DB(), settingswatch.Identity{
-		ServiceID: "srv-" + shortHost(), Role: "server",
-	}, log, cfgWake, func() {
+	rebuild := func() {
 		if err := ap.RebuildModel(); err != nil {
 			log.Warn().Err(err).Msg("model hot-swap after config change failed")
 		}
@@ -501,7 +539,34 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 		if ap.Agent != nil && ap.Agent.Obs() != nil {
 			ap.Agent.Obs().SetEnabled(ap.Settings.Load().DebugLog)
 		}
-	})
+	}
+	if ed.Nacos != nil {
+		// Full-stack posture: register with nacos (fail-closed — no
+		// registry, no process) and take configuration from the
+		// delivered pack. The PG settings watcher does not run.
+		advertise := ed.Nacos.Advertise
+		if advertise == "" {
+			advertise = addr
+		}
+		rt, err := ed.Nacos.Build(*ed.Nacos, NacosWiring{
+			St:        ap.Settings,
+			DB:        ap.Settings.DB(),
+			Identity:  settingswatch.Identity{ServiceID: "srv-" + shortHost(), Role: "server", Addr: advertise},
+			OnChange:  rebuild,
+			Advertise: advertise,
+		}, log)
+		if err != nil {
+			return err
+		}
+		if err := rt.Start(ctx); err != nil {
+			return err
+		}
+		go rt.Loop(ctx)
+	} else {
+		go settingswatch.Watch(ctx, ap.Settings, ap.Settings.DB(), settingswatch.Identity{
+			ServiceID: "srv-" + shortHost(), Role: "server",
+		}, log, cfgWake, rebuild)
+	}
 
 	return srv.ServeStarted(ctx, hs, serveErr)
 }

@@ -197,7 +197,7 @@ func TestWebCmdSubcommands(t *testing.T) {
 // the agent builds.
 func TestServeCmdInvalidAuthMode(t *testing.T) {
 	isolateEnv(t)
-	cmd := NewServeCmd(&agentbuild.Options{})
+	cmd := NewServeCmdWithEdition(&agentbuild.Options{}, Edition{})
 	cmd.SetArgs([]string{"--auth", "bogus"})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("bogus auth mode accepted")

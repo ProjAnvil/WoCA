@@ -1,7 +1,8 @@
-// Package webdist embeds the built web frontend (web/dist) so binaries that
-// serve the UI — the personal woca and the server/gateway roles — can ship it
-// without external files. Entries that must not carry the SPA (worker,
-// executor, ...) simply do not import this package.
+// Package webdist embeds the built web frontend (web/dist) so binaries
+// that serve the chat UI — the personal woca and the bridge execution
+// plane — can ship it without external files. Headless API roles
+// (woca-server, worker, ...) do not import this package; they serve no
+// pages (the ops console UI is the separate woca-ops service).
 //
 // The package lives next to the built assets because go:embed only reaches
 // the package's own directory tree; importers see it under the name webdist.

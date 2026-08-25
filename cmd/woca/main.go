@@ -118,7 +118,9 @@ func newRootCmd() *cobra.Command {
 		},
 	})
 
-	root.AddCommand(servefront.NewServeCmd(opts))
+	// The personal edition ships the chat UI with its serve path; headless
+	// API roles inject a nil Static instead (servefront.Edition.Static).
+	root.AddCommand(servefront.NewServeCmdWithEdition(opts, servefront.Edition{Static: webdist.DistFS()}))
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newPluginCmd())
 	root.AddCommand(newMcpAuthCmd())

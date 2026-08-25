@@ -9,6 +9,7 @@ package configsvc
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -52,7 +53,10 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc, err := New(st, ts, db, nil, zerolog.Nop())
+	svc, err := New(st, ts, db, zerolog.Nop())
+	if err == nil {
+		svc.AttachPublisher(&fakePublisher{})
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -595,4 +599,14 @@ func TestStorageMemoryRidePackage(t *testing.T) {
 	if payload["builtin-plugins"] != `["browser"]` {
 		t.Fatalf("plugin set = %q", payload["builtin-plugins"])
 	}
+}
+
+// fakePublisher records deliveries for assertions.
+type fakePublisher struct {
+	published []string
+}
+
+func (f *fakePublisher) Publish(_ context.Context, _, _, content string) error {
+	f.published = append(f.published, content)
+	return nil
 }

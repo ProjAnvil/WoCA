@@ -24,6 +24,7 @@ import (
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/ee/discovery"
 	"github.com/projanvil/woca/internal/ee/msgplane"
+	"github.com/projanvil/woca/internal/ee/nacosrt"
 	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/ee/worker"
 	"github.com/projanvil/woca/internal/logging"
@@ -151,27 +152,41 @@ func newWorkerRoot() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			// Config-plane watcher (design §16.3/§16.7): pick up config-service
-			// writes without a restart (model + memory rebuild). The idle
-			// waiter's wake channel accelerates the config push into an
-			// immediate rebuild; the poll stays the safety net.
-			var cfgWake <-chan struct{}
-			if idleWaiter, ok := idle.(*msgplane.Waiter); ok {
-				cfgWake = idleWaiter.Wake()
+			// Registry + config delivery (full-stack posture): register with
+			// nacos — WOCA_NACOS_URL is required, without the registry the
+			// worker refuses to start (fail-closed, no fallback) — and take
+			// configuration from the delivered pack (no PG settings
+			// watcher in this posture).
+			nacosBase := nacosrt.ServerFromEnv()
+			if nacosBase == "" {
+				return fmt.Errorf("worker requires WOCA_NACOS_URL (the nacos registry); refusing to start without it")
 			}
-			go settingswatch.Watch(ctx, ap.Settings, db, settingswatch.Identity{
-				ServiceID: workerID(), Role: "worker",
-			}, log, cfgWake, func() {
-				if err := ap.RebuildModel(); err != nil {
-					log.Warn().Err(err).Msg("model hot-swap after config change failed")
-				}
-				if err := ap.RebuildMemory(); err != nil {
-					log.Warn().Err(err).Msg("memory hot-swap after config change failed")
-				}
-				if ap.Agent != nil && ap.Agent.Obs() != nil {
-					ap.Agent.Obs().SetEnabled(ap.Settings.Load().DebugLog)
-				}
-			})
+			if obsAddr == "" || obsAddr == "off" {
+				return fmt.Errorf("worker requires --obs-addr (the advertise port) when registering with nacos")
+			}
+			rt, err := nacosrt.New(nacosrt.Config{
+				Server: nacosBase, Service: "woca-worker", Advertise: obsAddr,
+				St: ap.Settings, DB: db,
+				Identity: settingswatch.Identity{ServiceID: workerID(), Role: "worker", Addr: obsAddr},
+				OnChange: func() {
+					if err := ap.RebuildModel(); err != nil {
+						log.Warn().Err(err).Msg("model hot-swap after config change failed")
+					}
+					if err := ap.RebuildMemory(); err != nil {
+						log.Warn().Err(err).Msg("memory hot-swap after config change failed")
+					}
+					if ap.Agent != nil && ap.Agent.Obs() != nil {
+						ap.Agent.Obs().SetEnabled(ap.Settings.Load().DebugLog)
+					}
+				},
+			}, log)
+			if err != nil {
+				return err
+			}
+			if err := rt.Start(ctx); err != nil {
+				return err
+			}
+			go rt.Loop(ctx)
 
 			return w.Run(ctx)
 		},

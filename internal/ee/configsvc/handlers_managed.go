@@ -58,7 +58,10 @@ func (s *Service) handlePutManagedSkill(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.log.Info().Str("skill", req.Name).Msg("managed skill saved via config plane")
-	s.notifyConfig()
+	if err := s.notifyConfig(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -68,7 +71,10 @@ func (s *Service) handleDeleteManagedSkill(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown skill"})
 		return
 	}
-	s.notifyConfig()
+	if err := s.notifyConfig(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -114,7 +120,10 @@ func (s *Service) handlePutManagedMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.log.Info().Str("mcp", req.Name).Msg("managed mcp saved via config plane")
-	s.notifyConfig()
+	if err := s.notifyConfig(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -124,6 +133,9 @@ func (s *Service) handleDeleteManagedMCP(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown mcp server"})
 		return
 	}
-	s.notifyConfig()
+	if err := s.notifyConfig(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

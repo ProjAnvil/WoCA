@@ -35,6 +35,7 @@ import (
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/wocadb"
+	webdist "github.com/projanvil/woca/web"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 )
@@ -60,6 +61,10 @@ func main() {
 	var authMode atomic.Value // string
 
 	ed := servefront.Edition{
+		// The bridge ships the full chat UI: it is the execution plane
+		// users command over the web (scenario four tunnels its serve
+		// surface through the edge).
+		Static: webdist.DistFS(),
 		// The bridge's bootstrap exchange (R2): the login route this
 		// entry mounts via Auth.RegisterRoutes is anonymous and carries
 		// no host data past the gate.

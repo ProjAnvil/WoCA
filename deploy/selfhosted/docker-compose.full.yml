@@ -18,6 +18,8 @@
 #            audit — server-1 loopback publish; multi-tenancy grows this
 #            console, it does not get a second one)
 #                                 ladym 172.29.10.0/24   obs 172.28.40.0/24
+#   mgmt (nacos + the consoles)   mgmt  172.28.50.0/24 — roles attach an
+#                                 interface for registry + delivery
 #      :8085 Grafana (obs overlay)   ladym-pg / api ×2      (deploy/observability
 #                                    / worker               docker-compose.observability.yml)
 #
@@ -204,6 +206,68 @@ services:
   # between the deployment's segments. Legitimate flows never cross at the
   # IP layer — every dual-homed service (gateway, woca roles) reaches a peer
   # over the segment they share. `make ent-full-down` removes the rules.
+  # ─────────────────── nacos: discovery + address delivery ───────────────
+  # The deployment-layer registry (design §12.1): the woca roles resolve
+  # their service addresses (DB DSN, the ops facade's server upstream)
+  # from nacos config entries at assembly time — the roles never hardcode
+  # peer addresses in this stack. This is deployment-level address
+  # delivery only; business settings still belong to the config plane
+  # (woca-config, the settings-generation watcher — §16).
+  nacos:
+    image: nacos/nacos-server:v2.4.3
+    container_name: woca-ent-nacos
+    environment:
+      MODE: standalone
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8848/nacos/v1/console/health/readiness || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - woca-mgmt
+
+  # One-shot: publish the stack's service addresses as config entries.
+  # Re-running is idempotent (same values republished). Entries:
+  #   DEFAULT_GROUP/woca-db.dsn       — the shared settings database
+  #   DEFAULT_GROUP/woca-ops.upstream — woca-server's management listener
+  nacos-init:
+    image: curlimages/curl:8.10.1
+    container_name: woca-ent-nacos-init
+    depends_on:
+      nacos: { condition: service_healthy }
+    environment:
+      WOCA_PG_PASSWORD: ${WOCA_PG_PASSWORD:?set in .env}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        publish() {  # dataId content
+          curl -sf -X POST "http://nacos:8848/nacos/v1/cs/configs" \
+            --data-urlencode "dataId=$$1" \
+            --data-urlencode "group=DEFAULT_GROUP" \
+            --data-urlencode "content=$$2"
+          # A fresh nacos write is briefly invisible to reads (derby
+          # settling); read back until the entry serves its content, so
+          # service_completed_successfully means the roles can resolve.
+          i=0
+          until [ "$$(curl -sf "http://nacos:8848/nacos/v1/cs/configs?dataId=$$1&group=DEFAULT_GROUP")" = "$$2" ]; do
+            i=$$((i+1)); [ $$i -gt 30 ] && { echo "nacos read-back of $$1 never settled"; exit 1; }
+            sleep 1
+          done
+          echo "published $$1"
+        }
+        publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+        publish woca-ops.upstream "http://woca-server-1:8090"
+        # The empty bootstrap config pack: roles refuse to start without
+        # a deliverable pack, so it exists before any console write.
+        publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
+        echo "nacos service addresses ready"
+    restart: "no"
+    networks:
+      - woca-mgmt
+
   firewall:
     image: alpine:3.22
     container_name: woca-ent-firewall
@@ -243,7 +307,13 @@ services:
             "172.28.40.0/24 172.28.30.0/24" \
             "172.28.40.0/24 172.28.10.0/24" \
             "172.28.40.0/24 172.28.20.0/24" \
-            "172.28.40.0/24 172.29.10.0/24"; do
+            "172.28.40.0/24 172.29.10.0/24" \
+            "172.28.40.0/24 172.28.50.0/24" \
+            "172.28.50.0/24 172.28.30.0/24" \
+            "172.28.50.0/24 172.28.10.0/24" \
+            "172.28.50.0/24 172.28.20.0/24" \
+            "172.28.50.0/24 172.29.10.0/24" \
+            "172.28.50.0/24 172.28.40.0/24"; do
           set -- $$pair
           iptables -A WOCA-ENT-ISOLATION -s $$1 -d $$2 -j DROP
         done
@@ -280,6 +350,8 @@ services:
     networks:
       - woca-edge
       - ladym-data
+      # Management-plane leg: the config console lives on woca-mgmt now.
+      - woca-mgmt
 
   # ─────────────────── woca roles (stateless, edge) ──────────────────────
   woca-server-1: &woca-server
@@ -289,7 +361,8 @@ services:
       context: ../..
       dockerfile: deploy/selfhosted/Dockerfile.server
     environment: &woca-server-env
-      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_AUTH: apikey
       # Phase 3 wiring: runs are enqueued for the workers (the PG queue is
       # the message plane until traffic needs NATS, design §5.4) and session
@@ -308,11 +381,6 @@ services:
       WOCA_GW_ADDR: ":8090"
       WOCA_CONSOLE_USER: ${WOCA_CONSOLE_USER:-}
       WOCA_CONSOLE_PASSWORD: ${WOCA_CONSOLE_PASSWORD:-}
-    # Dev-only host publish of the ops console (server-1; server-2 clears
-    # it below — one loopback entry point is enough). Prod keeps the
-    # console strictly internal.
-    ports:
-      - "127.0.0.1:${ENT_OPS_PORT:-9091}:8090"
     volumes:
       - woca-sessions:/var/lib/woca/sessions
       - woca-crypto:/var/lib/woca/home
@@ -324,6 +392,8 @@ services:
       start_period: 15s
     restart: unless-stopped
     depends_on:
+      # The nacos entries must exist before the role resolves its DSN.
+      nacos-init: { condition: service_completed_successfully }
       woca-pg-primary: { condition: service_healthy }
     networks:
       - woca-edge
@@ -336,14 +406,40 @@ services:
       # cross-segment forwarding, so the DOCKER-USER isolation rules keep
       # applying to everyone else.
       - woca-mq
+      # Management leg: registry registration + pack delivery (nacos).
+      - woca-mgmt
 
   woca-server-2:
     <<: *woca-server
     container_name: woca-ent-server-2
     environment:
       <<: *woca-server-env
-    # The ops-console publish belongs to server-1 alone.
     ports: []
+
+  # The console UI as its own service (v1.7 §6.7, split): the SPA plus a
+  # stateless proxy onto server-1's pageless management API (:8090,
+  # internal only). Login and the console session live server-side.
+  woca-ops:
+    image: woca-ops:local
+    container_name: woca-ent-ops
+    build:
+      context: ../..
+      dockerfile: deploy/selfhosted/Dockerfile.ops
+    environment:
+      WOCA_OPS_ADDR: ":8091"
+      WOCA_OPS_UPSTREAM: "nacos://nacos:8848/DEFAULT_GROUP/woca-ops.upstream"
+    # Dev-only host publish of the ops console. Prod keeps it strictly
+    # internal.
+    ports:
+      - "127.0.0.1:${ENT_OPS_PORT:-9091}:8091"
+    restart: unless-stopped
+    depends_on:
+      woca-server-1: { condition: service_started }
+      # The upstream address resolves through nacos at startup.
+      nacos-init: { condition: service_completed_successfully }
+    networks:
+      - woca-mgmt
+      - woca-edge
 
   woca-worker-1: &woca-worker
     image: woca-worker:local
@@ -352,7 +448,8 @@ services:
       context: ../..
       dockerfile: deploy/selfhosted/Dockerfile.worker
     environment: &woca-worker-env
-      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_OBS_ADDR: ":9091"
       # Shared session transcripts (the same volume the servers mount), so
       # dispatched runs continue their session's history. WOCA_SANDBOX_*
@@ -371,12 +468,16 @@ services:
     restart: unless-stopped
     depends_on:
       woca-pg-primary: { condition: service_healthy }
+      # The nacos entries must exist before the role resolves its DSN.
+      nacos-init: { condition: service_completed_successfully }
     networks:
       - woca-edge
       - woca-pg
       - ladym-data
       # Message-plane leg: see the servers' note above.
       - woca-mq
+      # Management leg: registry registration + pack delivery (nacos).
+      - woca-mgmt
 
   woca-worker-2:
     <<: *woca-worker
@@ -399,8 +500,11 @@ services:
     restart: unless-stopped
     depends_on:
       woca-pg-primary: { condition: service_healthy }
+      # The nacos entries must exist before the role resolves its DSN.
+      nacos-init: { condition: service_completed_successfully }
     environment:
-      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_OBS_ADDR: ":9093"
       WOCA_HOME: "/var/lib/woca/home"
       # Console sign-in (optional): set BOTH in .env to require
@@ -414,10 +518,9 @@ services:
       retries: 12
       start_period: 10s
     networks:
-      - woca-edge
+      - woca-mgmt
       - woca-pg
-      # Message-plane leg (design §16.7): the config plane pushes
-      # config.dispatch notifications on every write.
+      # Message-plane leg (design §16.7): tenant.dispatch wake-ups.
       - woca-mq
     volumes:
       - woca-crypto:/var/lib/woca/home
@@ -435,8 +538,10 @@ services:
     restart: unless-stopped
     depends_on:
       woca-pg-primary: { condition: service_healthy }
+      # The nacos entries must exist before the role resolves its DSN.
+      nacos-init: { condition: service_completed_successfully }
     environment:
-      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_HOME: "/var/lib/woca/home"
     networks:
       - woca-edge
@@ -516,6 +621,14 @@ networks:
     name: woca-ent-mq
     ipam:
       config: [{ subnet: 172.28.20.0/24 }]
+
+  # Management plane: the registry (nacos) and the consoles. The roles
+  # reach it over an mgmt-side interface (registration + pack delivery);
+  # nothing else crosses segments at the IP layer.
+  woca-mgmt:
+    name: woca-ent-mgmt
+    ipam:
+      config: [{ subnet: 172.28.50.0/24 }]
 
   # ladyM data plane: physically isolated from woca data (§6.3.3).
   ladym-data:

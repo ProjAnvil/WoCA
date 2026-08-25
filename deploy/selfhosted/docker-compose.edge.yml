@@ -66,6 +66,7 @@ services:
     command: ["serve", "--addr", ":8080", "--auth", "apikey"]
     environment:
       WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@pg:5432/woca?sslmode=disable"
+      WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_AUTH: apikey
       WOCA_GW_ADDR: ":8090"
       WOCA_SESSION_DIR: /var/lib/woca/sessions
@@ -90,12 +91,31 @@ services:
     restart: unless-stopped
     depends_on:
       pg: { condition: service_healthy }
+      nacos-init: { condition: service_completed_successfully }
+    networks: [internal]
+
+  # ─────────────────── ops console facade: woca-ops ───────────────────
+  # The console UI as its own service (v1.7 §6.7, split): the SPA plus a
+  # stateless proxy onto the server's pageless management API (:8090,
+  # internal only). Login and the console session live server-side.
+  ops:
+    image: woca-ops:edge-dev
+    container_name: woca-edge-dev-ops
+    build:
+      context: ../..
+      dockerfile: deploy/selfhosted/Dockerfile.ops
+    environment:
+      WOCA_OPS_ADDR: ":8091"
+      WOCA_OPS_UPSTREAM: "http://server:8090"
+    restart: unless-stopped
+    depends_on:
+      - server
     networks: [internal]
     # Dev only: the ops console on the host loopback so the operator can
     # mint enrollment tokens and tenant keys. Prod keeps this strictly on the
     # private network.
     ports:
-      - "127.0.0.1:${EDGE_OPS_PORT:-9091}:8090"
+      - "127.0.0.1:${EDGE_OPS_PORT:-9091}:8091"
 
   # ─────────────────────── config plane: woca-config ───────────────────────
   # The managed-settings authority + ops console + the /gw/config pull.
@@ -107,6 +127,7 @@ services:
       dockerfile: deploy/selfhosted/Dockerfile.config
     environment:
       WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@pg:5432/woca?sslmode=disable"
+      WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_OBS_ADDR: "off"
       # Secrets master key lives in WOCA_HOME — shared with the server
       # role over the edge-crypto volume: both planes encrypt rows in the
@@ -127,6 +148,7 @@ services:
     restart: unless-stopped
     depends_on:
       pg: { condition: service_healthy }
+      nacos-init: { condition: service_completed_successfully }
     networks: [internal]
     # Dev only: the config console on the host loopback (woca settings
     # domains: models, storage, memory, dispatch — v1.7 keeps tenant and
@@ -163,6 +185,7 @@ services:
       context: ../..
       dockerfile: deploy/selfhosted/Dockerfile.edge
     environment:
+      WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_SERVICE_URL: http://server:8090
       WOCA_CONFIGSVC_URL: http://config:8080
       WOCA_EDGE_ADDR: ":8080"
@@ -179,9 +202,58 @@ services:
     depends_on:
       server: { condition: service_started }
       config: { condition: service_started }
+      nacos-init: { condition: service_completed_successfully }
     ports:
       - "${EDGE_PUBLIC_PORT:-8443}:8080"
     networks: [public, internal]
+
+  # ─────────────────── nacos: discovery + config delivery ────────────────
+  # Same posture as the full stack: service addresses and the delivered
+  # configuration pack ride the registry. Roles refuse to start without
+  # it (fail-closed).
+  nacos:
+    image: nacos/nacos-server:v2.4.3
+    container_name: woca-edge-dev-nacos
+    environment:
+      MODE: standalone
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8848/nacos/v1/console/health/readiness || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+    networks: [internal]
+
+  nacos-init:
+    image: curlimages/curl:8.10.1
+    container_name: woca-edge-dev-nacos-init
+    depends_on:
+      nacos: { condition: service_healthy }
+    environment:
+      WOCA_PG_PASSWORD: ${WOCA_PG_PASSWORD:?set in .env}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        publish() {  # dataId content
+          curl -sf -X POST "http://nacos:8848/nacos/v1/cs/configs" \
+            --data-urlencode "dataId=$$1" \
+            --data-urlencode "group=DEFAULT_GROUP" \
+            --data-urlencode "content=$$2"
+          i=0
+          until [ "$$(curl -sf "http://nacos:8848/nacos/v1/cs/configs?dataId=$$1&group=DEFAULT_GROUP")" = "$$2" ]; do
+            i=$$((i+1)); [ $$i -gt 30 ] && { echo "nacos read-back of $$1 never settled"; exit 1; }
+            sleep 1
+          done
+          echo "published $$1"
+        }
+        publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@pg:5432/woca?sslmode=disable"
+        publish woca-ops.upstream "http://server:8090"
+        publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
+        echo "nacos entries ready"
+    restart: "no"
+    networks: [internal]
 
 networks:
   public:

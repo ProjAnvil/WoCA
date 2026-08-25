@@ -22,7 +22,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/projanvil/woca/internal/ee/discovery"
 	"github.com/projanvil/woca/internal/ee/edgegw"
+	"github.com/projanvil/woca/internal/ee/nacosrt"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/spf13/cobra"
 )
@@ -43,6 +45,35 @@ func main() {
 			if serviceURL == "" {
 				return fmt.Errorf("the service plane is required (set --service-url or WOCA_SERVICE_URL)")
 			}
+			// Service discovery: both plane addresses accept nacos:// /
+			// consul:// references (resolved once at assembly, the same
+			// discipline as every other service address) or plain URLs.
+			if serviceURL, err = discovery.Resolve(cmd.Context(), serviceURL); err != nil {
+				return fmt.Errorf("service-url discovery: %w", err)
+			}
+			if configURL != "" {
+				if configURL, err = discovery.Resolve(cmd.Context(), configURL); err != nil {
+					return fmt.Errorf("configsvc-url discovery: %w", err)
+				}
+			}
+			// Registry (full-stack posture): register with nacos and keep
+			// the heartbeat. WOCA_NACOS_URL is required — without the
+			// registry the edge refuses to start (fail-closed). The edge
+			// is stateless: registration only, no local materialization.
+			nacosBase := nacosrt.ServerFromEnv()
+			if nacosBase == "" {
+				return fmt.Errorf("edge requires WOCA_NACOS_URL (the nacos registry); refusing to start without it")
+			}
+			rt, err := nacosrt.New(nacosrt.Config{
+				Server: nacosBase, Service: "woca-edge", Advertise: addr,
+			}, log)
+			if err != nil {
+				return err
+			}
+			if err := rt.Start(cmd.Context()); err != nil {
+				return err
+			}
+			go rt.Loop(cmd.Context())
 			edge := edgegw.New(edgegw.Config{ServiceURL: serviceURL, ConfigURL: configURL}, log)
 
 			ln, err := net.Listen("tcp", addr)

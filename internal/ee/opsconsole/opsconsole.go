@@ -1,13 +1,15 @@
-// Package opsconsole is the tenant ops console (product design v1.8
-// §6.7): the private core's single management surface, hosted by the
-// service plane (woca-server's internal listener) and reachable only on
-// the private network — the edge access point never forwards it. It owns
-// the tenant credentials (woca_ keys over the platform tenant tables,
-// full key shown exactly once, offline distribution, core-side
-// last_used), the sessions the core issued (view/revoke — §2.1), the
-// bridge enrollment inventory (one-time tokens, worker-led approvals,
-// registration list, revocation), the governance audit trail, and the
-// gateway policy (edge SPKI pin).
+// Package opsconsole is the tenant ops console's authoritative API
+// (product design v1.8 §6.7): the private core's single management
+// surface, hosted by the service plane (woca-server's internal listener)
+// and reachable only on the private network — the edge access point never
+// forwards it. The console UI itself is a separate service (woca-ops:
+// the opsui SPA plus a reverse proxy onto these routes); this package
+// carries no web pages. It owns the tenant credentials (woca_ keys over
+// the platform tenant tables, full key shown exactly once, offline
+// distribution, core-side last_used), the sessions the core issued
+// (view/revoke — §2.1), the bridge enrollment inventory (one-time tokens,
+// worker-led approvals, registration list, revocation), the governance
+// audit trail, and the gateway policy (edge SPKI pin).
 //
 // Neither the bridge nor the config console carries any of this: bridges
 // hold zero user credentials (v1.8), and the config plane's console
@@ -16,12 +18,10 @@ package opsconsole
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/projanvil/woca/internal/platform/httpx"
-	"io/fs"
 	"net/http"
 	"os"
 	"strconv"
@@ -30,6 +30,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/authcore"
 	"github.com/projanvil/woca/internal/ee/consoleauth"
 	"github.com/projanvil/woca/internal/ee/entrygw"
+	"github.com/projanvil/woca/internal/ee/nacosrt"
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/gateway"
 	"github.com/projanvil/woca/internal/platform/authz"
@@ -38,26 +39,29 @@ import (
 	"github.com/rs/zerolog"
 )
 
-//go:embed all:spa
-var spaFS embed.FS
-
 // Service wires the ops console over the shared database: the gateway
 // registry (entrygw), the credential/session authority (authcore over
 // the platform tenant tables), and the settings store all share it.
 type Service struct {
-	gw      *entrygw.Store
-	auth    *authcore.Service
-	keys    *tenant.Store
-	db      *wocadb.DB
-	log     zerolog.Logger
-	console *consoleauth.Gate
+	gw        *entrygw.Store
+	auth      *authcore.Service
+	keys      *tenant.Store
+	st        *settings.Store
+	db        *wocadb.DB
+	log       zerolog.Logger
+	console   *consoleauth.Gate
+	publisher nacosrt.Publisher // full-stack delivery (nil = direct dev console)
 }
+
+// AttachPublisher wires the full-stack delivery channel: gateway-policy
+// writes publish the config pack to nacos (the sole source of truth).
+func (s *Service) AttachPublisher(p nacosrt.Publisher) { s.publisher = p }
 
 // New builds the console service (and seeds the gateway posture from the
 // startup environment — the certificate-less bridge switch is a
 // deployment decision made at process start, never a page toggle, R6).
 func New(st *settings.Store, gw *entrygw.Store, auth *authcore.Service, keys *tenant.Store, log zerolog.Logger) *Service {
-	s := &Service{gw: gw, auth: auth, keys: keys, db: st.DB(), log: log, console: consoleauth.New()}
+	s := &Service{gw: gw, auth: auth, keys: keys, st: st, db: st.DB(), log: log, console: consoleauth.New()}
 	s.seedGatewayPosture()
 	return s
 }
@@ -76,9 +80,10 @@ func (s *Service) seedGatewayPosture() {
 	}
 }
 
-// Handler returns the console surface: the login exchange and the SPA's
-// non-API fallback mount at the top level; every /api route sits behind
-// the console gate and its per-route scope check.
+// Handler returns the console's API surface: the login exchange at the
+// top level; every /api route sits behind the console gate and its
+// per-route scope check. There is no page fallback — the SPA lives in
+// the woca-ops facade (internal/ee/opsui).
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -113,12 +118,6 @@ func (s *Service) Handler() http.Handler {
 	// Gateway policy: the edge SPKI pin embedded in enrollment tokens.
 	mux.Handle("GET /api/gw/settings", s.requireScope(authz.ScopeSettingsRead, s.handleGetGatewaySettings))
 	mux.Handle("PUT /api/gw/settings", s.requireScope(authz.ScopeSettingsWrite, s.handlePutGatewaySettings))
-
-	spaRoot, err := fs.Sub(spaFS, "spa")
-	if err != nil {
-		panic(err)
-	}
-	mux.Handle("/", spaWithFallback(spaRoot))
 
 	top := http.NewServeMux()
 	// The login route must be reachable before a session exists, so it
@@ -562,6 +561,16 @@ func (s *Service) handlePutGatewaySettings(w http.ResponseWriter, r *http.Reques
 	} else {
 		s.gw.AuditEvent(r.Context(), "edge.pin_cleared", "", "console")
 	}
+	// Gateway policy rides the config pack: publish immediately so every
+	// server applies the pin without waiting for the next config write.
+	// (Attached in the full-stack assembly; the direct dev console shares
+	// the database with the servers it manages.)
+	if s.publisher != nil {
+		if err := nacosrt.PublishPack(r.Context(), s.publisher, s.st, s.db); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "nacos publish failed: " + err.Error()})
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"edge_spki_pin": pin})
 }
 
@@ -581,37 +590,6 @@ func isHex64(s string) bool {
 // over the console's administrator context).
 func (s *Service) requireScope(scope string, h http.HandlerFunc) http.Handler {
 	return gateway.RequireScope(authz.NewLocal(), scope)(h)
-}
-
-// spaWithFallback serves SPA assets and falls back to index.html for
-// client-side routes (unknown non-API paths render the app).
-func spaWithFallback(root fs.FS) http.Handler {
-	files := http.FileServerFS(root)
-	ix, err := fs.ReadFile(root, "index.html")
-	if err != nil {
-		panic(err)
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.NotFound(w, r)
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			http.NotFound(w, r)
-			return
-		}
-		name := strings.TrimPrefix(r.URL.Path, "/")
-		if name != "" {
-			if _, err := fs.Stat(root, name); err != nil {
-				// Client-side route: render the app shell.
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write(ix)
-				return
-			}
-		}
-		files.ServeHTTP(w, r)
-	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
