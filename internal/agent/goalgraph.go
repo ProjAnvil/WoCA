@@ -11,6 +11,7 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/langchain-golang/core/schema"
 	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 	lgruntime "github.com/projanvil/langchain-golang/langgraph/runtime"
@@ -585,7 +586,19 @@ Respond with ONLY a JSON object:
 
 Rules: "complete" ONLY if the evidence concretely shows every done-criterion met (tests run and passing, files verified, commands succeeded). If the executor claimed completion but the evidence does not fully support it, reply "continue" and list what is missing. When in doubt, "continue". "blocked" only for hard blockers needing human input.`)
 
-		resp, err := a.goalModel().Invoke(ctx, []messages.Message{messages.Human(b.String())})
+		// Structured output (langchain v0.6): the verdict schema goes
+		// upstream when the model enforces JSON schemas natively; the
+		// router degrades models without the capability to a plain invoke,
+		// where the prompt-guided JSON reply and the lenient parse below
+		// stay authoritative.
+		verdictInput := []messages.Message{messages.Human(b.String())}
+		var resp messages.Message
+		var err error
+		if sc, ok := a.goalModel().(language.StructuredCaller); ok {
+			resp, err = sc.InvokeStructured(ctx, verdictInput, goalVerdictSchema())
+		} else {
+			resp, err = a.goalModel().Invoke(ctx, verdictInput)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -750,6 +763,22 @@ func (m *goalManager) setPending(ie *lgtypes.Interrupt, innerThread string, turn
 	m.pendingTurns = turns
 	m.pendingPrefix = prefix
 	m.mu.Unlock()
+}
+
+// goalVerdictSchema is the evaluator's structured-output contract
+// (langchain v0.6 InvokeStructured): providers with native JSON-schema
+// enforcement get it upstream; the rest are validated against it.
+func goalVerdictSchema() schema.Schema {
+	return schema.Object(map[string]schema.Schema{
+		"verdict":    schema.String("complete | continue | blocked"),
+		"confidence": schema.Number("confidence in the verdict, 0.0 to 1.0"),
+		"evidence":   schema.String("what was concretely verified"),
+		"gaps":       schema.String("what is missing (for continue)"),
+		"next_step":  schema.String("the single most valuable next action"),
+		// Only verdict is required — it alone drives the state machine.
+		// Everything else is best-effort narration, matching the lenient
+		// parse below (missing fields render empty).
+	}, "verdict")
 }
 
 // goalVerdict is the evaluator's structured output.

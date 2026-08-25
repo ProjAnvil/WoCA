@@ -1,15 +1,39 @@
-// Package tokens provides a token-count estimator for message lists. It is a
-// heuristic (word + punctuation + CJK based) that is a better approximation
-// than the naive characters/4 rule, without requiring an external BPE
-// tokenizer.
+// Package tokens provides token-count estimators for message lists.
+// EstimateWith prefers the model's own counter (langchain v0.6: OpenAI
+// models approximate tiktoken; others fall back to the default BPE-ish
+// approximation); Estimate/EstimateText keep the word + punctuation + CJK
+// heuristic for call sites without a model at hand.
 package tokens
 
 import (
 	"encoding/json"
 	"unicode"
 
+	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
 )
+
+// EstimateWith approximates the token count of a message list using the
+// model's own counter when it exposes one (language.GetNumTokensFromMessages
+// — approximate tiktoken on OpenAI, the default approximation elsewhere) and
+// the heuristic otherwise.
+func EstimateWith(model any, msgs []messages.Message) int {
+	if model == nil {
+		return Estimate(msgs)
+	}
+	if n, err := language.GetNumTokensFromMessages(model, msgs); err == nil {
+		return n
+	}
+	return Estimate(msgs)
+}
+
+// EstimateTextWith is EstimateWith for one string.
+func EstimateTextWith(model any, s string) int {
+	if model == nil {
+		return EstimateText(s)
+	}
+	return language.GetNumTokens(model, s)
+}
 
 // EstimateText approximates the token count of a string. Words count as one
 // token each, standalone punctuation/operators count as one, and each CJK

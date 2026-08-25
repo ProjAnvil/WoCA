@@ -57,7 +57,7 @@ func (a *Agent) ContextBreakdown(ctx context.Context, history []messages.Message
 	// Memory files are only part of the prompt when a builder is wired
 	// (harness builds them in); without one the startup prompt is all there
 	// is, so no memory category is reported.
-	sysTokens := tokens.EstimateText(a.systemPromptFor(ctx))
+	sysTokens := tokens.EstimateTextWith(a.model, a.systemPromptFor(ctx))
 	var mem prompt.MemoryFileStats
 	if a.promptFor != nil {
 		mem = prompt.MemoryFileStatsFor(ws)
@@ -104,9 +104,9 @@ func (a *Agent) ContextBreakdown(ctx context.Context, history []messages.Message
 			Detail: "MCP / 扩展工具",
 		})
 	}
-	humanTok := tokens.Estimate(humanMsgs)
-	aiTok := tokens.Estimate(aiMsgs)
-	toolTok := tokens.Estimate(toolMsgs)
+	humanTok := tokens.EstimateWith(a.model, humanMsgs)
+	aiTok := tokens.EstimateWith(a.model, aiMsgs)
+	toolTok := tokens.EstimateWith(a.model, toolMsgs)
 	if len(sysMsgs) > 0 {
 		cats = append(cats, ContextCategory{
 			Key: "history_summary", Label: "压缩摘要", Tokens: tokens.Estimate(sysMsgs),

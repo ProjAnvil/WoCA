@@ -335,6 +335,45 @@ func (r *Router) InputSchema() schema.Schema { return r.primary.InputSchema() }
 // OutputSchema delegates to primary.
 func (r *Router) OutputSchema() schema.Schema { return r.primary.OutputSchema() }
 
+// InvokeStructured implements language.StructuredCaller: models with
+// native JSON-schema enforcement (primary, then fallback) get the schema
+// upstream with the same retry/fallback treatment as Invoke; a model
+// without the capability degrades to a plain Invoke — the caller's
+// prompt-guided JSON handling stays authoritative there.
+func (r *Router) InvokeStructured(ctx context.Context, input []messages.Message, sch schema.Schema) (messages.Message, error) {
+	call := func(m language.ChatModel) (messages.Message, error) {
+		if sc, ok := m.(language.StructuredCaller); ok {
+			return sc.InvokeStructured(ctx, input, sch)
+		}
+		return m.Invoke(ctx, input)
+	}
+	resp, err := call(r.primary)
+	if err == nil {
+		return resp, nil
+	}
+	retryable := r.retryableFn()
+	for attempt := 0; attempt < r.maxRetries; attempt++ {
+		if !retryable(err) {
+			break
+		}
+		resp, err = call(r.primary)
+		if err == nil {
+			return resp, nil
+		}
+	}
+	if r.fallback != nil {
+		r.mu.Lock()
+		first := !r.usedFallback
+		r.usedFallback = true
+		r.mu.Unlock()
+		if first && r.onFallback != nil {
+			r.onFallback(err)
+		}
+		return call(r.fallback)
+	}
+	return messages.Message{}, err
+}
+
 // BindTools binds tools on primary and fallback, returning a new Router.
 func (r *Router) BindTools(bound []tools.Tool) (language.ChatModel, error) {
 	primary, err := r.primary.BindTools(bound)

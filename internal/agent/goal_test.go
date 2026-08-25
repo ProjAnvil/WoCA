@@ -10,6 +10,8 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/langchain-golang/core/schema"
+	coretools "github.com/projanvil/langchain-golang/core/tools"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 
@@ -652,6 +654,72 @@ func TestGoalBlockedByModelEndsLoop(t *testing.T) {
 		t.Fatalf("unexpected error: %v", resg.err)
 	}
 	if g := a.Goal(); g.Status != GoalBlocked || g.BlockedReason != "missing API key" {
+		t.Fatalf("goal = %+v", g)
+	}
+}
+
+// structuredFake wraps the fake chat model with a recording StructuredCaller
+// so tests can assert the native schema path was negotiated (langchain v0.6).
+type structuredFake struct {
+	*language.FakeChatModel
+	schemas []schema.Schema
+}
+
+func (f *structuredFake) InvokeStructured(ctx context.Context, input []messages.Message, sch schema.Schema) (messages.Message, error) {
+	f.schemas = append(f.schemas, sch)
+	return f.FakeChatModel.Invoke(ctx, input)
+}
+
+// BindTools keeps the wrapper type through the agent's tool binding (the
+// production ChatModel copies re-expose InvokeStructured themselves).
+func (f *structuredFake) BindTools(bt []coretools.Tool) (language.ChatModel, error) {
+	inner, err := f.FakeChatModel.BindTools(bt)
+	if err != nil {
+		return nil, err
+	}
+	return &structuredFake{FakeChatModel: inner.(*language.FakeChatModel)}, nil
+}
+
+// TestGoalEvaluatorNativeStructuredOutput: with a StructuredCaller model the
+// evaluator hands the verdict schema upstream instead of relying on
+// prompt-guided JSON.
+func TestGoalEvaluatorNativeStructuredOutput(t *testing.T) {
+	inner := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.AI("assess"),
+			messages.AI("work"),
+			messages.AI(`{"verdict":"complete","confidence":0.9,"evidence":"tests green"}`),
+		),
+	)
+	fake := &structuredFake{FakeChatModel: inner}
+	a, err := New(Config{
+		Model:          fake,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+		RecursionLimit: 50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.SetGoal("native structured goal", "", 5, 1_000_000)
+	stream, err := a.GoalStream(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restep := pumpGoalChunks(t, stream)
+	if restep.err != nil {
+		t.Fatalf("unexpected error: %v", restep.err)
+	}
+	g := a.Goal()
+	// The agent binds tools into a fresh wrapper copy — read the schema
+	// log off the bound model, not the construction-time fake.
+	bound := a.goalModel().(*structuredFake)
+	if len(bound.schemas) == 0 {
+		t.Fatalf("evaluator never used the native structured path; goal=%+v status=%s", g, g.Status)
+	}
+	if g.Status != GoalComplete {
 		t.Fatalf("goal = %+v", g)
 	}
 }
