@@ -46,7 +46,7 @@ describe('StorageSection', () => {
     setActivePinia(pinia)
     const settings = useServerSettingsStore()
     settings.server = baseServer({
-      managed_fields: ['checkpoint-backend', 'memory-backend'],
+      managed_fields: ['checkpoint', 'memory'],
     })
     settings.checkpointBackend = 'postgres'
     settings.memoryBackend = 'postgres'
