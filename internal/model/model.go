@@ -399,3 +399,9 @@ func (r *Router) BindTools(bound []tools.Tool) (language.ChatModel, error) {
 
 // Capabilities delegates to primary.
 func (r *Router) Capabilities() language.ChatModelCapabilities { return r.primary.Capabilities() }
+
+// Unwrap returns the primary chat model. Optional capability interfaces the
+// ChatModel interface does not declare (language.TokenCounter,
+// language.MessageTokenCounter) are not promoted through wrappers, so
+// capability-aware callers unwrap to reach them.
+func (r *Router) Unwrap() language.ChatModel { return r.primary }

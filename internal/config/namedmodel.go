@@ -15,6 +15,10 @@ type namedModel struct {
 
 func (m namedModel) Name() string { return m.name }
 
+// Unwrap returns the wrapped chat model; see model.Router.Unwrap for why
+// capability interfaces need unwrapping.
+func (m namedModel) Unwrap() language.ChatModel { return m.ChatModel }
+
 // withName wraps m when it does not already report a stable name.
 func withName(m language.ChatModel, name string) language.ChatModel {
 	if _, ok := m.(interface{ Name() string }); ok {
