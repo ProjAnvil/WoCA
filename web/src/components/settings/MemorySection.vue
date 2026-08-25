@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { Brain } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
-import { useSettingsStore } from '../../stores/settings'
+import { useServerSettingsStore } from '../../stores/serverSettings'
 
 const { t } = useI18n()
-const settings = useSettingsStore()
+const settings = useServerSettingsStore()
 // The memory domain is operator-owned in the private-cloud form: when the
 // engine key rides the managed overlay the whole section locks (the
 // domain is configured in the config console, not on the bridge).

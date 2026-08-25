@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { toErrorMessage } from '../lib/errors'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Bot, Brain, Gauge, Layers, Lightbulb, PanelRight, Paperclip, Send, ShieldCheck, Sparkles, Square, Target, X } from 'lucide-vue-next'
@@ -10,8 +9,12 @@ import { useCompletionsStore } from '../stores/completions'
 import { useMemoryStore } from '../stores/memory'
 import { useAgentStore, MODE_DESCRIPTIONS, MODE_LABELS, THINKING_BUDGETS, THINKING_LABELS } from '../stores/agent'
 import { useSettingsStore } from '../stores/settings'
+import { useServerSettingsStore } from '../stores/serverSettings'
+import { useToastStore } from '../stores/toast'
+import { useAttachments } from '../composables/useAttachments'
+import { useAutocomplete } from '../composables/useAutocomplete'
 import { fmtTokens } from '../lib/format'
-import type { Attachment, CompletionEntry, ContextCategory } from '../types'
+import type { Attachment, CompletionEntry, ContextCategory, PermissionMode, ThinkingLevel } from '../types'
 
 const { t } = useI18n()
 const store = useSessionStore()
@@ -19,9 +22,51 @@ const workspace = useWorkspaceStore()
 const completions = useCompletionsStore()
 const memory = useMemoryStore()
 const agent = useAgentStore()
+const toast = useToastStore()
+
+
+
 const settingsStore = useSettingsStore()
+const catalog = useServerSettingsStore()
 const draft = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
+
+/* --------------------- attachments + autocomplete (composables) ----------- */
+
+const { attachments, attachmentError, addFiles, removeAttachment } = useAttachments()
+
+function onPickFiles(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (input.files) addFiles(input.files)
+  input.value = ''
+}
+
+// Cmd+V (macOS) / Ctrl+V (Windows) pastes a screenshot straight into the
+// attachment tray; the textarea's default paste keeps text as-is.
+function onPaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  const images: File[] = []
+  for (const it of Array.from(items)) {
+    if (it.kind === 'file' && it.type.startsWith('image/')) {
+      const f = it.getAsFile()
+      if (f) images.push(f)
+    }
+  }
+  if (images.length) {
+    e.preventDefault()
+    addFiles(images)
+  }
+}
+
+const completionSource = computed(() => ({ skills: completions.skills, agents: completions.agents }))
+const { ac, acItems, updateAc, closeAc, onBlurCloseAc, acceptAc, onKeydown } = useAutocomplete({
+  textarea,
+  draft,
+  completions: completionSource,
+  onEnter: send,
+})
+
 const fileInput = ref<HTMLInputElement | null>(null)
 
 const busy = computed(() => ['running', 'awaiting', 'queued'].includes(store.activeStatus))
@@ -31,17 +76,17 @@ const canSend = computed(
   () =>
     (draft.value.trim().length > 0 || attachments.value.length > 0) &&
     !busy.value &&
-    !settingsStore.noModelsManaged,
+    !catalog.noModelsManaged,
 )
 
 onMounted(() => {
-  if (!preferredId.value && settingsStore.models.length) {
-    preferredId.value = settingsStore.models[0].id
+  if (!preferredId.value && catalog.models.length) {
+    preferredId.value = catalog.models[0].id
   }
   void completions.load()
   void agent.load()
   void agent.refreshQuota()
-  void settingsStore.ensureModels()
+  void catalog.ensureModels()
 })
 
 /* ------------------------- input toolbar (mode/thinking/quota) ------------ */
@@ -62,8 +107,8 @@ const preferredId = ref(localStorage.getItem('woca.pref.modelPreset') ?? '')
 
 const currentModelName = computed(
   () =>
-    settingsStore.models.find((m) => m.id === preferredId.value)?.name ||
-    settingsStore.models[0]?.name ||
+    catalog.models.find((m) => m.id === preferredId.value)?.name ||
+    catalog.models[0]?.name ||
     agent.state?.model ||
     '',
 )
@@ -72,25 +117,25 @@ async function pickModel(id: string) {
   preferredId.value = id
   localStorage.setItem('woca.pref.modelPreset', id)
   pop.value = ''
-  await settingsStore.applyModel(id)
+  await catalog.applyModel(id)
   await agent.load()
 }
 
-async function pickMode(mode: string) {
+async function pickMode(mode: PermissionMode) {
   try {
     await agent.setMode(mode)
   } catch (e) {
-    alert(toErrorMessage(e))
+    toast.error(e)
     return
   }
   pop.value = ''
 }
 
-async function pickThinking(level: string) {
+async function pickThinking(level: ThinkingLevel) {
   try {
     await agent.setThinking(level)
   } catch (e) {
-    alert(toErrorMessage(e))
+    toast.error(e)
     return
   }
   pop.value = ''
@@ -157,189 +202,8 @@ function ctxCatPct(c: ContextCategory): string {
   return total ? `${Math.max(2, (c.tokens / total) * 100).toFixed(1)}%` : '0%'
 }
 
-const modeList = Object.entries(MODE_LABELS)
+const modeList = Object.entries(MODE_LABELS) as [PermissionMode, string][] as [PermissionMode, string][]
 
-/* ---------------------------------- attachments --------------------------- */
-
-const attachments = ref<Attachment[]>([])
-const attachmentError = ref('')
-const MAX_ATTACHMENTS = 6
-let attachSeq = 0
-// Files whose FileReader has been started but not yet landed in attachments.
-// The cap must hold for queued + pending together: the real enqueue happens
-// asynchronously in reader.onload, so a synchronous length check alone lets a
-// whole pasted batch slip past the limit.
-let pendingCount = 0
-
-function addFiles(files: File[] | FileList) {
-  attachmentError.value = ''
-  for (const f of Array.from(files)) {
-    if (!f.type.startsWith('image/')) {
-      attachmentError.value = t('chat.imageOnly', { name: f.name })
-      continue
-    }
-    pendingCount++
-    if (attachments.value.length + pendingCount > MAX_ATTACHMENTS) {
-      pendingCount--
-      attachmentError.value = t('chat.maxImages', { count: MAX_ATTACHMENTS })
-      break
-    }
-    const reader = new FileReader()
-    reader.onload = () => {
-      pendingCount--
-      const dataUrl = String(reader.result ?? '')
-      const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
-      attachments.value = [
-        ...attachments.value,
-        {
-          id: `att-${Date.now().toString(36)}-${attachSeq++}`,
-          name: f.name || 'screenshot.png',
-          mimeType: f.type,
-          dataUrl,
-          base64,
-        },
-      ]
-    }
-    // A failed read never fires onload; release its reservation so the slot
-    // is not leaked.
-    reader.onerror = () => {
-      pendingCount--
-    }
-    reader.readAsDataURL(f)
-  }
-}
-
-function onPickFiles(e: Event) {
-  const input = e.target as HTMLInputElement
-  if (input.files) addFiles(input.files)
-  input.value = ''
-}
-
-// Cmd+V (macOS) / Ctrl+V (Windows) pastes a screenshot straight into the
-// attachment tray; the textarea's default paste keeps text as-is.
-function onPaste(e: ClipboardEvent) {
-  const items = e.clipboardData?.items
-  if (!items) return
-  const images: File[] = []
-  for (const it of Array.from(items)) {
-    if (it.kind === 'file' && it.type.startsWith('image/')) {
-      const f = it.getAsFile()
-      if (f) images.push(f)
-    }
-  }
-  if (images.length) {
-    e.preventDefault()
-    addFiles(images)
-  }
-}
-
-function removeAttachment(id: string) {
-  attachments.value = attachments.value.filter((a) => a.id !== id)
-}
-
-/* --------------------------------- autocomplete --------------------------- */
-
-// "/" at the start of the line lists skills; "@" anywhere lists subagents.
-// ArrowUp/Down move the highlight, Enter/Tab accept, Esc dismisses.
-type AcKind = 'skill' | 'agent'
-const ac = ref<{ open: boolean; kind: AcKind; query: string; start: number; index: number }>({
-  open: false,
-  kind: 'skill',
-  query: '',
-  start: 0,
-  index: 0,
-})
-
-const acItems = computed<CompletionEntry[]>(() => {
-  if (!ac.value.open) return []
-  const q = ac.value.query.toLowerCase()
-  const all = ac.value.kind === 'skill' ? completions.skills : completions.agents
-  const scored = all.filter((e) => {
-    const n = e.name.toLowerCase()
-    return n.startsWith(q) || n.includes(q)
-  })
-  return scored.slice(0, 12)
-})
-
-function updateAc() {
-  const el = textarea.value
-  if (!el) return
-  const before = draft.value.slice(0, el.selectionStart ?? draft.value.length)
-
-  const skill = before.match(/^\/([a-zA-Z0-9_-]*)$/)
-  if (skill) {
-    setAc('skill', skill[1], 0)
-    return
-  }
-  const agent = before.match(/(^|\s)@([a-zA-Z0-9_-]*)$/)
-  if (agent) {
-    // index of the '@' trigger inside the draft
-    setAc('agent', agent[2], before.length - agent[2].length - 1)
-    return
-  }
-  ac.value.open = false
-}
-
-// start is the draft index of the trigger character ('/' or '@'); the query
-// to filter by begins at start+1.
-function setAc(kind: AcKind, query: string, start: number) {
-  const changed = query !== ac.value.query || kind !== ac.value.kind || !ac.value.open
-  ac.value = { open: true, kind, query, start, index: changed ? 0 : ac.value.index }
-}
-
-function closeAc() {
-  ac.value.open = false
-}
-
-// Delay so clicking a popup item fires before the popup unmounts.
-function onBlurCloseAc() {
-  window.setTimeout(closeAc, 150)
-}
-
-function acceptAc(entry?: CompletionEntry) {
-  const target = entry ?? acItems.value[ac.value.index]
-  if (!target || !textarea.value) return
-  const el = textarea.value
-  const caret = el.selectionStart ?? draft.value.length
-  const prefix = ac.value.kind === 'skill' ? '/' : '@'
-  draft.value =
-    draft.value.slice(0, ac.value.start) + prefix + target.name + ' ' + draft.value.slice(caret)
-  closeAc()
-  el.focus()
-}
-
-function onKeydown(e: KeyboardEvent) {
-  if (ac.value.open && acItems.value.length) {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      ac.value.index = (ac.value.index + 1) % acItems.value.length
-      return
-    }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      ac.value.index = (ac.value.index - 1 + acItems.value.length) % acItems.value.length
-      return
-    }
-    if (e.key === 'Enter' || e.key === 'Tab') {
-      e.preventDefault()
-      acceptAc()
-      return
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      closeAc()
-      return
-    }
-  }
-  // Enter submits — except while an IME composition is active. WebKit keeps
-  // the composing text out of v-model until compositionend, so an unguarded
-  // Enter-to-commit in the Wails WebView sends an empty draft (nothing
-  // happens, no bubble) instead of confirming the candidate.
-  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-    e.preventDefault()
-    send()
-  }
-}
 
 /* ------------------------------------- send ------------------------------- */
 
@@ -436,7 +300,7 @@ function send() {
           </div>
         </div>
 
-        <div v-if="settingsStore.models.length" class="ctl-wrap">
+        <div v-if="catalog.models.length" class="ctl-wrap">
           <button
             class="ctl-chip"
             :class="{ open: pop === 'model' }"
@@ -449,10 +313,10 @@ function send() {
           <div v-if="pop === 'model'" class="ctl-pop">
             <div class="ctl-pop-header">{{ t('chat.modelPick') }}</div>
             <button
-              v-for="m in settingsStore.models"
+              v-for="m in catalog.models"
               :key="m.id"
               class="ctl-opt"
-              :class="{ active: (preferredId || settingsStore.models[0]?.id) === m.id }"
+              :class="{ active: (preferredId || catalog.models[0]?.id) === m.id }"
               type="button"
               @click="pickModel(m.id)"
             >
@@ -483,7 +347,7 @@ function send() {
               <span v-if="agent.thinkingNote" class="ctl-pop-note">{{ agent.thinkingNote }}</span>
             </div>
             <button
-              v-for="level in ['off', ...agent.thinkingLevels]"
+              v-for="level in (['off', ...agent.thinkingLevels] as ThinkingLevel[])"
               :key="level"
               class="ctl-opt"
               :class="{ active: agent.thinkingLevel === level }"

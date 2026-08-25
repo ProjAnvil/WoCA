@@ -14,7 +14,7 @@ vi.mock('../../api/client', async (importOriginal) => {
 })
 
 import PluginsSection from './PluginsSection.vue'
-import { useSettingsStore } from '../../stores/settings'
+import { useServerSettingsStore } from '../../stores/serverSettings'
 import type { AppSettings, PluginStatus } from '../../types'
 
 function plugin(over: Partial<PluginStatus> = {}): PluginStatus {
@@ -65,7 +65,7 @@ describe('PluginsSection', () => {
   it('marks org-managed plugins and freezes the toggles when the set is locked', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const settings = useSettingsStore()
+    const settings = useServerSettingsStore()
     settings.server = { managed_fields: ['builtin-plugins'], msg_plane_available: false } as AppSettings
     api.getPlugins.mockResolvedValue({ plugins: [plugin({ enabled: true })] })
 

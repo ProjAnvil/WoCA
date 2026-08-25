@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import i18n from '../../i18n'
 
 import StorageSection from './StorageSection.vue'
-import { useSettingsStore } from '../../stores/settings'
+import { useServerSettingsStore } from '../../stores/serverSettings'
 import type { AppSettings } from '../../types'
 
 function baseServer(over: Partial<AppSettings> = {}): AppSettings {
@@ -31,7 +31,7 @@ describe('StorageSection', () => {
   it('keeps the backends editable when un-managed', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const settings = useSettingsStore()
+    const settings = useServerSettingsStore()
     settings.server = baseServer()
     const w = mountSection(pinia)
     const selects = w.findAll('select.field')
@@ -44,7 +44,7 @@ describe('StorageSection', () => {
   it('locks the domain and hides the DSN input on managed bridges', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const settings = useSettingsStore()
+    const settings = useServerSettingsStore()
     settings.server = baseServer({
       managed_fields: ['checkpoint-backend', 'memory-backend'],
     })

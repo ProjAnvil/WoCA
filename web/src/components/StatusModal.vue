@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { Activity, Download, X } from "lucide-vue-next";
 import { stats, type StatsResponse } from "../api/client";
 import { useSettingsStore } from "../stores/settings";
+import { useServerSettingsStore } from "../stores/serverSettings";
 import { useStatusStore } from "../stores/status";
 
 // The status health page (product design §6.3): connection zones — the
@@ -19,6 +20,7 @@ const st = computed(() => statusStore.status);
 const failed = computed(() => statusStore.failed);
 const runtime = ref<StatsResponse | null>(null);
 const settings = useSettingsStore();
+const serverSettings = useServerSettingsStore();
 
 onMounted(async () => {
   await statusStore.refresh();
@@ -176,8 +178,8 @@ function exportDiagnostics() {
               {{ st.managed ? t("status.managedOn") : t("status.localOnly") }}
             </dd>
           </dl>
-          <dl v-if="settings.managedFields.length" class="status-managed-list">
-            <dt v-for="f in settings.managedFields" :key="f">
+          <dl v-if="serverSettings.managedFields.length" class="status-managed-list">
+            <dt v-for="f in serverSettings.managedFields" :key="f">
               {{ f }}
               <span class="status-managed-src">managed{{ cloud?.last_version ? " · " + cloud.last_version : "" }}</span>
             </dt>

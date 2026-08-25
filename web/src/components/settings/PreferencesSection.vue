@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '../../stores/settings'
+import { useServerSettingsStore } from '../../stores/serverSettings'
 
 const { t } = useI18n()
 const settings = useSettingsStore()
+const server = useServerSettingsStore()
 </script>
 
 <template>
@@ -41,16 +43,16 @@ const settings = useSettingsStore()
         <div class="row-hint">
           {{
             t('settings.preferences.debugLogHint', {
-              dir: settings.logDir ? `· ${settings.logDir}` : '',
+              dir: server.logDir ? `· ${server.logDir}` : '',
             })
           }}
         </div>
       </div>
       <button
         class="switch"
-        :class="{ on: settings.debugLog }"
+        :class="{ on: server.debugLog }"
         :title="t('settings.preferences.debugLogTitle')"
-        @click="settings.toggleDebugLog()"
+        @click="server.toggleDebugLog()"
       ></button>
     </div>
   </section>

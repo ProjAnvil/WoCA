@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import i18n from '../../i18n'
 
 import MemorySection from './MemorySection.vue'
-import { useSettingsStore } from '../../stores/settings'
+import { useServerSettingsStore } from '../../stores/serverSettings'
 import type { AppSettings } from '../../types'
 
 function baseServer(managed: string[] = []): AppSettings {
@@ -23,7 +23,7 @@ describe('MemorySection', () => {
   it('offers the remote engine alongside the local and off options', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const settings = useSettingsStore()
+    const settings = useServerSettingsStore()
     settings.server = baseServer()
     settings.memoryEngine = 'remote'
     const w = mountSection(pinia)
@@ -38,7 +38,7 @@ describe('MemorySection', () => {
   it('locks the whole section when the engine key is managed', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const settings = useSettingsStore()
+    const settings = useServerSettingsStore()
     settings.server = baseServer(['memory-engine'])
     settings.memoryEngine = 'remote'
     const w = mountSection(pinia)
@@ -49,7 +49,7 @@ describe('MemorySection', () => {
   it('shows the ladym tuning fields for the local engine', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const settings = useSettingsStore()
+    const settings = useServerSettingsStore()
     settings.server = baseServer()
     settings.memoryEngine = 'ladym'
     const w = mountSection(pinia)

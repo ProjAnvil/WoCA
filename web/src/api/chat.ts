@@ -3,6 +3,8 @@
 import i18n from '../i18n'
 import type {
   AgentState,
+  PermissionMode,
+  ThinkingLevel,
   CreateRunResponse,
   MemoryListResponse,
   MemoryStatsResponse,
@@ -45,12 +47,12 @@ export function getAgent(): Promise<AgentState> {
 }
 
 /** Switches the permission mode; takes effect for subsequent tool calls. */
-export function setPermissionMode(mode: string): Promise<{ ok: boolean; mode: string }> {
+export function setPermissionMode(mode: PermissionMode): Promise<{ ok: boolean; mode: string }> {
   return postJSON('/api/agent/permissions', { mode })
 }
 
 /** Switches the thinking level (off | low | medium | high); applies next turn. */
-export function setThinkingLevel(level: string): Promise<{
+export function setThinkingLevel(level: ThinkingLevel): Promise<{
   ok: boolean
   level: string
   budget: number

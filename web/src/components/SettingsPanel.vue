@@ -20,6 +20,7 @@ import {
 } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth'
 import { useSettingsStore } from '../stores/settings'
+import { useServerSettingsStore } from '../stores/serverSettings'
 import { useStatusStore } from '../stores/status'
 import { useClaudeEnvStore, useManagedStore, usePluginsStore } from '../stores/sections'
 import { logout as apiLogout } from '../api/client'
@@ -41,6 +42,7 @@ import StatsSection from './settings/StatsSection.vue'
 
 const { t } = useI18n()
 const settings = useSettingsStore()
+const server = useServerSettingsStore()
 const auth = useAuthStore()
 
 // Sidebar navigation: each entry maps to one section of the right pane.
@@ -66,7 +68,7 @@ const sections = computed(() => [
     ? [{ id: 'managed', label: 'settings.nav.managed', icon: CloudDownload }]
     : []),
   ...baseSections.slice(4, 6), // plugins, storage
-  ...(settings.server?.msg_plane_available
+  ...(server.server?.msg_plane_available
     ? [{ id: 'msgplane', label: 'settings.nav.msgplane', icon: Radio }]
     : []),
   ...baseSections.slice(7), // memory, model, stats
@@ -118,7 +120,7 @@ async function doLogout() {
 // configured from the wails app by its owner.
 const statusStore = useStatusStore()
 const statusInfo = computed(() => statusStore.status)
-const statusAuth = computed(() => statusStore.status?.auth ?? '')
+const statusAuth = computed<'' | 'local' | 'apikey'>(() => (statusStore.status?.auth as '' | 'local' | 'apikey') ?? '')
 // Edge inventory probe: non-null only when this origin is an edge access
 // point (the bridge-switch section's gate).
 const edgeBridges = ref<EdgeBridge[] | null>(null)
@@ -195,7 +197,7 @@ onBeforeUnmount(() => {
 
         <!-- Right pane: the selected section's fields -->
         <div class="settings-content">
-          <div v-if="settings.managedFields.length" class="managed-banner">
+          <div v-if="server.managedFields.length" class="managed-banner">
             {{ t('settings.managedBanner') }}
           </div>
           <AppearanceSection v-if="active === 'appearance'" />
@@ -208,7 +210,7 @@ onBeforeUnmount(() => {
           <!-- Message plane is not a private-cloud concept (product design
                §2 rule 2): the section disappears on managed bridges. -->
           <MessagePlaneSection
-            v-if="active === 'msgplane' && settings.server?.msg_plane_available && !settings.managedFields.length"
+            v-if="active === 'msgplane' && server.server?.msg_plane_available && !server.managedFields.length"
           />
           <MemorySection v-if="active === 'memory'" />
           <ModelSection v-if="active === 'model'" />
@@ -231,16 +233,16 @@ onBeforeUnmount(() => {
 
       <!-- Sticky footer: server-settings save actions -->
       <div class="settings-footer">
-        <span v-if="settings.serverError" class="row-hint" style="color: var(--danger, #e5484d)">
-          {{ settings.serverError }}
+        <span v-if="server.serverError" class="row-hint" style="color: var(--danger, #e5484d)">
+          {{ server.serverError }}
         </span>
-        <span v-else-if="settings.savedMessage" class="row-hint">{{ settings.savedMessage }}</span>
+        <span v-else-if="server.savedMessage" class="row-hint">{{ server.savedMessage }}</span>
         <span v-else class="row-hint">{{ t('settings.footer.hint') }}</span>
-        <span v-if="settings.restartRequired" class="row-hint" style="color: var(--warn, #f5a524)">
+        <span v-if="server.restartRequired" class="row-hint" style="color: var(--warn, #f5a524)">
           {{ t('settings.footer.restart') }}
         </span>
-        <button class="btn" :disabled="settings.saving" @click="settings.saveServer()">
-          {{ settings.saving ? t('settings.shared.saving') : t('settings.footer.save') }}
+        <button class="btn" :disabled="server.saving" @click="server.saveServer()">
+          {{ server.saving ? t('settings.shared.saving') : t('settings.footer.save') }}
         </button>
       </div>
     </div>

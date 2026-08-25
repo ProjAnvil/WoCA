@@ -9,8 +9,10 @@ import GoalPanel from './components/GoalPanel.vue'
 import MemoryPanel from './components/MemoryPanel.vue'
 import InterruptModal from './components/InterruptModal.vue'
 import LoginGate from './components/LoginGate.vue'
+import ToastStack from './components/ToastStack.vue'
 import { useAuthStore } from './stores/auth'
 import { useSettingsStore } from './stores/settings'
+import { useServerSettingsStore } from './stores/serverSettings'
 import { useWorkspaceStore } from './stores/workspace'
 import { useSessionStore } from './stores/sessions'
 import { useMemoryStore } from './stores/memory'
@@ -18,6 +20,7 @@ import { useCompletionsStore } from './stores/completions'
 
 // Initializing the settings store applies the persisted/system theme.
 const settings = useSettingsStore()
+const serverSettings = useServerSettingsStore()
 const workspace = useWorkspaceStore()
 const sessions = useSessionStore()
 const memory = useMemoryStore()
@@ -32,7 +35,7 @@ onMounted(() => {
   // them (the bubble debug-copy button needs debug_log) would otherwise stay
   // hidden until the settings panel is opened — a reload regressed the debug
   // button until the user re-toggled the switch.
-  void settings.loadServer()
+  void serverSettings.loadServer()
 })
 
 // The file sidebar and the "/" "@" autocomplete follow the active session's
@@ -62,5 +65,6 @@ watch(
     <MemoryPanel v-if="memory.panelOpen" />
     <InterruptModal v-if="sessions.activeInterrupt" />
     <LoginGate v-if="auth.gateOpen" :revoked="auth.gateCode === 'revoked'" @authenticated="auth.onAuthenticated" />
+    <ToastStack />
   </div>
 </template>

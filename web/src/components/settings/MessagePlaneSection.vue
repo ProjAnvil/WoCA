@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { Radio } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
-import { useSettingsStore } from '../../stores/settings'
+import { useServerSettingsStore } from '../../stores/serverSettings'
 
 const { t } = useI18n()
-const settings = useSettingsStore()
+const settings = useServerSettingsStore()
 </script>
 
 <template>

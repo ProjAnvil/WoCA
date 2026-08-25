@@ -2,7 +2,7 @@
 import { computed, onMounted } from 'vue'
 import { Puzzle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
-import { useSettingsStore } from '../../stores/settings'
+import { useServerSettingsStore } from '../../stores/serverSettings'
 import { usePluginsStore } from '../../stores/sections'
 
 // bridge=true on the private-cloud form: the same dual track as skills/MCP
@@ -12,7 +12,7 @@ import { usePluginsStore } from '../../stores/sections'
 defineProps<{ bridge?: boolean }>()
 
 const { t } = useI18n()
-const settings = useSettingsStore()
+const settings = useServerSettingsStore()
 const plugins = usePluginsStore()
 const pluginState = plugins.state
 const orgLocked = computed(() => settings.isManaged('builtin-plugins'))

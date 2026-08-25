@@ -6,11 +6,13 @@ import type { ChatItem } from '../types'
 import { renderMarkdown } from '../lib/markdown'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
+import { useServerSettingsStore } from '../stores/serverSettings'
 import Avatar from './Avatar.vue'
 
 const props = defineProps<{ item: ChatItem }>()
 const { t } = useI18n()
 const settings = useSettingsStore()
+const serverSettings = useServerSettingsStore()
 const sessions = useSessionStore()
 
 const isText = computed(() => props.item.kind === 'user' || props.item.kind === 'assistant')
@@ -115,7 +117,7 @@ function copyDebugInfo() {
   const srcRun = it.kind === 'assistant' ? it.srcRun : undefined
   const ws = sessions.activeWorkspace
   const sid = sessions.activeId
-  const logDir = settings.logDir || '~/.woca/logs'
+  const logDir = serverSettings.logDir || '~/.woca/logs'
   const lines = [
     '## woca debug context',
     '',
@@ -162,7 +164,7 @@ function copyDebugInfo() {
           <Copy v-else :size="12" />
         </button>
         <button
-          v-if="settings.debugLog"
+          v-if="serverSettings.debugLog"
           class="bubble-action debug"
           :title="t('chat.copyDebug')"
           @click="copyDebugInfo()"

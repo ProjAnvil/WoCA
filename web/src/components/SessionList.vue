@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { toErrorMessage } from '../lib/errors'
+import { useToastStore } from '../stores/toast'
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronRight, Folder, Hand, Loader2, MessageSquare, Plus, Trash2 } from 'lucide-vue-next'
@@ -7,6 +7,7 @@ import { useSessionStore } from '../stores/sessions'
 import type { Session } from '../types'
 
 const { t } = useI18n()
+const toast = useToastStore()
 const store = useSessionStore()
 
 // Collapsed groups (default: expanded); switching the active session's
@@ -50,7 +51,7 @@ async function removeSession(s: Session) {
   try {
     await store.removeSession(s.id)
   } catch (e) {
-    alert(toErrorMessage(e))
+    toast.error(e)
   }
 }
 </script>

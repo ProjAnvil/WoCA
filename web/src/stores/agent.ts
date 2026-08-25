@@ -1,7 +1,7 @@
 import { toErrorMessage } from '../lib/errors'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { PermissionMode, QuotaResponse, ThinkingLevel } from '../types'
+import type { AgentState, PermissionMode, QuotaResponse, ThinkingLevel } from '../types'
 import * as api from '../api/client'
 import i18n from '../i18n'
 import { fmtTokens } from '../lib/format'
@@ -10,6 +10,15 @@ import { fmtTokens } from '../lib/format'
 // index and Object.entries them) but expose getters, so every read resolves
 // through the global composer and stays in sync with locale switches.
 /** UI display labels: permission modes / thinking levels / quota windows. */
+/** Runtime guards for user-supplied mode/level strings (slash commands). */
+export function isPermissionMode(m: string): m is PermissionMode {
+  return m === 'default' || m === 'acceptEdits' || m === 'bypassPermissions' || m === 'readOnly' || m === 'plan'
+}
+
+export function isThinkingLevel(l: string): l is ThinkingLevel {
+  return l === 'off' || l === 'low' || l === 'medium' || l === 'high'
+}
+
 export const MODE_LABELS: Record<string, string> = {
   get default() {
     return i18n.global.t('agent.modes.default.label')
@@ -97,18 +106,12 @@ function resetSuffix(ms: number): string {
  * /api/quota.
  */
 export const useAgentStore = defineStore('agent', () => {
-  const state = ref<{
-    provider: string
-    model: string
-    permission_mode: string
-    plan_mode: boolean
-    thinking: { level: string; budget: number; supported: boolean; levels: string[]; note?: string }
-  } | null>(null)
+  const state = ref<AgentState | null>(null)
   const quota = ref<QuotaResponse | null>(null)
   const quotaLoading = ref(false)
   const quotaError = ref('')
 
-  const mode = computed<PermissionMode | string>(() => state.value?.permission_mode ?? 'default')
+  const mode = computed<PermissionMode>(() => state.value?.permission_mode ?? 'default')
   const modeLabel = computed(() => MODE_LABELS[mode.value] ?? mode.value)
   const thinkingLevel = computed(() => state.value?.thinking.level ?? 'off')
   const thinkingLabel = computed(() => THINKING_LABELS[thinkingLevel.value] ?? thinkingLevel.value)
@@ -194,22 +197,23 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  async function setMode(m: string) {
+  async function setMode(m: PermissionMode) {
     if (!MODE_LABELS[m]) throw new Error(i18n.global.t('agent.unknownMode', { mode: m }))
     await api.setPermissionMode(m)
     if (state.value) state.value.permission_mode = m
   }
 
-  async function setThinking(level: string) {
+  async function setThinking(level: ThinkingLevel) {
     if (!THINKING_LABELS[level]) throw new Error(i18n.global.t('agent.thinking.unknownLevel', { level }))
     if (level !== 'off' && thinkingLevels.value.length && !thinkingLevels.value.includes(level)) {
       throw new Error(i18n.global.t('agent.thinking.unsupportedLevel', { level }))
     }
     const resp = await api.setThinkingLevel(level)
+    const echoed = isThinkingLevel(resp.level) ? resp.level : level
     if (state.value) {
       state.value.thinking = {
         ...state.value.thinking,
-        level: resp.level,
+        level: echoed,
         budget: resp.budget,
       }
     } else {
@@ -218,7 +222,7 @@ export const useAgentStore = defineStore('agent', () => {
         model: '',
         permission_mode: 'default',
         plan_mode: false,
-        thinking: { level: resp.level, budget: resp.budget, supported: true, levels: [] },
+        thinking: { level: echoed, budget: resp.budget, supported: true, levels: [] },
       }
     }
   }

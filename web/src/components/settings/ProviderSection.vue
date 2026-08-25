@@ -2,12 +2,12 @@
 import { computed } from 'vue'
 import { Server } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
-import { useSettingsStore } from '../../stores/settings'
+import { useServerSettingsStore } from '../../stores/serverSettings'
 
 defineProps<{ locked?: boolean }>()
 
 const { t } = useI18n()
-const settings = useSettingsStore()
+const settings = useServerSettingsStore()
 
 // Per-provider defaults shown as input placeholders.
 const providerDefaults = computed<Record<string, { base: string; key: string }>>(() => ({

@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import i18n from '../../i18n'
 
 import MessagePlaneSection from './MessagePlaneSection.vue'
-import { useSettingsStore } from '../../stores/settings'
+import { useServerSettingsStore } from '../../stores/serverSettings'
 import type { AppSettings } from '../../types'
 
 function mountSection(pinia: ReturnType<typeof createPinia>) {
@@ -20,7 +20,7 @@ describe('MessagePlaneSection', () => {
   it('explains the plane is unavailable on non-dispatching deployments', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const settings = useSettingsStore()
+    const settings = useServerSettingsStore()
     settings.server = { managed_fields: [], msg_plane_available: false } as unknown as AppSettings
     const w = mountSection(pinia)
     expect(w.text()).toContain('Enterprise-only')
@@ -32,7 +32,7 @@ describe('MessagePlaneSection', () => {
   it('shows the operating notes on a dispatching deployment', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const settings = useSettingsStore()
+    const settings = useServerSettingsStore()
     settings.server = { managed_fields: [], msg_plane_available: true } as unknown as AppSettings
     const w = mountSection(pinia)
     expect(w.text()).toContain('PG queue')

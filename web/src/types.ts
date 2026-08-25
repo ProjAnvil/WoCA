@@ -197,6 +197,8 @@ export interface WorkspaceFile {
 // --- settings (mirror the Go server's /api/settings JSON) ---
 
 export type CheckpointBackend = 'none' | 'file' | 'sqlite' | 'postgres'
+/** The selectable provider names (mirrors the server's four). */
+export type ProviderName = AppSettings['provider']
 export type MemoryBackend = 'none' | 'memory' | 'sqlite' | 'postgres'
 
 export interface AppSettings {
@@ -212,8 +214,8 @@ export interface AppSettings {
   openai_api_key_set: boolean
   glm_api_key_set: boolean
   deepseek_api_key_set: boolean
-  checkpoint_backend: CheckpointBackend | string
-  memory_backend: MemoryBackend | string
+  checkpoint_backend: CheckpointBackend
+  memory_backend: MemoryBackend
   checkpoint_dir: string
   postgres_url_set: boolean
   database: string
@@ -221,7 +223,7 @@ export interface AppSettings {
   debug_log: boolean
   /** Where observability logs live (~/.woca/logs), empty when unwired. */
   log_dir: string
-  memory_engine: string
+  memory_engine: 'ladym' | 'remote' | 'none'
   ladym_db_path: string
   ladym_embedding: string
   ladym_embedding_model: string
@@ -233,7 +235,7 @@ export interface AppSettings {
   ladym_system2: boolean
   ladym_system2_interval: number
   /** Message plane (run dispatch): pg | pg+nats (live-reloaded). */
-  msg_plane_mode: string
+  msg_plane_mode: 'pg' | 'pg+nats'
   /** False on personal editions — the plane section stays hidden. */
   msg_plane_available: boolean
   msg_plane_nats_url: string
@@ -322,15 +324,15 @@ export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high'
 export interface AgentState {
   provider: string
   model: string
-  permission_mode: PermissionMode | string
+  permission_mode: PermissionMode
   plan_mode: boolean
   thinking: {
-    level: ThinkingLevel | string
+    level: ThinkingLevel
     budget: number
     /** False when the current model has no thinking mode (chip disabled). */
     supported: boolean
     /** Levels the provider template allows, e.g. ['low','medium','high']. */
-    levels: ThinkingLevel[] | string[]
+    levels: ThinkingLevel[]
     /** How the provider maps levels onto its knob (hint shown in the drawer). */
     note?: string
   }
@@ -338,7 +340,8 @@ export interface AgentState {
 
 /** One quota window from the provider's monitor API. */
 export interface QuotaWindow {
-  kind: '5h' | 'weekly' | 'mcp' | string
+  /** Server-defined window label ('5h', 'weekly', 'mcp', …). */
+  kind: string
   /** Share of the window already spent (0-100). */
   used_percent: number
   /** Epoch-ms reset time (0 when unknown). */
@@ -350,7 +353,8 @@ export interface QuotaInfo {
   reason?: string
   source?: string
   /** "plan" (windows) or "balance" (prepaid amount). */
-  type?: 'plan' | 'balance' | string
+  /** 'plan' (windows) or 'balance' (prepaid). */
+  type?: 'plan' | 'balance'
   level?: string
   windows?: QuotaWindow[]
   /** Formatted prepaid amount for balance-type providers (e.g. "CNY 110.35"). */
@@ -417,7 +421,7 @@ export interface ClaudeSkillEntry {
 /** One MCP server detected in ~/.claude.json's global mcpServers. */
 export interface ClaudeMCPServer {
   name: string
-  type: 'http' | 'sse' | 'stdio' | string
+  type: 'http' | 'sse' | 'stdio'
   url?: string
   command?: string
   has_env?: boolean
@@ -434,13 +438,13 @@ export interface ClaudeEnvState {
 /** One built-in capability plugin (browser / pdf …) with runtime state. */
 export interface PluginStatus {
   name: string
-  kind: 'golang' | 'python' | string
+  kind: 'golang' | 'python'
   version?: string
   description?: string
   tools: string[]
   runtime?: string
   enabled: boolean
-  state: 'not_installed' | 'installing' | 'ready' | 'error' | string
+  state: 'not_installed' | 'installing' | 'ready' | 'error'
   detail?: string
   log?: string[]
 }
