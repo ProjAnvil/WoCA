@@ -13,8 +13,8 @@ const settings = useSettingsStore()
 // config plane delivers the backends (and the connection coordinates ride
 // the same package), so the local selects and the DSN input gray out — a
 // save could only ever fail against the managed lock.
-const checkpointLocked = computed(() => settings.isManaged('checkpoint_backend'))
-const memoryStoreLocked = computed(() => settings.isManaged('memory_backend'))
+const checkpointLocked = computed(() => settings.isManaged('checkpoint-backend'))
+const memoryStoreLocked = computed(() => settings.isManaged('memory-backend'))
 </script>
 
 <template>

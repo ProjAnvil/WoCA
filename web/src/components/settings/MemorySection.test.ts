@@ -39,7 +39,7 @@ describe('MemorySection', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const settings = useSettingsStore()
-    settings.server = baseServer(['memory_engine'])
+    settings.server = baseServer(['memory-engine'])
     settings.memoryEngine = 'remote'
     const w = mountSection(pinia)
     const engine = w.findAll('select.field')[0]

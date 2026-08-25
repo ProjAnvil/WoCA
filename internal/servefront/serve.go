@@ -7,7 +7,6 @@ package servefront
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -16,7 +15,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -305,56 +303,10 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 		}
 	}
 
-	// Bind and answer /api/health before the agent build: the build makes
-	// network calls (MCP connect, embedding probe) that can hang for many
-	// seconds under a VPN or a stalled endpoint, which used to leave the
-	// port unbound and the webd daemon timed out on its 5s readiness
-	// probe. Everything except health 503s until the real handler is
-	// swapped in below.
-	ln, err := net.Listen("tcp", addr)
+	hs, scheme, serveErr, swapHandler, err := bindEarly(addr, obs)
 	if err != nil {
-		return fmt.Errorf("listen %s: %w", addr, err)
+		return err
 	}
-	// atomic.Pointer, not atomic.Value: the swapped-in concrete handler
-	// types differ (http.HandlerFunc vs *http.ServeMux) and atomic.Value
-	// panics on inconsistent types.
-	var handler atomic.Pointer[http.Handler]
-	starting := http.Handler(http.HandlerFunc(startingHandler))
-	if obs != nil {
-		// Probes must answer from the first moment the port is bound.
-		starting = obs.Wrap(starting)
-	}
-	handler.Store(&starting)
-	hs := &http.Server{Addr: addr, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		(*handler.Load()).ServeHTTP(w, r)
-	})}
-	serveErr := make(chan error, 1)
-	// Direct TLS (product design §5.3 path C): WOCA_TLS_CERT/WOCA_TLS_KEY
-	// terminate TLS on the business listener itself — for public bridges
-	// without a reverse proxy. (The reverse-proxy paths keep using plain
-	// HTTP on loopback behind Caddy/Tailscale.)
-	tlsCert, tlsKey := os.Getenv("WOCA_TLS_CERT"), os.Getenv("WOCA_TLS_KEY")
-	scheme := "http"
-	if tlsCert != "" && tlsKey != "" {
-		cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
-		if err != nil {
-			_ = hs.Close()
-			return fmt.Errorf("tls: load keypair: %w", err)
-		}
-		ln = tls.NewListener(ln, &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{cert},
-		})
-		scheme = "https"
-	}
-	// Ready file (native client embedding): when WOCA_READY_FILE is set,
-	// the bound URL lands there atomically right after listen — the
-	// embedding process polls this file to discover the random port.
-	if f := os.Getenv("WOCA_READY_FILE"); f != "" && scheme == "http" {
-		_ = os.WriteFile(f, []byte("http://"+ln.Addr().String()), 0o600)
-	}
-	go func() { serveErr <- hs.Serve(ln) }()
-
 	// apikey auth is the multi-tenant posture: every tenant-sharing
 	// subsystem must be remote or off. EnterpriseMemory forbids the
 	// embedded ladyM engine (memory-engine must be remote or none).
@@ -492,7 +444,7 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 	if obs != nil {
 		real = obs.Wrap(real)
 	}
-	handler.Store(&real)
+	swapHandler.Store(&real)
 	if ed.Handler != nil {
 		ed.Handler(real)
 	}

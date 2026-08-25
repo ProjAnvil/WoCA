@@ -405,3 +405,74 @@ func TestResolveAndBridges(t *testing.T) {
 		t.Fatalf("bridges after revoke = %+v", bridges3)
 	}
 }
+
+// TestConfigPullWakeChannel: with Wake wired, a parked blocking query
+// returns within milliseconds of a config write instead of waiting out
+// the 400ms safety-net tick.
+func TestConfigPullWakeChannel(t *testing.T) {
+	db, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "gw.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	version := "v1"
+	wakeCh := make(chan struct{})
+	handler := NewConfigHandler(store, func(context.Context, string) (string, map[string]string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return version, map[string]string{"provider": "openai"}, nil
+	})
+	handler.Wake = func() <-chan struct{} {
+		mu.Lock()
+		defer mu.Unlock()
+		return wakeCh
+	}
+	mux := http.NewServeMux()
+	NewRegistryHandler(store).RegisterRoutes(mux)
+	handler.RegisterRoutes(mux)
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	access, _ := enrollBridge(t, store, ts)
+	done := make(chan time.Duration, 1)
+	go func() {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/gw/config?version=v1&wait=20s", nil)
+		req.Header.Set("Authorization", "Bearer "+access)
+		start := time.Now()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- -1
+			return
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			done <- -1
+			return
+		}
+		done <- time.Since(start)
+	}()
+	time.Sleep(300 * time.Millisecond) // parked
+	mu.Lock()
+	version = "v2"
+	signaled := time.Now()
+	close(wakeCh) // the config-plane write broadcast
+	mu.Unlock()
+
+	select {
+	case elapsed := <-done:
+		if elapsed < 0 {
+			t.Fatal("blocking query failed")
+		}
+		if since := time.Since(signaled); since > 250*time.Millisecond {
+			t.Fatalf("wake took %v (tick-paced, not signal-paced)", since)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocking query did not return after the wake signal")
+	}
+}

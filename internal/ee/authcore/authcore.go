@@ -171,14 +171,23 @@ func (s *Service) Introspect(_ context.Context, token string) (Session, error) {
 	}
 	now := nowMilli()
 	if now > sess.ExpiresAt {
-		// Naturally expired: drop the row, report unauthenticated.
-		_, _ = s.db.Exec(`DELETE FROM core_sessions WHERE token_hash = `+s.ph(0), hashToken(token))
+		// Naturally expired: drop the row, report unauthenticated. A
+		// failed cleanup leaves a dead row the next sweep retires; it
+		// must be visible, not silent.
+		if _, err := s.db.Exec(`DELETE FROM core_sessions WHERE token_hash = `+s.ph(0), hashToken(token)); err != nil {
+			s.log.Warn().Err(err).Msg("authcore: expired-session cleanup failed")
+		}
 		return Session{}, authn.ErrUnauthenticated
 	}
 	if time.Since(time.UnixMilli(sess.LastSeen)) > slideRewriteGap {
-		_, _ = s.db.Exec(
+		// A failed slide silently shortens the session (it re-slides on
+		// the next introspect past the gap) — log so the drift is
+		// observable.
+		if _, err := s.db.Exec(
 			`UPDATE core_sessions SET last_seen = `+s.ph(0)+`, expires_at = `+s.ph(1)+` WHERE token_hash = `+s.ph(2),
-			now, now+sessionTTL.Milliseconds(), hashToken(token))
+			now, now+sessionTTL.Milliseconds(), hashToken(token)); err != nil {
+			s.log.Warn().Err(err).Msg("authcore: session slide failed")
+		}
 		s.keys.TouchLastUsed(sess.KeyPrefix)
 	}
 	return sess, nil

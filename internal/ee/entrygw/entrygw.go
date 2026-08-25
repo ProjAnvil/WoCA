@@ -591,9 +591,15 @@ func (h *RegistryHandler) RegisterRoutes(mux *http.ServeMux) {
 type ConfigHandler struct {
 	gwBase
 	cfg ConfigSource
+	// Wake, when non-nil, is signaled on every config-plane write; the
+	// blocking query selects on it instead of pure polling.
+	Wake func() <-chan struct{}
 }
 
-// NewConfigHandler builds the config-plane pull surface.
+// NewConfigHandler builds the config-plane pull surface. Wake, when set,
+// returns a channel signaled on every config write — the blocking query
+// then returns immediately instead of polling; a 400ms tick stays as the
+// safety net so an unset Wake (or a missed signal) never stalls bridges.
 func NewConfigHandler(store *Store, cfg ConfigSource) *ConfigHandler {
 	return &ConfigHandler{gwBase: gwBase{reg: store, store: store}, cfg: cfg}
 }
@@ -764,7 +770,22 @@ func (h *ConfigHandler) handleConfig(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusNotModified)
 				return
 			}
-			time.Sleep(400 * time.Millisecond)
+			if h.Wake != nil {
+				select {
+				case <-h.Wake():
+				case <-time.After(400 * time.Millisecond):
+					// Safety net: a missed signal must not stall the
+					// bridge's pull loop.
+				case <-r.Context().Done():
+					return
+				}
+			} else {
+				select {
+				case <-time.After(400 * time.Millisecond):
+				case <-r.Context().Done():
+					return
+				}
+			}
 			if version, settings, err = h.cfg(r.Context(), bridgeID); err != nil {
 				writeGW(w, http.StatusInternalServerError, "unavailable")
 				return

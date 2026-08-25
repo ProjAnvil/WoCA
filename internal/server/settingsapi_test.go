@@ -3,12 +3,8 @@ package server
 import (
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
-	"testing/fstest"
-
-	"github.com/rs/zerolog"
 
 	"github.com/projanvil/woca/internal/settings"
 )
@@ -16,8 +12,7 @@ import (
 // TestSettingsAPIDegradedPaths covers the endpoints without a settings store
 // and malformed update bodies.
 func TestSettingsAPIDegradedPaths(t *testing.T) {
-	s := New(Config{Static: fstest.MapFS{}, Logger: zerolog.Nop()})
-	ts := httptest.NewServer(s.Handler())
+	ts := newTestServer(t, Config{})
 	t.Cleanup(ts.Close)
 
 	resp, err := http.Get(ts.URL + "/api/settings")
@@ -44,8 +39,7 @@ func TestSettingsAPIDegradedPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	s2 := New(Config{Static: fstest.MapFS{}, Logger: zerolog.Nop(), Settings: st})
-	ts2 := httptest.NewServer(s2.Handler())
+	ts2 := newTestServer(t, Config{Settings: st})
 	t.Cleanup(ts2.Close)
 	put2, _ := http.NewRequest(http.MethodPut, ts2.URL+"/api/settings", strings.NewReader(`{bad`))
 	badResp, err := http.DefaultClient.Do(put2)
@@ -65,14 +59,10 @@ func TestSettingsFloatPatchAndRebuildModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	s := New(Config{
-		Static:       fstest.MapFS{},
-		Logger:       zerolog.Nop(),
+	ts := newTestServer(t, Config{
 		Settings:     st,
 		RebuildModel: func() error { return modelErr },
 	})
-	ts := httptest.NewServer(s.Handler())
-	t.Cleanup(ts.Close)
 
 	// Temperature exercises the float patch path end to end.
 	status, body := putSettings(t, ts, `{"temperature":0.7,"model":"glm-5.3"}`)
@@ -94,15 +84,11 @@ func TestSettingsRebuildErrorsConcatenate(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	s := New(Config{
-		Static:        fstest.MapFS{},
-		Logger:        zerolog.Nop(),
+	ts := newTestServer(t, Config{
 		Settings:      st,
 		RebuildModel:  func() error { return errors.New("m-err") },
 		RebuildMemory: func() error { return errors.New("mem-err") },
 	})
-	ts := httptest.NewServer(s.Handler())
-	t.Cleanup(ts.Close)
 
 	// One request touching both a model key and a memory key: both rebuild
 	// failures are reported, joined with "; ".
@@ -121,8 +107,7 @@ func TestSettingsSaveFailureAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := New(Config{Static: fstest.MapFS{}, Logger: zerolog.Nop(), Settings: st})
-	ts := httptest.NewServer(s.Handler())
+	ts := newTestServer(t, Config{Settings: st})
 	t.Cleanup(ts.Close)
 
 	// A closed database fails the save: 500, settings unchanged.

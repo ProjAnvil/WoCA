@@ -161,28 +161,30 @@ func (m *managedState) lockedFields() []string {
 			out = append(out, key)
 		}
 	}
-	add("provider", o.Provider)
-	add("model", o.Model)
-	add("anthropic_base_url", o.AnthropicBaseURL)
-	add("openai_base_url", o.OpenAIBaseURL)
-	add("checkpoint_backend", o.CheckpointBackend)
-	add("memory_backend", o.MemoryBackend)
-	add("checkpoint_dir", o.CheckpointDir)
-	add("output_style", o.OutputStyle)
-	add("memory_engine", o.MemoryEngine)
-	add("model_whitelist", o.ModelWhitelist)
-	add("checkpoint-pg-host", o.CheckpointPGHost)
-	add("memory-pg-host", o.MemoryPGHost)
-	add("ladym-endpoint", o.LadyMEndpoint)
-	add("ladym-api-username", o.LadyMAPIUsername)
+	// The canonical key spelling is the Key* constant vocabulary (the
+	// settings.Apply CLI surface) — one spelling everywhere, never a mix.
+	add(KeyProvider, o.Provider)
+	add(KeyModel, o.Model)
+	add(KeyAnthropicBaseURL, o.AnthropicBaseURL)
+	add(KeyOpenAIBaseURL, o.OpenAIBaseURL)
+	add(KeyCheckpoint, o.CheckpointBackend)
+	add(KeyMemory, o.MemoryBackend)
+	add(KeyCheckpointDir, o.CheckpointDir)
+	add(KeyOutputStyle, o.OutputStyle)
+	add(KeyMemoryEngine, o.MemoryEngine)
+	add(KeyModelWhitelist, o.ModelWhitelist)
+	add(KeyCheckpointPGHost, o.CheckpointPGHost)
+	add(KeyMemoryPGHost, o.MemoryPGHost)
+	add(KeyLadyMEndpoint, o.LadyMEndpoint)
+	add(KeyLadyMAPIUsername, o.LadyMAPIUsername)
 	if len(o.BuiltinPlugins) > 0 {
-		out = append(out, "builtin-plugins")
+		out = append(out, KeyBuiltinPlugins)
 	}
 	if o.MaxTokens != 0 {
-		out = append(out, "max_tokens")
+		out = append(out, KeyMaxTokens)
 	}
 	if o.Temperature != 0 {
-		out = append(out, "temperature")
+		out = append(out, KeyTemperature)
 	}
 	return out
 }
@@ -200,20 +202,20 @@ func (m *managedState) checkWritable(cfg Settings) error {
 		managed string
 		desired string
 	}{
-		{"provider", o.Provider, cfg.Provider},
-		{"model", o.Model, cfg.Model},
-		{"anthropic_base_url", o.AnthropicBaseURL, cfg.AnthropicBaseURL},
-		{"openai_base_url", o.OpenAIBaseURL, cfg.OpenAIBaseURL},
-		{"checkpoint_backend", o.CheckpointBackend, cfg.CheckpointBackend},
-		{"memory_backend", o.MemoryBackend, cfg.MemoryBackend},
-		{"checkpoint_dir", o.CheckpointDir, cfg.CheckpointDir},
-		{"output_style", o.OutputStyle, cfg.OutputStyle},
-		{"memory_engine", o.MemoryEngine, cfg.MemoryEngine},
-		{"model_whitelist", o.ModelWhitelist, cfg.ModelWhitelist},
-		{"checkpoint-pg-host", o.CheckpointPGHost, cfg.CheckpointPGHost},
-		{"memory-pg-host", o.MemoryPGHost, cfg.MemoryPGHost},
-		{"ladym-endpoint", o.LadyMEndpoint, cfg.LadyMEndpoint},
-		{"ladym-api-username", o.LadyMAPIUsername, cfg.LadyMAPIUsername},
+		{KeyProvider, o.Provider, cfg.Provider},
+		{KeyModel, o.Model, cfg.Model},
+		{KeyAnthropicBaseURL, o.AnthropicBaseURL, cfg.AnthropicBaseURL},
+		{KeyOpenAIBaseURL, o.OpenAIBaseURL, cfg.OpenAIBaseURL},
+		{KeyCheckpoint, o.CheckpointBackend, cfg.CheckpointBackend},
+		{KeyMemory, o.MemoryBackend, cfg.MemoryBackend},
+		{KeyCheckpointDir, o.CheckpointDir, cfg.CheckpointDir},
+		{KeyOutputStyle, o.OutputStyle, cfg.OutputStyle},
+		{KeyMemoryEngine, o.MemoryEngine, cfg.MemoryEngine},
+		{KeyModelWhitelist, o.ModelWhitelist, cfg.ModelWhitelist},
+		{KeyCheckpointPGHost, o.CheckpointPGHost, cfg.CheckpointPGHost},
+		{KeyMemoryPGHost, o.MemoryPGHost, cfg.MemoryPGHost},
+		{KeyLadyMEndpoint, o.LadyMEndpoint, cfg.LadyMEndpoint},
+		{KeyLadyMAPIUsername, o.LadyMAPIUsername, cfg.LadyMAPIUsername},
 		{"ladym_db_path", o.LadyMDBPath, cfg.LadyMDBPath},
 		{"ladym_embedding", o.LadyMEmbedding, cfg.LadyMEmbedding},
 		{"ladym_embedding_model", o.LadyMEmbeddingModel, cfg.LadyMEmbeddingModel},

@@ -30,6 +30,24 @@ import (
 	"github.com/projanvil/woca/internal/tools"
 )
 
+// newTestServer builds a server from cfg and serves it for the test's
+// lifetime — the construct-serve-cleanup dance every server test repeated
+// inline. A nil Static gets an empty MapFS so the SPA handler never reads
+// a missing embed.
+func newTestServer(t *testing.T, cfg Config) *httptest.Server {
+	t.Helper()
+	if cfg.Static == nil {
+		cfg.Static = fstest.MapFS{}
+	}
+	if cfg.Logger.GetLevel() == zerolog.NoLevel {
+		cfg.Logger = zerolog.Nop()
+	}
+	s := New(cfg)
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
 func newTestAgent(t *testing.T) *agent.Agent {
 	t.Helper()
 	// First response asks a question (interrupts), second answers in prose.

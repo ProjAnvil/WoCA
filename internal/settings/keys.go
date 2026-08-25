@@ -57,6 +57,7 @@ const (
 	KeyMsgPlaneNATSURL       = "msg-plane-nats-url"
 	KeyMsgPlaneSubject       = "msg-plane-subject"
 	KeyModelWhitelist        = "model-whitelist"
+	KeyOutputStyle           = "output-style"
 )
 
 // DefaultMsgPlaneSubject is the default run-dispatch notification subject.

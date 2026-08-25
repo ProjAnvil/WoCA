@@ -8,7 +8,7 @@ const settings = useSettingsStore()
 // The memory domain is operator-owned in the private-cloud form: when the
 // engine key rides the managed overlay the whole section locks (the
 // domain is configured in the config console, not on the bridge).
-const locked = () => settings.isManaged('memory_engine')
+const locked = () => settings.isManaged('memory-engine')
 </script>
 
 <template>
