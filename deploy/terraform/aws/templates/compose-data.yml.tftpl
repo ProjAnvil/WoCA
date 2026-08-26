@@ -1,0 +1,55 @@
+# Data node compose — mirrors docker-compose.full.yml woca-pg-primary /
+# woca-pg-replica (both on one node; the replica reaches the primary by
+# compose DNS). initdb scripts and the replica bootstrap come from
+# /etc/woca/pg (rendered by terraform from deploy/selfhosted/initdb + pg).
+name: woca-private-data
+
+services:
+  woca-pg-primary:
+    image: postgres:16-alpine
+    container_name: woca-pg-primary
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: woca
+      POSTGRES_PASSWORD: $${WOCA_PG_PASSWORD:?set in .env}
+      POSTGRES_DB: woca
+      WOCA_PG_REPL_PASSWORD: $${WOCA_PG_REPL_PASSWORD:?set in .env}
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=16
+      - -c
+      - max_replication_slots=16
+      - -c
+      - listen_addresses=*
+    ports:
+      - "5432:5432" # for the app/mgmt nodes' data-leg ENIs
+    volumes:
+      - /etc/woca/pg:/docker-entrypoint-initdb.d:ro
+      - /var/lib/woca-data/pg-primary:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U woca -d woca"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  woca-pg-replica:
+    image: postgres:16-alpine
+    container_name: woca-pg-replica
+    restart: unless-stopped
+    depends_on:
+      woca-pg-primary: { condition: service_healthy }
+    environment:
+      WOCA_PG_PRIMARY_HOST: woca-pg-primary
+      WOCA_PG_REPL_PASSWORD: $${WOCA_PG_REPL_PASSWORD:?set in .env}
+    entrypoint: /usr/local/bin/init-replica.sh
+    volumes:
+      - /etc/woca/pg/init-replica.sh:/usr/local/bin/init-replica.sh:ro
+      - /var/lib/woca-data/pg-replica:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U woca"]
+      interval: 5s
+      timeout: 3s
+      retries: 30

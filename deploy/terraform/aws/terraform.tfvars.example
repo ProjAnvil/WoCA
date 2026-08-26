@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars and fill in. Passwords left empty are
+# generated (see terraform output, sensitive).
+
+region            = "us-east-1"
+availability_zone = "us-east-1a"
+arch              = "arm64"
+instance_type     = "t4g.medium"
+
+key_name   = "your-ec2-key"
+admin_cidr = "203.0.113.10/32" # your admin range — SSH only from here
+
+app_count   = "1"   # 2 needs the shared sessions volume (README)
+woca_version = "v0.0.0" # the release tag pushed to ECR
+
+# allow_dmz_egress = true  # first-boot image pulls only — lock it back

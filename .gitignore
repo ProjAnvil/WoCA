@@ -22,3 +22,8 @@ ee/opsconsole-web/node_modules/
 
 # IDE
 .idea/
+
+# terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate*

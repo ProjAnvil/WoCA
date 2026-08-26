@@ -1,0 +1,68 @@
+# App node compose — mirrors docker-compose.full.yml woca-server /
+# woca-worker / woca-tenant (one of each per node; scale by node count).
+# The node's ENIs carry the data/mq/memory/mgmt legs, so every address
+# below is reachable in-zone.
+name: woca-private-app
+
+services:
+  woca-server:
+    image: ${images["woca-server"]}
+    container_name: woca-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080" # business entry (gateway nginx upstream)
+      - "8090:8090" # service-plane listener (WOCA_GW_ADDR)
+    environment:
+      WOCA_DB: "${nacos_url}/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_NACOS_URL: "${nacos_url}"
+      WOCA_AUTH: apikey
+      WOCA_RUN_DISPATCH: "queue"
+      WOCA_RUNS_OFF_HOST: "true"
+      WOCA_SESSION_DIR: /var/lib/woca-data/sessions
+      WOCA_HOME: /var/lib/woca/home
+      WOCA_GW_ADDR: ":8090"
+      WOCA_CONSOLE_USER: $${WOCA_CONSOLE_USER:-}
+      WOCA_CONSOLE_PASSWORD: $${WOCA_CONSOLE_PASSWORD:-}
+    volumes:
+      - /var/lib/woca-data/sessions:/var/lib/woca/sessions
+      - /var/lib/woca/home:/var/lib/woca/home
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  woca-worker:
+    image: ${images["woca-worker"]}
+    container_name: woca-worker
+    restart: unless-stopped
+    ports:
+      - "9091:9091" # OBS_ADDR probe
+    environment:
+      WOCA_DB: "${nacos_url}/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_NACOS_URL: "${nacos_url}"
+      WOCA_OBS_ADDR: ":9091"
+      WOCA_SESSION_DIR: /var/lib/woca-data/sessions
+      WOCA_HOME: /var/lib/woca/home
+    volumes:
+      - /var/lib/woca-data/sessions:/var/lib/woca/sessions
+      - /var/lib/woca/home:/var/lib/woca/home
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9091/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # Admin toolbox (`docker exec` tenant/key commands). Same legs as the
+  # compose original (edge+pg+mq) via this node's ENIs.
+  woca-tenant:
+    image: ${images["woca-tenant"]}
+    container_name: woca-tenant
+    restart: unless-stopped
+    environment:
+      WOCA_DB: "${nacos_url}/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_HOME: /var/lib/woca/home
+    volumes:
+      - /var/lib/woca/home:/var/lib/woca/home

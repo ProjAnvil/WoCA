@@ -1,0 +1,8 @@
+#!/bin/bash
+# Mirrors deploy/selfhosted/initdb/03-allow-replication.sh with the
+# hardcoded compose pg-segment CIDR parameterized to this deployment's
+# data subnet.
+set -e
+echo "host replication woca_repl ${data_cidr} scram-sha-256" >> "$PGDATA/pg_hba.conf"
+echo "woca-private: pg_hba replication entry added (${data_cidr})"
+# Nothing to reload on first boot (server not up yet inside initdb phase).

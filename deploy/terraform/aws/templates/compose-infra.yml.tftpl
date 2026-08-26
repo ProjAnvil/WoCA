@@ -1,0 +1,217 @@
+# Infra node compose — the platform runtime substrate, merging the compose
+# full stack's woca-mq (nats-js-1/2/3 + nats-init) and ladym-data
+# (ladym-pg + ladym-api-1/2 + ladym-worker) networks plus nacos.
+#
+# nacos rides infra (not mgmt) because nacosrt is a hard startup gate for
+# every business role: it is runtime infrastructure. The mgmt zone keeps
+# only the human consoles, so an mgmt outage never blocks role
+# restarts/scale-outs.
+#
+# Published host ports serve the nodes whose ENI legs land in this subnet:
+#   4222 NATS (app, mgmt)  8080 ladym-api (dmz, app)  8848/9848 nacos (all)
+name: woca-private-infra
+
+x-nats: &nats
+  image: nats:2.11-alpine
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8222/healthz || exit 1"]
+    interval: 5s
+    timeout: 3s
+    retries: 30
+
+services:
+  # ── message plane: NATS JetStream cluster (mirrors full verbatim) ──────
+  nats-js-1:
+    <<: *nats
+    container_name: woca-nats-1
+    command:
+      - nats-server
+      - -js
+      - --name
+      - nats-js-1
+      - --cluster_name
+      - WOCA_PRIVATE
+      - --cluster
+      - nats://0.0.0.0:6222
+      - --routes
+      - nats://nats-js-1:6222,nats://nats-js-2:6222,nats://nats-js-3:6222
+      - --http_port
+      - "8222"
+      - --store_dir
+      - /data
+    ports:
+      - "4222:4222"
+    volumes:
+      - /var/lib/woca-data/nats-1:/data
+
+  nats-js-2:
+    <<: *nats
+    container_name: woca-nats-2
+    command:
+      - nats-server
+      - -js
+      - --name
+      - nats-js-2
+      - --cluster_name
+      - WOCA_PRIVATE
+      - --cluster
+      - nats://0.0.0.0:6222
+      - --routes
+      - nats://nats-js-1:6222,nats://nats-js-2:6222,nats://nats-js-3:6222
+      - --http_port
+      - "8222"
+      - --store_dir
+      - /data
+    volumes:
+      - /var/lib/woca-data/nats-2:/data
+
+  nats-js-3:
+    <<: *nats
+    container_name: woca-nats-3
+    command:
+      - nats-server
+      - -js
+      - --name
+      - nats-js-3
+      - --cluster_name
+      - WOCA_PRIVATE
+      - --cluster
+      - nats://0.0.0.0:6222
+      - --routes
+      - nats://nats-js-1:6222,nats://nats-js-2:6222,nats://nats-js-3:6222
+      - --http_port
+      - "8222"
+      - --store_dir
+      - /data
+    volumes:
+      - /var/lib/woca-data/nats-3:/data
+
+  # One-shot stream provisioning (idempotent), same as the original.
+  nats-init:
+    image: synadia/nats-box:latest
+    container_name: woca-nats-init
+    depends_on:
+      nats-js-1: { condition: service_healthy }
+      nats-js-2: { condition: service_started }
+      nats-js-3: { condition: service_started }
+    environment:
+      NATS_URL: nats://nats-js-1:4222
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        nats stream info WOCA_RUNS >/dev/null 2>&1 || \
+        nats stream create WOCA_RUNS \
+          --subjects 'runs.>' \
+          --storage file --retention work --replicas 3 --discard new \
+          --max-msgs=-1 --max-msg-size=-1 \
+          --dupe-window 2m --max-age 168h --max-bytes 2147483648
+        nats stream info WOCA_EVENTS >/dev/null 2>&1 || \
+        nats stream create WOCA_EVENTS \
+          --subjects 'events.>' \
+          --storage file --retention limits --replicas 3 --discard old \
+          --max-msgs=-1 --max-msg-size=-1 \
+          --dupe-window 2m --max-age 24h --max-bytes 5368709120
+        echo "woca-private JetStream streams ready"
+    restart: "no"
+
+  # ── memory plane: ladyM (dict-baked image, no runtime download) ────────
+  ladym-pg:
+    image: pgvector/pgvector:pg17
+    container_name: woca-ladym-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ladym
+      POSTGRES_PASSWORD: $${LADYM_PG_PASSWORD:?set in .env}
+      POSTGRES_DB: ladym
+    volumes:
+      - /var/lib/woca-data/ladym-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ladym"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  ladym-api-1:
+    image: ${images["ladym-enterprise"]}
+    container_name: woca-ladym-api-1
+    restart: unless-stopped
+    depends_on:
+      ladym-pg: { condition: service_healthy }
+    environment:
+      LADYM_STORE_BACKEND: postgres
+      LADYM_STORE_DSN: "postgres://ladym:$${LADYM_PG_PASSWORD}@ladym-pg:5432/ladym"
+    ports:
+      - "8080:8080"
+
+  ladym-api-2:
+    image: ${images["ladym-enterprise"]}
+    container_name: woca-ladym-api-2
+    restart: unless-stopped
+    depends_on:
+      ladym-pg: { condition: service_healthy }
+    environment:
+      LADYM_STORE_BACKEND: postgres
+      LADYM_STORE_DSN: "postgres://ladym:$${LADYM_PG_PASSWORD}@ladym-pg:5432/ladym"
+
+  ladym-worker:
+    image: ${images["ladym-enterprise"]}
+    container_name: woca-ladym-worker
+    restart: unless-stopped
+    depends_on:
+      ladym-pg: { condition: service_healthy }
+    environment:
+      LADYM_STORE_BACKEND: postgres
+      LADYM_STORE_DSN: "postgres://ladym:$${LADYM_PG_PASSWORD}@ladym-pg:5432/ladym"
+    command: ["worker"]
+
+  # ── registry + config delivery: nacos (moved from the compose mgmt net) ─
+  nacos:
+    image: nacos/nacos-server:v2.4.3
+    container_name: woca-nacos
+    restart: unless-stopped
+    ports:
+      - "8848:8848" # HTTP API
+      - "9848:9848" # gRPC (v2 clients)
+    environment:
+      MODE: standalone
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8848/nacos/v1/console/health/readiness || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  # One-shot address publish — same entries as the original, with hosts
+  # resolved to this deployment's node IPs.
+  nacos-init:
+    image: curlimages/curl:8.10.1
+    container_name: woca-nacos-init
+    depends_on:
+      nacos: { condition: service_healthy }
+    environment:
+      WOCA_PG_PASSWORD: $${WOCA_PG_PASSWORD:?set in .env}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        publish() {  # dataId content
+          curl -sf -X POST "http://nacos:8848/nacos/v1/cs/configs" \
+            --data-urlencode "dataId=$$1" \
+            --data-urlencode "group=DEFAULT_GROUP" \
+            --data-urlencode "content=$$2"
+          # A fresh nacos write is briefly invisible to reads (derby
+          # settling); read back until the entry serves its content.
+          i=0
+          until [ "$$(curl -sf "http://nacos:8848/nacos/v1/cs/configs?dataId=$$1&group=DEFAULT_GROUP")" = "$$2" ]; do
+            i=$$((i+1)); [ $$i -gt 30 ] && { echo "nacos read-back of $$1 never settled"; exit 1; }
+            sleep 1
+          done
+          echo "published $$1"
+        }
+        publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@${pg_host}:5432/woca?sslmode=disable"
+        publish woca-ops.upstream "${app_upstream}"
+        publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
+        echo "nacos service addresses ready"
+    restart: "no"

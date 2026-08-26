@@ -1,0 +1,44 @@
+#cloud-config
+# Node ${node}: woca private-deploy zone node (compose subset + .env,
+# rendered by terraform — see deploy/terraform/aws/stack.tf).
+
+write_files:
+  - path: /etc/woca/.env
+    permissions: '0600'
+    content: |
+      ${indent(6, env)}
+%{ for path, content in files ~}
+  - path: /etc/woca/${path}
+    permissions: '0644'
+    content: |
+      ${indent(6, content)}
+%{ endfor ~}
+  - path: /usr/local/bin/woca-up.sh
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      # Boots the node's zone compose subset (idempotent).
+      set -e
+%{ if mount_data ~}
+      # Data EBS (/dev/sdf → nvme): format once, mount, lay out volumes.
+      DISK=$(lsblk -dpno NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v '/dev/nvme0n1$' | head -1 || true)
+      if [ -n "$DISK" ] && ! blkid "$DISK" >/dev/null 2>&1; then
+        mkfs.xfs "$DISK"
+      fi
+      if [ -n "$DISK" ]; then
+        mkdir -p /var/lib/woca-data
+        grep -q woca-data /etc/fstab || echo "$DISK /var/lib/woca-data xfs defaults,nofail 0 2" >> /etc/fstab
+        mount -a || true
+      fi
+      mkdir -p /var/lib/woca-data/pg /var/lib/woca-data/sessions /var/lib/woca/home
+%{ else ~}
+      mkdir -p /var/lib/woca/home
+%{ endif ~}
+      cd /etc/woca
+      docker compose pull --ignore-pull-failures || true
+      exec docker compose up -d
+
+runcmd:
+  - dnf install -y docker docker-compose-plugin
+  - systemctl enable --now docker
+  - /usr/local/bin/woca-up.sh

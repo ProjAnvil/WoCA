@@ -1,0 +1,21 @@
+# DMZ node compose — mirrors docker-compose.full.yml `gateway`, the only
+# host-publishing service. Upstreams are cross-node ENI addresses now.
+name: woca-private-dmz
+
+services:
+  gateway:
+    image: nginx:1.29-alpine
+    container_name: woca-gateway
+    restart: unless-stopped
+    ports:
+      - "80:80"     # business entry (NLB :80)
+      - "8082:8082" # skill-svc SPA (NLB :9082)
+      - "8083:8083" # discovery & config status (NLB :9083)
+      - "8086:8086" # config console (NLB :9086)
+    volumes:
+      - /etc/woca/nginx/nginx-full.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6

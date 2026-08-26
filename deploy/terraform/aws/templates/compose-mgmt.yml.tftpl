@@ -1,0 +1,48 @@
+# Mgmt node compose — the human operational surfaces only: woca-config
+# (settings management + config console) and woca-ops (tenant ops
+# console). nacos moved to the infra zone (hard runtime gate ⇒
+# infrastructure); the mgmt zone may fail without blocking business
+# roles. Mirrors docker-compose.full.yml minus the nacos services.
+name: woca-private-mgmt
+
+services:
+  # Config plane: settings management + config console. Published for the
+  # gateway's mgmt leg (nginx :8086 upstream).
+  woca-config:
+    image: ${images["woca-config"]}
+    container_name: woca-config
+    restart: unless-stopped
+    environment:
+      WOCA_DB: "${nacos_url}/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_NACOS_URL: "${nacos_url}"
+      WOCA_OBS_ADDR: ":9093"
+      WOCA_HOME: /var/lib/woca/home
+      WOCA_CONSOLE_USER: $${WOCA_CONSOLE_USER:-}
+      WOCA_CONSOLE_PASSWORD: $${WOCA_CONSOLE_PASSWORD:-}
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/lib/woca/home:/var/lib/woca/home
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # Tenant ops console (loopback publish only — reach it over the SSH
+  # tunnel, like the compose stack's dev posture).
+  woca-ops:
+    image: ${images["woca-ops"]}
+    container_name: woca-ops
+    restart: unless-stopped
+    environment:
+      WOCA_OPS_ADDR: ":8091"
+      WOCA_OPS_UPSTREAM: "${nacos_url}/DEFAULT_GROUP/woca-ops.upstream"
+      WOCA_HOME: /var/lib/woca/home
+      WOCA_CONSOLE_USER: $${WOCA_CONSOLE_USER:-}
+      WOCA_CONSOLE_PASSWORD: $${WOCA_CONSOLE_PASSWORD:-}
+    ports:
+      - "127.0.0.1:9091:8091"
+    volumes:
+      - /var/lib/woca/home:/var/lib/woca/home
