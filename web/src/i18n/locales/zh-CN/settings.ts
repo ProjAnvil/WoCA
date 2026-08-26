@@ -30,6 +30,8 @@ export default {
 
   cloudaccess: '云接入',
   edge: '接入点',
+  remotes: '远端连接',
+  nativeConnect: '连接',
   managed: '远端配置',
 
   },
@@ -114,6 +116,25 @@ export default {
     addPlaceholder: 'br_xxxxxxxx 或 https://edge.example.com',
     addButton: '连接',
     addInvalid: '无法识别：请输入 bridge id（字母、数字、- _ .）或以 http(s):// 开头的 URL',
+  },
+  nativeConnect: {
+    title: '切换连接',
+    intro: '断开后返回连接页：可重新选择已保存的连接、使用本机模式，或添加新的地址。',
+    button: '断开并切换连接',
+    hint: '连接信息只保存在本机。断开时会尝试注销服务器上的会话，并清除本机会话。',
+  },
+  remotes: {
+    title: '远端连接（接入点切换）',
+    intro: '本 bridge 保存的远端地址列表（存于 bridge 数据库）。点击切换将整页跳转到目标地址，由其登录页接管。',
+    lastUsed: '上次使用',
+    empty: '尚未保存远端地址。',
+    refresh: '刷新',
+    remove: '删除',
+    addLabel: '添加远端地址',
+    addHint: '输入另一个 bridge 或接入点的完整 URL（http(s)://…）',
+    addPlaceholder: 'https://edge.example.com',
+    labelPlaceholder: '备注（可选）',
+    addButton: '添加',
   },
   plugins: {
     title: '插件',

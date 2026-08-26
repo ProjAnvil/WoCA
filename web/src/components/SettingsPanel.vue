@@ -8,6 +8,7 @@ import {
   CloudUpload,
   Cpu,
   Database,
+  Globe,
   LogOut,
   Network,
   Palette,
@@ -33,6 +34,9 @@ import StorageSection from './settings/StorageSection.vue'
 import AdminSection from './settings/AdminSection.vue'
 import CloudAccessSection from './settings/CloudAccessSection.vue'
 import EdgeSwitchSection from './settings/EdgeSwitchSection.vue'
+import NativeConnectSection from './settings/NativeConnectSection.vue'
+import RemotesSection from './settings/RemotesSection.vue'
+import { getNativeBridge } from '../native/bridge'
 import ManagedSection from './settings/ManagedSection.vue'
 import { getEdgeBridges, type EdgeBridge } from '../api/client'
 import MessagePlaneSection from './settings/MessagePlaneSection.vue'
@@ -77,6 +81,17 @@ const sections = computed(() => [
   // origins, so nothing else changes shape.
   ...(edgeBridges.value?.length
     ? [{ id: 'edge', label: 'settings.nav.edge', icon: Network }]
+    : []),
+  // Remote profiles (接入点切换, bridge 形态): direct-bridge origins keep
+  // their own saved remote list in the bridge's settings database.
+  ...(isBridge.value && !edgeBridges.value?.length
+    ? [{ id: 'remotes', label: 'settings.nav.remotes', icon: Globe }]
+    : []),
+  // The native-only connection switcher: web editions switch bridges via
+  // the access-point section above; the app switches profiles via its
+  // own connect view, and this entry is the way back to it.
+  ...(getNativeBridge()
+    ? [{ id: 'nativeconnect', label: 'settings.nav.nativeConnect', icon: Plug }]
     : []),
   // The bridge cloud-access page (edge URL / enrollment, §6.5) and the
   // read-only admin page (sessions/audit — v1.7: no key management on
@@ -223,6 +238,8 @@ onBeforeUnmount(() => {
             :current="statusInfo?.cloud?.bridge_id"
             @refresh="refreshEdgeBridges"
           />
+          <RemotesSection v-if="active === 'remotes'" />
+          <NativeConnectSection v-if="active === 'nativeconnect'" />
 
           <!-- Shared datalist for the free-form model inputs -->
           <datalist id="woca-model-suggestions">

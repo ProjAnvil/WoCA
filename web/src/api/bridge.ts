@@ -168,3 +168,39 @@ export interface AuditRow {
 export function listAudit(limit = 100): Promise<AuditRow[]> {
   return request(`/api/audit?limit=${limit}`, undefined, i18n.global.t('api.requestFailed'))
 }
+
+// --- remote profiles (bridge 形态的接入点切换: saved remote origins in
+// the bridge's settings DB; switching is a full navigation, the target's
+// own login gate takes over) ---
+
+export interface WebProfile {
+  id: string
+  url: string
+  label?: string
+  added_at: number
+}
+
+export interface WebProfiles {
+  profiles: WebProfile[]
+  last?: string
+}
+
+export function getWebProfiles(): Promise<WebProfiles> {
+  return request('/api/profiles', undefined, i18n.global.t('api.requestFailed'))
+}
+
+export function addWebProfile(url: string, label = ''): Promise<WebProfile> {
+  return postJSON('/api/profiles', { url, label }, i18n.global.t('api.requestFailed'))
+}
+
+export function useWebProfile(id: string): Promise<WebProfile> {
+  return postJSON(`/api/profiles/${encodeURIComponent(id)}/use`, {}, i18n.global.t('api.requestFailed'))
+}
+
+export function deleteWebProfile(id: string): Promise<WebProfiles> {
+  return request(
+    `/api/profiles/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+    i18n.global.t('api.requestFailed'),
+  )
+}

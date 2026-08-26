@@ -224,6 +224,11 @@ func main() {
 			// settings:read — the environment-info class every member
 			// reads (the claudeenv page's scope).
 			bridge.ManagedInventoryRoutes(mux, scoped(authz.ScopeSettingsRead))
+			// Remote profiles for the embedded web (bridge 形态的接入点
+			// 切换): saved remote origins in the bridge's settings DB.
+			if st := currentStore.Load(); st != nil {
+				bridge.WebProfileRoutes(mux, bridge.NewLocalKV(st.DB()), scoped)
+			}
 			mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
 				payload := map[string]any{
 					"edition": "bridge",

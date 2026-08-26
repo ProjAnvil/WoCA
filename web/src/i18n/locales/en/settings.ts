@@ -30,6 +30,10 @@ export default {
 
     cloudaccess: 'Cloud access',
     edge: 'Access point',
+
+    remotes: 'Remotes',
+
+    nativeConnect: 'Connection',
     managed: 'Remote config',
 
   },
@@ -117,6 +121,25 @@ export default {
     addPlaceholder: 'br_xxxxxxxx or https://edge.example.com',
     addButton: 'Connect',
     addInvalid: 'Unrecognized: enter a bridge id (letters, digits, - _ .) or a URL starting with http(s)://',
+  },
+  nativeConnect: {
+    title: 'Switch connection',
+    intro: 'Disconnect to return to the connect view: pick a saved connection, use local mode, or add a new address.',
+    button: 'Disconnect and switch',
+    hint: 'Connection details stay on this device. Disconnecting signs out of the server and clears the local session.',
+  },
+  remotes: {
+    title: 'Remotes (access-point switching)',
+    intro: 'Remote origins saved on this bridge (stored in its database). Picking one navigates the whole page there; its login gate takes over.',
+    lastUsed: 'Last used',
+    empty: 'No remote origins saved yet.',
+    refresh: 'Refresh',
+    remove: 'Remove',
+    addLabel: 'Add a remote origin',
+    addHint: 'Full URL of another bridge or access point (http(s)://…)',
+    addPlaceholder: 'https://edge.example.com',
+    labelPlaceholder: 'Label (optional)',
+    addButton: 'Add',
   },
   plugins: {
     title: 'Plugins',

@@ -122,4 +122,36 @@ describe('SettingsPanel', () => {
     expect(reload).toHaveBeenCalledTimes(1)
     vi.unstubAllGlobals()
   })
+
+  it('native mode shows the connect entry and disconnects via the binding', async () => {
+    const reload = vi.fn()
+    vi.stubGlobal('location', {
+      get href() {
+        return 'http://localhost:34115/'
+      },
+      set href(_v: string) {
+        /* navigation no-op */
+      },
+      reload,
+    })
+    const logout = vi.fn().mockResolvedValue({ state: 'authorization_required' })
+    ;(window as unknown as { go: unknown }).go = { main: { App: { Logout: logout } } }
+
+    api.getStatus.mockResolvedValue(bridgeStatus())
+    const { w } = mountPanel()
+    await flushPromises()
+
+    // The native-only entry appears alongside the bridge sections.
+    const entry = w.findAll('.settings-nav-item').find((b) => b.text() === 'Connection')
+    expect(entry).toBeTruthy()
+    await entry!.trigger('click')
+
+    await w.get('[data-testid="native-disconnect"]').trigger('click')
+    await flushPromises()
+    expect(logout).toHaveBeenCalledTimes(1)
+    expect(reload).toHaveBeenCalledTimes(1)
+
+    delete (window as unknown as { go: unknown }).go
+    vi.unstubAllGlobals()
+  })
 })
