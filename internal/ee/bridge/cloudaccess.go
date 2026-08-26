@@ -188,7 +188,13 @@ func NewCloudAccess(st *settings.Store, log zerolog.Logger) *CloudAccess {
 
 // legacyStatePath resolves the v1.4 state file inside the effective woca
 // home (WOCA_HOME first — containers repoint it — then the OS home).
-func legacyStatePath() string {
+func legacyStatePath() string { return GatewayStatePath() }
+
+// GatewayStatePath resolves the gateway state file inside the effective
+// woca home (WOCA_HOME first — containers repoint it — then the OS home).
+// The CLI commands (gateway enroll/request) and serve share it, so a
+// manual enrollment lands exactly where serve's legacy migration reads.
+func GatewayStatePath() string {
 	if home := os.Getenv("WOCA_HOME"); home != "" {
 		return filepath.Join(home, "bridge-gateway.json")
 	}

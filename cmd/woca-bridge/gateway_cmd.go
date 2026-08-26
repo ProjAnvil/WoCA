@@ -7,7 +7,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/rs/zerolog"
 
@@ -35,14 +34,12 @@ func newGatewayCmd() *cobra.Command {
 			if url == "" || token == "" {
 				return fmt.Errorf("gateway enroll requires --url and --token (or WOCA_GATEWAY_URL / WOCA_ENROLL_TOKEN)")
 			}
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return err
-			}
 			insecure, _ := cmd.Flags().GetBool("insecure")
 			g := bridge.NewGatewayClient(bridge.GatewayConfig{
 				URL: url, EnrollmentToken: token,
-				StatePath: filepath.Join(home, ".woca", "bridge-gateway.json"),
+				// Shared with serve: WOCA_HOME-aware, so the enrollment
+				// lands where serve (and its legacy migration) reads it.
+				StatePath: bridge.GatewayStatePath(),
 				Insecure:  insecure,
 			}, zerolog.Nop())
 			if err := g.Enroll(cmd.Context(), token); err != nil {
@@ -74,14 +71,11 @@ func newGatewayCmd() *cobra.Command {
 			if url == "" {
 				return fmt.Errorf("gateway request requires --url (or WOCA_GATEWAY_URL)")
 			}
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return err
-			}
 			insecure, _ := cmd.Flags().GetBool("insecure")
 			g := bridge.NewGatewayClient(bridge.GatewayConfig{
-				URL: url, StatePath: filepath.Join(home, ".woca", "bridge-gateway.json"),
-				Insecure: insecure,
+				URL:       url,
+				StatePath: bridge.GatewayStatePath(),
+				Insecure:  insecure,
 			}, consoleLogger())
 			return g.RequestEnrollment(cmd.Context(), func(fp string) {
 				fmt.Printf("enrollment fingerprint: %s\n", fp)
