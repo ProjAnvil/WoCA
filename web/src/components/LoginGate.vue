@@ -58,6 +58,7 @@ async function submit() {
         <div class="brand-mark">W</div>
         <span>woca</span>
       </div>
+      <p class="login-gate-tagline">{{ t("login.tagline") }}</p>
       <p v-if="props.revoked" class="login-gate-revoked" data-testid="revoked-notice" role="alert">
         {{ t("login.revoked") }}
       </p>
@@ -93,6 +94,9 @@ async function submit() {
         alt="bridge URL QR"
         class="login-gate-qr-img"
       />
+      <p v-if="showQR && qrData" class="login-gate-qr-hint">
+        {{ t("login.pairQRHint") }}
+      </p>
     </form>
   </div>
 </template>
@@ -133,6 +137,10 @@ async function submit() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.login-gate-tagline {
+  margin: -8px 0 0;
+  font-size: 12px;
 }
 .login-gate-revoked {
   margin: 0;
@@ -189,5 +197,12 @@ async function submit() {
   border-radius: 8px;
   background: #fff;
   padding: 6px;
+}
+.login-gate-qr-hint {
+  margin: 0;
+  align-self: center;
+  font-size: 12px;
+  opacity: 0.75;
+  text-align: center;
 }
 </style>

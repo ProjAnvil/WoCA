@@ -82,7 +82,7 @@ describe('ConnectView', () => {
 
     expect(connect).not.toHaveBeenCalled()
     expect(wrapper.get('[data-testid="connection-validation"]').text()).toBe(
-      'Enter an absolute HTTPS origin without a path, query, fragment, or credentials. HTTP is allowed only for localhost, 127.0.0.1, or ::1.',
+      'Enter a URL like https://example.com (no path). HTTPS only, except localhost.',
     )
   })
 
@@ -173,7 +173,7 @@ describe('ConnectView three-entry model (design §6.6)', () => {
   it('switches URL label and placeholder between the private-cloud and direct tabs', async () => {
     const { wrapper } = mountConnect()
     expect(wrapper.get('[data-testid="tab-private"]').attributes('aria-selected')).toBe('true')
-    expect(wrapper.get('[data-testid="url-input"]').attributes('placeholder')).toBe('https://edge.example.com')
+    expect(wrapper.get('[data-testid="url-input"]').attributes('placeholder')).toBe('https://woca.example.com')
 
     await wrapper.get('[data-testid="tab-direct"]').trigger('click')
     expect(wrapper.get('[data-testid="tab-direct"]').attributes('aria-selected')).toBe('true')
@@ -218,7 +218,7 @@ describe('ConnectView three-entry model (design §6.6)', () => {
     await wrapper.get('form').trigger('submit')
 
     expect(connect).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('No bridge is registered at this edge.')
+    expect(wrapper.text()).toContain('No bridges found. Check the address, or contact your administrator.')
   })
 
   it('skips the inventory when the URL carries a direct bridge link', async () => {

@@ -239,15 +239,15 @@ describe('NativeGate', () => {
     expect(fatal.get('code').text()).toBe(
       '/Users/test/Library/Application Support/woca-native-client/client.db',
     )
-    expect(fatal.text()).toContain('Woca cannot open its local configuration database.')
-    expect(fatal.text()).toContain('Fix the file permissions or database schema, then relaunch Woca.')
+    expect(fatal.text()).toContain("woca can't read its local configuration.")
+    expect(fatal.text()).toContain('Check the file permissions and relaunch woca. If it keeps failing, contact your administrator with the path below.')
     expect(fatal.text()).not.toContain('secret schema detail')
     expect(fatal.find('button').exists()).toBe(false)
 
     i18n.global.locale.value = 'zh-CN'
     await flushPromises()
-    expect(fatal.text()).toContain('Woca 无法打开本地配置数据库。')
-    expect(fatal.text()).toContain('修复文件权限或数据库结构后，请重新启动 Woca。')
+    expect(fatal.text()).toContain('woca 无法读取本机配置。')
+    expect(fatal.text()).toContain('请检查本机文件权限后重启 woca；若仍失败，请联系管理员并附上下方路径。')
   })
 
   it('uses fixed unavailable-path copy when the database path cannot be resolved', async () => {
