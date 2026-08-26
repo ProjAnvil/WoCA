@@ -553,6 +553,12 @@ services:
       - woca-crypto:/var/lib/woca/home
 
   # ─────────────────── ladyM (physically isolated) ────────────────────────
+  # ladyM services run the dict-baked image: the operator-built base
+  # (ladym-enterprise:local, see README-FULL.md) plus the sha256-pinned CJK
+  # segmentation dictionary at /opt/ladym/dict — CJK recall works out of
+  # the box, fully offline (ladyM never downloads dictionaries itself).
+  # LADYM_DICT_VARIANT picks zh (default) | zh_s | zh_t | jp; pinned files
+  # under ./dict/ make the build air-gapped (see Dockerfile.ladym-dict).
   ladym-pg:
     image: pgvector/pgvector:pg17
     container_name: woca-ent-ladym-pg
@@ -574,7 +580,13 @@ services:
   # The image entrypoint is /ladym with subcommands `serve` (HTTP
   # data-plane, the image's default CMD) and `worker`.
   ladym-api-1: &ladym-api
-    image: ladym-enterprise:local
+    image: ladym-enterprise:local-dict
+    build:
+      context: .
+      dockerfile: Dockerfile.ladym-dict
+      args:
+        BASE: ladym-enterprise:local
+        DICT_VARIANT: ${LADYM_DICT_VARIANT:-zh}
     container_name: woca-ent-ladym-api-1
     depends_on:
       ladym-pg: { condition: service_healthy }
@@ -590,7 +602,13 @@ services:
     container_name: woca-ent-ladym-api-2
 
   ladym-worker:
-    image: ladym-enterprise:local
+    image: ladym-enterprise:local-dict
+    build:
+      context: .
+      dockerfile: Dockerfile.ladym-dict
+      args:
+        BASE: ladym-enterprise:local
+        DICT_VARIANT: ${LADYM_DICT_VARIANT:-zh}
     container_name: woca-ent-ladym-worker
     depends_on:
       ladym-pg: { condition: service_healthy }

@@ -1,0 +1,74 @@
+# woca deploy: the ladyM dict-baked image — a THIN DATA LAYER on top of the
+# operator-built ladyM enterprise image.
+#
+#   docker build -f Dockerfile.ladym-dict \
+#     --build-arg BASE=ladym-enterprise:local \
+#     -t ladym-enterprise:local-dict .
+#
+# The EE stacks (docker-compose.full.yml / docker-compose.dev.yml) build
+# this layer for their ladyM services, so CJK segmentation works out of the
+# box with no runtime download (private-cloud deployments are offline by
+# default; LadyM itself never downloads dictionaries on its own).
+#
+# The dictionary ships as FILES at /opt/ladym/dict (LADYM_DICT_DIR), not
+# compiled into binaries: the layer is architecture-independent, every
+# ladyM role (api/worker) reads the same copy, and ladyM base-image
+# upgrades never touch it — rebuild this layer on top of the new base.
+#
+# DICT_VARIANT picks the dictionary: zh (default) | zh_s | zh_t | jp.
+# Files are sha256-pinned — they MUST match the cjkDictRegistry pins in
+# ladyM's storage/cjk_dict.go (gse v1.0.2). Bump them together with the
+# ladyM upgrade.
+#
+# Air-gapped alternative to the build-time downloads: place the pinned
+# files under ./dict/ next to this Dockerfile and they are COPYed in
+# instead (no network needed); pass DICT_VARIANT accordingly.
+
+ARG BASE=ladym-enterprise:local
+ARG DICT_VARIANT=zh
+
+# ---------------------------------------------------------------------------
+# dict stage — download + sha256-verify + manifest. Mirrors the mirrors'
+# order in ladyM's storage/cjk_dict.go: jsDelivr first, GitHub raw fallback
+# (jsDelivr 403s files over 20MB, which covers the jp dictionary).
+# ---------------------------------------------------------------------------
+FROM alpine:3.20 AS dict
+ARG DICT_VARIANT
+RUN apk add --no-cache curl ca-certificates
+# Optional air-gap source: pinned files placed under ./dict/ (the deploy
+# tree ships it with just a .gitkeep) are preferred over the network.
+COPY dict/ /src/dict/
+# shellcheck disable=SC2016 — pins duplicated from ladyM storage/cjk_dict.go
+RUN set -eux; \
+    case "$DICT_VARIANT" in \
+      zh)   files="s_1.txt t_1.txt" ;; \
+      zh_s) files="s_1.txt" ;; \
+      zh_t) files="t_1.txt" ;; \
+      jp)   files="jp.txt" ;; \
+      *) echo "unknown DICT_VARIANT: $DICT_VARIANT (want zh|zh_s|zh_t|jp)" >&2; exit 1 ;; \
+    esac; \
+    mkdir -p /opt/ladym/dict; \
+    cd /opt/ladym/dict; \
+    for f in $files; do \
+      case "$f" in \
+        s_1.txt) rel=data/dict/zh/s_1.txt; sum=2b3063ec552327520bee3c0c5819d6e131ab3db50a60b94641ec90f611c24bcd ;; \
+        t_1.txt) rel=data/dict/zh/t_1.txt; sum=2c84cef353d2daac62cc62bbeabab6b6a8866cfee8f9f88901e00ed66ed208c6 ;; \
+        jp.txt)  rel=data/dict/jp/dict.txt; sum=b7de28abfda94ed009f1e7fc67333393a449825ca653a7eb101fee61dfeda4ed ;; \
+      esac; \
+      if [ -f "/src/dict/$f" ]; then \
+        cp "/src/dict/$f" "$f"; \
+      else \
+        curl -fsSL --retry 3 "https://cdn.jsdelivr.net/gh/go-ego/gse@v1.0.2/$rel" -o "$f" \
+          || curl -fsSL --retry 3 "https://raw.githubusercontent.com/go-ego/gse/v1.0.2/$rel" -o "$f"; \
+      fi; \
+      echo "$sum  $f" | sha256sum -c -; \
+    done; \
+    printf '{"version":"gse-v1.0.2","variant":"%s"}\n' "$DICT_VARIANT" > manifest.json
+
+# ---------------------------------------------------------------------------
+# final stage — base image + dict files + env. Works for any BASE that runs
+# ladyM (the distroless enterprise image, or anything else).
+# ---------------------------------------------------------------------------
+FROM ${BASE}
+COPY --from=dict /opt/ladym/dict /opt/ladym/dict
+ENV LADYM_DICT_DIR=/opt/ladym/dict

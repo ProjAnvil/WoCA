@@ -44,10 +44,20 @@ isolation, and network-zone isolation.
 
 1. **woca images**: the Dockerfiles in this directory build from the repo
    root; `docker compose -f docker-compose.full.yml build` builds them.
-2. **ladyM image**: build the ladyM enterprise image from the ladyM repo:
+2. **ladyM image**: build the ladyM enterprise base image from the ladyM
+   repo (v0.5.1+ for CJK segmentation):
    ```bash
-   cd ../ladyM && docker build -t ladym-enterprise:local -f Dockerfile.enterprise .
+   cd ../ladyM && docker build -t ladym-enterprise:local .
    ```
+   The compose stack then builds the dict-baked image
+   (`ladym-enterprise:local-dict`) from that base automatically: a thin
+   data layer (Dockerfile.ladym-dict) carrying the sha256-pinned CJK
+   segmentation dictionary at /opt/ladym/dict, so CJK recall works fully
+   offline — ladyM never downloads dictionaries itself.
+   `LADYM_DICT_VARIANT` in .env picks zh (default) | zh_s | zh_t | jp.
+   Air-gapped builds: place the pinned files under
+   `deploy/selfhosted/dict/` before building. To refresh the dictionary:
+   rebuild the layer and restart the ladyM services.
 3. **Environment**: `cp .env.example .env` and set passwords.
 
 ## Deploy

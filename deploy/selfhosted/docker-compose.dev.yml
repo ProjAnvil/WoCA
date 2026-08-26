@@ -379,6 +379,11 @@ services:
       - ladym-data
 
   # ─────────────────── ladyM (minimal: one api + worker) ──────────────────
+  # Same dict-baked image as the full stack: the operator-built base
+  # (ladym-enterprise:local) plus the sha256-pinned CJK dictionary at
+  # /opt/ladym/dict (Dockerfile.ladym-dict) — dev runs CJK segmentation
+  # out of the box, no runtime download. LADYM_DICT_VARIANT picks
+  # zh (default) | zh_s | zh_t | jp.
   ladym-pg:
     image: pgvector/pgvector:pg17
     container_name: woca-dev-ladym-pg
@@ -398,7 +403,13 @@ services:
       - ladym-data
 
   ladym-api:
-    image: ladym-enterprise:local
+    image: ladym-enterprise:local-dict
+    build:
+      context: .
+      dockerfile: Dockerfile.ladym-dict
+      args:
+        BASE: ladym-enterprise:local
+        DICT_VARIANT: ${LADYM_DICT_VARIANT:-zh}
     container_name: woca-dev-ladym-api
     depends_on:
       ladym-pg: { condition: service_healthy }
@@ -410,7 +421,13 @@ services:
       - ladym-data
 
   ladym-worker:
-    image: ladym-enterprise:local
+    image: ladym-enterprise:local-dict
+    build:
+      context: .
+      dockerfile: Dockerfile.ladym-dict
+      args:
+        BASE: ladym-enterprise:local
+        DICT_VARIANT: ${LADYM_DICT_VARIANT:-zh}
     container_name: woca-dev-ladym-worker
     depends_on:
       ladym-pg: { condition: service_healthy }
