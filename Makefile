@@ -92,8 +92,14 @@ native-build: web build-server
 	cp build/woca-bridge native-client/bridgebin/woca-bridge
 	cd native-client && wails build -clean -tags embeddedbridge
 
-native-dev:
-	cd native-client && wails dev
+native-dev: build-server
+	# Dev runs the SAME embedded bridge as production (product design
+	# §5.1): bundle the freshly built woca-bridge and compile with the
+	# embeddedbridge tag, so `wails dev` boots the zero-login local bridge
+	# instead of needing WOCA_NATIVE_DEV_BFF_URL. Re-run to pick up bridge
+	# source changes (the embedded copy is stamped at build time).
+	cp build/woca-bridge native-client/bridgebin/woca-bridge
+	cd native-client && wails dev -tags embeddedbridge
 
 # Self-hosted enterprise stack: the persistence layer — PostgreSQL
 # primary+replica and a 3-node NATS JetStream cluster, segmented per
