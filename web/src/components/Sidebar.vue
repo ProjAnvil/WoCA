@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Activity, FolderOpen, Plus, Settings, X } from 'lucide-vue-next'
 import FolderPicker from "./FolderPicker.vue";
@@ -24,13 +24,23 @@ const wsPath = ref("");
 const wsInput = ref<HTMLInputElement | null>(null);
 const pickerOpen = ref(false);
 const statusOpen = ref(false);
-// One shared poll keeps the lamp (and the settings panel's edition
-// snapshot) fresh every 20s.
+// One probe on mount decides whether this deployment serves the bridge
+// status surface (personal `woca serve` does not, so the footer shows no
+// status entry and the poll never arms). Once the surface is seen — from
+// here or from the settings panel — the shared 20s poll keeps the lamp
+// (and the edition snapshot) fresh.
 const lampPoll = usePolling(() => statusStore.refresh(), 20000);
 
 onMounted(() => {
-  lampPoll.start();
+  void statusStore.refresh();
 });
+
+watch(
+  () => statusStore.hasStatusSurface,
+  (has) => {
+    if (has) lampPoll.start();
+  }
+);
 
 function openWorkspaceDialog() {
   wsPath.value = "";
@@ -77,7 +87,11 @@ async function pickWorkspace(path: string) {
     </div>
 
     <div class="footer-bar">
-      <button class="footer-settings-btn" @click="statusOpen = true">
+      <button
+        v-if="statusStore.hasStatusSurface"
+        class="footer-settings-btn"
+        @click="statusOpen = true"
+      >
         <span class="status-lamp" :class="'lamp-' + statusStore.lamp" />
         <Activity :size="15" />
         <span>{{ t("status.entry") }}</span>

@@ -10,11 +10,18 @@ import { getStatus, type BridgeStatus } from '../api/client'
 export const useStatusStore = defineStore('status', () => {
   const status = ref<BridgeStatus | null>(null)
   const failed = ref(false)
+  // Capability probe: does this deployment serve /api/status at all? Only
+  // the bridge does — a personal `woca serve` answers with the SPA
+  // fallback, which never parses. Sticky like getEdgeBridges' probe: set
+  // on the first real answer, never cleared by later failures, so a
+  // transient error on an enrolled bridge keeps the entry visible.
+  const hasStatusSurface = ref(false)
 
   async function refresh() {
     try {
       status.value = await getStatus()
       failed.value = false
+      hasStatusSurface.value = true
     } catch {
       failed.value = true
     }
@@ -29,5 +36,5 @@ export const useStatusStore = defineStore('status', () => {
     return status.value.cloud.stale ? 'stale' : 'ok'
   })
 
-  return { status, failed, refresh, lamp }
+  return { status, failed, hasStatusSurface, refresh, lamp }
 })

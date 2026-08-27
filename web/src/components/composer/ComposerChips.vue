@@ -221,7 +221,7 @@ onMounted(() => {
           type="button"
           @click="pickMode(m)"
         >
-          <span class="ctl-opt-name">{{ label }}<span class="ctl-opt-key">{{ m }}</span></span>
+          <span class="ctl-opt-name">{{ label }}</span>
           <span class="ctl-opt-desc">{{ MODE_DESCRIPTIONS[m] }}</span>
         </button>
       </div>

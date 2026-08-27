@@ -45,4 +45,23 @@ describe('useStatusStore', () => {
     // The last good snapshot stays readable for the modal's zones.
     expect(s.status?.cloud?.stale).toBe(true)
   })
+
+  it('hasStatusSurface: armed only by a real answer, sticky across failures', async () => {
+    const s = useStatusStore()
+    expect(s.hasStatusSurface).toBe(false)
+
+    // Personal serve: /api/status falls through to the SPA fallback and
+    // never parses — the probe stays unarmed.
+    getStatus.mockRejectedValue(new Error('spa fallback'))
+    await s.refresh()
+    expect(s.hasStatusSurface).toBe(false)
+
+    getStatus.mockResolvedValue({ edition: 'bridge', managed: true } as never)
+    await s.refresh()
+    expect(s.hasStatusSurface).toBe(true)
+
+    getStatus.mockRejectedValue(new Error('bridge restarting'))
+    await s.refresh()
+    expect(s.hasStatusSurface).toBe(true) // sticky: entry stays visible
+  })
 })
