@@ -29,7 +29,7 @@ onMounted(() => {
     <p class="mem-intro">{{ bridge ? t('settings.claudeenv.bridgeIntro') : t('settings.claudeenv.intro') }}</p>
 
     <div v-if="claudeEnv.state.loading" class="row-hint">{{ t('settings.claudeenv.detecting') }}</div>
-    <div v-else-if="claudeEnv.state.error" class="row-hint" style="color: var(--danger, #e5484d)">
+    <div v-else-if="claudeEnv.state.error" class="row-hint" style="color: var(--danger)">
       {{ claudeEnv.state.error }}
     </div>
 

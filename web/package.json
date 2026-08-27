@@ -10,7 +10,8 @@
     "build:demo": "vite build --config vite.config.demo.ts",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:tokens": "node scripts/check-tokens.mjs"
   },
   "dependencies": {
     "@microsoft/fetch-event-source": "^2.0.1",

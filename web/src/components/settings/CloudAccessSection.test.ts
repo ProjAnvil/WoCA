@@ -1,4 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
 
@@ -29,7 +30,7 @@ function snapshot(over: Record<string, unknown> = {}) {
 }
 
 function mountSection() {
-  return mount(CloudAccessSection, { global: { plugins: [i18n] } })
+  return mount(CloudAccessSection, { global: { plugins: [createPinia(), i18n] } })
 }
 
 async function field(w: ReturnType<typeof mountSection>, selector: string) {

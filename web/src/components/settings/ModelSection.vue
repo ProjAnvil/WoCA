@@ -36,7 +36,7 @@ onMounted(() => {
            catalog authority to verify; unknown models are refused). An
            empty catalog disables selection entirely and the composer
            refuses to send. -->
-      <div v-if="server.serverError" class="row-hint" style="color: var(--danger, #e5484d); max-width: 260px">
+      <div v-if="server.serverError" class="row-hint" style="color: var(--danger); max-width: 260px">
         {{ server.serverError }}
       </div>
       <select

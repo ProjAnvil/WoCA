@@ -30,4 +30,22 @@ describe('useToastStore', () => {
     // Idempotent: dismissing again is a no-op.
     expect(() => s.dismiss(id)).not.toThrow()
   })
+
+  it('exposes success/warn levels with optional actions', () => {
+    const s = useToastStore()
+    const action = { label: 'Retry', run: () => {} }
+    s.success('done', action)
+    s.warn('careful')
+    expect(s.toasts[0]).toMatchObject({ message: 'done', kind: 'success', action })
+    expect(s.toasts[1]).toMatchObject({ message: 'careful', kind: 'warn' })
+  })
+
+  it('caps the stack at three, dropping the oldest', () => {
+    const s = useToastStore()
+    s.push('one', 'info', 60_000)
+    s.push('two', 'info', 60_000)
+    s.push('three', 'info', 60_000)
+    s.push('four', 'info', 60_000)
+    expect(s.toasts.map((t) => t.message)).toEqual(['two', 'three', 'four'])
+  })
 })

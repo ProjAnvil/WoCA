@@ -76,7 +76,7 @@ function addTargetValue() {
       <div>
         <div class="row-label">{{ t('settings.edge.addLabel') }}</div>
         <div class="row-hint">{{ t('settings.edge.addHint') }}</div>
-        <div v-if="addError" class="row-hint" style="color: var(--danger, #e5484d)">{{ addError }}</div>
+        <div v-if="addError" class="row-hint" style="color: var(--danger)">{{ addError }}</div>
       </div>
       <div class="edge-add-controls">
         <input
@@ -133,13 +133,13 @@ function addTargetValue() {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #8b93a1;
+  background: var(--muted);
 }
 .edge-dot.live {
-  background: #2fbf71;
+  background: var(--ok);
 }
 .edge-id {
-  font-family: var(--mono, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
   flex: 1 1 auto;
   overflow: hidden;

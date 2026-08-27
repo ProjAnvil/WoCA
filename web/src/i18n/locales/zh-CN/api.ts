@@ -6,6 +6,7 @@ export default {
   loadSessionsFailed: '加载会话失败',
   deleteSessionFailed: '删除会话失败',
   loadWorkspaceFailed: '加载工作区失败',
+  loadChangesFailed: '加载变更失败',
   readFileFailed: '读取文件失败',
   loadSettingsFailed: '加载设置失败',
   saveSettingsFailed: '保存设置失败',

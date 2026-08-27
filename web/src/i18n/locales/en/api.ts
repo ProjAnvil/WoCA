@@ -5,6 +5,7 @@ export default {
   requestFailed: 'Request failed',
   loadSessionsFailed: 'Failed to load sessions',
   deleteSessionFailed: 'Failed to delete session',
+  loadChangesFailed: 'Failed to load changes',
   loadWorkspaceFailed: 'Failed to load workspace',
   readFileFailed: 'Failed to read file',
   loadSettingsFailed: 'Failed to load settings',

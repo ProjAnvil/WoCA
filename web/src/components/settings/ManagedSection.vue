@@ -37,7 +37,7 @@ onMounted(() => {
     </div>
 
     <div v-if="managed.loading" class="row-hint">{{ t('settings.managed.loading') }}</div>
-    <div v-else-if="managed.error" class="row-hint" style="color: var(--danger, #e5484d)">
+    <div v-else-if="managed.error" class="row-hint" style="color: var(--danger)">
       {{ managed.error }}
     </div>
 
@@ -87,12 +87,12 @@ onMounted(() => {
   flex-wrap: wrap;
 }
 .managed-sync code {
-  font-family: var(--mono, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 .managed-stale {
   font-size: 12px;
-  color: var(--warn, #f5a524);
+  color: var(--warn);
 }
 .managed-list {
   display: flex;
@@ -115,7 +115,7 @@ onMounted(() => {
 .managed-name {
   flex: 0 0 auto;
   font-size: 13px;
-  font-family: var(--mono, monospace);
+  font-family: var(--font-mono);
 }
 .managed-desc {
   flex: 1 1 auto;

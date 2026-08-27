@@ -3,6 +3,17 @@
 
 // Token counts stay integral when they divide evenly, otherwise one decimal
 // (1.5k, 2.3M); small counts render verbatim.
+/** 61_000 → "1m 1s"; 3_740_000 → "1h 2m"; under a minute → "42s". */
+export function fmtDuration(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s = sec % 60
+  if (h) return `${h}h ${m}m`
+  if (m) return `${m}m ${s}s`
+  return `${s}s`
+}
+
 export function fmtTokens(n: number): string {
   if (!n) return '0'
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`

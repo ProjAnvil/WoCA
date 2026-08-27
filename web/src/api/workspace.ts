@@ -42,6 +42,39 @@ export function getWorkspaceFile(path: string, workspace?: string): Promise<Work
   return request(`/api/workspace/file?path=${encodeURIComponent(path)}${ws}`, undefined, i18n.global.t('api.readFileFailed'))
 }
 
+/** One pending (undoable) workspace change with its unified diff. */
+export interface WorkspaceChange {
+  path: string
+  added: number
+  removed: number
+  created: boolean
+  deleted: boolean
+  binary: boolean
+  diff: string
+}
+
+export interface ChangesResponse {
+  files: WorkspaceChange[]
+  undo_steps: number
+  redo_steps: number
+}
+
+/** The Changes review tab's payload: pending changes as diffs + step counts. */
+export function getWorkspaceChanges(workspace?: string): Promise<ChangesResponse> {
+  const qs = workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''
+  return request(`/api/workspace/changes${qs}`, undefined, i18n.global.t('api.loadChangesFailed'))
+}
+
+/** Checkpoint rollback: path-scoped (to before first touch) or N steps (0 = all). */
+export function undoWorkspace(body: { workspace?: string; path?: string; steps?: number }): Promise<{
+  applied: number
+  summary: string
+  undo_steps: number
+  redo_steps: number
+}> {
+  return postJSON('/api/workspace/undo', body)
+}
+
 /** Lists skills ("/" commands) and subagents ("@" mentions) for autocomplete. */
 export function getCompletions(workspace?: string): Promise<{
   skills: CompletionEntry[]

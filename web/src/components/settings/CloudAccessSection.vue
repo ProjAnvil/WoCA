@@ -9,6 +9,7 @@ import {
   updateCloudAccess,
   type CloudAccessStatus,
 } from '../../api/client'
+import { useConfirmStore } from '../../stores/confirm'
 
 // The bridge's cloud-access section (product design §6.5): bridge-local
 // infrastructure configuration — the edge URL, the one-time enrollment
@@ -16,6 +17,7 @@ import {
 // managed domains are read-only: this layer belongs to the bridge, not
 // the config plane (§3.3's two-layer separation).
 const { t } = useI18n()
+const confirmDialog = useConfirmStore()
 
 const st = ref<CloudAccessStatus | null>(null)
 const url = ref('')
@@ -62,7 +64,15 @@ async function save() {
 // 注销: wipe the local machine identity. Server-side revocation stays
 // the administrator's action (console), this only clears this bridge.
 async function deregister() {
-  if (resetting.value || !confirm(t('settings.cloud.resetConfirm'))) return
+  if (resetting.value) return
+  const ok = await confirmDialog.ask({
+    title: t('settings.cloud.resetTitle'),
+    body: t('settings.cloud.resetConfirm'),
+    confirmLabel: t('settings.cloud.resetAction'),
+    cancelLabel: t('common.cancel'),
+    tone: 'danger',
+  })
+  if (!ok) return
   resetting.value = true
   error.value = ''
   try {
@@ -182,7 +192,7 @@ async function deregister() {
   display: flex;
   justify-content: center;
   padding: 12px;
-  color: var(--muted, #6e7681);
+  color: var(--muted);
 }
 .cloud-grid {
   display: grid;
@@ -196,9 +206,9 @@ async function deregister() {
 }
 .cloud-grid input {
   padding: 8px 10px;
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg, #14161a);
+  background: var(--bg);
   color: inherit;
   font: inherit;
 }
@@ -208,7 +218,7 @@ async function deregister() {
 .cloud-hint {
   margin: 0;
   font-size: 11.5px;
-  color: var(--muted, #6e7681);
+  color: var(--muted);
 }
 .cloud-actions {
   display: flex;
@@ -220,7 +230,7 @@ async function deregister() {
   gap: 4px 10px;
   margin: 0;
   padding: 10px 12px;
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 12.5px;
 }
@@ -239,30 +249,30 @@ async function deregister() {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--muted, #6e7681);
+  background: var(--muted);
   flex: none;
 }
 .lamp.ok {
-  background: var(--ok, #3fb950);
+  background: var(--ok);
 }
 .lamp.warn {
-  background: var(--warn, #d29922);
+  background: var(--warn);
 }
 .cloud-error {
   margin: 0;
-  color: #e5534b;
+  color: var(--danger);
   font-size: 12.5px;
 }
 .cloud-note {
   margin: 0;
-  color: var(--ok, #3fb950);
+  color: var(--ok);
   font-size: 12.5px;
 }
 .btn-danger {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border-color: #a33;
-  color: #e88;
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  color: var(--danger-text);
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, watch } from 'vue'
+import { onBeforeUnmount, onMounted, watch } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import WorkspaceSidebar from './components/WorkspaceSidebar.vue'
@@ -10,6 +10,11 @@ import MemoryPanel from './components/MemoryPanel.vue'
 import InterruptModal from './components/InterruptModal.vue'
 import LoginGate from './components/LoginGate.vue'
 import ToastStack from './components/ToastStack.vue'
+import WConfirmDialog from './components/ui/WConfirmDialog.vue'
+import WCommandPalette from './components/ui/WCommandPalette.vue'
+import BtwPanel from './components/BtwPanel.vue'
+import { useAppCommands } from './composables/useAppCommands'
+import { usePaletteStore } from './stores/palette'
 import { useAuthStore } from './stores/auth'
 import { useSettingsStore } from './stores/settings'
 import { useServerSettingsStore } from './stores/serverSettings'
@@ -26,6 +31,43 @@ const sessions = useSessionStore()
 const memory = useMemoryStore()
 const completions = useCompletionsStore()
 const auth = useAuthStore()
+const palette = usePaletteStore()
+const commands = useAppCommands()
+
+/* ---------------------- global shortcuts + command palette ---------------- */
+
+// ⌘K toggles the palette (the everything-else fallback), ⌘J toggles the
+// workspace panel. Double-Esc (<300ms) interrupts the active run — but Esc
+// inside the composer belongs to autocomplete close, and while the palette
+// is open it belongs to the palette, so both contexts are excluded.
+let lastEsc = 0
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  const meta = e.metaKey || e.ctrlKey
+  if (meta && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    palette.toggle()
+    return
+  }
+  if (meta && e.key.toLowerCase() === 'j') {
+    e.preventDefault()
+    workspace.togglePanel()
+    return
+  }
+  if (e.key === 'Escape' && !e.isComposing) {
+    if (palette.open) return
+    if (document.activeElement instanceof HTMLTextAreaElement) return
+    const now = Date.now()
+    if (now - lastEsc < 300 && ['running', 'awaiting', 'queued'].includes(sessions.activeStatus)) {
+      e.preventDefault()
+      void sessions.cancel()
+    }
+    lastEsc = now
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 onMounted(() => {
   void auth.probe()
@@ -65,6 +107,9 @@ watch(
     <MemoryPanel v-if="memory.panelOpen" />
     <InterruptModal v-if="sessions.activeInterrupt" />
     <LoginGate v-if="auth.gateOpen" :revoked="auth.gateCode === 'revoked'" @authenticated="auth.onAuthenticated" />
+    <WConfirmDialog />
+    <BtwPanel />
+    <WCommandPalette :commands="commands" />
     <ToastStack />
   </div>
 </template>

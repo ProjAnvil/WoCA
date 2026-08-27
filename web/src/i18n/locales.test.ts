@@ -29,4 +29,15 @@ describe('locale structure', () => {
     expect(Object.keys(zh.cloud).sort()).toEqual(Object.keys(enl.cloud).sort())
     expect(Object.keys(zh.nav).sort()).toEqual(Object.keys(enl.nav).sort())
   })
+
+  // Full-tree parity: a key added to one locale but not the other renders as
+  // its own name in the missing side — this pins every namespace (recursively)
+  // so the gap can never silently ship.
+  it('keeps zh-CN and en key paths identical across every namespace', () => {
+    function keyPaths(obj: unknown, prefix = ''): string[] {
+      if (obj === null || typeof obj !== 'object') return [prefix]
+      return Object.entries(obj).flatMap(([k, v]) => keyPaths(v, prefix ? `${prefix}.${k}` : k))
+    }
+    expect(keyPaths(zhCN).sort()).toEqual(keyPaths(en).sort())
+  })
 })

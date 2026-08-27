@@ -1,0 +1,260 @@
+/* ============================================================================
+   woca design tokens — two layers:
+     · primitives (--w-*): raw values, never theme-swapped
+     · semantic: the ONLY layer components may consume
+   Light theme lives on :root, dark theme (canonical) on html.dark.
+   Rules: no bare hex / px shadows outside this file (npm run check:tokens).
+   ========================================================================== */
+
+:root {
+  /* --- primitives: warm graphite grays ---------------------------------- */
+  --w-gray-0: #ffffff;
+  --w-gray-50: #f6f6f4;
+  --w-gray-100: #efefec;
+  --w-gray-150: #e7e7e2;
+  --w-gray-200: #d5d5cf;
+  --w-gray-300: #b0b0a8;
+  --w-gray-400: #8b8b83;
+  --w-gray-500: #55554f;
+  --w-gray-700: #2a2a2f;
+  --w-gray-800: #1e1e21;
+  --w-gray-850: #171719;
+  --w-gray-900: #131314;
+  --w-gray-950: #0c0c0e;
+
+  /* --- primitives: brand axis (from the gate-logo gradient midpoint) ----- */
+  --w-brand-300: #a996ff;
+  --w-brand-500: #7a5cff;
+  --w-brand-600: #6b4dff;
+
+  /* --- primitives: status (Primer dual-theme AA calibration) ------------- */
+  --w-green-500: #3fb950;
+  --w-green-600: #1a7f37;
+  --w-amber-500: #d29922;
+  --w-amber-600: #9a6700;
+  --w-red-500: #f85149;
+  --w-red-600: #cf222e;
+  --w-blue-500: #58a6ff;
+  --w-blue-600: #0969da;
+
+  /* --- spacing (density switchable: compact tier shrinks the unit) ------- */
+  --space-unit: 4px;
+  --space-1: calc(var(--space-unit) / 2);
+  --space-2: calc(var(--space-unit) * 1);
+  --space-3: calc(var(--space-unit) * 2);
+  --space-4: calc(var(--space-unit) * 3);
+  --space-5: calc(var(--space-unit) * 4);
+  --space-6: calc(var(--space-unit) * 5);
+  --space-7: calc(var(--space-unit) * 6);
+  --space-8: calc(var(--space-unit) * 8);
+  --space-10: calc(var(--space-unit) * 10);
+  --space-12: calc(var(--space-unit) * 12);
+  --gap-list: var(--space-1);
+  --gap-stack: var(--space-4);
+  --pad-card: var(--space-4);
+  --pad-modal: var(--space-6);
+
+  /* --- type scale -------------------------------------------------------- */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    'Liberation Mono', monospace;
+  --text-xs: 12px;
+  --lh-xs: 16px;
+  --text-sm: 13px;
+  --lh-sm: 20px;
+  --text-base: 14px;
+  --lh-base: 22px;
+  --text-md: 16px;
+  --lh-md: 24px;
+  --text-lg: 20px;
+  --lh-lg: 28px;
+  --text-xl: 24px;
+  --lh-xl: 32px;
+  --text-chat: 15px;
+  --lh-chat: 26px;
+
+  /* --- radius scale ------------------------------------------------------ *
+   * Legacy aliases keep their old pixel values: --radius=8, --radius-lg=12.
+   * New components consume the explicit scale (xs..2xl) instead.           */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-full: 999px;
+  --radius: var(--radius-md);
+  --radius-lg: var(--radius-xl);
+
+  /* --- elevation --------------------------------------------------------- */
+  --shadow-xs: 0 1px 2px rgba(24, 24, 22, 0.05);
+  --shadow-sm: 0 2px 8px rgba(24, 24, 22, 0.07);
+  --shadow-md: 0 8px 24px rgba(24, 24, 22, 0.1);
+  --shadow-lg: 0 16px 40px rgba(24, 24, 22, 0.14);
+  --shadow-overlay: 0 24px 64px rgba(24, 24, 22, 0.16), 0 0 0 1px var(--border);
+
+  /* --- z-index ladder ----------------------------------------------------- */
+  --z-sticky: 100;
+  --z-panel: 200;
+  --z-popover: 300;
+  --z-overlay: 400;
+  --z-modal: 410;
+  --z-sheet: 420;
+  --z-toast: 500;
+  --z-palette: 600;
+  --z-tooltip: 700;
+
+  /* --- motion ------------------------------------------------------------- */
+  --dur-instant: 80ms;
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* --- semantic: surfaces & borders (light) ------------------------------- */
+  --bg: var(--w-gray-50);
+  --bg-sidebar: #fbfbfa;
+  --bg-soft: var(--w-gray-100);
+  --surface: var(--w-gray-0);
+  --surface-2: #f3f3f1;
+  --surface-hover: var(--w-gray-100);
+  --surface-active: #e4e4e0;
+  --panel: var(--surface-2);
+  --scrim: rgba(20, 20, 16, 0.32);
+  --border-subtle: rgba(20, 20, 16, 0.05);
+  --border: rgba(20, 20, 16, 0.09);
+  --border-strong: rgba(20, 20, 16, 0.16);
+
+  /* --- semantic: text (light) --------------------------------------------- */
+  --text: #1b1b19;
+  --text-2: var(--w-gray-500);
+  --muted: var(--w-gray-400);
+  --faint: #b3b3aa;
+
+  /* --- semantic: action (light) ------------------------------------------- */
+  --accent: #1f1f1d;
+  --accent-hover: #000000;
+  --on-accent: #ffffff;
+
+  /* --- semantic: brand & signals (light) ---------------------------------- */
+  --brand: var(--w-brand-600);
+  --brand-hover: #5936e8;
+  --brand-soft: rgba(107, 77, 255, 0.1);
+  --brand-text: #5a3df0;
+  --on-brand: #ffffff;
+  --link: #4a6a9e;
+  --focus: var(--w-brand-600);
+
+  /* --- semantic: status families (light) ---------------------------------- */
+  --ok: var(--w-green-600);
+  --ok-soft: rgba(26, 127, 55, 0.1);
+  --ok-text: #116329;
+  --on-ok: #ffffff;
+  --warn: var(--w-amber-600);
+  --warn-soft: rgba(154, 103, 0, 0.12);
+  --warn-text: #7d5300;
+  --on-warn: #ffffff;
+  --danger: var(--w-red-600);
+  --danger-soft: rgba(207, 34, 46, 0.08);
+  --danger-text: #b02530;
+  --on-danger: #ffffff;
+  --info: var(--w-blue-600);
+  --info-soft: rgba(9, 105, 218, 0.08);
+  --info-text: #0856b3;
+  --on-info: #ffffff;
+
+  /* Chat column (messages + tool cards). Widens by display size below so
+     wide monitors get more room for content. */
+  --chat-col: 860px;
+}
+
+/* Wider chat content on larger displays. */
+@media (min-width: 1440px) {
+  :root {
+    --chat-col: 960px;
+  }
+}
+@media (min-width: 1800px) {
+  :root {
+    --chat-col: 1100px;
+  }
+}
+
+/* Compact density tier (settings + ⌘K switch; persisted per preferences). */
+html[data-density='compact'] {
+  --space-unit: 3px;
+  --lh-chat: 24px;
+}
+
+/* ---- semantic: dark (canonical) ------------------------------------------ */
+html.dark {
+  --bg: var(--w-gray-900);
+  --bg-sidebar: var(--w-gray-850);
+  --bg-soft: var(--w-gray-800);
+  --surface: var(--w-gray-800);
+  --surface-2: #242428;
+  --surface-hover: var(--w-gray-700);
+  --surface-active: #313136;
+  --panel: var(--surface-2);
+  --scrim: rgba(0, 0, 0, 0.55);
+  --border-subtle: rgba(255, 255, 255, 0.045);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  --text: #ececef;
+  --text-2: #b4b4bc;
+  --muted: #7e7e88;
+  --faint: #55555e;
+
+  --accent: #ececef;
+  --accent-hover: #ffffff;
+  --on-accent: #141415;
+
+  --brand: var(--w-brand-500);
+  --brand-hover: #8f74ff;
+  --brand-soft: rgba(122, 92, 255, 0.16);
+  --brand-text: var(--w-brand-300);
+  --on-brand: #ffffff;
+  --link: #8ab0e0;
+  --focus: var(--w-brand-500);
+
+  --ok: var(--w-green-500);
+  --ok-soft: rgba(63, 185, 80, 0.14);
+  --ok-text: #57c973;
+  --on-ok: #06130a;
+  --warn: var(--w-amber-500);
+  --warn-soft: rgba(210, 153, 34, 0.14);
+  --warn-text: #e3b341;
+  --on-warn: #171103;
+  --danger: var(--w-red-500);
+  --danger-soft: rgba(248, 81, 73, 0.12);
+  --danger-text: #ff7b72;
+  --on-danger: #ffffff;
+  --info: var(--w-blue-500);
+  --info-soft: rgba(88, 166, 255, 0.14);
+  --info-text: #79b8ff;
+  --on-info: #071018;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
+  --shadow-overlay: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border);
+}
+
+/* Global reduced-motion waiver: streaming pulse degrades to a steady dot. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

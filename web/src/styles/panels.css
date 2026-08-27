@@ -1,0 +1,675 @@
+/* Cards + simple lines (settings)                                             */
+/* -------------------------------------------------------------------------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(2px);
+  display: grid;
+  place-items: center;
+  z-index: 40;
+  padding: 20px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.card-title {
+  font-weight: 600;
+}
+
+.card-body {
+  padding: 8px 20px 20px;
+}
+
+/* Settings panel shell styles (settings-card / settings-layout / settings-nav
+   / settings-content / settings-footer) live scoped in SettingsPanel.vue. */
+
+.setting-section {
+  padding: 14px 0 22px;
+  border-bottom: 1px solid var(--border);
+}
+.setting-section:last-child {
+  border-bottom: none;
+}
+
+.setting-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+/* Theme choice card styles live scoped in the appearance section component. */
+
+/* Simple-line setting rows */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+}
+.setting-row:first-of-type {
+  border-top: none;
+}
+.setting-row .row-label {
+  color: var(--text-2);
+}
+.setting-row .row-hint {
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.switch {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  transition: background 0.15s ease;
+  flex: 0 0 auto;
+}
+.switch.on {
+  background: var(--accent);
+}
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease;
+}
+.switch.on::after {
+  transform: translateX(16px);
+}
+
+.field {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+.field:focus {
+  border-color: var(--focus);
+}
+
+.footer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+.footer-settings-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  color: var(--text-2);
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.footer-settings-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.empty-hint {
+  text-align: center;
+  color: var(--muted);
+  padding: 48px 20px;
+}
+
+.workspace-empty {
+  color: var(--faint);
+  font-size: 12px;
+  padding: 8px 6px;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Right workspace sidebar (file browser + preview)                            */
+/* -------------------------------------------------------------------------- */
+
+.right-sidebar {
+  flex: 0 0 auto;
+  width: 0;
+  overflow: hidden;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  transition: width 0.22s ease;
+}
+
+/* Width comes from the workspace store (--ws-w, set while dragging or on
+   open); the clamp() is only a fallback before any width was set. */
+.right-sidebar.open {
+  width: var(--ws-w, clamp(300px, 34vw, 480px));
+}
+
+/* Dragging sets the width on every pointermove; the open/close transition
+   would only add lag. */
+.right-sidebar.dragging {
+  transition: none;
+}
+
+.rs-tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.rs-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.rs-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--brand);
+}
+.rs-tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.rs-tab-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+}
+.rs-body-changes {
+  flex-direction: column;
+}
+
+.right-sidebar-inner {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.rs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sidebar);
+}
+.rs-header .rs-title-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.rs-header .rs-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rs-header .rs-sub {
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rs-header .rs-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Two panes: the file tree stays on the left, the selected file renders on
+   the right (each scrolls independently). */
+.rs-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.ws-tree-pane {
+  flex: 0 0 38%;
+  min-width: 190px;
+  overflow-y: auto;
+  padding: 8px 4px 16px 8px;
+  border-right: 1px solid var(--border);
+}
+
+.ws-preview-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 10px 16px;
+}
+
+.ws-preview-pane > .file-preview {
+  flex: 1;
+}
+
+.ws-preview-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+/* On narrow screens the sidebar overlays instead of squeezing the chat. */
+@media (max-width: 860px) {
+  .main {
+    min-width: 0;
+  }
+  .split-handle {
+    display: none;
+  }
+  .right-sidebar,
+  .right-sidebar.open,
+  .right-sidebar-inner {
+    width: min(420px, 62vw);
+  }
+  .right-sidebar.open {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    box-shadow: var(--shadow-lg);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* File preview (markdown + shiki code highlight)                              */
+/* -------------------------------------------------------------------------- */
+
+.file-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.fp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 10px;
+}
+.fp-head .fp-file-icon {
+  color: var(--muted);
+}
+.fp-head .fp-title {
+  font-weight: 600;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fp-state {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.fp-state.fp-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--danger);
+}
+
+.fp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.fp-plain {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Shiki dual-theme output: swap CSS vars when dark mode is active (inline
+   styles carry the light color, so !important is required — see shiki docs). */
+.code-view pre,
+.shiki-host pre {
+  margin: 0;
+  padding: 2px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  background: transparent !important;
+  overflow-x: auto;
+}
+.code-view code,
+.shiki-host code {
+  font-family: var(--font-mono);
+}
+html.dark .shiki-host span {
+  color: var(--shiki-dark, inherit) !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Chat items (tool cards, streaming cursor, banners)                          */
+/* -------------------------------------------------------------------------- */
+
+.cursor {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--accent);
+  animation: blink 1s steps(2, start) infinite;
+}
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* Task-header status capsules: state before content — tone-coded, the
+   running dot breathes. (reduced-motion degrades it to a steady dot.) */
+.task-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+.pill-running {
+  border-color: color-mix(in srgb, var(--brand) 40%, var(--border));
+  background: var(--brand-soft);
+  color: var(--brand-text);
+}
+.pill-running .pill-dot {
+  background: var(--brand);
+  animation: task-pill-breathe 1.6s ease-in-out infinite;
+}
+@keyframes task-pill-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.pill-awaiting {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: var(--warn-soft);
+  color: var(--warn-text);
+}
+.pill-awaiting .pill-dot {
+  background: var(--warn);
+}
+.pill-queued {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.pill-queued .pill-dot {
+  background: var(--muted);
+}
+
+.error-banner {
+  max-width: 820px;
+  margin: 0 auto 20px;
+  padding: 10px 14px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  font-size: 13px;
+}
+
+
+/* Merged tool card: input and output live in one card under small section
+   labels; .tool-io strips the standalone border-top since the label above
+   already draws the separator. */
+/* In-stream cards: same column math as message bubbles. */
+.stream-card {
+  max-width: var(--chat-col);
+  margin: 0 auto 16px;
+}
+
+.tool-section-label {
+  padding: 7px 12px 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+}
+.tool-io {
+  border-top: none;
+}
+
+.tool-args {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-output {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.reasoning-icon {
+  color: var(--focus);
+}
+.reasoning-body {
+  color: var(--muted);
+  font-style: italic;
+  max-height: 280px;
+}
+
+.goal-note-icon {
+  color: var(--accent, var(--focus));
+}
+.reasoning-cursor {
+  margin: 0 12px 8px;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Interrupt modal                                                             */
+/* -------------------------------------------------------------------------- */
+
+.interrupt-card {
+  width: 520px;
+  max-width: 100%;
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.intr-reason {
+  margin: 0 0 10px;
+  color: var(--text);
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+
+.question-block {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.question-block:first-child {
+  border-top: none;
+}
+.question-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.question-text {
+  margin: 4px 0 8px;
+}
+
+.option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.option-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.option-row:hover {
+  background: var(--surface-2);
+}
+.option-label {
+  font-weight: 500;
+}
+.option-desc {
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.interrupt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.btn {
+  padding: 8px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.btn:hover {
+  background: var(--surface-hover);
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.send-btn.stop {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+
+/* While a run is busy the send button becomes the secondary "queue send"
+   (the stop button keeps the primary slot) — the touch entry for parking
+   the next message without the Enter key. */
+.send-btn.queue-send {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  box-shadow: none;
+}
+.send-btn.queue-send:not(:disabled):hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+

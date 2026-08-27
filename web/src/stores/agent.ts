@@ -9,6 +9,15 @@ import { fmtTokens } from '../lib/format'
 // The label maps below keep their Record<string, string> shape (components
 // index and Object.entries them) but expose getters, so every read resolves
 // through the global composer and stays in sync with locale switches.
+/** UI cycle order for the composer's Shift+Tab mode switch. */
+export const PERMISSION_MODE_ORDER: PermissionMode[] = [
+  'default',
+  'acceptEdits',
+  'plan',
+  'readOnly',
+  'bypassPermissions',
+]
+
 /** UI display labels: permission modes / thinking levels / quota windows. */
 /** Runtime guards for user-supplied mode/level strings (slash commands). */
 export function isPermissionMode(m: string): m is PermissionMode {

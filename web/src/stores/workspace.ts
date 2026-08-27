@@ -2,7 +2,7 @@ import { toErrorMessage } from '../lib/errors'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { WorkspaceFile } from '../types'
-import { getWorkspace, getWorkspaceFile } from '../api/client'
+import { getWorkspace, getWorkspaceFile, getWorkspaceChanges, undoWorkspace, type WorkspaceChange } from '../api/client'
 import i18n from '../i18n'
 
 // Split-layout constants (px). The chat column keeps a usable minimum —
@@ -59,12 +59,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     demo.value = v
   }
 
+  const treeLoading = ref(false)
+
   async function load(workspace?: string) {
     if (workspace !== undefined) root.value = workspace
+    treeLoading.value = true
     try {
       tree.value = await getWorkspace(root.value || undefined)
     } catch {
       tree.value = null
+    } finally {
+      treeLoading.value = false
     }
   }
 
@@ -126,8 +131,72 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     previewError.value = ''
   }
 
+  /* --------------------------- Changes review plane ------------------------ */
+
+  // The right panel's tab: the file tree or the pending-changes review.
+  const tab = ref<'files' | 'changes'>('files')
+  function openChangesTab() {
+    tab.value = 'changes'
+    if (!panelOpen.value) openPanel()
+    void refreshChanges()
+  }
+
+  const changes = ref<WorkspaceChange[]>([])
+  const changesLoading = ref(false)
+  const changesError = ref('')
+  const undoSteps = ref(0)
+
+  async function refreshChanges() {
+    if (demo.value) return
+    changesLoading.value = true
+    changesError.value = ''
+    try {
+      const resp = await getWorkspaceChanges(root.value || undefined)
+      changes.value = resp.files
+      undoSteps.value = resp.undo_steps
+    } catch (e) {
+      changesError.value = toErrorMessage(e)
+    } finally {
+      changesLoading.value = false
+    }
+  }
+
+  /** Checkpoint rollback: one path (to before first touch) or everything. */
+  async function undo(path?: string) {
+    try {
+      await undoWorkspace({ workspace: root.value || undefined, path })
+      await refreshChanges()
+      await load()
+    } catch (e) {
+      changesError.value = toErrorMessage(e)
+    }
+  }
+
+  /* ------------------- parked inline review comments (2-2) ---------------- */
+
+  // Comments collected on diff lines; they ride the NEXT run's prompt as
+  // file:line context (server-side buildPrompt) and clear once consumed.
+  const pendingComments = ref<Array<{ file: string; line: number; text: string }>>([])
+
+  function addComment(file: string, line: number, text: string) {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    pendingComments.value = [...pendingComments.value, { file, line, text: trimmed }]
+  }
+
+  function removeComment(file: string, line: number) {
+    pendingComments.value = pendingComments.value.filter((c) => !(c.file === file && c.line === line))
+  }
+
+  function takeComments() {
+    const out = pendingComments.value
+    pendingComments.value = []
+    return out
+  }
+
   return {
     tree,
+    treeLoading,
     root,
     panelOpen,
     width,
@@ -143,5 +212,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     openPreview,
     closePreview,
     setDemo,
+    tab,
+    openChangesTab,
+    changes,
+    changesLoading,
+    changesError,
+    undoSteps,
+    refreshChanges,
+    undo,
+    pendingComments,
+    addComment,
+    removeComment,
+    takeComments,
   }
 })

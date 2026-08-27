@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, FolderOpen, Plus, Settings, X } from 'lucide-vue-next'
+import { Activity, FolderOpen, Settings, X } from 'lucide-vue-next'
 import FolderPicker from "./FolderPicker.vue";
 import StatusModal from "./StatusModal.vue";
 import SessionList from "./SessionList.vue";
@@ -61,17 +61,7 @@ async function pickWorkspace(path: string) {
 
     <div class="sidebar-body">
       <section class="side-section">
-        <div class="side-section-head">
-          <span class="side-section-title">{{ t("sidebar.workspaces") }}</span>
-          <button
-            class="icon-btn"
-            :title="t('sidebar.newWorkspace')"
-            @click="openWorkspaceDialog"
-          >
-            <Plus :size="16" />
-          </button>
-        </div>
-        <SessionList />
+        <SessionList @add-workspace="openWorkspaceDialog" />
       </section>
     </div>
 

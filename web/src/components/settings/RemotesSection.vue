@@ -111,9 +111,9 @@ async function remove(p: WebProfile) {
       <div>
         <div class="row-label">{{ t('settings.remotes.addLabel') }}</div>
         <div class="row-hint">{{ t('settings.remotes.addHint') }}</div>
-        <div v-if="addError" class="row-hint" style="color: var(--danger, #e5484d)">{{ addError }}</div>
-        <input v-model="addURL" class="field" style="max-width: 280px" :placeholder="t('settings.remotes.addPlaceholder')" @keyup.enter="add()" />
-        <input v-model="addLabel" class="field" style="max-width: 160px" :placeholder="t('settings.remotes.labelPlaceholder')" @keyup.enter="add()" />
+        <div v-if="addError" class="row-hint" style="color: var(--danger)">{{ addError }}</div>
+        <input v-model="addURL" class="field" style="max-width: 280px" :placeholder="t('settings.remotes.addPlaceholder')" @keydown.enter="add()" />
+        <input v-model="addLabel" class="field" style="max-width: 160px" :placeholder="t('settings.remotes.labelPlaceholder')" @keydown.enter="add()" />
       </div>
       <button class="btn" :disabled="!addURL.trim() || busy" @click="add()">{{ t('settings.remotes.addButton') }}</button>
     </div>

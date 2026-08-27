@@ -38,10 +38,13 @@ const locked = () => settings.isManaged('memory-engine')
           <div class="row-hint">{{ t('settings.memory.autoRetainHint') }}</div>
         </div>
         <button
-          class="switch"
-          :class="{ on: settings.ladymAutoRetain }"
-          @click="!locked() && (settings.ladymAutoRetain = !settings.ladymAutoRetain)"
-        ></button>
+        class="switch"
+        role="switch"
+        :class="{ on: settings.ladymAutoRetain }"
+        :aria-label="t('settings.memory.autoRetain')"
+        :aria-checked="settings.ladymAutoRetain"
+        @click="!locked() && (settings.ladymAutoRetain = !settings.ladymAutoRetain)"
+      ></button>
       </div>
 
       <div class="setting-row">
@@ -50,10 +53,13 @@ const locked = () => settings.isManaged('memory-engine')
           <div class="row-hint">{{ t('settings.memory.system2Hint') }}</div>
         </div>
         <button
-          class="switch"
-          :class="{ on: settings.ladymSystem2 }"
-          @click="!locked() && (settings.ladymSystem2 = !settings.ladymSystem2)"
-        ></button>
+        class="switch"
+        role="switch"
+        :class="{ on: settings.ladymSystem2 }"
+        :aria-label="t('settings.memory.system2')"
+        :aria-checked="settings.ladymSystem2"
+        @click="!locked() && (settings.ladymSystem2 = !settings.ladymSystem2)"
+      ></button>
       </div>
 
       <div class="setting-row">

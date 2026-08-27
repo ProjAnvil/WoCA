@@ -1,0 +1,557 @@
+/* Chat input                                                                  */
+/* -------------------------------------------------------------------------- */
+
+.chat-input {
+  position: relative;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: 14px 20px;
+}
+
+.chat-input-inner {
+  max-width: 820px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 8px 10px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.chat-input-inner:focus-within {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent);
+}
+
+.chat-input textarea {
+  flex: 1;
+  resize: none;
+  border: none;
+  outline: none;
+  background: none;
+  line-height: 1.5;
+  max-height: 200px;
+}
+.chat-input textarea::placeholder {
+  color: var(--faint);
+}
+
+/* Chat-input toolbar: permission mode / thinking level / quota chips */
+.input-toolbar {
+  max-width: 820px;
+  margin: 0 auto 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ctl-wrap {
+  position: relative;
+}
+.ctl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  transition:
+    color 0.12s ease,
+    border-color 0.12s ease;
+}
+.ctl-chip:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.ctl-chip.open {
+  color: var(--focus);
+  border-color: var(--focus);
+}
+/* Thinking selector: disabled when the model lacks thinking support
+   (the drawer stays closed) */
+.ctl-chip.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ctl-chip.disabled:hover {
+  color: var(--muted);
+  border-color: var(--border);
+}
+.ctl-pop-note {
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--faint);
+  margin-left: 8px;
+}
+/* Transparent backdrop: closes the popover on outside click (sits below it) */
+.ctl-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+}
+.ctl-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 260px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  z-index: 20;
+}
+.ctl-pop-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 12px 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.ctl-refresh {
+  border: none;
+  background: none;
+  color: var(--focus);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.ctl-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 12px;
+  text-align: left;
+}
+.ctl-opt:hover,
+.ctl-opt.active {
+  background: var(--surface-active);
+}
+.ctl-opt.active {
+  box-shadow: inset 2px 0 0 var(--focus);
+}
+.ctl-opt-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ctl-opt-key {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--faint);
+}
+.ctl-opt-desc {
+  font-size: 12px;
+  color: var(--faint);
+}
+.quota-pop {
+  min-width: 320px;
+  max-width: 420px;
+}
+.quota-body {
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+/* Context indicator (hover-driven breakdown next to the quota chip) */
+.ctx-pop {
+  min-width: 340px;
+  max-width: 440px;
+}
+.ctx-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ctx-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+.ctx-exact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ctx-exact-num {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+.ctx-exact-detail {
+  font-size: 11px;
+  color: var(--faint);
+  line-height: 1.5;
+}
+.ctx-estimate {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ctx-estimate b {
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+/* Context window occupancy: donut ring + the linear bar (which uniquely
+   carries the compact-threshold mark). */
+.ctx-window {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.ctx-window-cols {
+  flex: 1;
+  min-width: 0;
+}
+.ctx-ring {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+}
+.ctx-ring-track {
+  fill: none;
+  stroke: var(--surface-active);
+  stroke-width: 5;
+}
+.ctx-ring-fill {
+  fill: none;
+  stroke: var(--ok);
+  stroke-width: 5;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  transition: stroke-dashoffset var(--dur-slow) var(--ease-out);
+}
+.ctx-ring-fill.warn {
+  stroke: var(--warn);
+}
+.ctx-ring-fill.danger {
+  stroke: var(--danger);
+}
+.ctx-ring-text {
+  fill: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-anchor: middle;
+}
+
+/* Cumulative usage block (process-session scope, from /api/quota). */
+.ctx-cumulative {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+.ctx-cum-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-bottom: var(--space-2);
+}
+.ctx-cum-rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.ctx-cum-note {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+.ctx-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: visible;
+}
+.ctx-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--focus);
+  transition: width 0.15s ease;
+}
+/* Auto-compact threshold marker on the window bar */
+.ctx-bar-mark {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--muted);
+  border-radius: 1px;
+}
+.ctx-bar-label {
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.ctx-compact {
+  font-size: 11px;
+  color: var(--faint);
+}
+.ctx-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.ctx-cat-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.ctx-cat-label {
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctx-cat-detail {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.ctx-cat-tokens {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.ctx-cat-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.ctx-cat-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--focus) 70%, transparent);
+}
+.ctx-foot {
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--faint);
+  line-height: 1.5;
+}
+
+/* Checkbox row name (shared by the settings panel's claudeenv and plugins
+   sections; the remaining env-check styles are scoped in ClaudeEnvSection.vue) */
+.env-check-name {
+  flex: 0 0 auto;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.attach-btn {
+  flex: 0 0 auto;
+  margin-bottom: 2px;
+}
+
+/* Attachment tray (pasted screenshots + picked files) */
+.attach-tray {
+  max-width: 820px;
+  margin: 0 auto 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.attach-chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.attach-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.attach-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-sm);
+}
+.attach-remove:hover {
+  background: var(--danger);
+  color: var(--on-danger);
+}
+.attach-name {
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--faint);
+}
+.attach-error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* Attachment thumbnails inside a sent user bubble */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.msg-attachment-img {
+  max-width: 220px;
+  max-height: 160px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  object-fit: contain;
+  background: var(--surface-2);
+}
+
+/* Autocomplete popup (/ skills, @ subagents) */
+.ac-popup {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  left: 20px;
+  right: 20px;
+  max-width: 780px;
+  max-height: 360px;
+  margin: 0 auto 8px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  z-index: 20;
+}
+.ac-popup .ac-list {
+  overflow-y: auto;
+}
+.ac-header {
+  padding: 7px 12px 5px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.ac-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  text-align: left;
+  transition: background 0.08s ease;
+}
+.ac-item .ac-icon {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.ac-item .ac-name {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ac-item .ac-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--faint);
+}
+.ac-item.active {
+  background: var(--surface-active);
+  box-shadow: inset 2px 0 0 var(--focus);
+}
+.ac-item.active .ac-icon {
+  color: var(--link);
+}
+.ac-item.active .ac-desc {
+  color: var(--text-2);
+}
+.ac-detail {
+  padding: 8px 12px 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+}
+
+.send-btn {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--on-accent);
+  transition: background 0.12s ease, opacity 0.12s ease;
+}
+.send-btn:hover {
+  background: var(--accent-hover);
+}
+.send-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* -------------------------------------------------------------------------- */

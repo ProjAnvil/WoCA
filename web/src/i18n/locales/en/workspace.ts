@@ -1,3 +1,22 @@
 export default {
+  changes: {
+    pendingCount: '{count} files to review',
+    rollbackAll: 'Roll back all',
+    rollbackAllTitle: 'Roll back all changes',
+    rollbackAllBody: 'Reverts all {count} un-reverted file changes in this workspace (back to their pre-edit state).',
+    rollbackFileTitle: 'Roll back this file',
+    rollbackFileBody: 'Reverts to before "{path}" was first touched (later edits to other files unwind with it).',
+    rollback: 'Roll back',
+    rolledBack: 'Rolled back',
+    dropTurnTitle: 'Drop the last conversation turn',
+    dropTurnBody: 'Removes the final user message and its reply; the transcript returns to before that turn.',
+    dropTurn: 'Drop turn',
+    turnDropped: 'Last turn dropped',
+    empty: 'No pending changes',
+    binary: 'Binary file (no text diff)',
+    commentLine: 'Comment on this line',
+    commentPlaceholder: 'Write a comment, Enter queues it for the next message…',
+    commentsQueued: '{count} comments ride the next message',
+  },
   demoNoContent: "The demo build doesn't include this file's content",
 }

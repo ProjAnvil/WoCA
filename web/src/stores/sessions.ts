@@ -1,25 +1,23 @@
-import { toErrorMessage } from '../lib/errors'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type {
   Attachment,
   ChatItem,
-  ContextInfo,
   Goal,
   Interrupt,
   RunStatus,
   Session,
-  TranscriptMessage,
   WorkspaceGroup,
 } from '../types'
 import * as api from '../api/client'
 import i18n from '../i18n'
 import { truncate, baseName } from '../lib/format'
 import { messagesToItems, nid } from '../lib/transcript'
-
-function isAbortError(value: unknown): boolean {
-  return typeof value === 'object' && value !== null && 'name' in value && value.name === 'AbortError'
-}
+import { useAgentStore, isPermissionMode, isThinkingLevel } from './agent'
+import { toErrorMessage } from '../lib/errors'
+import { createItemMutations } from './sessions/items'
+import { createContextTracker } from './sessions/context'
+import { createRunStreams } from './sessions/stream'
 
 // demoReply is a canned assistant answer used when the store runs in demo mode
 // (no backend), so the standalone demo remains interactive.
@@ -35,13 +33,18 @@ function demoReply(prompt: string): string {
     i18n.global.t('sessions.demo.toolCards'),
   ].join('\n')
 }
-import { useAgentStore, isPermissionMode, isThinkingLevel } from './agent'
 
+// Orchestrating session store: list/selection/workspace grouping plus the
+// send/goal/interrupt lifecycle. The three planes live in ./sessions/*:
+// items.ts (live-block mutations), context.ts (usage snapshot), stream.ts
+// (server run state + SSE attach/reattach).
 export const useSessionStore = defineStore('sessions', () => {
   const sessions = ref<Session[]>([])
   const activeId = ref('')
 
   const items = ref<Record<string, ChatItem[]>>({})
+  // True while a session's transcript is being fetched (message skeletons).
+  const historyLoading = ref(false)
   const status = ref<Record<string, RunStatus>>({})
   // 1-based queue position while a run waits on the session gate (backend
   // admission; absent = not queued).
@@ -59,28 +62,46 @@ export const useSessionStore = defineStore('sessions', () => {
   const goal = ref<Record<string, Goal | null>>({})
   const goalRunning = ref<Record<string, boolean>>({})
   const goalPanelOpen = ref(false)
-  // Context-usage snapshot for the chat input's context indicator. Hover
-  // refreshes it on demand; a run finishing refreshes it in the background so
-  // the always-visible chip number stays current.
-  const contextInfo = ref<ContextInfo | null>(null)
-  const contextLoading = ref(false)
-  const contextError = ref('')
 
-  // Server-truth run state per session (running / awaiting), seeded from the
-  // session list and kept live by the global /api/events stream. This is the
-  // authoritative signal for the sidebar badge — it survives page refreshes
-  // and reflects runs other tabs started, unlike the local status map which
-  // only covers streams this tab attached.
-  const serverRunState = ref<Record<string, { status: 'running' | 'awaiting'; runId: string }>>({})
-  let eventsSource: api.EventStream | null = null
-  const runStreamControllers = new Map<string, AbortController>()
-  const reattaching = new Set<string>()
+  // --- demo mode (the standalone demo app seeds this instead of the backend) ---
+  const demo = ref(false)
+
+  const mutations = createItemMutations({ items, streamingId, reasoningId, goalNoteId, runId })
+  const { list, push, closeStreaming, closeReasoning, closeGoalNote } = mutations
+
+  const { contextInfo, contextLoading, contextError, refreshContext } = createContextTracker({
+    activeId,
+    items,
+    demo,
+  })
+
   // Sessions with a createRun POST in flight. The server's global `running`
   // event races the POST response; without this marker maybeReattach would
   // treat our own just-started run as a foreign one (local status is still
   // the previous turn's) and rebuild items from the pre-run disk snapshot,
   // wiping the optimistic user bubble send() just pushed.
   const sending = new Set<string>()
+
+  const streams = createRunStreams({
+    demo,
+    activeId,
+    sessions,
+    status,
+    interrupt,
+    error,
+    queuePosition,
+    runId,
+    streamingId,
+    reasoningId,
+    goalNoteId,
+    goal,
+    goalRunning,
+    items: mutations,
+    sending,
+    loadSession: (id) => loadSession(id),
+    refreshContext: () => refreshContext(),
+  })
+  const { serverRunState, runStateOf, seedRunState, connectGlobalEvents, maybeReattach, attachStream, abortRun } = streams
 
   const activeSession = computed(() => sessions.value.find((s) => s.id === activeId.value))
   const activeItems = computed(() => items.value[activeId.value] ?? [])
@@ -133,86 +154,6 @@ export const useSessionStore = defineStore('sessions', () => {
     if (!(id in goalNoteId.value)) goalNoteId.value[id] = null
   }
 
-  // --- server-truth run state (sidebar badge + refresh reattach) ---
-
-  // runStateOf merges both signals: the local status map (instant, but only
-  // for streams this tab attached) and the server state (authoritative,
-  // survives refresh, covers other tabs). A dead local stream falls through
-  // to the server value, so a run that outlived the stream still shows busy.
-  function runStateOf(sid: string): 'running' | 'awaiting' | '' {
-    const local = status.value[sid] ?? 'idle'
-    if (local === 'awaiting') return 'awaiting'
-    if (local === 'running' || local === 'queued') return 'running'
-    return serverRunState.value[sid]?.status ?? ''
-  }
-
-  function seedRunState(list: { id: string; run_status?: string; run_id?: string }[]) {
-    const next: Record<string, { status: 'running' | 'awaiting'; runId: string }> = {}
-    for (const s of list) {
-      if (s.run_status === 'running' || s.run_status === 'awaiting') {
-        next[s.id] = { status: s.run_status, runId: s.run_id ?? '' }
-      }
-    }
-    serverRunState.value = next
-  }
-
-  // connectGlobalEvents subscribes to /api/events. Native EventSource
-  // reconnects on its own; every (re)connection is seeded with the current
-  // snapshot server-side, which keeps the map fresh without polling.
-  function connectGlobalEvents() {
-    if (demo.value || eventsSource) return
-    eventsSource = api.streamEvents((ev) => {
-      if (ev.status === 'running' || ev.status === 'awaiting') {
-        serverRunState.value = {
-          ...serverRunState.value,
-          [ev.session_id]: { status: ev.status, runId: ev.run_id ?? '' },
-        }
-        // A run started elsewhere (or before a refresh) in the visible
-        // session: reattach its stream so the chat streams live again.
-        if (ev.session_id === activeId.value) maybeReattach(ev.session_id)
-      } else if (serverRunState.value[ev.session_id]) {
-        const next = { ...serverRunState.value }
-        delete next[ev.session_id]
-        serverRunState.value = next
-      }
-    })
-  }
-
-  // maybeReattach resubscribes a session's live run after this tab lost its
-  // stream (page refresh, or the run started in another tab). The replay
-  // rebuilds the chat tail and restores a parked interrupt card.
-  async function maybeReattach(sid: string) {
-    const st = serverRunState.value[sid]
-    if (!st || !st.runId || demo.value) return
-    const local = status.value[sid] ?? 'idle'
-    if (local === 'running' || local === 'queued' || local === 'awaiting') return
-    // A send whose POST is still in flight owns the run it is about to
-    // attach to — reattaching here would reload the pre-run snapshot over
-    // its optimistic user bubble (see `sending` above).
-    if (sending.has(sid)) return
-    if (reattaching.has(st.runId)) return
-    reattaching.add(st.runId)
-    try {
-      // Rebuild the item list from the on-disk transcript first. Runs
-      // persist only at completion, so disk is always the pre-run snapshot —
-      // replaying onto it appends exactly this run's events. This also
-      // prevents duplicates when a broken earlier stream already applied
-      // part of the run to the live items.
-      const s = sessions.value.find((x) => x.id === sid)
-      if (s) s.loaded = false
-      interrupt.value[sid] = null
-      await loadSession(sid)
-      streamingId.value[sid] = null
-      reasoningId.value[sid] = null
-      goalNoteId.value[sid] = null
-      await attachStream(sid, st.runId)
-    } finally {
-      reattaching.delete(st.runId)
-    }
-  }
-
-  // --- demo mode (the standalone demo app seeds this instead of the backend) ---
-  const demo = ref(false)
   function setDemo(v: boolean) {
     demo.value = v
   }
@@ -294,12 +235,15 @@ export const useSessionStore = defineStore('sessions', () => {
     if (!s) return
     ensureMaps(id)
     if (!s.loaded) {
+      historyLoading.value = true
       try {
         const { messages } = await api.getSession(id)
         items.value[id] = messagesToItems(messages)
         s.loaded = true
       } catch {
         items.value[id] = []
+      } finally {
+        historyLoading.value = false
       }
     }
     // Refresh the goal chip (sidecar-backed after a server restart).
@@ -318,29 +262,6 @@ export const useSessionStore = defineStore('sessions', () => {
     // Switching onto a session whose run lives on the server (started in
     // another tab / before a refresh): pick its stream back up.
     maybeReattach(id)
-  }
-
-  // refreshContext reloads the active session's context-usage snapshot (the
-  // hover popover's payload and the chip number). An empty session (nothing
-  // sent yet) has no usage to report — the chip stays disabled until the
-  // first message lands. Local-only sessions (demo mode / failed create)
-  // have no server-side transcript either, so they keep the last snapshot.
-  async function refreshContext() {
-    const sid = activeId.value
-    if (!sid || sid.startsWith('tmp-') || demo.value) return
-    if ((items.value[sid] ?? []).length === 0) {
-      contextInfo.value = null
-      return
-    }
-    contextLoading.value = true
-    contextError.value = ''
-    try {
-      contextInfo.value = await api.getSessionContext(sid)
-    } catch (e) {
-      contextError.value = toErrorMessage(e)
-    } finally {
-      contextLoading.value = false
-    }
   }
 
   // removeSession deletes a session server-side and drops all of its local
@@ -372,274 +293,6 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
 
-  // --- item mutations ---
-
-  function list(sid: string): ChatItem[] {
-    return items.value[sid] ?? []
-  }
-
-  function push(sid: string, item: ChatItem) {
-    items.value[sid] = [...list(sid), item]
-  }
-
-  function closeStreaming(sid: string) {
-    const id = streamingId.value[sid]
-    streamingId.value[sid] = null
-    if (!id) return
-    const ls = list(sid)
-    const idx = ls.findIndex((i) => i.id === id)
-    if (idx >= 0 && ls[idx].kind === 'assistant') {
-      const next = [...ls]
-      next[idx] = { ...(next[idx] as Extract<ChatItem, { kind: 'assistant' }>), streaming: false }
-      items.value[sid] = next
-    }
-  }
-
-  function ensureStreaming(sid: string): string {
-    const existing = streamingId.value[sid]
-    if (existing) return existing
-    const id = nid()
-    push(sid, { id, kind: 'assistant', content: '', streaming: true, ts: Date.now(), srcRun: runId.value[sid] })
-    streamingId.value[sid] = id
-    return id
-  }
-
-  /*
-   * Live-block lifecycle: while a run streams, a session holds at most two
-   * "live" items — the reasoning (thinking) block tracked by reasoningId and
-   * the assistant answer tracked by streamingId. The answer bubble is created
-   * lazily by ensureStreaming on the first delta, not when the run starts, so
-   * tool-only turns never render an empty bubble. Both blocks are frozen
-   * (streaming: false) by closeStreaming/closeReasoning on done/error.
-   * appendDelta and addToolCall also close the reasoning block: the first
-   * answer token or any tool call means the model has stopped thinking, so
-   * the card must collapse even though the run continues.
-   */
-  function appendDelta(sid: string, text: string) {
-    if (!text) return
-    // The answer's first token ends the thinking segment (it collapses) and
-    // the goal-loop narration block (the unified reply is arriving).
-    closeReasoning(sid)
-    closeGoalNote(sid)
-    const id = ensureStreaming(sid)
-    const ls = list(sid)
-    const idx = ls.findIndex((i) => i.id === id)
-    if (idx < 0) return
-    const cur = ls[idx] as Extract<ChatItem, { kind: 'assistant' }>
-    const next = [...ls]
-    next[idx] = { ...cur, content: cur.content + text }
-    items.value[sid] = next
-  }
-
-  // A tool call also ends the live thinking segment.
-  function addToolCall(sid: string, tc: { id: string; name: string; args: Record<string, unknown> }) {
-    closeStreaming(sid)
-    closeReasoning(sid)
-    push(sid, { id: nid(), kind: 'tool_call', toolCallId: tc.id, name: tc.name, args: tc.args })
-  }
-
-  function addToolResult(sid: string, tr: { tool_call_id: string; content: string }) {
-    // The result lands on its call's card (input + output in one card). An
-    // orphan result (no matching call in the list) falls back to a standalone
-    // card so it is never silently dropped.
-    const ls = list(sid)
-    const idx = ls.findIndex((i) => i.kind === 'tool_call' && i.toolCallId === tr.tool_call_id)
-    if (idx >= 0) {
-      const cur = ls[idx] as Extract<ChatItem, { kind: 'tool_call' }>
-      const next = [...ls]
-      next[idx] = { ...cur, result: tr.content }
-      items.value[sid] = next
-      return
-    }
-    push(sid, { id: nid(), kind: 'tool_result', toolCallId: tr.tool_call_id, content: tr.content })
-  }
-
-  // --- reasoning (thinking) items ---
-
-  // appendReasoning extends the session's live thinking block, creating it
-  // before the assistant bubble on first fragment.
-  function appendReasoning(sid: string, text: string) {
-    if (!text) return
-    let id = reasoningId.value[sid]
-    const ls = list(sid)
-    const idx = id ? ls.findIndex((i) => i.id === id) : -1
-    if (idx >= 0 && ls[idx].kind === 'reasoning') {
-      const cur = ls[idx] as Extract<ChatItem, { kind: 'reasoning' }>
-      const next = [...ls]
-      next[idx] = { ...cur, content: cur.content + text }
-      items.value[sid] = next
-      return
-    }
-    id = nid()
-    push(sid, { id, kind: 'reasoning', content: text, streaming: true })
-    reasoningId.value[sid] = id
-  }
-
-  // closeReasoning freezes the live thinking block (its card collapses to a
-  // "thinking process" header the user can expand).
-  function closeReasoning(sid: string) {
-    const id = reasoningId.value[sid]
-    reasoningId.value[sid] = null
-    if (!id) return
-    const ls = list(sid)
-    const idx = ls.findIndex((i) => i.id === id)
-    if (idx >= 0 && ls[idx].kind === 'reasoning') {
-      const next = [...ls]
-      next[idx] = { ...(next[idx] as Extract<ChatItem, { kind: 'reasoning' }>), streaming: false }
-      items.value[sid] = next
-    }
-  }
-
-  // --- goal-loop narration (progress, never an answer bubble) ---
-
-  // appendGoalNote extends the session's live goal-loop narration block —
-  // cycle banners and the executor's per-cycle chatter — created lazily on
-  // the first fragment of a goal run.
-  function appendGoalNote(sid: string, text: string) {
-    if (!text) return
-    let id = goalNoteId.value[sid]
-    const ls = list(sid)
-    const idx = id ? ls.findIndex((i) => i.id === id) : -1
-    if (idx >= 0 && ls[idx].kind === 'goal_note') {
-      const cur = ls[idx] as Extract<ChatItem, { kind: 'goal_note' }>
-      const next = [...ls]
-      next[idx] = { ...cur, content: cur.content + text }
-      items.value[sid] = next
-      return
-    }
-    id = nid()
-    push(sid, { id, kind: 'goal_note', content: text, streaming: true })
-    goalNoteId.value[sid] = id
-  }
-
-  // closeGoalNote freezes the live narration block; the unified reply or the
-  // run's terminal event unfreezes it.
-  function closeGoalNote(sid: string) {
-    const id = goalNoteId.value[sid]
-    goalNoteId.value[sid] = null
-    if (!id) return
-    const ls = list(sid)
-    const idx = ls.findIndex((i) => i.id === id)
-    if (idx >= 0 && ls[idx].kind === 'goal_note') {
-      const next = [...ls]
-      next[idx] = { ...(next[idx] as Extract<ChatItem, { kind: 'goal_note' }>), streaming: false }
-      items.value[sid] = next
-    }
-  }
-
-  // --- run lifecycle ---
-
-  // attachStream subscribes to a run's SSE stream, updating this session's
-  // chat items and goal chip. afterDone runs once the stream ends (used for
-  // the goal loop's idle auto-continue after an interjected user run).
-  //
-  // claimRunId=false keeps runId[sid] on the run that currently owns the
-  // session: a queued run must never steal the single answerInterrupt/cancel
-  // slot (its interrupt-free lifetime makes the slot belong to the active
-  // run by construction). The run_started handler claims the slot when a
-  // queued run is promoted — at that point the previous run is guaranteed
-  // terminal (the backend releases the gate only after persisting it).
-  async function attachStream(
-    sid: string,
-    rid: string,
-    afterDone?: () => void,
-    claimRunId = true,
-  ) {
-    if (claimRunId) runId.value[sid] = rid
-    runStreamControllers.get(rid)?.abort()
-    const controller = new AbortController()
-    runStreamControllers.set(rid, controller)
-    try {
-      await api.streamRun(rid, {
-        onDelta: (t) => appendDelta(sid, t),
-        onReasoning: (t) => appendReasoning(sid, t),
-        onGoalNote: (t) => appendGoalNote(sid, t),
-        onToolCall: (tc) => addToolCall(sid, tc),
-        onToolResult: (tr) => addToolResult(sid, tr),
-        onInterrupt: (ev) => {
-          interrupt.value[sid] = { kind: ev.kind, payload: ev.payload } as unknown as Interrupt
-          status.value[sid] = 'awaiting'
-        },
-        onInterruptResolved: () => {
-          // Fired live on answer and on replay: a satisfied interrupt must
-          // never linger as an unanswered card (the refresh-reattach path
-          // replays answered interrupts too).
-          interrupt.value[sid] = null
-          if (status.value[sid] === 'awaiting') status.value[sid] = 'running'
-        },
-        onGoal: (ev) => {
-          goal.value[sid] = ev.goal
-          goalRunning.value[sid] = ev.running
-        },
-        onRunQueued(pos) {
-          status.value[sid] = 'queued'
-          queuePosition.value[sid] = pos
-        },
-        onQueuePosition(pos) {
-          queuePosition.value[sid] = pos
-        },
-        onRunStarted() {
-          status.value[sid] = 'running'
-          delete queuePosition.value[sid]
-          runId.value[sid] = rid
-        },
-        onResync() {
-          // The gap exceeds the server's replay window (or a seq jump was
-          // detected): fall back to refetching the full session messages.
-          // loadSession skips already-loaded sessions, so reset loaded first
-          // to force the refetch; after the rebuild the old streaming bubble
-          // slots are stale — clear them so later deltas open fresh bubbles.
-          const s = sessions.value.find((x) => x.id === sid)
-          if (s) s.loaded = false
-          void loadSession(sid).then(() => {
-            streamingId.value[sid] = null
-            reasoningId.value[sid] = null
-          })
-        },
-        onDone: () => {
-          closeStreaming(sid)
-          closeReasoning(sid)
-          closeGoalNote(sid)
-          // A terminal event ends any parked interrupt too (TTL-cancelled
-          // asks never get an interrupt_resolved of their own).
-          interrupt.value[sid] = null
-          status.value[sid] = 'done'
-          delete queuePosition.value[sid]
-          afterDone?.()
-          // The terminal SSE event fires just before the server persists the
-          // final transcript, so let the save land before re-reading it.
-          if (sid === activeId.value) window.setTimeout(() => void refreshContext(), 500)
-        },
-        onError: (msg) => {
-          closeStreaming(sid)
-          closeReasoning(sid)
-          closeGoalNote(sid)
-          interrupt.value[sid] = null
-          error.value[sid] = msg
-          status.value[sid] = 'error'
-          delete queuePosition.value[sid]
-        },
-      }, controller.signal)
-    } catch (e) {
-      if (controller.signal.aborted && isAbortError(e)) {
-        if (runStreamControllers.get(rid) === controller) {
-          closeStreaming(sid)
-          closeReasoning(sid)
-          closeGoalNote(sid)
-        }
-        return
-      }
-      closeStreaming(sid)
-      closeReasoning(sid)
-      closeGoalNote(sid)
-      error.value[sid] = toErrorMessage(e)
-      status.value[sid] = 'error'
-      delete queuePosition.value[sid]
-    } finally {
-      if (runStreamControllers.get(rid) === controller) runStreamControllers.delete(rid)
-    }
-  }
-
   /*
    * Idle continuation: while a goal is active the user can still interject a
    * normal prompt; the goal loop waits for that run (attachStream wires this
@@ -668,7 +321,7 @@ export const useSessionStore = defineStore('sessions', () => {
     }
   }
 
-  async function send(text: string, attachments?: Attachment[]) {
+  async function send(text: string, attachments?: Attachment[], comments?: Array<{ file: string; line: number; text: string }>) {
     const sid = activeId.value
     const prompt = text.trim()
     if ((!prompt && !attachments?.length) || !sid) return
@@ -723,7 +376,7 @@ export const useSessionStore = defineStore('sessions', () => {
         mime_type: a.mimeType,
         data: a.base64,
       }))
-      const res = await api.createRun(sid, prompt, activeWorkspace.value.path, payload)
+      const res = await api.createRun(sid, prompt, activeWorkspace.value.path, payload, comments)
       // The response reports whether the run started or queued behind the
       // session gate; run_started on the stream flips queued → running. A
       // queued run leaves runId on the active run (claim only on promotion).
@@ -876,7 +529,7 @@ export const useSessionStore = defineStore('sessions', () => {
     const sid = activeId.value
     if (!sid) return
     const rid = runId.value[sid]
-    if (rid) runStreamControllers.get(rid)?.abort()
+    if (rid) abortRun(rid)
     closeStreaming(sid)
     closeReasoning(sid)
     closeGoalNote(sid)
@@ -914,6 +567,7 @@ export const useSessionStore = defineStore('sessions', () => {
     runId,
     queuePosition,
     workspaceGroups,
+    historyLoading,
     activeWorkspace,
     activeWorkspaceKey,
     serverRunState,
@@ -923,6 +577,8 @@ export const useSessionStore = defineStore('sessions', () => {
     contextError,
     refreshContext,
     init,
+    demo,
+    loadSession,
     createSession,
     setActive,
     removeSession,

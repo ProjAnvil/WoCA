@@ -3,10 +3,14 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Brain, Plus, Search, Trash2, X } from 'lucide-vue-next'
 import { useMemoryStore } from '../stores/memory'
+import { useConfirmStore } from '../stores/confirm'
+import WSheet from './ui/WSheet.vue'
+import WSkeleton from './ui/WSkeleton.vue'
 import type { MemoryItem } from '../types'
 
 const { t, locale } = useI18n()
 const memory = useMemoryStore()
+const confirmDialog = useConfirmStore()
 
 // Layer labels carry the L1~L6 number (e.g. "L2 facts") so the chip, the badge
 // and the layer ordering all read consistently.
@@ -59,7 +63,14 @@ function fmtTime(ts: number): string {
 }
 
 async function removeItem(m: MemoryItem) {
-  if (!window.confirm(t('memory.forgetConfirm'))) return
+  const ok = await confirmDialog.ask({
+    title: t('memory.forgetTitle'),
+    body: t('memory.forgetConfirm'),
+    confirmLabel: t('memory.forgetAction'),
+    cancelLabel: t('common.cancel'),
+    tone: 'danger',
+  })
+  if (!ok) return
   // remove() catches errors internally and writes them to the store's error,
   // surfaced by the mem-error row.
   await memory.remove(m.id)
@@ -86,8 +97,8 @@ function toggleLayer(layer: string) {
 </script>
 
 <template>
-  <div class="overlay" @click.self="memory.close()">
-    <div class="card memory-card">
+  <WSheet :title="t('memory.title')" size="lg" @close="memory.close()">
+    <div class="memory-card">
       <div class="card-head">
         <span class="card-title">
           <Brain :size="15" />
@@ -126,7 +137,17 @@ function toggleLayer(layer: string) {
         <p v-else-if="!memory.loading && memory.items.length === 0" class="mem-empty">
           {{ t('memory.empty') }}
         </p>
-        <p v-if="memory.loading" class="mem-empty">{{ t('common.loading') }}</p>
+        <div v-if="memory.loading" role="status" aria-busy="true">
+          <span class="sr-only">{{ t('common.loading') }}</span>
+          <template v-if="memory.items.length === 0">
+            <div v-for="i in 3" :key="i" class="mem-skeleton-item">
+              <WSkeleton variant="text" width="34%" />
+              <WSkeleton variant="text" width="84%" />
+              <WSkeleton variant="text" width="58%" />
+            </div>
+          </template>
+          <WSkeleton v-else variant="text" width="42%" />
+        </div>
 
         <div v-if="insightItems.length" class="mem-group">
           <div class="mem-group-title">{{ t('memory.insights') }}</div>
@@ -179,5 +200,5 @@ function toggleLayer(layer: string) {
         <p class="mem-privacy">{{ t('memory.privacy') }}</p>
       </div>
     </div>
-  </div>
+  </WSheet>
 </template>

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Brain, Bug, Check, ChevronRight, Copy, Target, Wrench } from 'lucide-vue-next'
+import { Brain, Bug, Check, Copy, Target, Wrench } from 'lucide-vue-next'
 import type { ChatItem } from '../types'
 import { renderMarkdown } from '../lib/markdown'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
 import { useServerSettingsStore } from '../stores/serverSettings'
 import Avatar from './Avatar.vue'
+import WCollapseCard from './ui/WCollapseCard.vue'
 
 const props = defineProps<{ item: ChatItem }>()
 const { t } = useI18n()
@@ -158,6 +159,7 @@ function copyDebugInfo() {
         <button
           class="bubble-action"
           :title="t('chat.copyMarkdown')"
+          :aria-label="t('chat.copyMarkdown')"
           @click="copyMarkdown()"
         >
           <Check v-if="copied === 'md'" :size="12" />
@@ -167,6 +169,7 @@ function copyDebugInfo() {
           v-if="serverSettings.debugLog"
           class="bubble-action debug"
           :title="t('chat.copyDebug')"
+          :aria-label="t('chat.copyDebug')"
           @click="copyDebugInfo()"
         >
           <Check v-if="copied === 'debug'" :size="12" />
@@ -176,40 +179,45 @@ function copyDebugInfo() {
     </div>
   </div>
 
-  <!-- reasoning (thinking process): collapsible block, live while streaming -->
-  <div v-else-if="item.kind === 'reasoning'" class="tool-card reasoning-card" :class="{ live: reasoningStreaming }">
-    <button class="tool-card-head tool-toggle" @click="reasoningOpen = !reasoningOpen">
-      <Brain :size="13" class="reasoning-icon" />
-      <ChevronRight :size="13" class="tool-chevron" :class="{ open: reasoningOpen }" />
-      <span class="tool-name">{{ reasoningStreaming ? t('chat.thinkingLive') : t('chat.thinkingDone') }}</span>
-      <span v-if="!reasoningStreaming" class="reasoning-size">{{ t('chat.charCount', { count: reasoningContent.length }) }}</span>
-    </button>
-    <pre v-if="reasoningOpen" class="tool-output reasoning-body">{{ reasoningContent }}</pre>
-    <span v-else-if="reasoningStreaming" class="cursor reasoning-cursor"></span>
-  </div>
+  <!-- reasoning (thinking process): collapsible card, live while streaming -->
+  <WCollapseCard class="stream-card"     v-else-if="item.kind === 'reasoning'"
+    :title="reasoningStreaming ? t('chat.thinkingLive') : t('chat.thinkingDone')"
+    :meta="reasoningStreaming ? '' : t('chat.charCount', { count: reasoningContent.length })"
+    tone="brand"
+    :live="reasoningStreaming"
+    :open="reasoningOpen"
+    @update:open="reasoningOpen = $event"
+  >
+    <template #icon><Brain :size="13" class="reasoning-icon" /></template>
+    <pre class="tool-output reasoning-body">{{ reasoningContent }}</pre>
+    <span v-if="reasoningStreaming" class="cursor reasoning-cursor"></span>
+  </WCollapseCard>
 
   <!-- goal-loop narration: cycle banners + per-cycle chatter as collapsible
        progress, never an answer bubble (the run ends with one unified reply) -->
-  <div v-else-if="item.kind === 'goal_note'" class="tool-card goal-note-card" :class="{ live: goalNoteStreaming }">
-    <button class="tool-card-head tool-toggle" @click="goalNoteOpen = !goalNoteOpen">
-      <Target :size="13" class="goal-note-icon" />
-      <ChevronRight :size="13" class="tool-chevron" :class="{ open: goalNoteOpen }" />
-      <span class="tool-name">{{ goalNoteStreaming ? t('chat.goalLoopLive') : t('chat.goalLoopDone') }}</span>
-      <span v-if="!goalNoteStreaming" class="reasoning-size">{{ t('chat.charCount', { count: goalNoteContent.length }) }}</span>
-    </button>
-    <pre v-if="goalNoteOpen" class="tool-output reasoning-body">{{ goalNoteContent }}</pre>
-    <span v-else-if="goalNoteStreaming" class="cursor reasoning-cursor"></span>
-  </div>
+  <WCollapseCard class="stream-card"     v-else-if="item.kind === 'goal_note'"
+    :title="goalNoteStreaming ? t('chat.goalLoopLive') : t('chat.goalLoopDone')"
+    :meta="goalNoteStreaming ? '' : t('chat.charCount', { count: goalNoteContent.length })"
+    tone="brand"
+    :live="goalNoteStreaming"
+    :open="goalNoteOpen"
+    @update:open="goalNoteOpen = $event"
+  >
+    <template #icon><Target :size="13" class="goal-note-icon" /></template>
+    <pre class="tool-output reasoning-body">{{ goalNoteContent }}</pre>
+    <span v-if="goalNoteStreaming" class="cursor reasoning-cursor"></span>
+  </WCollapseCard>
 
   <!-- tool call: input and output share one card (result merges in when it
-       arrives; a still-running call shows a hint instead of the output) -->
-  <div v-else-if="item.kind === 'tool_call'" class="tool-card">
-    <button class="tool-card-head tool-toggle" @click="collapsed = !collapsed">
-      <Wrench :size="13" />
-      <ChevronRight :size="13" class="tool-chevron" :class="{ open: !collapsed }" />
-      <span class="tool-name">{{ toolName }}</span>
-      <span v-if="!toolHasResult" class="tool-status">{{ t('chat.running') }}</span>
-    </button>
+       arrives; a still-running call shows a live hint instead of the output) -->
+  <WCollapseCard class="stream-card"     v-else-if="item.kind === 'tool_call'"
+    :title="toolName"
+    :meta="toolHasResult ? '' : t('chat.running')"
+    :live="!toolHasResult"
+    :open="!collapsed"
+    @update:open="collapsed = !$event"
+  >
+    <template #icon><Wrench :size="13" /></template>
     <template v-if="!collapsed">
       <div class="tool-section-label">{{ t('chat.input') }}</div>
       <pre class="tool-args tool-io">{{ toolArgs }}</pre>
@@ -218,14 +226,12 @@ function copyDebugInfo() {
         <pre class="tool-output tool-io">{{ toolResultContent }}</pre>
       </template>
     </template>
-  </div>
+  </WCollapseCard>
 
   <!-- tool result (orphan: its call is no longer in the transcript) -->
-  <div v-else class="tool-card tool-result">
-    <button class="tool-card-head tool-toggle" @click="collapsed = !collapsed">
-      <ChevronRight :size="13" class="tool-chevron" :class="{ open: !collapsed }" />
-      <span class="tool-name">{{ t('chat.toolOutput') }}</span>
-    </button>
-    <pre v-if="!collapsed" class="tool-output">{{ toolResultContent }}</pre>
-  </div>
+  <WCollapseCard class="stream-card" v-else :title="t('chat.toolOutput')" :open="!collapsed" @update:open="collapsed = !$event">
+    <template v-if="!collapsed">
+      <pre class="tool-output">{{ toolResultContent }}</pre>
+    </template>
+  </WCollapseCard>
 </template>

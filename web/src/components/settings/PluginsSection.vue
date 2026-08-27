@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import WSkeleton from '../ui/WSkeleton.vue'
 import { computed, onMounted } from 'vue'
 import { Puzzle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
@@ -53,8 +54,13 @@ const stateLabels = computed<Record<string, string>>(() => ({
       }}
     </p>
 
-    <div v-if="pluginState.loading && !pluginState.loaded" class="row-hint">{{ t('common.loading') }}</div>
-    <div v-else-if="pluginState.error" class="row-hint" style="color: var(--danger, #e5484d)">
+    <div v-if="pluginState.loading && !pluginState.loaded" role="status" aria-busy="true">
+      <span class="sr-only">{{ t('common.loading') }}</span>
+      <div v-for="i in 3" :key="i" class="plugin-skeleton">
+        <WSkeleton variant="rect" height="44px" />
+      </div>
+    </div>
+    <div v-else-if="pluginState.error" class="row-hint" style="color: var(--danger)">
       {{ pluginState.error }}
     </div>
     <div v-if="pluginState.message" class="row-hint" style="margin-bottom: 6px">
@@ -76,8 +82,11 @@ const stateLabels = computed<Record<string, string>>(() => ({
         </div>
         <button
           class="switch"
+          role="switch"
           :class="{ on: p.enabled }"
           :disabled="pluginState.toggling === p.name || orgLocked"
+          :aria-label="p.name"
+          :aria-checked="p.enabled"
           :title="orgLocked ? t('settings.managedTooltip') : p.enabled ? t('settings.plugins.disableTip') : t('settings.plugins.enableTip')"
           @click="plugins.toggle(p)"
         ></button>
@@ -159,10 +168,10 @@ const stateLabels = computed<Record<string, string>>(() => ({
   color: var(--faint);
 }
 .plugin-state[data-state='ready'] {
-  color: #46a758;
+  color: var(--ok-text);
 }
 .plugin-state[data-state='installing'] {
-  color: var(--warn, #f5a524);
+  color: var(--warn);
 }
 .plugin-state[data-state='error'] {
   color: var(--danger);
@@ -187,7 +196,7 @@ const stateLabels = computed<Record<string, string>>(() => ({
   background: var(--surface-hover);
   padding: 6px 8px;
   font-size: 11px;
-  font-family: var(--mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   color: var(--faint);
   white-space: pre-wrap;
   word-break: break-all;
@@ -197,6 +206,6 @@ const stateLabels = computed<Record<string, string>>(() => ({
   gap: 8px;
 }
 .plugin-versions {
-  color: #46a758;
+  color: var(--ok-text);
 }
 </style>

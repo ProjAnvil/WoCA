@@ -106,7 +106,7 @@ async function submit() {
   position: fixed;
   inset: 0;
   z-index: 200;
-  background: var(--bg, #14161a);
+  background: var(--bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -117,9 +117,9 @@ async function submit() {
   gap: 14px;
   width: min(360px, 90vw);
   padding: 28px;
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 14px;
-  background: var(--panel, #1b1e24);
+  background: var(--panel);
 }
 .login-gate-brand {
   display: flex;
@@ -132,8 +132,8 @@ async function submit() {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: var(--accent, #4f7cff);
-  color: #fff;
+  background: var(--brand);
+  color: var(--on-brand);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -147,7 +147,7 @@ async function submit() {
   padding: 8px 10px;
   border-radius: 8px;
   background: rgba(229, 83, 75, 0.14);
-  color: #e5534b;
+  color: var(--danger);
   font-size: 12.5px;
 }
 .login-gate-hint {
@@ -162,7 +162,7 @@ async function submit() {
   display: flex;
   gap: 8px;
   align-items: center;
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 10px;
 }
@@ -176,7 +176,7 @@ async function submit() {
 }
 .login-gate-error {
   margin: 0;
-  color: #e5534b;
+  color: var(--danger);
   font-size: 12px;
 }
 .login-gate-qr {
@@ -185,7 +185,7 @@ async function submit() {
   gap: 6px;
   background: none;
   border: none;
-  color: var(--accent, #4f7cff);
+  color: var(--brand);
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;

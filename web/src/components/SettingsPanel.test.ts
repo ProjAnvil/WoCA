@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import i18n from '../i18n'
 
@@ -15,9 +15,7 @@ vi.mock('../api/client', async (importOriginal) => {
 
 import SettingsPanel from './SettingsPanel.vue'
 import { useAuthStore } from '../stores/auth'
-import { useSettingsStore } from '../stores/settings'
 import type { BridgeStatus } from '../api/client'
-import type { AppSettings } from '../types'
 
 function bridgeStatus(over: Partial<BridgeStatus> = {}): BridgeStatus {
   return {
@@ -39,14 +37,31 @@ function bridgeStatus(over: Partial<BridgeStatus> = {}): BridgeStatus {
   } as BridgeStatus
 }
 
+// The panel renders through WSheet's Teleport, so assertions query the
+// document instead of the component wrapper.
+let w: ReturnType<typeof mount> | null = null
+
+function q(sel: string): HTMLElement | null {
+  return document.querySelector(sel)
+}
+
+function all(sel: string): HTMLElement[] {
+  return Array.from(document.querySelectorAll(sel))
+}
+
+function click(el: Element) {
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+}
+
 function mountPanel() {
   const pinia = createPinia()
   setActivePinia(pinia)
-  return { pinia, w: mount(SettingsPanel, { global: { plugins: [i18n, pinia] } }) }
+  w = mount(SettingsPanel, { global: { plugins: [i18n, pinia] } })
+  return w
 }
 
-function navLabels(w: ReturnType<typeof mountPanel>['w']): string[] {
-  return w.findAll('.settings-nav-item:not(.nav-logout)').map((b) => b.text())
+function navLabels(): string[] {
+  return all('.settings-nav-item:not(.nav-logout)').map((el) => el.textContent?.trim() ?? '')
 }
 
 describe('SettingsPanel', () => {
@@ -56,49 +71,54 @@ describe('SettingsPanel', () => {
     api.getEdgeBridges.mockReset().mockResolvedValue(null)
     api.logout.mockReset().mockResolvedValue(undefined)
   })
+  afterEach(() => {
+    w?.unmount()
+    w = null
+    document.body.innerHTML = ''
+  })
 
   it('keeps the personal shape: no bridge sections, no logout', async () => {
-    const { w } = mountPanel()
+    mountPanel()
     await flushPromises()
-    const nav = navLabels(w)
+    const nav = navLabels()
     expect(nav.join('|')).not.toContain('Remote config')
     expect(nav.join('|')).not.toContain('Access point')
     expect(nav.join('|')).not.toContain('Administration')
-    expect(w.find('.nav-logout').exists()).toBe(false)
+    expect(q('.nav-logout')).toBeNull()
   })
 
   it('shows the bridge surfaces for an enrolled admin', async () => {
     api.getStatus.mockResolvedValue(bridgeStatus())
     api.getEdgeBridges.mockResolvedValue([{ bridge_id: 'br_1', created_at: 1, last_seen: 2, live: true }])
 
-    const { w } = mountPanel()
+    mountPanel()
     const auth = useAuthStore()
     auth.me = { user_id: 'u1', remark: 'ops', role: 'admin' }
     await flushPromises()
 
-    const nav = navLabels(w).join('|')
+    const nav = navLabels().join('|')
     expect(nav).toContain('Remote config')
     expect(nav).toContain('Access point')
     expect(nav).toContain('Cloud access')
     expect(nav).toContain('Admin')
     // Identity + logout pinned bottom-left.
-    expect(w.find('.nav-identity').text()).toContain('ops')
-    expect(w.find('.nav-logout').exists()).toBe(true)
+    expect(q('.nav-identity')?.textContent ?? '').toContain('ops')
+    expect(q('.nav-logout')).not.toBeNull()
   })
 
   it('members get the interactive surfaces but not governance', async () => {
     api.getStatus.mockResolvedValue(bridgeStatus())
-    const { w } = mountPanel()
+    mountPanel()
     const auth = useAuthStore()
     auth.me = { user_id: 'u2', remark: 'dev', role: 'member' }
     await flushPromises()
 
-    const nav = navLabels(w).join('|')
+    const nav = navLabels().join('|')
     expect(nav).toContain('Remote config')
     expect(nav).not.toContain('Cloud access')
     expect(nav).not.toContain('Admin')
     // Logout exists for any session-holding deployment.
-    expect(w.find('.nav-logout').exists()).toBe(true)
+    expect(q('.nav-logout')).not.toBeNull()
   })
 
   it('logout calls the API and reloads into the gate', async () => {
@@ -113,10 +133,10 @@ describe('SettingsPanel', () => {
       reload,
     })
     api.getStatus.mockResolvedValue(bridgeStatus())
-    const { w } = mountPanel()
+    mountPanel()
     await flushPromises()
 
-    await w.get('.nav-logout').trigger('click')
+    click(q('.nav-logout')!)
     await flushPromises()
     expect(api.logout).toHaveBeenCalledTimes(1)
     expect(reload).toHaveBeenCalledTimes(1)
@@ -138,15 +158,16 @@ describe('SettingsPanel', () => {
     ;(window as unknown as { go: unknown }).go = { main: { App: { Logout: logout } } }
 
     api.getStatus.mockResolvedValue(bridgeStatus())
-    const { w } = mountPanel()
+    mountPanel()
     await flushPromises()
 
     // The native-only entry appears alongside the bridge sections.
-    const entry = w.findAll('.settings-nav-item').find((b) => b.text() === 'Connection')
+    const entry = all('.settings-nav-item').find((el) => el.textContent?.trim() === 'Connection')
     expect(entry).toBeTruthy()
-    await entry!.trigger('click')
+    click(entry!)
 
-    await w.get('[data-testid="native-disconnect"]').trigger('click')
+    await flushPromises()
+    click(q('[data-testid="native-disconnect"]')!)
     await flushPromises()
     expect(logout).toHaveBeenCalledTimes(1)
     expect(reload).toHaveBeenCalledTimes(1)

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import WSheet from './ui/WSheet.vue'
 import {
   Activity, ShieldCheck,
   Brain,
@@ -173,8 +174,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="overlay" @click.self="settings.closePanel()">
-    <div class="card settings-card">
+  <WSheet :title="t('settings.title')" size="lg" @close="settings.closePanel()">
+    <div class="settings-card">
       <div class="card-head">
         <span class="card-title">{{ t('settings.title') }}</span>
         <button class="icon-btn" @click="settings.closePanel()">
@@ -250,12 +251,12 @@ onBeforeUnmount(() => {
 
       <!-- Sticky footer: server-settings save actions -->
       <div class="settings-footer">
-        <span v-if="server.serverError" class="row-hint" style="color: var(--danger, #e5484d)">
+        <span v-if="server.serverError" class="row-hint" style="color: var(--danger)">
           {{ server.serverError }}
         </span>
         <span v-else-if="server.savedMessage" class="row-hint">{{ server.savedMessage }}</span>
         <span v-else class="row-hint">{{ t('settings.footer.hint') }}</span>
-        <span v-if="server.restartRequired" class="row-hint" style="color: var(--warn, #f5a524)">
+        <span v-if="server.restartRequired" class="row-hint" style="color: var(--warn)">
           {{ t('settings.footer.restart') }}
         </span>
         <button class="btn" :disabled="server.saving" @click="server.saveServer()">
@@ -263,13 +264,15 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-  </div>
+  </WSheet>
 </template>
 
 <style scoped>
 .settings-card {
-  width: min(880px, 94vw);
-  height: min(640px, 86vh);
+  /* The WSheet shell owns width/height; the card fills it. */
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   max-width: 100%;
   display: flex;
   flex-direction: column;
@@ -327,7 +330,7 @@ onBeforeUnmount(() => {
   color: var(--faint);
 }
 .nav-logout {
-  color: var(--danger, #e5484d);
+  color: var(--danger);
 }
 
 .settings-nav-item {

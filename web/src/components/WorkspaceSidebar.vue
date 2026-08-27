@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { FileText, PanelRightClose, RefreshCw } from 'lucide-vue-next'
+import { FileDiff, FileText, PanelRightClose, RefreshCw } from 'lucide-vue-next'
 import WorkspaceTree from './WorkspaceTree.vue'
 import FilePreview from './FilePreview.vue'
+import ChangesTab from './ChangesTab.vue'
 import { useWorkspaceStore } from '../stores/workspace'
 
 const { t } = useI18n()
@@ -32,7 +33,34 @@ const store = useWorkspaceStore()
         </div>
       </header>
 
-      <div class="rs-body">
+      <div class="rs-tabs" role="tablist">
+        <button
+          class="rs-tab"
+          role="tab"
+          :aria-selected="store.tab === 'files'"
+          :class="{ active: store.tab === 'files' }"
+          type="button"
+          @click="store.tab = 'files'"
+        >
+          <FileText :size="13" /> {{ t('sidebar.tabFiles') }}
+        </button>
+        <button
+          class="rs-tab"
+          role="tab"
+          :aria-selected="store.tab === 'changes'"
+          :class="{ active: store.tab === 'changes' }"
+          type="button"
+          @click="store.openChangesTab()"
+        >
+          <FileDiff :size="13" /> {{ t('sidebar.tabChanges') }}
+          <span v-if="store.changes.length" class="rs-tab-count">{{ store.changes.length }}</span>
+        </button>
+      </div>
+
+      <div v-if="store.tab === 'changes'" class="rs-body rs-body-changes">
+        <ChangesTab />
+      </div>
+      <div v-else class="rs-body">
         <div class="ws-tree-pane">
           <WorkspaceTree />
         </div>

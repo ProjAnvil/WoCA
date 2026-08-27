@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Sidebar from '@/components/Sidebar.vue'
 import ChatPanel from '@/components/ChatPanel.vue'
 import WorkspaceSidebar from '@/components/WorkspaceSidebar.vue'
@@ -16,6 +17,7 @@ const settings = useSettingsStore()
 const workspace = useWorkspaceStore()
 const sessions = useSessionStore()
 const completions = useCompletionsStore()
+const { t } = useI18n()
 
 onMounted(() => {
   sessions.setDemo(true)
@@ -32,14 +34,16 @@ onMounted(() => {
     <Sidebar />
     <main class="main">
       <div class="demo-banner">
-        <span>woca demo · 演示数据（未连接后端）</span>
+        <span>woca demo · {{ t('demo.banner') }}</span>
         <div class="demo-actions">
           <button class="demo-btn" @click="sessions.triggerInterrupt(demoInterrupts.permission)">
-            权限审批
+            {{ t('demo.permission') }}
           </button>
-          <button class="demo-btn" @click="sessions.triggerInterrupt(demoInterrupts.ask)">提问</button>
+          <button class="demo-btn" @click="sessions.triggerInterrupt(demoInterrupts.ask)">
+            {{ t('demo.ask') }}
+          </button>
           <button class="demo-btn" @click="sessions.triggerInterrupt(demoInterrupts.plan)">
-            计划审批
+            {{ t('demo.plan') }}
           </button>
         </div>
       </div>

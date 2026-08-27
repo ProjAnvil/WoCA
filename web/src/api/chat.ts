@@ -14,17 +14,41 @@ import type {
 } from '../types'
 import { postJSON, request } from './transport'
 
+/** One parked inline review comment (rides the next run's prompt). */
+export interface RunComment {
+  file: string
+  line: number
+  text: string
+}
+
 export function createRun(
   sessionId: string,
   prompt: string,
   workspace?: string,
   attachments?: Array<{ name: string; mime_type: string; data: string }>,
+  comments?: RunComment[],
 ): Promise<CreateRunResponse> {
   return postJSON<CreateRunResponse>('/api/runs', {
     session_id: sessionId,
     prompt,
     workspace: workspace ?? '',
     attachments: attachments ?? [],
+    comments: comments ?? [],
+  })
+}
+
+/** Starts a /btw side-question run: answered, never persisted to the transcript. */
+export function startBtwRun(sessionId: string, prompt: string, workspace?: string): Promise<{ run_id: string }> {
+  return postJSON<{ run_id: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/btw`, {
+    prompt,
+    workspace: workspace ?? '',
+  })
+}
+
+/** Rolls the conversation back to before the final user turn. */
+export function dropLastTurn(sessionId: string): Promise<{ kept: number }> {
+  return postJSON<{ kept: number }>(`/api/sessions/${encodeURIComponent(sessionId)}/truncate`, {
+    drop_last_turn: true,
   })
 }
 

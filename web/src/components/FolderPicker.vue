@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import WSkeleton from './ui/WSkeleton.vue'
 import { toErrorMessage } from '../lib/errors'
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ArrowUp, Check, FolderPlus, Loader2, RefreshCw } from 'lucide-vue-next'
+import { ArrowUp, Check, FolderPlus, RefreshCw } from 'lucide-vue-next'
 import { fsList, fsMkdir, type FsListing } from '../api/client'
 
 // The workspace folder browser (product design §6.4): directories only,
@@ -81,7 +82,17 @@ function choose(path: string) {
       </div>
 
       <div class="fp-body">
-        <div v-if="loading" class="fp-empty"><Loader2 class="spin" :size="18" /></div>
+        <div v-if="loading" class="fp-skeleton" role="status" aria-busy="true">
+          <span class="sr-only">{{ t('common.loading') }}</span>
+          <div
+            v-for="i in 6"
+            :key="i"
+            class="fp-skel-row"
+            :style="{ marginLeft: `${(i % 3) * 14}px` }"
+          >
+            <WSkeleton variant="text" :width="`${38 + ((i * 41) % 46)}%`" height="14px" />
+          </div>
+        </div>
         <div v-else-if="error" class="fp-empty fp-error">{{ error }}</div>
         <div v-else-if="!listing?.dirs.length" class="fp-empty">{{ t('fs.empty') }}</div>
         <button
@@ -124,9 +135,9 @@ function choose(path: string) {
   max-height: 76vh;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 14px;
-  background: var(--panel, #1b1e24);
+  background: var(--panel);
   padding: 14px;
   gap: 10px;
 }
@@ -147,7 +158,7 @@ function choose(path: string) {
 .fp-crumb {
   background: none;
   border: none;
-  color: var(--accent, #4f7cff);
+  color: var(--brand);
   cursor: pointer;
   padding: 0;
   font: inherit;
@@ -157,7 +168,7 @@ function choose(path: string) {
   min-height: 180px;
   max-height: 40vh;
   overflow-y: auto;
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 8px;
 }
 .fp-empty {
@@ -167,7 +178,7 @@ function choose(path: string) {
   opacity: 0.6;
   font-size: 13px;
 }
-.fp-error { color: #e5534b; opacity: 1; }
+.fp-error { color: var(--danger); opacity: 1; }
 .fp-row {
   display: flex;
   align-items: center;
@@ -193,7 +204,7 @@ function choose(path: string) {
 .fp-mkdir input, .fp-manual input {
   flex: 1;
   background: transparent;
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 8px;
   color: inherit;

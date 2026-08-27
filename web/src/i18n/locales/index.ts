@@ -2,7 +2,9 @@
 // them into the two message trees passed to vue-i18n. New domains: add a
 // module under zh-CN/ and en/, then import + spread it below.
 import agentEn from './en/agent'
+import btwEn from './en/btw'
 import adminEn from './en/admin'
+import demoEn from './en/demo'
 import fsEn from './en/fs'
 import loginEn from './en/login'
 import statusEn from './en/status'
@@ -13,12 +15,15 @@ import goalEn from './en/goal'
 import memoryEn from './en/memory'
 import memoryStoreEn from './en/memoryStore'
 import nativeEn from './en/native'
+import paletteEn from './en/palette'
 import sessionsEn from './en/sessions'
 import settingsEn from './en/settings'
 import sidebarEn from './en/sidebar'
 import workspaceEn from './en/workspace'
 import agentZh from './zh-CN/agent'
+import btwZh from './zh-CN/btw'
 import adminZh from './zh-CN/admin'
+import demoZh from './zh-CN/demo'
 import fsZh from './zh-CN/fs'
 import loginZh from './zh-CN/login'
 import statusZh from './zh-CN/status'
@@ -29,15 +34,18 @@ import goalZh from './zh-CN/goal'
 import memoryZh from './zh-CN/memory'
 import memoryStoreZh from './zh-CN/memoryStore'
 import nativeZh from './zh-CN/native'
+import paletteZh from './zh-CN/palette'
 import sessionsZh from './zh-CN/sessions'
 import settingsZh from './zh-CN/settings'
 import sidebarZh from './zh-CN/sidebar'
 import workspaceZh from './zh-CN/workspace'
 
 export const zhCN = {
+  btw: btwZh,
   common: commonZh,
   fs: fsZh,
   admin: adminZh,
+  demo: demoZh,
   login: loginZh,
   status: statusZh,
   chat: chatZh,
@@ -51,12 +59,15 @@ export const zhCN = {
   workspace: workspaceZh,
   memoryStore: memoryStoreZh,
   native: nativeZh,
+  palette: paletteZh,
 }
 
 export const en = {
+  btw: btwEn,
   common: commonEn,
   fs: fsEn,
   admin: adminEn,
+  demo: demoEn,
   login: loginEn,
   status: statusEn,
   chat: chatEn,
@@ -70,4 +81,5 @@ export const en = {
   workspace: workspaceEn,
   memoryStore: memoryStoreEn,
   native: nativeEn,
+  palette: paletteEn,
 }

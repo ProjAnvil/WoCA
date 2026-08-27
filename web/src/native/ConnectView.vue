@@ -303,7 +303,7 @@ function backToForm() {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 14px;
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 10px;
   background: rgba(79, 124, 255, 0.06);
 }
@@ -323,9 +323,9 @@ function backToForm() {
   gap: 6px;
   padding: 7px 12px;
   border-radius: 8px;
-  border: 1px solid var(--accent, #4f7cff);
+  border: 1px solid var(--brand);
   background: transparent;
-  color: var(--accent, #4f7cff);
+  color: var(--brand);
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;
@@ -338,7 +338,7 @@ function backToForm() {
   display: flex;
   gap: 6px;
   padding: 4px;
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 10px;
 }
 .gate-tabs button {
@@ -354,7 +354,7 @@ function backToForm() {
 }
 .gate-tabs button.active {
   background: rgba(79, 124, 255, 0.16);
-  color: var(--accent, #7fa5ff);
+  color: var(--brand-hover);
 }
 .gate-step-title {
   margin: 0;
@@ -375,7 +375,7 @@ function backToForm() {
   gap: 10px;
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 10px;
   background: transparent;
   color: inherit;
@@ -384,7 +384,7 @@ function backToForm() {
   font-size: 13px;
 }
 .gate-bridge:hover {
-  border-color: var(--accent, #4f7cff);
+  border-color: var(--brand);
 }
 .gate-bridge code {
   flex: 1;
@@ -392,17 +392,17 @@ function backToForm() {
   font-size: 12.5px;
 }
 .gate-bridge-live {
-  color: #8b93a1;
+  color: var(--muted);
   font-size: 11.5px;
 }
 .gate-bridge-live.live {
-  color: #2fbf71;
+  color: var(--ok);
 }
 .gate-back {
   align-self: center;
   border: none;
   background: none;
-  color: var(--accent, #7fa5ff);
+  color: var(--brand-hover);
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;

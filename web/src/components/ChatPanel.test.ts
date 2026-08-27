@@ -33,7 +33,7 @@ describe('ChatPanel message submission', () => {
     await draftEnter(wrapper, false)
 
     expect(sendSpy).toHaveBeenCalledTimes(1)
-    expect(sendSpy).toHaveBeenCalledWith('hello', [])
+    expect(sendSpy).toHaveBeenCalledWith('hello', [], [])
   })
 
   it('keeps the draft when Enter confirms an IME composition', async () => {

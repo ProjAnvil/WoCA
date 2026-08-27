@@ -1,0 +1,416 @@
+/* -------------------------------------------------------------------------- */
+/* Goal mode: header chip + detail panel                                       */
+/* -------------------------------------------------------------------------- */
+
+.goal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 340px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+.goal-chip:hover {
+  border-color: var(--accent);
+}
+.goal-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-chip-meta {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.goal-chip.s-complete {
+  border-color: color-mix(in srgb, var(--ok) 60%, var(--border));
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.goal-chip.s-blocked,
+.goal-chip.s-budget_limited {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.goal-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.goal-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.goal-body {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 20px 20px;
+}
+.goal-hint {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.goal-hint code {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.goal-objective-input {
+  width: 100%;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.goal-budget-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.goal-budget-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.goal-budget-row input {
+  width: 130px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.goal-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.goal-btn:hover {
+  background: var(--surface-hover);
+}
+.goal-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  margin-left: auto;
+}
+.goal-btn.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.goal-btn.danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+.goal-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.goal-objective {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.goal-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.goal-status {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.goal-status.s-active {
+  border-color: color-mix(in srgb, var(--info) 60%, var(--border));
+  color: var(--info-text);
+  background: color-mix(in srgb, var(--info) 10%, transparent);
+}
+.goal-status.s-complete {
+  border-color: color-mix(in srgb, var(--ok) 60%, var(--border));
+  color: var(--ok-text);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+}
+.goal-status.s-blocked,
+.goal-status.s-budget_limited {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.goal-claim {
+  font-size: 12px;
+  color: var(--warn-text);
+}
+.goal-live {
+  font-size: 12px;
+  color: var(--muted);
+}
+.goal-budgets {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.goal-meter-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.goal-meter-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  overflow: hidden;
+}
+.goal-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--info);
+  transition: width 0.3s ease;
+}
+.goal-meter-fill.tokens {
+  background: var(--brand);
+}
+.goal-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.goal-note.danger {
+  color: var(--danger);
+}
+.goal-note.ok {
+  color: var(--ok-text);
+}
+.goal-progress {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.goal-progress-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+.goal-progress-row:last-child {
+  border-bottom: none;
+}
+.goal-cycle {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.goal-verdict {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.goal-verdict.v-complete {
+  color: var(--ok-text);
+  border-color: color-mix(in srgb, var(--ok) 50%, var(--border));
+}
+.goal-verdict.v-blocked {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+.goal-summary {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Bubble hover actions: copy-as-markdown + debug context                      */
+/* -------------------------------------------------------------------------- */
+
+.bubble-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.message.assistant .message-bubble:hover .bubble-actions,
+.bubble-actions:focus-within {
+  opacity: 1;
+}
+/* Touch has no hover: the actions stay visible at reduced emphasis. */
+@media (pointer: coarse) {
+  .bubble-actions {
+    opacity: 0.6;
+  }
+}
+
+/* Streaming liveness strip between the message stream and the composer. */
+.stream-liveness {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: var(--chat-col);
+  margin: 0 auto;
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+/* Replay (P2-6): hover-surfaced timeline at the stream's bottom edge. */
+.replay-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: var(--space-2) var(--space-5);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+  pointer-events: none;
+  background: linear-gradient(to top, var(--bg) 30%, transparent);
+  z-index: 4;
+}
+.chat-stream:hover .replay-bar,
+.replay-bar.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+.replay-slider {
+  width: 100%;
+  accent-color: var(--warn);
+}
+.replay-banner {
+  position: absolute;
+  top: var(--space-2);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+  border-radius: var(--radius-full);
+  background: var(--warn-soft);
+  color: var(--warn-text);
+  font-size: var(--text-xs);
+  z-index: 4;
+}
+.replay-exit {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.replay-exit:hover {
+  background: var(--surface-hover);
+}
+.task-pill.pill-done {
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+  background: var(--ok-soft);
+  color: var(--ok-text);
+  cursor: pointer;
+}
+.pill-done .pill-dot,
+.pill-done svg {
+  color: var(--ok);
+}
+
+.liveness-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--brand);
+  animation: liveness-breathe 1.6s ease-in-out infinite;
+}
+@keyframes liveness-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.liveness-elapsed {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+.liveness-event {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bubble-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.bubble-action:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.bubble-action.debug:hover {
+  color: var(--warn-text);
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+}
+
+/* -------------------------------------------------------------------------- */

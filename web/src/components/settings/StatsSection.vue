@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import WSkeleton from '../ui/WSkeleton.vue'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import * as api from '../../api/client'
@@ -40,7 +41,10 @@ onUnmounted(() => {
         {{ t('settings.stats.lsp', { active: data.lsp.active, broken: data.lsp.broken }) }}
       </span>
     </div>
-    <p v-else>{{ t('common.loading') }}</p>
+    <div v-else class="stats-skeleton" role="status" aria-busy="true">
+      <span class="sr-only">{{ t('common.loading') }}</span>
+      <WSkeleton v-for="i in 4" :key="i" variant="text" width="116px" height="22px" />
+    </div>
     <a v-if="grafanaUrl" class="ops-link" :href="grafanaUrl" target="_blank" rel="noopener">
       <span class="ops-title">{{ t('settings.stats.opsLink') }}</span>
       <span class="ops-hint">{{ t('settings.stats.opsHint') }}</span>
@@ -55,13 +59,13 @@ onUnmounted(() => {
   gap: 2px;
   margin-top: 14px;
   padding: 10px 12px;
-  border: 1px solid var(--border, #2a2a2e);
+  border: 1px solid var(--border);
   border-radius: 8px;
   text-decoration: none;
   color: inherit;
 }
 .ops-link:hover {
-  border-color: var(--accent, #4c8bf5);
+  border-color: var(--brand);
 }
 .ops-title {
   font-weight: 600;
@@ -81,7 +85,7 @@ onUnmounted(() => {
 .stat-chip {
   padding: 4px 10px;
   border-radius: 999px;
-  background: var(--bg-soft, rgba(127, 127, 127, 0.12));
+  background: var(--bg-soft);
   font-size: 12px;
 }
 </style>

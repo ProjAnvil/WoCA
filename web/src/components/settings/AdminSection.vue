@@ -82,7 +82,7 @@ function fmtTime(ms: number): string {
 
 <style scoped>
 .admin-card {
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
   margin-bottom: 12px;
@@ -113,12 +113,12 @@ function fmtTime(ms: number): string {
 }
 .admin-table td {
   padding: 4px 8px 4px 0;
-  border-top: 1px solid var(--border, #22252d);
+  border-top: 1px solid var(--border);
 }
 .admin-detail {
   font-family: ui-monospace, monospace;
   overflow-wrap: anywhere;
   max-width: 220px;
 }
-.admin-error { color: #e5534b; font-size: 12.5px; }
+.admin-error { color: var(--danger); font-size: 12.5px; }
 .admin-loading { display: flex; justify-content: center; padding: 16px; }</style>

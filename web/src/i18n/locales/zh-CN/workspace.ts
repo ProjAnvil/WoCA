@@ -1,3 +1,22 @@
 export default {
+  changes: {
+    pendingCount: '{count} 个文件待审查',
+    rollbackAll: '全部回退',
+    rollbackAllTitle: '回退全部变更',
+    rollbackAllBody: '将撤销工作区全部 {count} 步未回退的文件变更（恢复到编辑前）。',
+    rollbackFileTitle: '回退此文件',
+    rollbackFileBody: '回退到「{path}」首次被修改之前（其后对其他文件的修改会一并回退）。',
+    rollback: '回退',
+    rolledBack: '已回退',
+    dropTurnTitle: '撤销最后一轮对话',
+    dropTurnBody: '删除最后一组用户消息与回复，聊天记录回到该轮之前。',
+    dropTurn: '撤销一轮',
+    turnDropped: '已撤销最后一轮对话',
+    empty: '没有待审查的变更',
+    binary: '二进制文件（无文本 diff）',
+    commentLine: '评论此行',
+    commentPlaceholder: '写评论，回车排队到下一条消息…',
+    commentsQueued: '{count} 条评论将随下一条消息发送',
+  },
   demoNoContent: '演示模式未包含该文件的内容',
 }

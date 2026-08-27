@@ -20,7 +20,10 @@ const server = useServerSettingsStore()
       </div>
       <button
         class="switch"
+        role="switch"
         :class="{ on: settings.autoCollapseTools }"
+        :aria-label="t('settings.preferences.autoCollapse')"
+        :aria-checked="settings.autoCollapseTools"
         @click="settings.autoCollapseTools = !settings.autoCollapseTools"
       ></button>
     </div>
@@ -32,7 +35,10 @@ const server = useServerSettingsStore()
       </div>
       <button
         class="switch"
+        role="switch"
         :class="{ on: settings.markdownPreview }"
+        :aria-label="t('settings.preferences.markdown')"
+        :aria-checked="settings.markdownPreview"
         @click="settings.markdownPreview = !settings.markdownPreview"
       ></button>
     </div>
@@ -50,7 +56,10 @@ const server = useServerSettingsStore()
       </div>
       <button
         class="switch"
+        role="switch"
         :class="{ on: server.debugLog }"
+        :aria-label="t('settings.preferences.debugLog')"
+        :aria-checked="server.debugLog"
         :title="t('settings.preferences.debugLogTitle')"
         @click="server.toggleDebugLog()"
       ></button>

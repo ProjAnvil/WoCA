@@ -41,9 +41,9 @@ function freshness(): "ok" | "stale" | "off" {
 const cloud = computed(() => st.value?.cloud);
 
 const lamp = {
-  ok: "var(--ok, #3fb950)",
-  stale: "var(--warn, #d29922)",
-  off: "var(--muted, #6e7681)",
+  ok: "var(--ok)",
+  stale: "var(--warn)",
+  off: "var(--muted)",
 } as const;
 
 // One-click diagnostics export (product design §6.3): a Markdown bundle
@@ -193,9 +193,9 @@ function exportDiagnostics() {
 <style scoped>
 .status-modal {
   width: min(480px, 92vw);
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 14px;
-  background: var(--panel, #1b1e24);
+  background: var(--panel);
   padding: 14px;
   display: flex;
   flex-direction: column;
@@ -213,7 +213,7 @@ function exportDiagnostics() {
   gap: 6px;
 }
 .status-zone {
-  border: 1px solid var(--border, #2a2e37);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px;
 }
@@ -241,7 +241,7 @@ dd {
   overflow-wrap: anywhere;
 }
 .status-error {
-  color: #e5534b;
+  color: var(--danger);
   font-size: 13px;
 }
 </style>

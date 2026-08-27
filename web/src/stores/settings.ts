@@ -33,6 +33,17 @@ export const useSettingsStore = defineStore('settings', () => {
     'default',
   )
 
+  // Information density: drives the --space-unit token via
+  // html[data-density] (see styles/tokens.css).
+  const density = usePreference<'comfortable' | 'compact'>('woca.pref.density', 'comfortable')
+  watch(
+    density,
+    (d) => {
+      document.documentElement.dataset.density = d
+    },
+    { immediate: true },
+  )
+
   function openPanel() {
     panelOpen.value = true
     // Opening the panel refreshes the server-backed snapshot (lazy import
@@ -54,6 +65,7 @@ export const useSettingsStore = defineStore('settings', () => {
     markdownPreview,
     model,
     permissionMode,
+    density,
     openPanel,
     closePanel,
   }

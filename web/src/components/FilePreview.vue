@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import WSkeleton from './ui/WSkeleton.vue'
 import { useI18n } from 'vue-i18n'
 import { CircleAlert } from 'lucide-vue-next'
 import { useWorkspaceStore } from '../stores/workspace'
@@ -46,7 +47,10 @@ const plainText = computed(() =>
       <span class="fp-title" :title="file?.path">{{ file?.name }}</span>
     </div>
 
-    <div v-if="store.previewLoading" class="fp-state">{{ t('common.loading') }}</div>
+    <div v-if="store.previewLoading" class="fp-state" role="status" aria-busy="true">
+      <span class="sr-only">{{ t('common.loading') }}</span>
+      <WSkeleton variant="paragraph" :repeat="6" />
+    </div>
     <div v-else-if="store.previewError" class="fp-state fp-error">
       <CircleAlert :size="14" />
       {{ store.previewError }}
