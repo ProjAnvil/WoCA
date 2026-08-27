@@ -12,7 +12,6 @@ import (
 	"github.com/ProjAnvil/LadyM/config"
 	ladymengine "github.com/ProjAnvil/LadyM/engine"
 	ladymfacade "github.com/ProjAnvil/LadyM/ladym"
-	ladymops "github.com/ProjAnvil/LadyM/operations"
 	"github.com/ProjAnvil/LadyM/schema"
 
 	"github.com/projanvil/langchain-golang/core/language"
@@ -327,20 +326,45 @@ func (l *LadyM) IndexCode(_ context.Context, root, workspace string, force bool)
 		rep.FilesSkippedUnchanged, len(rep.Errors)), nil
 }
 
-// Consolidate runs one System 2 cycle synchronously; returns a report.
-func (l *LadyM) Consolidate(_ context.Context, workspace string) (string, error) {
+// Consolidate runs one System 2 cycle: episodes created at or after since
+// (0 = full backfill) are promoted into facts through the ADD/UPDATE/DELETE
+// classifier, playbooks cluster, the L5/L6 extractions run once enough
+// episodes exist, and stale episodes decay. The cycle is composed here
+// instead of via ladymops.RunSystem2Cycle because woca drives incremental
+// cycles (since = the previous trigger) and that helper hardcodes a full
+// backfill — with an inherited classifier that would re-bill every stored
+// episode on every cycle.
+func (l *LadyM) Consolidate(_ context.Context, workspace string, since float64) (string, error) {
+	ws := l.workspace(workspace)
 	l.mu.Lock()
-	rep, err := ladymops.RunSystem2Cycle(l.eng, l.workspace(workspace))
-	l.mu.Unlock()
+	defer l.mu.Unlock()
+	cons, err := l.eng.Consolidate(ws, since)
 	if err != nil {
 		return "", fmt.Errorf("memory: consolidate: %w", err)
 	}
-	if cons, ok := rep.Consolidate.(*ladymops.ConsolidationReport); ok {
-		return fmt.Sprintf("facts_promoted=%d kept_episodes=%d skipped_llm_steps=%v decay=%+v",
-			cons.PromotedToSemantic, cons.KeptEpisodes, rep.SkippedLLMSteps, rep.Decay), nil
+	if _, err := l.eng.Proceduralize(ws, 0); err != nil {
+		return "", fmt.Errorf("memory: consolidate: %w", err)
 	}
-	return fmt.Sprintf("consolidate=%+v skipped_llm_steps=%v decay=%+v",
-		rep.Consolidate, rep.SkippedLLMSteps, rep.Decay), nil
+	skipped := true
+	n, err := l.eng.CountRecentEpisodes(ws)
+	if err != nil {
+		return "", fmt.Errorf("memory: consolidate: %w", err)
+	}
+	if n >= l.eng.MinEpisodesToRun() {
+		skipped = false
+		if _, err := l.eng.ExtractMentalModels(ws); err != nil {
+			return "", fmt.Errorf("memory: consolidate: %w", err)
+		}
+		if _, err := l.eng.PredictForwardIntents(ws); err != nil {
+			return "", fmt.Errorf("memory: consolidate: %w", err)
+		}
+	}
+	decay, err := l.eng.Decay(ws, false, 0, 0)
+	if err != nil {
+		return "", fmt.Errorf("memory: consolidate: %w", err)
+	}
+	return fmt.Sprintf("facts_promoted=%d kept_episodes=%d skipped_llm_steps=%v decay=%+v",
+		cons.PromotedToSemantic, cons.KeptEpisodes, skipped, decay), nil
 }
 
 // Description names the engine for /memory stats output.

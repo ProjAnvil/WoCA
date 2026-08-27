@@ -54,7 +54,7 @@ func (f *fakeMemEngine) Stats(ctx context.Context, ws string) (*memory.Stats, er
 func (f *fakeMemEngine) IndexCode(ctx context.Context, root, ws string, force bool) (string, error) {
 	return "indexed 1 of 1 files", nil
 }
-func (f *fakeMemEngine) Consolidate(ctx context.Context, ws string) (string, error) {
+func (f *fakeMemEngine) Consolidate(ctx context.Context, ws string, since float64) (string, error) {
 	return "cycle done", nil
 }
 func (f *fakeMemEngine) Description() string { return "ladym fake.db" }

@@ -48,8 +48,10 @@ type Engine interface {
 	Stats(ctx context.Context, workspace string) (*Stats, error)
 	// IndexCode (re)indexes a source root into code memories; returns a report.
 	IndexCode(ctx context.Context, root, workspace string, force bool) (string, error)
-	// Consolidate runs one System 2 cycle synchronously; returns a report.
-	Consolidate(ctx context.Context, workspace string) (string, error)
+	// Consolidate runs one System 2 cycle; since bounds the promotion
+	// scan to episodes created at or after that unix time (0 = full
+	// backfill). Returns a human-readable report.
+	Consolidate(ctx context.Context, workspace string, since float64) (string, error)
 	// Description names the engine for /memory stats output.
 	Description() string
 	// Close releases the underlying store.

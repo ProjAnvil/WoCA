@@ -300,7 +300,7 @@ func TestRemoteListStatsForgetConsolidate(t *testing.T) {
 	if err := eng.Forget(ctx, "m_1"); err != nil {
 		t.Fatal(err)
 	}
-	report, err := eng.Consolidate(ctx, "/repo")
+	report, err := eng.Consolidate(ctx, "/repo", 0)
 	if err != nil || report == "" {
 		t.Fatalf("Consolidate = %q err=%v", report, err)
 	}

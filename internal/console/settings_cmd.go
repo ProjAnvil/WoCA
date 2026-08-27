@@ -231,7 +231,7 @@ func (c *Console) memoryEngineCmd(ctx context.Context, eng memory.Engine, args [
 		}
 		return Result{Output: "forgotten\n"}, nil
 	case "consolidate":
-		report, err := eng.Consolidate(ctx, ws)
+		report, err := eng.Consolidate(ctx, ws, 0)
 		if err != nil {
 			return Result{}, err
 		}

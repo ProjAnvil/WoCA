@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -13,9 +12,11 @@ import (
 )
 
 // The retain layer: completed runs/goals/tasks stored into long-term memory.
-// The mechanics live on memoryRuntime (this file); the Agent delegates at
-// the bottom apply the host policy — subagents never write memory — and
-// resolve the run workspace before handing over.
+// Every auto write is an L1 episode; the L2 fact layer has a single reviewed
+// door — System 2 consolidation — so nothing here calls Remember. The
+// mechanics live on memoryRuntime (this file); the Agent delegates at the
+// bottom apply the host policy — subagents never write memory — and resolve
+// the run workspace before handing over.
 
 // autoRetain reports whether automatic retention is on. With no settings
 // loader wired the default is on (tests rely on it); an explicit setting
@@ -30,11 +31,14 @@ func (m *memoryRuntime) autoRetain() bool {
 	return loader().LadyMAutoRetain
 }
 
-// RetainRun stores a completed run into long-term memory: the Q/A pair as an
-// L2 fact (ladyM's attention gate dedups noise) and the run outcome as an L1
-// episode (food for System 2). It is the single write choke point, called by
-// the runner when a run finishes. Writes are best-effort: errors are dropped
-// (the memory subsystem must never fail a run), logged to obs when wired.
+// RetainRun stores a completed run into long-term memory as one L1 episode.
+// On success the episode's observation carries the full Q/A material; the L2
+// fact layer has a single reviewed door — System 2 consolidation (the
+// ADD/UPDATE/DELETE classifier) — so no run fact is written here. Errored or
+// cancelled runs record the request and outcome only: a failed answer must
+// never distill into a durable fact. Writes are best-effort: errors are
+// dropped (the memory subsystem must never fail a run), logged to obs when
+// wired.
 func (m *memoryRuntime) RetainRun(ctx context.Context, ws string, history, final []messages.Message, runErr error) {
 	eng := m.Engine()
 	if eng == nil {
@@ -55,22 +59,19 @@ func (m *memoryRuntime) RetainRun(ctx context.Context, ws string, history, final
 		}
 	}
 	obs := clampUTF8(question, 500)
+	if outcome == "success" {
+		if answer := lastAIText(final); answer != "" {
+			obs = clampUTF8("Q: "+question+"\nA: "+answer, 4000)
+		}
+	}
 	if err := eng.RecordEvent(ctx, ws, "woca", "run", obs, outcome); err != nil {
 		m.warn("retain_write_error", map[string]any{"op": "record_event", "error": err.Error()})
 	}
-	// The fact is optional (no answer, e.g. an errored run), but episodes
-	// alone are consolidation food, so the System 2 trigger below still runs.
-	if answer := lastAIText(final); answer != "" {
-		q := clampUTF8(question, 2000)
-		ans := clampUTF8(answer, 4000)
-		if _, err := eng.Remember(ctx, ws, fmt.Sprintf("Q: %s\nA: %s", q, ans), []string{"woca", "auto"}, "woca:auto"); err != nil {
-			m.warn("retain_write_error", map[string]any{"op": "remember", "error": err.Error()})
-		}
-	}
-	// System 2 (opportunistic, per-workspace throttle): consolidate the
-	// fresh episodes into facts/playbooks/insights in the background. The
-	// cycle itself gates on ladyM's episode threshold, so a no-op trigger
-	// is cheap (spec §4.5).
+	// System 2 (opportunistic, per-workspace throttle): promote the fresh
+	// episodes into facts/playbooks/insights in the background. since=0 puts
+	// the cycle in mark mode — the engine's consolidated_at stamp decides
+	// what is pending, which (unlike a time floor) never strands episodes
+	// a previous aborted cycle failed to reach.
 	if s := m.settings(); s.LadyMSystem2 {
 		interval := int64(settings.DefaultLadyMSystem2Interval)
 		if s.LadyMSystem2Interval >= settings.MinLadyMSystem2Interval {
@@ -79,7 +80,7 @@ func (m *memoryRuntime) RetainRun(ctx context.Context, ws string, history, final
 		if m.system2Due(ws, interval) {
 			engC := eng
 			go func() {
-				if _, err := engC.Consolidate(context.WithoutCancel(ctx), ws); err != nil {
+				if _, err := engC.Consolidate(context.WithoutCancel(ctx), ws, 0); err != nil {
 					m.warn("system2_error", map[string]any{"workspace": ws, "error": err.Error()})
 				}
 			}()
@@ -87,10 +88,12 @@ func (m *memoryRuntime) RetainRun(ctx context.Context, ws string, history, final
 	}
 }
 
-// RetainGoal stores a completed goal-mode session into memory: the objective
-// and its terminal narrative as an L2 fact, and an episode for System 2. Goal
-// runs bypass Runner.Run (they execute the goal graph directly), so RunGoal's
-// defer is their only retain hook.
+// RetainGoal stores a completed goal-mode session into memory as one L1
+// episode, mirroring RetainRun's policy: the objective/result narrative is
+// consolidation material, not a direct fact, and only a successful goal
+// carries the result (a blocked or errored goal's narrative is episode
+// history). Goal runs bypass Runner.Run (they execute the goal graph
+// directly), so RunGoal's defer is their only retain hook.
 func (m *memoryRuntime) RetainGoal(ctx context.Context, ws, objective, status, summary string, runErr error) {
 	eng := m.Engine()
 	if eng == nil {
@@ -106,16 +109,14 @@ func (m *memoryRuntime) RetainGoal(ctx context.Context, ws, objective, status, s
 	case status == string(GoalBlocked), status == string(GoalBudgetLimited), status == string(GoalPaused):
 		outcome = status
 	}
-	if err := eng.RecordEvent(ctx, ws, "woca", "goal:"+status, clampUTF8(objective, 500), outcome); err != nil {
-		m.warn("retain_write_error", map[string]any{"op": "goal_event", "error": err.Error()})
-	}
-	// The fact is optional (no summary, e.g. a paused or errored run), but the
-	// episode above still feeds System 2.
-	if ans := strings.TrimSpace(summary); ans != "" {
-		content := "GOAL: " + clampUTF8(objective, 2000) + "\nRESULT(" + status + "): " + clampUTF8(ans, 4000)
-		if _, err := eng.Remember(ctx, ws, content, []string{"woca", "auto", "goal"}, "woca:auto"); err != nil {
-			m.warn("retain_write_error", map[string]any{"op": "goal_remember", "error": err.Error()})
+	obs := clampUTF8(objective, 500)
+	if outcome == "success" {
+		if ans := strings.TrimSpace(summary); ans != "" {
+			obs = clampUTF8("GOAL: "+objective+"\nRESULT("+status+"): "+ans, 4000)
 		}
+	}
+	if err := eng.RecordEvent(ctx, ws, "woca", "goal:"+status, obs, outcome); err != nil {
+		m.warn("retain_write_error", map[string]any{"op": "goal_event", "error": err.Error()})
 	}
 }
 
@@ -140,7 +141,8 @@ func (m *memoryRuntime) RecordTaskEvent(ctx context.Context, ws, name, descripti
 }
 
 // system2Due applies the per-workspace minimum interval between System 2
-// cycles and records the trigger time.
+// cycles and records the trigger time. What counts as pending is the
+// engine's consolidated_at mark, not this timestamp.
 func (m *memoryRuntime) system2Due(ws string, intervalS int64) bool {
 	now := time.Now().Unix()
 	m.mu.Lock()

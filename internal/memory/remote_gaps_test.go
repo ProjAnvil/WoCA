@@ -192,7 +192,7 @@ func TestRemoteDegradedAndFailingPaths(t *testing.T) {
 		if _, err := eng.Stats(ctx, "ws"); err == nil {
 			t.Fatal("failing stats should surface")
 		}
-		if _, err := eng.Consolidate(ctx, "ws"); err == nil {
+		if _, err := eng.Consolidate(ctx, "ws", 0); err == nil {
 			t.Fatal("failing consolidate should surface")
 		}
 	})

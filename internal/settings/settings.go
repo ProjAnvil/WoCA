@@ -145,6 +145,9 @@ type Settings struct {
 }
 
 // Default returns the default settings: sqlite storage under ~/.woca.
+// System 2 consolidation defaults on: it is the only door from L1 episodes
+// into L2 facts (auto-retain writes episodes, never facts), and with the
+// default offline classifier a cycle costs no LLM calls.
 func Default() Settings {
 	return Settings{
 		Provider:          "anthropic",
@@ -152,6 +155,7 @@ func Default() Settings {
 		MemoryBackend:     MemorySQLite,
 		MemoryEngine:      MemoryEngineLadyM,
 		LadyMAutoRetain:   true,
+		LadyMSystem2:      true,
 	}
 }
 

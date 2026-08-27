@@ -454,7 +454,7 @@ func TestEngineCRUDAndStats(t *testing.T) {
 	}
 
 	// Consolidation without an LLM is a no-op message, not an error.
-	if _, err := eng.Consolidate(ctx, "/ws"); err != nil {
+	if _, err := eng.Consolidate(ctx, "/ws", 0); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -503,14 +503,14 @@ func TestEngineBranches(t *testing.T) {
 	if _, err := eng.IndexCode(ctx, t.TempDir(), "/other", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.Consolidate(ctx, "/other"); err != nil {
+	if _, err := eng.Consolidate(ctx, "/other", 0); err != nil {
 		t.Fatal(err)
 	}
 	// Empty-workspace index/consolidate fallbacks.
 	if _, err := eng.IndexCode(ctx, t.TempDir(), "", true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.Consolidate(ctx, ""); err != nil {
+	if _, err := eng.Consolidate(ctx, "", 0); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -626,7 +626,7 @@ func TestEngineErrorsAfterClose(t *testing.T) {
 	if _, err := eng.IndexCode(ctx, root, "/ws/test", true); err == nil {
 		t.Error("IndexCode after Close should fail")
 	}
-	if _, err := eng.Consolidate(ctx, "/ws/test"); err == nil {
+	if _, err := eng.Consolidate(ctx, "/ws/test", 0); err == nil {
 		t.Error("Consolidate after Close should fail")
 	}
 	_ = eng.Close() // second Close stays safe
@@ -674,6 +674,52 @@ func TestLadyMEngineClosedSurfacesErrors(t *testing.T) {
 	// IndexCode walks the source root (filesystem-driven); a closed engine
 	// must not panic even where it may not error.
 	_, _ = eng.IndexCode(ctx, dir, "/w", false)
-	_, err = eng.Consolidate(ctx, "/w")
+	_, err = eng.Consolidate(ctx, "/w", 0)
 	check("consolidate", err)
+}
+
+// The retain pipeline's load-bearing path: auto-retain writes only L1
+// episodes (the Q/A material rides the observation); the composed System 2
+// cycle is what promotes that material into an L2 fact, and a repeated
+// cycle must not duplicate it.
+func TestConsolidatePromotesEpisodeMaterialIntoFacts(t *testing.T) {
+	eng := newEngine(t)
+	ctx := context.Background()
+
+	if err := eng.RecordEvent(ctx, "/ws", "woca", "run",
+		"Q: which framework does this project use?\nA: fiber, pinned in go.mod", "success"); err != nil {
+		t.Fatal(err)
+	}
+	report, err := eng.Consolidate(ctx, "/ws", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report, "facts_promoted=1") {
+		t.Fatalf("report = %q, want one promotion", report)
+	}
+	facts, err := eng.List(ctx, "/ws", "L2_semantic", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 1 || !strings.Contains(facts[0].Content, "which framework does this project use?") {
+		t.Fatalf("facts = %+v", facts)
+	}
+
+	// A second cycle no-ops on the already-promoted episode: the
+	// consolidated_at mark skips it in selection (facts_promoted=0), so the
+	// fact layer stays at one entry without re-classifying anything.
+	report2, err := eng.Consolidate(ctx, "/ws", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report2, "facts_promoted=0") {
+		t.Fatalf("second report = %q, want no promotions", report2)
+	}
+	facts, err = eng.List(ctx, "/ws", "L2_semantic", 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts) != 1 {
+		t.Fatalf("repeated cycle duplicated facts: %+v", facts)
+	}
 }

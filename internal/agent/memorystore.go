@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -241,7 +242,11 @@ func (m *memoryRuntime) buildAttachments(entries []store.Entry, hits []memory.Hi
 		if len(content) > 2000 {
 			content = clampUTF8(content, 2000) + "…"
 		}
-		line := fmt.Sprintf("[%s|%s|%.2f] %s", h.Layer, h.Type, h.Score, summary)
+		line := "[" + h.Layer + "|" + h.Type + "|" + fmt.Sprintf("%.2f", h.Score)
+		if age := memoryAge(h.UpdatedAt); age != "" {
+			line += "|" + age
+		}
+		line += "] " + summary
 		if content != "" && content != summary {
 			line += "\n" + content
 		}
@@ -285,6 +290,31 @@ func lastHumanQuery(msgs []messages.Message) string {
 		}
 	}
 	return strings.TrimSpace(clampUTF8(last, 2000))
+}
+
+// memoryAge renders a hit's UpdatedAt as a coarse relative age for the
+// attachment header, so the model can arbitrate when a fresh fact
+// contradicts a stale one. Engines that report no timestamp (the KV-store
+// fallback, older remotes) yield "" and the age field is omitted entirely.
+func memoryAge(ts float64) string {
+	if ts <= 0 {
+		return ""
+	}
+	d := time.Since(time.Unix(int64(ts), 0))
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo ago", int(d.Hours()/(24*30)))
+	default:
+		return fmt.Sprintf("%dy ago", int(d.Hours()/(24*365)))
+	}
 }
 
 // clampUTF8 truncates s to at most n bytes, backing off to a rune boundary

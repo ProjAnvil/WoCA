@@ -20,6 +20,7 @@ type fakeMemEngine struct {
 	mu         sync.Mutex
 	hits       []memory.Hit
 	remembered []string
+	events     []string // "ws|obs|outcome" per RecordEvent call
 	listed     []memory.Hit
 	forgotten  []string
 	drop       bool // Remember returns ("", nil): the attention gate dropped it
@@ -68,7 +69,19 @@ func (f *fakeMemEngine) Remember(ctx context.Context, ws, c string, tags []strin
 	}
 	return "srv-1", nil
 }
-func (f *fakeMemEngine) RecordEvent(ctx context.Context, ws, a, act, obs, o string) error { return nil }
+func (f *fakeMemEngine) RecordEvent(ctx context.Context, ws, a, act, obs, o string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, ws+"|"+obs+"|"+o)
+	return nil
+}
+
+// Events returns a copy of the recorded RecordEvent tuples.
+func (f *fakeMemEngine) Events() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.events...)
+}
 func (f *fakeMemEngine) List(ctx context.Context, ws string, layer string, limit, off int) ([]memory.Hit, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -107,9 +120,11 @@ func (f *fakeMemEngine) Stats(ctx context.Context, ws string) (*memory.Stats, er
 func (f *fakeMemEngine) IndexCode(ctx context.Context, root, ws string, force bool) (string, error) {
 	return "ok", nil
 }
-func (f *fakeMemEngine) Consolidate(ctx context.Context, ws string) (string, error) { return "ok", nil }
-func (f *fakeMemEngine) Description() string                                        { return "ladym test.db" }
-func (f *fakeMemEngine) Close() error                                               { return nil }
+func (f *fakeMemEngine) Consolidate(ctx context.Context, ws string, since float64) (string, error) {
+	return "ok", nil
+}
+func (f *fakeMemEngine) Description() string { return "ladym test.db" }
+func (f *fakeMemEngine) Close() error        { return nil }
 
 func newMemoryTestServer(t *testing.T, eng memory.Engine) *httptest.Server {
 	t.Helper()

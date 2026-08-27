@@ -1,7 +1,7 @@
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/ProjAnvil/LadyM v0.5.1 h1:sZ14+lWnZTH8TilF4E1J6Gd3IR08q5MKsXy6ckg+0X4=
-github.com/ProjAnvil/LadyM v0.5.1/go.mod h1:e2L7vtsHYDv+CHw0UsPPGp8vpieupwEfPZ6PVzhOYtk=
+github.com/ProjAnvil/LadyM v0.5.2 h1:+bFb8xAnw9DX9jBK9MaKY43pKrKqL8uXiLTq1FP7vlY=
+github.com/ProjAnvil/LadyM v0.5.2/go.mod h1:e2L7vtsHYDv+CHw0UsPPGp8vpieupwEfPZ6PVzhOYtk=
 github.com/antithesishq/antithesis-sdk-go v0.7.2-default-no-op h1:p2zFsAzvhIpFya8AIOHIbWf7NGvO34QpLGclyf7nXj8=
 github.com/antithesishq/antithesis-sdk-go v0.7.2-default-no-op/go.mod h1:FQyySiasQQM8735Ddel3MRojmy4dA1IqCeyJ5jmPMbI=
 github.com/aymanbagabas/go-osc52/v2 v2.0.1 h1:HwpRHbFMcZLEVr42D4p7XBqjyuxQH5SMiErDT4WkJ2k=

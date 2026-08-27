@@ -339,7 +339,7 @@ type consolidateFailEngine struct {
 	called chan struct{}
 }
 
-func (c *consolidateFailEngine) Consolidate(ctx context.Context, ws string) (string, error) {
+func (c *consolidateFailEngine) Consolidate(ctx context.Context, ws string, since float64) (string, error) {
 	c.once.Do(func() { close(c.called) })
 	return "", errors.New("consolidate boom")
 }

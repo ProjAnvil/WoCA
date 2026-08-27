@@ -752,9 +752,12 @@ func TestRunScopesMemoryToSessionWorkspace(t *testing.T) {
 	}
 	driveToDone(t, ts.URL, created.RunID)
 
-	// RetainRun completes before the "done" event, so the fact is already in.
-	if len(f.remembered) != 1 || !strings.HasPrefix(f.remembered[0], "/ws/session|woca:auto|") {
-		t.Fatalf("remembered = %v, want the retained fact in /ws/session", f.remembered)
+	// RetainRun completes before the "done" event, so the episode is already
+	// in: the Q/A material rides the episode (auto-retain never writes facts
+	// directly — consolidation is the fact layer's only door).
+	if ev := f.Events(); len(ev) != 1 || !strings.HasPrefix(ev[0], "/ws/session|") ||
+		!strings.Contains(ev[0], "Q: how does auth work?") || !strings.HasSuffix(ev[0], "|success") {
+		t.Fatalf("events = %v, want the retained episode in /ws/session", ev)
 	}
 	// Prefetch is asynchronous: poll for its Recall to land on the same
 	// workspace the memory panel would query.

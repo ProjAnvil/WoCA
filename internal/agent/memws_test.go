@@ -58,9 +58,8 @@ func TestRetainRunUsesCtxWorkspace(t *testing.T) {
 	a.RetainRun(ctx,
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
 
-	calls := f.recordedRememberCalls()
-	if len(calls) != 1 || !strings.HasPrefix(calls[0], "/ws/ctx\x00") {
-		t.Fatalf("rememberCalls = %v, want workspace /ws/ctx", calls)
+	if calls := f.recordedRememberCalls(); len(calls) != 0 {
+		t.Fatalf("auto-retain must not write facts directly: %v", calls)
 	}
 	if wss := f.recordedEventWSs(); len(wss) != 1 || wss[0] != "/ws/ctx" {
 		t.Fatalf("eventWSs = %v, want [/ws/ctx]", wss)
@@ -87,9 +86,11 @@ func TestRetainGoalUsesCtxWorkspace(t *testing.T) {
 	a.SetMemoryWorkspace("/ws/field")
 	ctx := WithRunWorkspace(context.Background(), "/ws/goal-ctx")
 	a.RetainGoal(ctx, "objective", "complete", "summary", nil)
-	calls := f.recordedRememberCalls()
-	if len(calls) != 1 || !strings.HasPrefix(calls[0], "/ws/goal-ctx\x00") {
-		t.Fatalf("rememberCalls = %v, want workspace /ws/goal-ctx", calls)
+	if calls := f.recordedRememberCalls(); len(calls) != 0 {
+		t.Fatalf("auto-retain must not write facts directly: %v", calls)
+	}
+	if wss := f.recordedEventWSs(); len(wss) != 1 || wss[0] != "/ws/goal-ctx" {
+		t.Fatalf("eventWSs = %v, want [/ws/goal-ctx]", wss)
 	}
 }
 

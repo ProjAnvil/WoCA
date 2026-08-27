@@ -81,6 +81,7 @@ type retainEngine struct {
 	mu       sync.Mutex
 	remember []string
 	events   []string
+	eventObs []string
 }
 
 func (e *retainEngine) Remember(_ context.Context, _, content string, _ []string, _ string) (string, error) {
@@ -90,10 +91,11 @@ func (e *retainEngine) Remember(_ context.Context, _, content string, _ []string
 	return "id-1", nil
 }
 
-func (e *retainEngine) RecordEvent(_ context.Context, _, agentName, action, _, outcome string) error {
+func (e *retainEngine) RecordEvent(_ context.Context, _, agentName, action, observation, outcome string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.events = append(e.events, agentName+"/"+action+"/"+outcome)
+	e.eventObs = append(e.eventObs, observation)
 	return nil
 }
 
@@ -107,6 +109,12 @@ func (e *retainEngine) Events() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([]string(nil), e.events...)
+}
+
+func (e *retainEngine) EventObs() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.eventObs...)
 }
 
 func (e *retainEngine) Recall(context.Context, string, string, int) ([]memory.Hit, error) {
@@ -125,9 +133,9 @@ func (e *retainEngine) Stats(context.Context, string) (*memory.Stats, error) {
 func (e *retainEngine) IndexCode(context.Context, string, string, bool) (string, error) {
 	return "", nil
 }
-func (e *retainEngine) Consolidate(context.Context, string) (string, error) { return "", nil }
-func (e *retainEngine) Description() string                                 { return "retain-stub" }
-func (e *retainEngine) Close() error                                        { return nil }
+func (e *retainEngine) Consolidate(context.Context, string, float64) (string, error) { return "", nil }
+func (e *retainEngine) Description() string                                          { return "retain-stub" }
+func (e *retainEngine) Close() error                                                 { return nil }
 
 // TestRunnerRetainsRunIntoMemory checks the runner-level wiring: with a
 // memory engine configured (and settings defaults, autoretain on), Run's
@@ -153,14 +161,15 @@ func TestRunnerRetainsRunIntoMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 	remembered := eng.Remembered()
-	if len(remembered) != 1 {
-		t.Fatalf("remember calls = %v, want 1", remembered)
-	}
-	if c := remembered[0]; !strings.Contains(c, "Q: remember me") || !strings.Contains(c, "A: stored answer") {
-		t.Fatalf("remembered = %q", c)
+	if len(remembered) != 0 {
+		t.Fatalf("auto-retain must not write facts directly: %v", remembered)
 	}
 	if ev := eng.Events(); len(ev) != 1 || ev[0] != "woca/run/success" {
 		t.Fatalf("events = %v", ev)
+	}
+	if obs := eng.EventObs(); len(obs) != 1 || !strings.Contains(obs[0], "Q: remember me") ||
+		!strings.Contains(obs[0], "A: stored answer") {
+		t.Fatalf("episode observations = %q", obs)
 	}
 }
 
@@ -198,13 +207,13 @@ func TestRunGoalRetainsGoalIntoMemory(t *testing.T) {
 	if ev := eng.Events(); len(ev) != 1 || ev[0] != "woca/goal:complete/success" {
 		t.Fatalf("events = %v", ev)
 	}
-	remembered := eng.Remembered()
-	if len(remembered) != 1 {
-		t.Fatalf("remember calls = %v", remembered)
+	if remembered := eng.Remembered(); len(remembered) != 0 {
+		t.Fatalf("auto-retain must not write facts directly: %v", remembered)
 	}
-	if c := remembered[0]; !strings.Contains(c, "GOAL: make the tests pass") ||
-		!strings.Contains(c, "RESULT(complete): 3/3 pass") {
-		t.Fatalf("remembered = %q", c)
+	if obs := eng.EventObs(); len(obs) != 1 ||
+		!strings.Contains(obs[0], "GOAL: make the tests pass") ||
+		!strings.Contains(obs[0], "RESULT(complete): 3/3 pass") {
+		t.Fatalf("episode observations = %q", obs)
 	}
 }
 

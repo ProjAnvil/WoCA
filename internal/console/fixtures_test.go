@@ -63,7 +63,7 @@ func (f *fakeEngine) IndexCode(ctx context.Context, root, ws string, force bool)
 	return "indexed 1 file", nil
 }
 
-func (f *fakeEngine) Consolidate(ctx context.Context, ws string) (string, error) {
+func (f *fakeEngine) Consolidate(ctx context.Context, ws string, since float64) (string, error) {
 	return "consolidated", nil
 }
 
@@ -134,7 +134,7 @@ func (e *errEngine) Stats(ctx context.Context, ws string) (*memory.Stats, error)
 	return nil, errBoom
 }
 
-func (e *errEngine) Consolidate(ctx context.Context, ws string) (string, error) {
+func (e *errEngine) Consolidate(ctx context.Context, ws string, since float64) (string, error) {
 	return "", errBoom
 }
 

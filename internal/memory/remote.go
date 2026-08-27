@@ -275,18 +275,20 @@ func (e *RemoteEngine) IndexCode(context.Context, string, string, bool) (string,
 	return "", ErrIndexRequiresSandbox
 }
 
-// Consolidate triggers one System 2 cycle on the ladyM worker service.
-func (e *RemoteEngine) Consolidate(ctx context.Context, workspace string) (string, error) {
+// Consolidate triggers one System 2 cycle on the ladyM worker service,
+// forwarding since (0 = whole pending backlog; the server's consolidated_at
+// mark is what actually tracks processed episodes).
+func (e *RemoteEngine) Consolidate(ctx context.Context, workspace string, since float64) (string, error) {
 	// Consolidation is the long pole — bound generously, not with the read
 	// budget (the client's own CLI uses 120s for this call).
 	ctx, cancel := context.WithTimeout(ctx, e.writeTimeout*6)
 	defer cancel()
-	res, err := e.client.Consolidate(ctx, workspaceKey(ctx, workspace))
+	res, err := e.client.Consolidate(ctx, workspaceKey(ctx, workspace), since)
 	if err != nil {
 		return "", fmt.Errorf("memory: remote consolidate: %w", err)
 	}
-	return fmt.Sprintf("kept_episodes=%d promoted=%d actions=%v",
-		res.KeptEpisodes, res.PromotedToSemantic, res.Actions), nil
+	return fmt.Sprintf("kept_episodes=%d promoted=%d skipped_consolidated=%d actions=%v",
+		res.KeptEpisodes, res.PromotedToSemantic, res.SkippedConsolidated, res.Actions), nil
 }
 
 // Description names the engine for /memory stats output.

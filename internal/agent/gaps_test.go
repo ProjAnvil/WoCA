@@ -493,7 +493,7 @@ type consolidatingEngine struct {
 	err error
 }
 
-func (c *consolidatingEngine) Consolidate(ctx context.Context, ws string) (string, error) {
+func (c *consolidatingEngine) Consolidate(ctx context.Context, ws string, since float64) (string, error) {
 	return "", c.err
 }
 

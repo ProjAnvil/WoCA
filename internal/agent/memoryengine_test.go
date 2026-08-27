@@ -22,13 +22,15 @@ type fakeEngine struct {
 	remembered    []string
 	rememberCalls []string // "ws\x00src\x00content" per Remember call
 	events        []string
+	eventObs      []string // observation per RecordEvent call (parallel to events)
 	eventWSs      []string // workspace per RecordEvent call (parallel to events)
 	hits          []memory.Hit
-	consolidates  int   // number of Consolidate calls (System 2 cycles)
-	err           bool  // Recall returns an error when set
-	drop          bool  // Remember returns ("", nil): attention-gate drop
-	rememberErr   error // Remember returns this error when set (overrides drop)
-	eventErr      error // RecordEvent returns this error when set (still recorded)
+	consolidates  int       // number of Consolidate calls (System 2 cycles)
+	consSince     []float64 // since argument per Consolidate call
+	err           bool      // Recall returns an error when set
+	drop          bool      // Remember returns ("", nil): attention-gate drop
+	rememberErr   error     // Remember returns this error when set (overrides drop)
+	eventErr      error     // RecordEvent returns this error when set (still recorded)
 }
 
 func (f *fakeEngine) Recall(ctx context.Context, query, workspace string, topK int) ([]memory.Hit, error) {
@@ -60,6 +62,7 @@ func (f *fakeEngine) Remember(ctx context.Context, ws, content string, tags []st
 func (f *fakeEngine) RecordEvent(ctx context.Context, ws, agentName, action, observation, outcome string) error {
 	f.mu.Lock()
 	f.events = append(f.events, agentName+"/"+action+"/"+outcome)
+	f.eventObs = append(f.eventObs, observation)
 	f.eventWSs = append(f.eventWSs, ws)
 	f.mu.Unlock()
 	return f.eventErr
@@ -74,9 +77,10 @@ func (f *fakeEngine) Stats(ctx context.Context, ws string) (*memory.Stats, error
 func (f *fakeEngine) IndexCode(ctx context.Context, root, ws string, force bool) (string, error) {
 	return "", nil
 }
-func (f *fakeEngine) Consolidate(ctx context.Context, ws string) (string, error) {
+func (f *fakeEngine) Consolidate(ctx context.Context, ws string, since float64) (string, error) {
 	f.mu.Lock()
 	f.consolidates++
+	f.consSince = append(f.consSince, since)
 	f.mu.Unlock()
 	return "cycle", nil
 }
@@ -113,6 +117,21 @@ func (f *fakeEngine) recordedEventWSs() []string {
 	return append([]string(nil), f.eventWSs...)
 }
 
+// recordedEventObs returns a copy of the per-RecordEvent observations.
+func (f *fakeEngine) recordedEventObs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.eventObs...)
+}
+
+// recordedConsolidateSinces returns a copy of the per-Consolidate since
+// arguments (the System 2 goroutine appends concurrently).
+func (f *fakeEngine) recordedConsolidateSinces() []float64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]float64(nil), f.consSince...)
+}
+
 // recordedConsolidates returns the number of Consolidate calls (the System 2
 // goroutine appends concurrently; test goroutines must not read directly).
 func (f *fakeEngine) recordedConsolidates() int {
@@ -125,27 +144,38 @@ func TestPrefetchUsesEngineRecall(t *testing.T) {
 	f := &fakeEngine{hits: []memory.Hit{{
 		ID: "h1", Layer: "L2_semantic", Type: "fact",
 		Summary: "auth uses JWT", Content: "auth uses JWT with 24h expiry",
-		Score: 0.83, UpdatedAt: 1,
+		Score: 0.83, UpdatedAt: float64(time.Now().Unix()),
+	}, {
+		ID: "h2", Layer: "L2_semantic", Type: "fact",
+		Summary: "no timestamp hit", Content: "no timestamp hit",
+		Score: 0.7,
 	}}}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.SetMemoryWorkspace("/ws/custom")
 	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("how does auth work?")})
 	var got []messages.Message
-	for i := 0; i < 50 && got == nil; i++ {
+	for i := 0; i < 50 && len(got) < 2; i++ {
 		got = a.takeMemoryAttachments(context.Background())
-		if got == nil {
+		if len(got) < 2 {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	if len(got) != 1 {
-		t.Fatalf("attachments = %d, want 1", len(got))
+	if len(got) != 2 {
+		t.Fatalf("attachments = %d, want 2", len(got))
 	}
 	body := got[0].Content
-	if !strings.Contains(body, "<relevant-memory>") || !strings.Contains(body, "[L2_semantic|fact|0.83]") {
+	if !strings.Contains(body, "<relevant-memory>") || !strings.Contains(body, "[L2_semantic|fact|0.83|") {
 		t.Fatalf("attachment format: %q", body)
+	}
+	if !strings.Contains(body, "|just now] ") {
+		t.Fatalf("attachment header should carry a relative age: %q", body)
 	}
 	if !strings.Contains(body, "auth uses JWT") {
 		t.Fatalf("attachment content: %q", body)
+	}
+	// A hit without a timestamp omits the age field entirely.
+	if b2 := got[1].Content; !strings.Contains(b2, "[L2_semantic|fact|0.70] ") || strings.Count(b2, "|") != 2 {
+		t.Fatalf("no-timestamp attachment format: %q", b2)
 	}
 	if recalls := f.recordedRecalls(); len(recalls) != 1 || recalls[0] != "/ws/custom|how does auth work?" {
 		t.Fatalf("recalls = %v", f.recordedRecalls())
@@ -256,7 +286,10 @@ func TestMemoryRuntimeStandalone(t *testing.T) {
 	// Retention: engine swap is visible through the same snapshot path.
 	m.RetainRun(context.Background(), "/ws",
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
-	if len(f.remembered) != 1 {
-		t.Fatalf("remembered = %v", f.remembered)
+	if len(f.remembered) != 0 {
+		t.Fatalf("auto-retain must not write facts directly: %v", f.remembered)
+	}
+	if obs := f.recordedEventObs(); len(obs) != 1 || !strings.Contains(obs[0], "Q: q") || !strings.Contains(obs[0], "A: a") {
+		t.Fatalf("episode observations = %v", obs)
 	}
 }
