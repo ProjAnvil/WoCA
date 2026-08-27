@@ -29,7 +29,7 @@ withDefaults(defineProps<{ hint?: string }>(), { hint: '' })
   width: 40px;
   height: 40px;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--brand) 0%, var(--w-brand-300) 100%);
+  background: var(--brand);
   color: var(--on-brand);
   font-size: 20px;
   font-weight: 600;

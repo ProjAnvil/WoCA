@@ -42,14 +42,6 @@ watch(
   () => jumpToLatest(),
 )
 
-// New activity ends replay mode (the transcript grew under the scrubber).
-watch(
-  () => store.activeItems.length,
-  () => {
-    if (replayIndex.value !== null) replayIndex.value = null
-  },
-)
-
 /* ------------------------------ empty state ------------------------------- */
 
 // One-click sample prompts: a fresh session starts with something to run,
@@ -59,19 +51,6 @@ const emptyPrompts = computed(() => [t('chat.emptyPrompt1'), t('chat.emptyPrompt
 
 function usePrompt(p: string) {
   composerEl.value?.fillPrompt(p)
-}
-
-/* --------------------------- replay (P2-6) --------------------------------- */
-
-// A read-only scrub over the transcript prefix: dragging the timeline shows
-// the session as of that item; a yellow banner marks the mode and exiting
-// (or sending) returns to live. Purely client-side — nothing re-executes.
-const replayIndex = ref<number | null>(null)
-const visibleItems = computed(() =>
-  replayIndex.value === null ? store.activeItems : store.activeItems.slice(0, replayIndex.value + 1),
-)
-function exitReplay() {
-  replayIndex.value = null
 }
 
 /* --------------------------- streaming liveness ---------------------------- */
@@ -193,7 +172,7 @@ const latestEvent = computed(() => {
 
     <div class="chat-stream">
       <div ref="messagesEl" class="chat-messages">
-        <ChatItemView v-for="item in visibleItems" :key="item.id" :item="item" />
+        <ChatItemView v-for="item in store.activeItems" :key="item.id" :item="item" />
         <div v-if="store.historyLoading" class="msg-skeleton-wrap" role="status" aria-busy="true">
           <span class="sr-only">{{ t('common.loading') }}</span>
           <div v-for="i in 3" :key="i" class="msg-skeleton">
@@ -215,24 +194,6 @@ const latestEvent = computed(() => {
             </button>
           </template>
         </WEmptyState>
-      </div>
-      <div v-if="store.activeItems.length > 1" class="replay-bar" :class="{ active: replayIndex !== null }">
-        <label class="replay-label" :for="'replay-' + store.activeId">
-          <input
-            :id="'replay-' + store.activeId"
-            v-model.number="replayIndex"
-            class="replay-slider"
-            type="range"
-            :min="0"
-            :max="store.activeItems.length - 1"
-            :value="replayIndex === null ? store.activeItems.length - 1 : replayIndex"
-            :aria-label="t('chat.replaySlider')"
-          />
-        </label>
-      </div>
-      <div v-if="replayIndex !== null" class="replay-banner" role="status">
-        {{ t('chat.replayMode', { i: replayIndex + 1, n: store.activeItems.length }) }}
-        <button class="replay-exit" type="button" @click="exitReplay">{{ t('chat.replayExit') }}</button>
       </div>
       <Transition name="jump-latest">
         <button v-if="!pinned" class="jump-latest" :aria-label="t('chat.jumpToLatest')" @click="jumpToLatest()">

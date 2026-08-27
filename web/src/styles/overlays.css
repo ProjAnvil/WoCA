@@ -301,67 +301,6 @@
   color: var(--muted);
   font-size: var(--text-xs);
 }
-/* Replay (P2-6): hover-surfaced timeline at the stream's bottom edge. */
-.replay-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: var(--space-2) var(--space-5);
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
-  pointer-events: none;
-  background: linear-gradient(to top, var(--bg) 30%, transparent);
-  z-index: 4;
-}
-.chat-stream:hover .replay-bar,
-.replay-bar.active {
-  opacity: 1;
-  pointer-events: auto;
-}
-.replay-slider {
-  width: 100%;
-  accent-color: var(--warn);
-}
-.replay-banner {
-  position: absolute;
-  top: var(--space-2);
-  left: 50%;
-  transform: translateX(-50%);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
-  border-radius: var(--radius-full);
-  background: var(--warn-soft);
-  color: var(--warn-text);
-  font-size: var(--text-xs);
-  z-index: 4;
-}
-.replay-exit {
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text-2);
-  font: inherit;
-  padding: 1px 8px;
-  cursor: pointer;
-}
-.replay-exit:hover {
-  background: var(--surface-hover);
-}
-.task-pill.pill-done {
-  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
-  background: var(--ok-soft);
-  color: var(--ok-text);
-  cursor: pointer;
-}
-.pill-done .pill-dot,
-.pill-done svg {
-  color: var(--ok);
-}
-
 .liveness-dot {
   width: 7px;
   height: 7px;

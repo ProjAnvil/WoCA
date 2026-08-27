@@ -22,11 +22,6 @@
   --w-gray-900: #131314;
   --w-gray-950: #0c0c0e;
 
-  /* --- primitives: brand axis (from the gate-logo gradient midpoint) ----- */
-  --w-brand-300: #a996ff;
-  --w-brand-500: #7a5cff;
-  --w-brand-600: #6b4dff;
-
   /* --- primitives: status (Primer dual-theme AA calibration) ------------- */
   --w-green-500: #3fb950;
   --w-green-600: #1a7f37;
@@ -141,14 +136,15 @@
   --accent-hover: #000000;
   --on-accent: #ffffff;
 
-  /* --- semantic: brand & signals (light) ---------------------------------- */
-  --brand: var(--w-brand-600);
-  --brand-hover: #5936e8;
-  --brand-soft: rgba(107, 77, 255, 0.1);
-  --brand-text: #5a3df0;
-  --on-brand: #ffffff;
+  /* --- semantic: brand & signals (light) ---------------------------------- *
+   * The brand IS the ink: light theme accents are near-black.            */
+  --brand: var(--accent);
+  --brand-hover: var(--accent-hover);
+  --brand-soft: rgba(20, 20, 16, 0.08);
+  --brand-text: #1b1b19;
+  --on-brand: var(--on-accent);
   --link: #4a6a9e;
-  --focus: var(--w-brand-600);
+  --focus: var(--accent);
 
   /* --- semantic: status families (light) ---------------------------------- */
   --ok: var(--w-green-600);
@@ -215,13 +211,13 @@ html.dark {
   --accent-hover: #ffffff;
   --on-accent: #141415;
 
-  --brand: var(--w-brand-500);
-  --brand-hover: #8f74ff;
-  --brand-soft: rgba(122, 92, 255, 0.16);
-  --brand-text: var(--w-brand-300);
-  --on-brand: #ffffff;
+  --brand: var(--accent);
+  --brand-hover: var(--accent-hover);
+  --brand-soft: rgba(255, 255, 255, 0.1);
+  --brand-text: #dcdce0;
+  --on-brand: var(--on-accent);
   --link: #8ab0e0;
-  --focus: var(--w-brand-500);
+  --focus: var(--accent);
 
   --ok: var(--w-green-500);
   --ok-soft: rgba(63, 185, 80, 0.14);
