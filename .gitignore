@@ -2,6 +2,7 @@
 /woca
 *.test
 *.out
+/node_modules/
 web/node_modules/
 .claude/
 .woca/
