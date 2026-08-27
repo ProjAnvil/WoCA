@@ -4,7 +4,6 @@ import { useI18n } from 'vue-i18n'
 import { Brain, Plus, Search, Trash2, X } from 'lucide-vue-next'
 import { useMemoryStore } from '../stores/memory'
 import { useConfirmStore } from '../stores/confirm'
-import WSheet from './ui/WSheet.vue'
 import WSkeleton from './ui/WSkeleton.vue'
 import type { MemoryItem } from '../types'
 
@@ -97,8 +96,8 @@ function toggleLayer(layer: string) {
 </script>
 
 <template>
-  <WSheet :title="t('memory.title')" size="lg" @close="memory.close()">
-    <div class="memory-card">
+  <div class="overlay" @click.self="memory.close()">
+    <div class="card memory-card">
       <div class="card-head">
         <span class="card-title">
           <Brain :size="15" />
@@ -200,5 +199,5 @@ function toggleLayer(layer: string) {
         <p class="mem-privacy">{{ t('memory.privacy') }}</p>
       </div>
     </div>
-  </WSheet>
+  </div>
 </template>

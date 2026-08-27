@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import WSheet from './ui/WSheet.vue'
 import { Pause, Play, Target, Trash2, X } from 'lucide-vue-next'
 import { useSessionStore } from '../stores/sessions'
 import { fmtTokens } from '../lib/format'
@@ -51,8 +50,8 @@ async function setGoal() {
 </script>
 
 <template>
-  <WSheet size="md" @close="close()">
-    <div class="goal-card">
+  <div class="overlay" @click.self="close()">
+    <div class="card goal-card">
       <div class="card-head">
         <span class="card-title goal-title">
           <Target :size="15" />
@@ -163,5 +162,5 @@ async function setGoal() {
         </div>
       </div>
     </div>
-  </WSheet>
+  </div>
 </template>

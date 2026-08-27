@@ -15,8 +15,6 @@ export const PREFERENCE_KEYS = [
   'woca.pref.model',
   'woca.pref.permissionMode',
   'woca.pref.density',
-  'woca.pref.pinnedSessions',
-  'woca.pref.sessionGroups',
 ] as const
 
 export type PreferenceKey = (typeof PREFERENCE_KEYS)[number]

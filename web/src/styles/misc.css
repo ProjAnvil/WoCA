@@ -1,10 +1,10 @@
 /* Memory panel (workspace overlay)                                            */
 
 .memory-card {
-  /* The sheet owns the fixed height; switching layer filters never resizes
-     the card, the body scrolls instead. */
-  flex: 1;
-  min-height: 0;
+  width: min(720px, 94vw);
+  /* Fixed height: switching layer filters never resizes the card, the body
+     scrolls instead. */
+  height: min(700px, 84vh);
   display: flex;
   flex-direction: column;
   overflow: hidden;

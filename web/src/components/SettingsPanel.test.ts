@@ -56,7 +56,9 @@ function click(el: Element) {
 function mountPanel() {
   const pinia = createPinia()
   setActivePinia(pinia)
-  w = mount(SettingsPanel, { global: { plugins: [i18n, pinia] } })
+  // The panel renders a centered overlay (no Teleport); attaching to the
+  // document keeps the DOM queries below valid.
+  w = mount(SettingsPanel, { global: { plugins: [i18n, pinia] }, attachTo: document.body })
   return w
 }
 

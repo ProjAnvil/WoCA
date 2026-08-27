@@ -39,8 +39,8 @@
 }
 
 .goal-card {
-  flex: 1;
-  min-height: 0;
+  width: min(640px, 94vw);
+  max-height: 84vh;
   display: flex;
   flex-direction: column;
   overflow: hidden;

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import WSheet from './ui/WSheet.vue'
 import {
   Activity, ShieldCheck,
   Brain,
@@ -174,8 +173,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <WSheet :title="t('settings.title')" size="lg" @close="settings.closePanel()">
-    <div class="settings-card">
+  <div class="overlay" @click.self="settings.closePanel()">
+    <div class="card settings-card">
       <div class="card-head">
         <span class="card-title">{{ t('settings.title') }}</span>
         <button class="icon-btn" @click="settings.closePanel()">
@@ -264,15 +263,13 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-  </WSheet>
+  </div>
 </template>
 
 <style scoped>
 .settings-card {
-  /* The WSheet shell owns width/height; the card fills it. */
-  flex: 1;
-  min-height: 0;
-  width: 100%;
+  width: min(880px, 94vw);
+  height: min(640px, 86vh);
   max-width: 100%;
   display: flex;
   flex-direction: column;
