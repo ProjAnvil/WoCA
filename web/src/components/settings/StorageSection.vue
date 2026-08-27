@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { Database } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useServerSettingsStore } from '../../stores/serverSettings'
+import WInfoTip from '../ui/WInfoTip.vue'
 
 defineProps<{ bridge?: boolean }>()
 
@@ -29,8 +30,7 @@ const memoryStoreLocked = computed(() => settings.isManaged('memory'))
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.storage.checkpointBackend') }}</div>
-        <div class="row-hint">{{ t('settings.storage.checkpointHint') }}</div>
+<div class="row-label">{{ t('settings.storage.checkpointBackend') }}<WInfoTip :text="t('settings.storage.checkpointHint')" /></div>
       </div>
       <select
         v-model="settings.checkpointBackend"
@@ -48,8 +48,7 @@ const memoryStoreLocked = computed(() => settings.isManaged('memory'))
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.storage.memoryBackend') }}</div>
-        <div class="row-hint">{{ t('settings.storage.memoryStoreHint') }}</div>
+<div class="row-label">{{ t('settings.storage.memoryBackend') }}<WInfoTip :text="t('settings.storage.memoryStoreHint')" /></div>
       </div>
       <select
         v-model="settings.memoryBackend"
@@ -92,8 +91,7 @@ const memoryStoreLocked = computed(() => settings.isManaged('memory'))
 
     <div v-if="settings.server" class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.storage.dbLocation') }}</div>
-        <div class="row-hint">{{ settings.server.database }}</div>
+<div class="row-label">{{ t('settings.storage.dbLocation') }}<WInfoTip :text="settings.server.database" /></div>
       </div>
     </div>
   </section>

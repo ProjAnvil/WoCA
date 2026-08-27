@@ -2,6 +2,7 @@
 import { useI18n } from 'vue-i18n'
 import { Plug } from 'lucide-vue-next'
 import { getNativeBridge } from '../../native/bridge'
+import WInfoTip from '../ui/WInfoTip.vue'
 
 // The native-only connection switcher: dropping the active profile's
 // session returns the app to the connect view (saved profiles, the
@@ -30,8 +31,7 @@ async function disconnect() {
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.nativeConnect.button') }}</div>
-        <div class="row-hint">{{ t('settings.nativeConnect.hint') }}</div>
+<div class="row-label">{{ t('settings.nativeConnect.button') }}<WInfoTip :text="t('settings.nativeConnect.hint')" /></div>
       </div>
       <button class="btn" data-testid="native-disconnect" @click="disconnect()">
         {{ t('settings.nativeConnect.button') }}

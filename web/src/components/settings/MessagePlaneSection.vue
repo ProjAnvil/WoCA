@@ -2,6 +2,7 @@
 import { Radio } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useServerSettingsStore } from '../../stores/serverSettings'
+import WInfoTip from '../ui/WInfoTip.vue'
 
 const { t } = useI18n()
 const settings = useServerSettingsStore()
@@ -23,8 +24,7 @@ const settings = useServerSettingsStore()
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.msgplane.mode') }}</div>
-        <div class="row-hint">{{ t('settings.msgplane.modeHint') }}</div>
+<div class="row-label">{{ t('settings.msgplane.mode') }}<WInfoTip :text="t('settings.msgplane.modeHint')" /></div>
       </div>
       <select v-model="settings.msgPlaneMode" class="field" style="max-width: 240px">
         <option value="pg">{{ t('settings.msgplane.modePG') }}</option>
@@ -34,8 +34,7 @@ const settings = useServerSettingsStore()
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.msgplane.natsURL') }}</div>
-        <div class="row-hint">{{ t('settings.msgplane.natsURLHint') }}</div>
+<div class="row-label">{{ t('settings.msgplane.natsURL') }}<WInfoTip :text="t('settings.msgplane.natsURLHint')" /></div>
       </div>
       <input
         v-model="settings.msgPlaneNATSURL"
@@ -49,8 +48,7 @@ const settings = useServerSettingsStore()
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.msgplane.subject') }}</div>
-        <div class="row-hint">{{ t('settings.msgplane.subjectHint') }}</div>
+<div class="row-label">{{ t('settings.msgplane.subject') }}<WInfoTip :text="t('settings.msgplane.subjectHint')" /></div>
       </div>
       <input
         v-model="settings.msgPlaneSubject"

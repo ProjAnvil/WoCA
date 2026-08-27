@@ -2,6 +2,7 @@
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '../../stores/settings'
 import { useServerSettingsStore } from '../../stores/serverSettings'
+import WInfoTip from '../ui/WInfoTip.vue'
 
 const { t } = useI18n()
 const settings = useSettingsStore()
@@ -15,8 +16,7 @@ const server = useServerSettingsStore()
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.preferences.autoCollapse') }}</div>
-        <div class="row-hint">{{ t('settings.preferences.autoCollapseHint') }}</div>
+<div class="row-label">{{ t('settings.preferences.autoCollapse') }}<WInfoTip :text="t('settings.preferences.autoCollapseHint')" /></div>
       </div>
       <button
         class="switch"
@@ -30,8 +30,7 @@ const server = useServerSettingsStore()
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.preferences.markdown') }}</div>
-        <div class="row-hint">{{ t('settings.preferences.markdownHint') }}</div>
+<div class="row-label">{{ t('settings.preferences.markdown') }}<WInfoTip :text="t('settings.preferences.markdownHint')" /></div>
       </div>
       <button
         class="switch"

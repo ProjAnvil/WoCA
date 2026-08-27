@@ -9,6 +9,7 @@ import {
   useWebProfile,
   type WebProfile,
 } from '../../api/client'
+import WInfoTip from '../ui/WInfoTip.vue'
 
 // Remote profiles (bridge 形态): the saved remote origins this bridge's
 // embedded web can be pointed at — stored in the bridge's own settings
@@ -109,8 +110,7 @@ async function remove(p: WebProfile) {
 
     <div class="setting-row edge-add">
       <div>
-        <div class="row-label">{{ t('settings.remotes.addLabel') }}</div>
-        <div class="row-hint">{{ t('settings.remotes.addHint') }}</div>
+<div class="row-label">{{ t('settings.remotes.addLabel') }}<WInfoTip :text="t('settings.remotes.addHint')" /></div>
         <div v-if="addError" class="row-hint" style="color: var(--danger)">{{ addError }}</div>
         <input v-model="addURL" class="field" style="max-width: 280px" :placeholder="t('settings.remotes.addPlaceholder')" @keydown.enter="add()" />
         <input v-model="addLabel" class="field" style="max-width: 160px" :placeholder="t('settings.remotes.labelPlaceholder')" @keydown.enter="add()" />

@@ -41,9 +41,8 @@ onMounted(() => {
               selected: claudeEnv.state.env.selected.skills.length,
               total: claudeEnv.state.env.skills.length,
             })
-          }}
+          }}<WInfoTip :text="t('settings.claudeenv.skillsHint')" />
         </div>
-        <div class="row-hint">{{ t('settings.claudeenv.skillsHint') }}</div>
         <div v-if="!claudeEnv.state.env.skills.length" class="row-hint">
           {{ t('settings.claudeenv.noSkills') }}
         </div>
@@ -67,9 +66,8 @@ onMounted(() => {
               selected: claudeEnv.state.env.selected.mcp.length,
               total: claudeEnv.state.env.mcp.length,
             })
-          }}
+          }}<WInfoTip :text="t('settings.claudeenv.mcpHint')" />
         </div>
-        <div class="row-hint">{{ t('settings.claudeenv.mcpHint') }}</div>
         <div v-if="!claudeEnv.state.env.mcp.length" class="row-hint">
           {{ t('settings.claudeenv.noMcp') }}
         </div>

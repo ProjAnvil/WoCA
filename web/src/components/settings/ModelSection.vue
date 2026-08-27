@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '../../stores/settings'
 import { useServerSettingsStore } from '../../stores/serverSettings'
+import WInfoTip from '../ui/WInfoTip.vue'
 
 const { t } = useI18n()
 const settings = useSettingsStore()
@@ -28,8 +29,7 @@ onMounted(() => {
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.model.defaultModel') }}</div>
-        <div class="row-hint">{{ t('settings.shared.freeModelHint') }}</div>
+<div class="row-label">{{ t('settings.model.defaultModel') }}<WInfoTip :text="t('settings.shared.freeModelHint')" /></div>
       </div>
       <!-- Private-cloud form (managed): the operator's preset catalog is
            the ONLY source — selecting one applies it (the bridge asks the

@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Network, RefreshCw } from 'lucide-vue-next'
 import type { EdgeBridge } from '../../api/client'
+import WInfoTip from '../ui/WInfoTip.vue'
 
 defineProps<{ bridges: EdgeBridge[]; current?: string }>()
 const emit = defineEmits<{ refresh: [] }>()
@@ -50,6 +51,7 @@ function addTargetValue() {
   <section class="setting-section">
     <div class="setting-section-title">
       <Network :size="13" style="vertical-align: -2px" /> {{ t('settings.edge.title') }}
+      <WInfoTip :text="t('settings.edge.hint')" />
       <button class="icon-btn edge-refresh" :title="t('settings.edge.refresh')" @click="emit('refresh')">
         <RefreshCw :size="13" />
       </button>
@@ -74,8 +76,7 @@ function addTargetValue() {
 
     <div class="setting-row edge-add">
       <div>
-        <div class="row-label">{{ t('settings.edge.addLabel') }}</div>
-        <div class="row-hint">{{ t('settings.edge.addHint') }}</div>
+<div class="row-label">{{ t('settings.edge.addLabel') }}<WInfoTip :text="t('settings.edge.addHint')" /></div>
         <div v-if="addError" class="row-hint" style="color: var(--danger)">{{ addError }}</div>
       </div>
       <div class="edge-add-controls">
@@ -92,7 +93,6 @@ function addTargetValue() {
       </div>
     </div>
 
-    <p class="row-hint">{{ t('settings.edge.hint') }}</p>
   </section>
 </template>
 

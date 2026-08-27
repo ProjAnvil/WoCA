@@ -2,6 +2,7 @@
 import { Brain } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useServerSettingsStore } from '../../stores/serverSettings'
+import WInfoTip from '../ui/WInfoTip.vue'
 
 const { t } = useI18n()
 const settings = useServerSettingsStore()
@@ -19,8 +20,7 @@ const locked = () => settings.isManaged('memory-engine')
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.memory.engine') }}</div>
-        <div class="row-hint">{{ t('settings.memory.engineHint') }}</div>
+<div class="row-label">{{ t('settings.memory.engine') }}<WInfoTip :text="t('settings.memory.engineHint')" /></div>
       </div>
       <select v-model="settings.memoryEngine" class="field" style="max-width: 200px" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined">
         <option value="ladym">{{ t('settings.memory.enabledOption') }}</option>
@@ -34,8 +34,7 @@ const locked = () => settings.isManaged('memory-engine')
     <template v-if="settings.memoryEngine === 'ladym'">
       <div class="setting-row">
         <div>
-          <div class="row-label">{{ t('settings.memory.autoRetain') }}</div>
-          <div class="row-hint">{{ t('settings.memory.autoRetainHint') }}</div>
+<div class="row-label">{{ t('settings.memory.autoRetain') }}<WInfoTip :text="t('settings.memory.autoRetainHint')" /></div>
         </div>
         <button
         class="switch"
@@ -49,8 +48,7 @@ const locked = () => settings.isManaged('memory-engine')
 
       <div class="setting-row">
         <div>
-          <div class="row-label">{{ t('settings.memory.system2') }}</div>
-          <div class="row-hint">{{ t('settings.memory.system2Hint') }}</div>
+<div class="row-label">{{ t('settings.memory.system2') }}<WInfoTip :text="t('settings.memory.system2Hint')" /></div>
         </div>
         <button
         class="switch"
@@ -64,8 +62,7 @@ const locked = () => settings.isManaged('memory-engine')
 
       <div class="setting-row">
         <div>
-          <div class="row-label">{{ t('settings.memory.interval') }}</div>
-          <div class="row-hint">{{ t('settings.memory.intervalHint') }}</div>
+<div class="row-label">{{ t('settings.memory.interval') }}<WInfoTip :text="t('settings.memory.intervalHint')" /></div>
         </div>
         <input
           v-model.number="settings.ladymSystem2Interval" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined"
@@ -79,8 +76,7 @@ const locked = () => settings.isManaged('memory-engine')
 
       <div class="setting-row">
         <div>
-          <div class="row-label">{{ t('settings.memory.topK') }}</div>
-          <div class="row-hint">{{ t('settings.memory.topKHint') }}</div>
+<div class="row-label">{{ t('settings.memory.topK') }}<WInfoTip :text="t('settings.memory.topKHint')" /></div>
         </div>
         <input
           v-model.number="settings.ladymTopK"
@@ -93,13 +89,11 @@ const locked = () => settings.isManaged('memory-engine')
       </div>
 
       <div class="setting-subgroup">
-        <div class="row-label">{{ t('settings.memory.model') }}</div>
-        <div class="row-hint">{{ t('settings.memory.modelHint') }}</div>
+<div class="row-label">{{ t('settings.memory.model') }}<WInfoTip :text="t('settings.memory.modelHint')" /></div>
 
         <div class="setting-row">
           <div>
-            <div class="row-label">Embedding</div>
-            <div class="row-hint">{{ t('settings.memory.embeddingHint') }}</div>
+<div class="row-label">Embedding<WInfoTip :text="t('settings.memory.embeddingHint')" /></div>
           </div>
           <select v-model="settings.ladymEmbedding" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined" class="field" style="max-width: 200px">
             <option value="inherit">{{ t('settings.memory.inheritOption') }}</option>
@@ -112,8 +106,7 @@ const locked = () => settings.isManaged('memory-engine')
 
         <div class="setting-row">
           <div>
-            <div class="row-label">{{ t('settings.memory.embeddingModel') }}</div>
-            <div class="row-hint">{{ t('settings.memory.embeddingModelHint') }}</div>
+<div class="row-label">{{ t('settings.memory.embeddingModel') }}<WInfoTip :text="t('settings.memory.embeddingModelHint')" /></div>
           </div>
           <input
             v-model="settings.ladymEmbeddingModel" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined"
@@ -125,8 +118,7 @@ const locked = () => settings.isManaged('memory-engine')
 
         <div class="setting-row">
           <div>
-            <div class="row-label">Embedding Base URL</div>
-            <div class="row-hint">{{ t('settings.memory.embeddingBaseHint') }}</div>
+<div class="row-label">Embedding Base URL<WInfoTip :text="t('settings.memory.embeddingBaseHint')" /></div>
           </div>
           <input
             v-model="settings.ladymEmbeddingBaseURL" :disabled="locked()" :title="locked() ? t('settings.managedTooltip') : undefined"
@@ -159,8 +151,7 @@ const locked = () => settings.isManaged('memory-engine')
 
         <div class="setting-row">
           <div>
-            <div class="row-label">{{ t('settings.memory.llm') }}</div>
-            <div class="row-hint">{{ t('settings.memory.llmHint') }}</div>
+<div class="row-label">{{ t('settings.memory.llm') }}<WInfoTip :text="t('settings.memory.llmHint')" /></div>
           </div>
           <select v-model="settings.ladymLLM" class="field" style="max-width: 200px">
             <option value="inherit">{{ t('settings.memory.inheritOption') }}</option>
@@ -171,8 +162,7 @@ const locked = () => settings.isManaged('memory-engine')
 
       <div class="setting-row">
         <div>
-          <div class="row-label">{{ t('settings.memory.dbPath') }}</div>
-          <div class="row-hint">{{ t('settings.memory.dbPathHint') }}</div>
+<div class="row-label">{{ t('settings.memory.dbPath') }}<WInfoTip :text="t('settings.memory.dbPathHint')" /></div>
         </div>
         <input
           v-model="settings.ladymDBPath"

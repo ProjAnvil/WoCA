@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { Server } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useServerSettingsStore } from '../../stores/serverSettings'
+import WInfoTip from '../ui/WInfoTip.vue'
 
 defineProps<{ locked?: boolean }>()
 
@@ -35,8 +36,7 @@ const providerHint = computed(
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.provider.provider') }}</div>
-        <div class="row-hint">{{ t('settings.provider.providerHint') }}</div>
+<div class="row-label">{{ t('settings.provider.provider') }}<WInfoTip :text="t('settings.provider.providerHint')" /></div>
       </div>
       <select
         v-model="settings.provider"
@@ -95,8 +95,7 @@ const providerHint = computed(
 
     <div class="setting-row">
       <div>
-        <div class="row-label">{{ t('settings.provider.defaultModel') }}</div>
-        <div class="row-hint">{{ locked ? t('settings.provider.modelCatalogHint') : t('settings.shared.freeModelHint') }}</div>
+<div class="row-label">{{ t('settings.provider.defaultModel') }}<WInfoTip :text="locked ? t('settings.provider.modelCatalogHint') : t('settings.shared.freeModelHint')" /></div>
       </div>
       <input
         v-model="settings.serverModel"
