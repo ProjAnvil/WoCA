@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/projanvil/woca/internal/runws"
@@ -121,6 +122,64 @@ func (h *FileHistory) Redo(ctx context.Context) (string, error) {
 	s.undo = append(s.undo, change)
 	h.mu.Unlock()
 	return describeRestore("Redid", change, change.After), nil
+}
+
+// Pending returns a copy of the workspace's undoable changes, oldest
+// first — the web Changes review tab's payload (un-reverted edits with
+// their before/after bytes).
+func (h *FileHistory) Pending(ctx context.Context) []FileChange {
+	s := h.scope(ctx)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]FileChange, len(s.undo))
+	copy(out, s.undo)
+	return out
+}
+
+// UndoSteps reverts up to n changes from the top of the stack, reporting how
+// many were applied (0 when there was nothing to undo). Each step keeps
+// Undo's apply-then-commit ordering, so a failed apply stops the batch with
+// the earlier steps already reverted and reported.
+func (h *FileHistory) UndoSteps(ctx context.Context, n int) (int, string, error) {
+	applied := 0
+	var descs []string
+	for i := 0; i < n; i++ {
+		desc, err := h.Undo(ctx)
+		if err != nil {
+			return applied, "", err
+		}
+		if desc == "nothing to undo" {
+			break
+		}
+		applied++
+		descs = append(descs, desc)
+	}
+	return applied, strings.Join(descs, "; "), nil
+}
+
+// UndoThroughPath reverts changes from the top of the stack down to (and
+// including) the oldest change touching path. The stack only unwinds from
+// the top, so changes to other files made after that point revert with it —
+// the semantics of "roll back to before this file was first touched".
+func (h *FileHistory) UndoThroughPath(ctx context.Context, path string) (int, string, error) {
+	s := h.scope(ctx)
+	h.mu.Lock()
+	target := -1
+	for i, ch := range s.undo {
+		if ch.Path == path {
+			target = i
+			break
+		}
+	}
+	n := 0
+	if target >= 0 {
+		n = len(s.undo) - target
+	}
+	h.mu.Unlock()
+	if target < 0 {
+		return 0, "no changes for " + path, nil
+	}
+	return h.UndoSteps(ctx, n)
 }
 
 // Counts reports the undoable and redoable step counts (for UI hints).

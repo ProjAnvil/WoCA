@@ -202,3 +202,83 @@ func TestFileHistoryScopedPerRunWorkspace(t *testing.T) {
 		t.Fatalf("default scope undo = %q, want nothing to undo", out)
 	}
 }
+
+func TestFileHistoryPendingCopiesStack(t *testing.T) {
+	dir := newHistoryDir(t)
+	h := NewFileHistory()
+	a := filepath.Join(dir, "a.txt")
+	b := filepath.Join(dir, "b.txt")
+	h.Record(nilCtx(), a, []byte("a1"), []byte("a2"))
+	h.Record(nilCtx(), b, []byte("b1"), []byte("b2"))
+
+	pending := h.Pending(nilCtx())
+	if len(pending) != 2 || pending[0].Path != a || pending[1].Path != b {
+		t.Fatalf("pending = %+v", pending)
+	}
+	if string(pending[0].Before) != "a1" || string(pending[0].After) != "a2" {
+		t.Fatalf("pending bytes = %q -> %q", pending[0].Before, pending[0].After)
+	}
+	// The copy is detached: mutating it must not touch the stack.
+	pending[0].Path = "mutated"
+	if again := h.Pending(nilCtx()); again[0].Path != a {
+		t.Fatalf("Pending must return a copy, got %q", again[0].Path)
+	}
+}
+
+func TestFileHistoryUndoStepsBatchesAndStops(t *testing.T) {
+	dir := newHistoryDir(t)
+	h := NewFileHistory()
+	for i, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		p := filepath.Join(dir, name)
+		h.Record(nilCtx(), p, []byte("v1"), []byte("v2"))
+		_ = i
+	}
+	// Undo two of the three; each undo restores the on-disk v1.
+	applied, summary, err := h.UndoSteps(nilCtx(), 2)
+	if err != nil || applied != 2 || summary == "" {
+		t.Fatalf("UndoSteps = %d, %q, %v", applied, summary, err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "c.txt")); string(got) != "v1" {
+		t.Fatalf("c.txt = %q, want v1", got)
+	}
+	if undoN, _ := h.Counts(nilCtx()); undoN != 1 {
+		t.Fatalf("remaining undoable = %d, want 1", undoN)
+	}
+	// Over-asking clamps at the stack depth without error.
+	applied, _, err = h.UndoSteps(nilCtx(), 5)
+	if err != nil || applied != 1 {
+		t.Fatalf("over-ask UndoSteps = %d, %v", applied, err)
+	}
+	if applied, summary, _ := h.UndoSteps(nilCtx(), 1); applied != 0 || summary != "" {
+		t.Fatalf("empty stack UndoSteps = %d, %q", applied, summary)
+	}
+}
+
+func TestFileHistoryUndoThroughPathUnwindsAboveIt(t *testing.T) {
+	dir := newHistoryDir(t)
+	h := NewFileHistory()
+	a := filepath.Join(dir, "a.txt")
+	b := filepath.Join(dir, "b.txt")
+	// a edited first, then b, then a again (non-consecutive for a).
+	h.Record(nilCtx(), a, []byte("a1"), []byte("a2"))
+	h.Record(nilCtx(), b, []byte("b1"), []byte("b2"))
+	h.Record(nilCtx(), a, []byte("a2"), []byte("a3"))
+
+	applied, _, err := h.UndoThroughPath(nilCtx(), b)
+	if err != nil || applied != 2 {
+		t.Fatalf("UndoThroughPath(b) = %d, %v; b's step sits under a's second edit, both must revert", applied, err)
+	}
+	if got, _ := os.ReadFile(b); string(got) != "b1" {
+		t.Fatalf("b.txt = %q, want b1", got)
+	}
+	if got, _ := os.ReadFile(a); string(got) != "a2" {
+		t.Fatalf("a.txt = %q, want a2 (only the second a-edit reverted)", got)
+	}
+	if n, _ := h.Counts(nilCtx()); n != 1 {
+		t.Fatalf("remaining undoable = %d, want 1 (the first a-edit)", n)
+	}
+	// Unknown path is a no-op, not an error.
+	if applied, summary, err := h.UndoThroughPath(nilCtx(), filepath.Join(dir, "zz.txt")); err != nil || applied != 0 || summary == "" {
+		t.Fatalf("unknown path = %d, %q, %v", applied, summary, err)
+	}
+}

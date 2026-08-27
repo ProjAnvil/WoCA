@@ -26,6 +26,33 @@ func (a *Agent) UndoFiles(ctx context.Context) (string, error) {
 	return a.registry.FileHistory().Undo(ctx)
 }
 
+// PendingFiles returns the workspace's pending (undoable) file changes,
+// oldest first — the web Changes review tab's payload.
+func (a *Agent) PendingFiles(ctx context.Context) []tools.FileChange {
+	if a.registry == nil || a.registry.FileHistory() == nil {
+		return nil
+	}
+	return a.registry.FileHistory().Pending(ctx)
+}
+
+// UndoFilesSteps reverts up to n file-tool mutations in the calling run's
+// workspace (checkpoint rollback), reporting how many were applied.
+func (a *Agent) UndoFilesSteps(ctx context.Context, n int) (int, string, error) {
+	if a.registry == nil || a.registry.FileHistory() == nil {
+		return 0, "", fmt.Errorf("file history unavailable")
+	}
+	return a.registry.FileHistory().UndoSteps(ctx, n)
+}
+
+// UndoFilesThroughPath reverts back to before path was first touched (see
+// FileHistory.UndoThroughPath for the unwind semantics).
+func (a *Agent) UndoFilesThroughPath(ctx context.Context, path string) (int, string, error) {
+	if a.registry == nil || a.registry.FileHistory() == nil {
+		return 0, "", fmt.Errorf("file history unavailable")
+	}
+	return a.registry.FileHistory().UndoThroughPath(ctx, path)
+}
+
 // RedoFiles re-applies the most recently undone file mutation in the calling
 // run's workspace.
 func (a *Agent) RedoFiles(ctx context.Context) (string, error) {

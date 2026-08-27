@@ -353,6 +353,12 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/sessions/{id}/goal", authz.ScopeSessionsWrite, s.handleGoalCommand)
 	s.route(mux, "GET /api/sessions/{id}/context", authz.ScopeSessionsRead, s.handleSessionContext)
 	s.route(mux, "GET /api/workspace", authz.ScopeWorkspaceRead, s.handleWorkspace)
+	// Checkpoint/changes plane (web review tab): pending-change diffs,
+	// workspace rollback, conversation truncation and /btw side runs.
+	s.route(mux, "GET /api/workspace/changes", authz.ScopeWorkspaceRead, s.handleWorkspaceChanges)
+	s.route(mux, "POST /api/workspace/undo", authz.ScopeRunsWrite, s.handleWorkspaceUndo)
+	s.route(mux, "POST /api/sessions/{id}/truncate", authz.ScopeSessionsWrite, s.handleTruncateSession)
+	s.route(mux, "POST /api/sessions/{id}/btw", authz.ScopeRunsWrite, s.handleBtwRun)
 	s.route(mux, "GET /api/workspace/file", authz.ScopeWorkspaceRead, s.handleWorkspaceFile)
 	s.route(mux, "GET /api/completions", authz.ScopeSessionsRead, s.handleCompletions)
 	// Model presets (design §16): the consumer frontend lists the

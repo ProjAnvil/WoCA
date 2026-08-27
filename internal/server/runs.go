@@ -35,6 +35,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		Prompt      string          `json:"prompt"`
 		Workspace   string          `json:"workspace"`
 		Attachments []runAttachment `json:"attachments"`
+		Comments    []runComment    `json:"comments"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -44,7 +45,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
-	human, err := humanMessage(req.Prompt, req.Attachments)
+	human, err := humanMessage(buildPrompt(req.Prompt, req.Comments), req.Attachments)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -245,6 +246,31 @@ func (s *Server) RunStateCounts() (active, queued int) {
 	return active, q
 }
 
+// runComment is one parked inline review comment (the Changes/preview
+// surfaces collect them; they ride the next run's prompt as file:line
+// context for the model).
+type runComment struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
+	Text string `json:"text"`
+}
+
+// buildPrompt appends the parked review comments to the prompt as a
+// structured block the model can anchor to files and lines.
+func buildPrompt(prompt string, comments []runComment) string {
+	if len(comments) == 0 {
+		return prompt
+	}
+	var b strings.Builder
+	b.WriteString(prompt)
+	b.WriteString("\n\n<inline-review-comments>\n")
+	for _, c := range comments {
+		fmt.Fprintf(&b, "- %s:%d: %s\n", c.File, c.Line, strings.TrimSpace(c.Text))
+	}
+	b.WriteString("</inline-review-comments>")
+	return b.String()
+}
+
 // runAttachment is one image attached to a prompt (base64-encoded).
 type runAttachment struct {
 	Name     string `json:"name"`
@@ -278,6 +304,35 @@ func humanMessage(prompt string, atts []runAttachment) (messages.Message, error)
 		blocks = append(blocks, messages.ImageBlock{MimeType: a.MimeType, Base64: a.Data})
 	}
 	return messages.Message{Role: messages.RoleHuman, Content: prompt, ContentBlocks: blocks}, nil
+}
+
+// handleBtwRun starts a side-question run ("/btw"): the same agent and
+// session history answer the question, but the exchange is never persisted
+// to the session transcript — the main conversation context stays clean.
+// It streams over the regular run SSE endpoint and never touches the
+// session run-state map, so the sidebar badge ignores it.
+func (s *Server) handleBtwRun(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Prompt    string `json:"prompt"`
+		Workspace string `json:"workspace"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	s.auditEvent(r, "run_btw", r.PathValue("id"))
+	human := messages.Human(req.Prompt)
+	run, sid, _, history := s.newRegisteredRun(r.PathValue("id"), req.Workspace)
+	run.emit(Event{Type: "run_started", Data: map[string]any{}})
+	run.start(append(history, human), func(final []messages.Message) {
+		// Deliberately not persisted: /btw never enters the transcript.
+		_ = final
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"run_id": run.ID(), "session_id": sid})
 }
 
 // handleQueueInput buffers user input submitted while a run is in flight;
