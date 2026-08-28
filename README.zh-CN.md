@@ -100,14 +100,14 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
   式气泡、语法高亮的文件侧栏、图片上传与截图粘贴、设置面板 —— 由同一
   二进制经 SSE 提供，并通过 `woca web start | stop | restart | status`
   以后台守护进程方式管理。
-- **交互式 TUI**（bubbletea）：实时流式输出、审批提示、图片附件、vim 输
-  入模式、主题、可滚动 transcript。
+- **交互式 TUI**（bubbletea）：实时流式输出、审批提示、vim 输入模式、主
+  题、可滚动 transcript。
 - **单次 CLI**：适合脚本与管道。
 
 **生态**
 
 - **Skills**（`SKILL.md` + YAML frontmatter）、**自定义子代理**
-  （`.woca/agents/*.md`）、**hooks**（9 组事件、匹配器、退出码语义）、
+  （`.woca/agents/*.md`）、**hooks**（12 组事件、匹配器、退出码语义）、
   **MCP** 客户端（stdio + streamable HTTP，工具 / 资源 / prompts / 通知 /
   OAuth）、**能力插件**（托管浏览器自动化与 PDF 工具链）—— 见
   [扩展 woca](#扩展-woca)。
@@ -190,8 +190,9 @@ woca                    # 终端下为 bubbletea TUI；否则为行式 REPL
 woca --resume last      # 继续最近一次会话
 ```
 
-`esc` 中断运行，`pgup`/`pgdown` 滚动，输入 `!cmd` 将 shell 命令输出纳入
-对话。见[斜杠命令](#斜杠命令)。
+审批提示用 `y`/`n` 回答，`pgup`/`pgdown` 滚动；中断运行请从 Web UI 取消
+（`POST /api/runs/{id}/cancel`）。行式 REPL 中以 `!` 前缀执行 shell 命令，
+输出纳入对话。见[斜杠命令](#斜杠命令)。
 
 ### 单次执行
 
@@ -245,8 +246,6 @@ reasoning-effort 映射走同一路由。
 cmd/woca                 cobra CLI：flags、config、REPL、单次执行、serve
 internal/agent           编码代理图（langchain-golang/langgraph 运行时）：
                          门控、plan 模式、流式执行、恢复、压缩、团队、目标
-internal/lgcp            langgraph 运行时的持久化 checkpoint 后端
-                         （file/sqlite/postgres）
 internal/tools           工具集 + 注册表 + 权限分类
 internal/permissions     权限模式、规则、只读分类器
 internal/model           供应商路由：重试、fallback
@@ -259,7 +258,7 @@ internal/compact         自动压缩 / 摘要
 internal/tokens          CJK 感知 token 估算器
 internal/skills          SKILL.md 加载器（分层：flag > 工作区 > 用户）
 internal/agents          子代理定义（.woca/agents/*.md）
-internal/hooks           hook 运行器（9 组事件）
+internal/hooks           hook 运行器（12 组事件）
 internal/mcp             MCP 客户端（stdio + streamable HTTP、OAuth）
 internal/plugins         市场插件（skills/agents 捆绑包）
 internal/pluginrt        能力插件运行时（browser、pdf）
@@ -367,7 +366,7 @@ $ woca config list
 ---
 name: reviewer
 description: 审查 diff 的正确性与风格问题
-tools: [Read, Grep, Glob]
+tools: Read, Grep, Glob
 ---
 你是一名严格的代码审查者，只报告具体、可执行的问题。
 ```
@@ -420,9 +419,11 @@ description: 撰写 conventional commit 信息
 }
 ```
 
-支持九组事件（`PreToolUse`、`PostToolUse`、`UserPromptSubmit`、`Stop`
-…）。每个 hook 从 stdin 收到 JSON 事件；stdout 回喂为上下文。`PreToolUse`
-hook 以 `2` 退出即拒绝工具；`PostToolUse` hook 以 `2` 退出则阻断继续。
+支持十二组事件：`PreToolUse`、`PostToolUse`、`UserPromptSubmit`、`Stop`、
+`SessionStart`、`SessionEnd`、`SubagentStop`、`Notification`、`PreCompact`、
+`PostCompact`、`PermissionRequest`、`PostSampling`。每个 hook 从 stdin 收到
+JSON 事件；stdout 回喂为上下文。`PreToolUse` hook 以 `2` 退出即拒绝工具；
+`PostToolUse` hook 以 `2` 退出则阻断继续。
 
 ### MCP 服务器
 

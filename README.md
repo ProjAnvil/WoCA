@@ -109,14 +109,14 @@ every conversation is persisted as a resumable transcript.
   syntax-highlighted previews, image uploads and screenshot paste, settings
   panel — served from the same binary over SSE and managed as a background
   daemon via `woca web start | stop | restart | status`.
-- **Interactive TUI** (bubbletea): live streaming, approval prompts, image
-  attachments, vim-mode input, themes, scrollable transcript.
+- **Interactive TUI** (bubbletea): live streaming, approval prompts,
+  vim-mode input, themes, scrollable transcript.
 - **One-shot CLI** for scripting and pipes.
 
 **Ecosystem**
 
 - **Skills** (`SKILL.md` + YAML frontmatter), **custom subagents**
-  (`.woca/agents/*.md`), **hooks** (9 event groups, matchers, exit-code
+  (`.woca/agents/*.md`), **hooks** (12 event groups, matchers, exit-code
   semantics), **MCP** client (stdio + streamable HTTP, tools, resources,
   prompts, notifications, OAuth), and **capability plugins** (managed
   browser automation and PDF tooling) — see
@@ -204,8 +204,10 @@ woca                    # bubbletea TUI on a terminal; line REPL otherwise
 woca --resume last      # continue your most recent session
 ```
 
-Press `esc` to interrupt a run, `pgup`/`pgdown` to scroll, type `!cmd` to
-run a shell command into the conversation. See
+Answer approval prompts with `y`/`n` and scroll with `pgup`/`pgdown`. To
+interrupt a running turn, cancel it from the web UI
+(`POST /api/runs/{id}/cancel`). In the line REPL, a line starting with `!`
+runs a shell command and feeds its output into the conversation. See
 [Slash commands](#slash-commands).
 
 ### One-shot
@@ -262,8 +264,6 @@ cmd/woca                 cobra CLI: flags, config, REPL, one-shot, serve
 internal/agent           the coding-agent graph (langchain-golang/langgraph
                          runtime): gate, plan mode, streaming execution,
                          recovery, compaction, teams, goals
-internal/lgcp            durable checkpoint savers (file/sqlite/postgres)
-                         for the langgraph runtime
 internal/tools           tool set + registry + permission categories
 internal/permissions     permission modes, rules, read-only classifier
 internal/model           provider router: retry, fallback, invocation
@@ -276,7 +276,7 @@ internal/compact         auto-compaction / summarization
 internal/tokens          CJK-aware token estimator
 internal/skills          SKILL.md loader (layered: flag > workspace > user)
 internal/agents          subagent definitions (.woca/agents/*.md)
-internal/hooks           hook runner (9 event groups)
+internal/hooks           hook runner (12 event groups)
 internal/mcp             MCP client (stdio + streamable HTTP, OAuth)
 internal/plugins         marketplace plugins (skills/agents bundles)
 internal/pluginrt        capability-plugin runtimes (browser, pdf)
@@ -493,7 +493,7 @@ markdown files:
 ---
 name: reviewer
 description: Reviews diffs for correctness and style issues
-tools: [Read, Grep, Glob]
+tools: Read, Grep, Glob
 ---
 You are a critical code reviewer. Report only concrete, actionable issues.
 ```
@@ -548,8 +548,10 @@ Configure lifecycle hooks in `~/.woca/settings.json` or
 }
 ```
 
-Nine event groups are supported (`PreToolUse`, `PostToolUse`,
-`UserPromptSubmit`, `Stop`, …). Each hook receives a JSON event on stdin;
+Twelve event groups are supported: `PreToolUse`, `PostToolUse`,
+`UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`, `SubagentStop`,
+`Notification`, `PreCompact`, `PostCompact`, `PermissionRequest`, and
+`PostSampling`. Each hook receives a JSON event on stdin;
 stdout is fed back as context. A `PreToolUse` hook exiting `2` denies the
 tool; a `PostToolUse` hook exiting `2` blocks continuation.
 
