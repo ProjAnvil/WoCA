@@ -1,0 +1,14 @@
+[task]
+name = "woca/hello-woca"
+version = "1.0.0"
+description = "Smoke test: run the woca harness headless inside a Harbor container"
+
+[environment]
+docker_image = "ubuntu:24.04"
+
+[agent]
+user = "agent"
+timeout_sec = 300.0
+
+[verifier]
+timeout_sec = 60.0

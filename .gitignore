@@ -28,3 +28,6 @@ ee/opsconsole-web/node_modules/
 .terraform/
 .terraform.lock.hcl
 *.tfstate*
+jobs/
+__pycache__/
+*.pyc

@@ -1,4 +1,4 @@
-.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web ee-web install deps-baseline check-deps native-test native-build native-dev ent-up ent-down ent-ps ent-logs
+.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web ee-web install deps-baseline check-deps native-test native-build native-dev ent-up ent-down ent-ps ent-logs eval-binary
 
 # Default: build the web frontend, then the binary (frontend is embedded).
 all: web build
@@ -30,6 +30,12 @@ build:
 # (woca-gateway/-scheduler/-worker/...) get their own cmd/ entries and
 # targets in Phase 3 (see the microservices design doc §5.1).
 build-personal: web build
+
+# Cross-compile the static linux/amd64 binary that the Harbor agent adapter
+# (eval/woca_agent.py) uploads into benchmark task containers. CGO-free
+# (modernc sqlite), so no cross toolchain is needed.
+eval-binary:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o build/woca-linux-amd64 ./cmd/woca
 
 test:
 	go test ./...

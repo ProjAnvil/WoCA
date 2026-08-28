@@ -1,0 +1,1 @@
+Write the exact text `woca-was-here` to the file `/app/greeting.txt` (a single trailing newline is fine, no extra whitespace). Do not create any other files. When you are done, reply with a one-line confirmation.
