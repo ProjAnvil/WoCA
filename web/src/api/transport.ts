@@ -71,12 +71,12 @@ export async function request<T>(url: string, init?: RequestInit, label?: string
     throw new UnauthorizedError(code)
   }
   if (!resp.ok) {
-    const detail = await resp
+    const body = await resp
       .json()
-      .then((d) => (d as { error?: string }).error)
-      .catch(() => '')
-    const msg = detail || String(resp.status)
-    throw new Error(label ? `${label}：${msg}` : msg)
+      .then((d) => d as { error?: string; code?: string })
+      .catch(() => ({}) as { error?: string; code?: string })
+    const msg = body.error || String(resp.status)
+    throw new ApiError(label ? `${label}：${msg}` : msg, body.code)
   }
   const text = await resp.text()
   return (text ? JSON.parse(text) : undefined) as T
@@ -96,4 +96,34 @@ export async function postJSON<T>(
     },
     label,
   )
+}
+
+/**
+ * Standard error-code → localized message lookup (api-standard.md §1).
+ * Codes are never localized server-side; the frontend owns the mapping.
+ * Falls back to the English wire message when no translation exists.
+ */
+/** Generic non-2xx failure; carries the standard numeric code when the
+ * server sent one (api-standard.md §1). */
+export class ApiError extends Error {
+  /** Standard numeric error code, e.g. "S-B-0100" (absent on legacy
+   * responses that predate the registry). */
+  code?: string
+
+  constructor(message: string, code?: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.code = code
+  }
+}
+
+export function apiErrorText(err: unknown, fallback: string): string {
+  if (err instanceof ApiError && err.code) {
+    const key = `errors.${err.code}`
+    const t = (i18n.global as { t: (k: string) => string }).t
+    const tr = t(key)
+    if (tr !== key) return tr
+    if (err.message) return err.message
+  }
+  return fallback
 }

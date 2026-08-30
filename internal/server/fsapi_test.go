@@ -48,7 +48,7 @@ func newFSServer(t *testing.T) (*fsb.Service, *httptest.Server) {
 func TestFSRoutesListAndValidate(t *testing.T) {
 	_, ts := newFSServer(t)
 
-	resp, err := http.Get(ts.URL + "/api/fs/list")
+	resp, err := http.Get(ts.URL + "/api/filesystem/list")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestFSRoutesListAndValidate(t *testing.T) {
 		t.Fatalf("roots listing = %+v", roots)
 	}
 	// Listing the root shows its child directories only.
-	resp1b, err := http.Get(ts.URL + "/api/fs/list?path=" + roots.Roots[0])
+	resp1b, err := http.Get(ts.URL + "/api/filesystem/list?path=" + roots.Roots[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestFSRoutesListAndValidate(t *testing.T) {
 	}
 
 	// Validate an existing dir.
-	resp2, err := http.Get(ts.URL + "/api/fs/validate?path=" + roots.Roots[0])
+	resp2, err := http.Get(ts.URL + "/api/filesystem/validate?path=" + roots.Roots[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestFSRoutesListAndValidate(t *testing.T) {
 	}
 
 	// Out-of-jail listing is a uniform 403 (no path oracle).
-	resp3, err := http.Get(ts.URL + "/api/fs/list?path=" + t.TempDir())
+	resp3, err := http.Get(ts.URL + "/api/filesystem/list?path=" + t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestFSRoutesListAndValidate(t *testing.T) {
 
 func TestFSRoutesMkdirStatusCodes(t *testing.T) {
 	_, ts := newFSServer(t)
-	resp, _ := http.Get(ts.URL + "/api/fs/list")
+	resp, _ := http.Get(ts.URL + "/api/filesystem/list")
 	var roots struct {
 		Roots []string `json:"roots"`
 	}
@@ -120,7 +120,7 @@ func TestFSRoutesMkdirStatusCodes(t *testing.T) {
 
 	mkdir := func(parent, name string) int {
 		body, _ := json.Marshal(map[string]string{"parent": parent, "name": name})
-		resp, err := http.Post(ts.URL+"/api/fs/mkdir", "application/json", bytes.NewReader(body))
+		resp, err := http.Post(ts.URL+"/api/filesystem/mkdir", "application/json", bytes.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,7 +157,7 @@ func TestFSRoutesRequireAuthentication(t *testing.T) {
 	})
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
-	resp, err := http.Get(ts.URL + "/api/fs/list")
+	resp, err := http.Get(ts.URL + "/api/filesystem/list")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/projanvil/woca/internal/platform/authn"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/platform/authz"
 	"github.com/projanvil/woca/internal/platform/tenancy"
 )
@@ -223,14 +224,32 @@ func writeForbidden(w http.ResponseWriter, msg string) {
 	writeCoded(w, http.StatusForbidden, msg, authn.CodeForbidden)
 }
 
-// writeCoded emits the error envelope with the enumerated failure code —
-// the field every client switches on ({"error": ..., "code": "revoked"}).
+// codedCode maps the authn reason slugs onto the standard numeric codes
+// (api-standard.md §1). The slug survives in a transitional `reason`
+// field for clients that switch on it; the `code` field is the stable
+// wire identity from here on.
+func codedCode(errCode string) string {
+	switch errCode {
+	case authn.CodeRevoked:
+		return httpx.SegBusiness + "-" + httpx.CodeCredentialRevoked
+	case authn.CodeForbidden:
+		return httpx.SegBusiness + "-" + httpx.CodeForbidden
+	default:
+		return httpx.SegBusiness + "-" + httpx.CodeUnauthorized
+	}
+}
+
+// writeCoded emits the error envelope with the standard code plus the
+// transitional reason slug ({"error":..., "code":"S-B-0002", "reason":"revoked"}).
 func writeCoded(w http.ResponseWriter, code int, msg, errCode string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	body := map[string]string{"error": msg, "code": authn.CodeUnauthorized}
-	if errCode != "" {
-		body["code"] = errCode
+	if errCode == "" {
+		errCode = authn.CodeUnauthorized
 	}
-	_ = json.NewEncoder(w).Encode(body)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":  msg,
+		"code":   codedCode(errCode),
+		"reason": errCode,
+	})
 }

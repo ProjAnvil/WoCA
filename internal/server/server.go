@@ -111,7 +111,7 @@ type Config struct {
 	Quota func(ctx context.Context) (quota.Info, error)
 	// ApplyClaudeEnv persists a claude-skills / claude-mcp checkbox
 	// selection, syncs the ~/.woca symlinks + mcp.json, and live-applies the
-	// skill set (POST /api/claudeenv). Nil disables the write side of the
+	// skill set (POST /api/claude-env). Nil disables the write side of the
 	// endpoint.
 	ApplyClaudeEnv func(skills, mcp []string) error
 	// Plugins snapshots the built-in plugin catalog with runtime install
@@ -372,11 +372,11 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/agent/permissions", authz.ScopeAgentWrite, s.handleSetPermissionMode)
 	s.route(mux, "POST /api/agent/thinking", authz.ScopeAgentWrite, s.handleSetThinking)
 	s.route(mux, "GET /api/quota", authz.ScopeSettingsRead, s.handleQuota)
-	s.route(mux, "GET /api/claudeenv", authz.ScopeSettingsRead, s.handleGetClaudeEnv)
+	s.route(mux, "GET /api/claude-env", authz.ScopeSettingsRead, s.handleGetClaudeEnv)
 	// Importing ~/.claude skills/MCP is user extensibility — the same trust
 	// class as enabling a plugin (touching ~/.woca on the execution machine),
 	// not a server-settings rewrite: members can curate their environment.
-	s.route(mux, "PUT /api/claudeenv", authz.ScopePluginsWrite, s.handlePutClaudeEnv)
+	s.route(mux, "PUT /api/claude-env", authz.ScopePluginsWrite, s.handlePutClaudeEnv)
 	s.route(mux, "GET /api/plugins", authz.ScopePluginsRead, s.handleGetPlugins)
 	s.route(mux, "PUT /api/plugins", authz.ScopePluginsWrite, s.handlePutPlugins)
 	s.route(mux, "POST /api/plugins/{name}/install", authz.ScopePluginsWrite, s.handleInstallPlugin)

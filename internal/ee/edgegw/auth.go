@@ -9,6 +9,8 @@
 package edgegw
 
 import (
+	"github.com/projanvil/woca/internal/platform/httpx"
+
 	"bytes"
 	"context"
 	"encoding/json"
@@ -219,22 +221,22 @@ func (e *Edge) handleClientLogin(w http.ResponseWriter, r *http.Request) {
 		APIKey string `json:"api_key"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusBadRequest, Segment: httpx.SegEdge, Code: httpx.CodeInvalidRequest, Message: "invalid request"})
 		return
 	}
 	out, status, err := e.coreLogin(r.Context(), req.APIKey)
 	if err != nil && (status == 0 || status == http.StatusServiceUnavailable || status == http.StatusBadGateway) {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "private core unreachable — login unavailable (fail-closed)"})
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusServiceUnavailable, Segment: httpx.SegEdge, Code: httpx.CodePlaneUnreachable, Message: "private core unreachable — login unavailable (fail-closed)"})
 		return
 	}
 	if status != http.StatusOK {
-		// The enumerated wire code is the contract (the core's authn
-		// codes); there is no message string to match.
-		body := map[string]string{"error": "unauthorized"}
+		// The standard code is the wire contract; the core's authn
+		// reason rides the transitional field for old clients.
 		if out.Code == "revoked" {
-			body["code"] = "revoked"
+			httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusUnauthorized, Segment: httpx.SegEdge, Code: httpx.CodeCredentialRevoked, Message: "credential revoked"})
+			return
 		}
-		writeJSON(w, http.StatusUnauthorized, body)
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusUnauthorized, Segment: httpx.SegEdge, Code: httpx.CodeUnauthorized, Message: "unauthorized"})
 		return
 	}
 	secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")

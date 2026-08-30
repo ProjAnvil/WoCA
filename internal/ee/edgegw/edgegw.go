@@ -221,7 +221,7 @@ func (e *Edge) Handler() http.Handler {
 	// Everything else under /gw/ — including the core-internal resolve
 	// and bridges — is not a public machine-channel route.
 	r.HandleFunc("/gw/", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown gateway route"})
+		writeErr(w, http.StatusNotFound, "0004", "unknown gateway route")
 	})
 	r.HandleFunc("GET /tunnel/poll", e.authTunnel(e.handlePoll))
 	r.HandleFunc("POST /tunnel/respond/{id}", e.authTunnel(e.handleRespond))
@@ -242,14 +242,14 @@ func (e *Edge) Handler() http.Handler {
 func (e *Edge) forward(target string) http.Handler {
 	if target == "" {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "edge misconfigured"})
+			writeErr(w, http.StatusInternalServerError, "0500", "edge misconfigured")
 		})
 	}
 	base, err := url.Parse(target)
 	if err != nil {
 		e.log.Error().Str("target", target).Msg("edge: bad plane URL")
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "edge misconfigured"})
+			writeErr(w, http.StatusInternalServerError, "0500", "edge misconfigured")
 		})
 	}
 	proxy := &httputil.ReverseProxy{
@@ -260,7 +260,7 @@ func (e *Edge) forward(target string) http.Handler {
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			e.log.Warn().Err(err).Str("plane", target).Msg("edge: plane unreachable")
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "core plane unreachable"})
+			writeErr(w, http.StatusBadGateway, "0502", "core plane unreachable")
 		},
 	}
 	return proxy
@@ -270,7 +270,7 @@ func (e *Edge) forward(target string) http.Handler {
 func (e *Edge) handleBridgeList(w http.ResponseWriter, r *http.Request) {
 	bridges, err := e.coreBridges(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "core plane unreachable"})
+		writeErr(w, http.StatusBadGateway, "0502", "core plane unreachable")
 		return
 	}
 	writeJSON(w, http.StatusOK, bridges)
@@ -330,7 +330,7 @@ func (e *Edge) handleSelect(w http.ResponseWriter, r *http.Request) {
 func (e *Edge) writeSelectionPage(w http.ResponseWriter, r *http.Request) {
 	bridges, err := e.coreBridges(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "core plane unreachable"})
+		writeErr(w, http.StatusBadGateway, "0502", "core plane unreachable")
 		return
 	}
 	var rows strings.Builder
@@ -372,11 +372,11 @@ func (e *Edge) serveClient(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			switch {
 			case errors.Is(err, errCoreAuthDown):
-				writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "private core unreachable"})
+				writeErr(w, http.StatusServiceUnavailable, "0502", "private core unreachable")
 			case errors.Is(err, errRevokedCredential):
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized", "code": "revoked"})
+				writeErr(w, http.StatusUnauthorized, "0002", "credential revoked")
 			default:
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+				writeErr(w, http.StatusUnauthorized, "0001", "unauthorized")
 			}
 			return
 		}
@@ -388,11 +388,11 @@ func (e *Edge) serveClient(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		b, err := io.ReadAll(io.LimitReader(r.Body, int64(clientBodyLimit)+1))
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad request body"})
+			writeErr(w, http.StatusBadRequest, "0100", "bad request body")
 			return
 		}
 		if len(b) > clientBodyLimit {
-			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request too large for the tunnel"})
+			writeErr(w, http.StatusRequestEntityTooLarge, "0100", "request too large for the tunnel")
 			return
 		}
 		body = b
@@ -419,7 +419,7 @@ func (e *Edge) serveClient(w http.ResponseWriter, r *http.Request) {
 		started:   time.Now(),
 	}
 	if e.parkedN.Load() >= maxParked {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "edge busy"})
+		writeErr(w, http.StatusServiceUnavailable, "0503", "edge busy")
 		return
 	}
 	e.parkedN.Add(1)
@@ -500,7 +500,7 @@ func (e *Edge) targetBridge(w http.ResponseWriter, r *http.Request) string {
 	}
 	bridges, err := e.coreBridges(r.Context())
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "core plane unreachable"})
+		writeErr(w, http.StatusBadGateway, "0502", "core plane unreachable")
 		return ""
 	}
 	// Auto-route counts LIVE bridges only: stale registrations (offline
@@ -650,12 +650,12 @@ func (e *Edge) authTunnel(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := bearer(r)
 		if token == "" {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeErr(w, http.StatusUnauthorized, "0001", "unauthorized")
 			return
 		}
 		bridgeID, err := e.resolveToken(r.Context(), token)
 		if err != nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeErr(w, http.StatusUnauthorized, "0001", "unauthorized")
 			return
 		}
 		next(w, r.WithContext(withBridgeID(r.Context(), bridgeID)))
@@ -808,4 +808,9 @@ func requestID() string {
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	httpx.WriteJSON(w, code, v)
+}
+
+// writeErr emits the standard S-E error envelope (api-standard.md §1).
+func writeErr(w http.ResponseWriter, status int, code, msg string) {
+	httpx.WriteCoded(w, httpx.CodedError{Status: status, Segment: httpx.SegEdge, Code: code, Message: msg})
 }

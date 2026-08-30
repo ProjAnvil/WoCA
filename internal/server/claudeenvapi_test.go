@@ -48,7 +48,7 @@ func TestClaudeEnvGet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp, err := http.Get(ts.URL + "/api/claudeenv")
+	resp, err := http.Get(ts.URL + "/api/claude-env")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestClaudeEnvGetWithoutSettings(t *testing.T) {
 	if sk, mcp := s.currentClaudeSelection(); sk != nil || mcp != nil {
 		t.Fatalf("currentClaudeSelection without settings = %v %v, want nils", sk, mcp)
 	}
-	resp, err := http.Get(ts.URL + "/api/claudeenv")
+	resp, err := http.Get(ts.URL + "/api/claude-env")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestClaudeEnvGetWithoutSettings(t *testing.T) {
 func TestClaudeEnvPut(t *testing.T) {
 	// Without the apply hook the write side is unavailable.
 	_, ts := newClaudeEnvServer(t, nil)
-	resp, err := http.NewRequest(http.MethodPut, ts.URL+"/api/claudeenv", strings.NewReader(`{"skills":[],"mcp":[]}`))
+	resp, err := http.NewRequest(http.MethodPut, ts.URL+"/api/claude-env", strings.NewReader(`{"skills":[],"mcp":[]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestClaudeEnvPut(t *testing.T) {
 		appliedSkills, appliedMCP = skills, mcp
 		return nil
 	})
-	req, _ := http.NewRequest(http.MethodPut, ts2.URL+"/api/claudeenv", strings.NewReader(`{bad`))
+	req, _ := http.NewRequest(http.MethodPut, ts2.URL+"/api/claude-env", strings.NewReader(`{bad`))
 	badResp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestClaudeEnvPut(t *testing.T) {
 	_, ts3 := newClaudeEnvServer(t, func(skills, mcp []string) error {
 		return errors.New("apply boom")
 	})
-	req, _ = http.NewRequest(http.MethodPut, ts3.URL+"/api/claudeenv", strings.NewReader(`{"skills":["a"],"mcp":[]}`))
+	req, _ = http.NewRequest(http.MethodPut, ts3.URL+"/api/claude-env", strings.NewReader(`{"skills":["a"],"mcp":[]}`))
 	failResp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestClaudeEnvPut(t *testing.T) {
 	}
 
 	// Happy path echoes the selection and notes the MCP restart.
-	req, _ = http.NewRequest(http.MethodPut, ts2.URL+"/api/claudeenv",
+	req, _ = http.NewRequest(http.MethodPut, ts2.URL+"/api/claude-env",
 		strings.NewReader(`{"skills":["code-review"],"mcp":["fetch"]}`))
 	okResp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -201,7 +201,7 @@ func TestClaudeEnvGetDetectionFailures(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/claudeenv")
+	resp, err := http.Get(ts.URL + "/api/claude-env")
 	if err != nil {
 		t.Fatal(err)
 	}

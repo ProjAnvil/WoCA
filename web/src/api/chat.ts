@@ -39,7 +39,7 @@ export function createRun(
 
 /** Starts a /btw side-question run: answered, never persisted to the transcript. */
 export function startBtwRun(sessionId: string, prompt: string, workspace?: string): Promise<{ run_id: string }> {
-  return postJSON<{ run_id: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/btw`, {
+  return postJSON<{ run_id: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/side-runs`, {
     prompt,
     workspace: workspace ?? '',
   })

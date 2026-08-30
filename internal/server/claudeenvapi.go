@@ -1,9 +1,9 @@
 package server
 
 // The Claude-environment settings API: the Skill / MCP checkbox page in the
-// web settings panel. GET /api/claudeenv lists what was detected under
+// web settings panel. GET /api/claude-env lists what was detected under
 // ~/.claude (skills) and ~/.claude.json (global mcpServers) plus the current
-// selection; PUT /api/claudeenv saves a new selection, syncs the ~/.woca
+// selection; PUT /api/claude-env saves a new selection, syncs the ~/.woca
 // skill symlinks and mcp.json, and live-applies the skill set (MCP servers
 // connect at the next agent start).
 
@@ -14,7 +14,7 @@ import (
 	"github.com/projanvil/woca/internal/claudeenv"
 )
 
-// claudeEnvState is the GET /api/claudeenv payload.
+// claudeEnvState is the GET /api/claude-env payload.
 type claudeEnvState struct {
 	Skills   []claudeenv.SkillEntry `json:"skills"`
 	MCP      []claudeenv.MCPServer  `json:"mcp"`

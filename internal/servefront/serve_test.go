@@ -101,12 +101,12 @@ func TestServeAPIDrivesClosures(t *testing.T) {
 	if resp := post("/api/agent/thinking", `{"budget":0}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("thinking = %d", resp.StatusCode)
 	}
-	if resp := put("/api/claudeenv", `{"skills":[],"mcp":[]}`); resp.StatusCode != http.StatusOK {
+	if resp := put("/api/claude-env", `{"skills":[],"mcp":[]}`); resp.StatusCode != http.StatusOK {
 		t.Fatalf("claude-env = %d", resp.StatusCode)
 	}
 	// The GET side is the scan surface the bridge's .claude import rides
 	// on (the bridge serves the same surface via its edition of Serve).
-	if resp := get("/api/claudeenv"); resp.StatusCode != http.StatusOK {
+	if resp := get("/api/claude-env"); resp.StatusCode != http.StatusOK {
 		t.Fatalf("claude-env get = %d", resp.StatusCode)
 	}
 	if resp := put("/api/settings", `{"provider":"openai","memory_engine":"none"}`); resp.StatusCode != http.StatusOK {

@@ -28,7 +28,7 @@ export function updateSettings(
 
 /** Lists ~/.claude skills + global MCP servers and the current selection. */
 export function getClaudeEnv(): Promise<ClaudeEnvState> {
-  return request('/api/claudeenv', undefined, i18n.global.t('api.loadClaudeEnvFailed'))
+  return request('/api/claude-env', undefined, i18n.global.t('api.loadClaudeEnvFailed'))
 }
 
 /** Saves the checkbox selection; skills apply live, MCP at next agent start. */
@@ -36,7 +36,7 @@ export function putClaudeEnv(body: {
   skills: string[]
   mcp: string[]
 }): Promise<{ ok: boolean; mcp_restart: boolean }> {
-  return request('/api/claudeenv', {
+  return request('/api/claude-env', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

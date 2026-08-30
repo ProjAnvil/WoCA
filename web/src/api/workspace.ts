@@ -128,9 +128,9 @@ export interface FsListing {
 
 export function fsList(path?: string): Promise<FsListing> {
   const q = path ? `?path=${encodeURIComponent(path)}` : ''
-  return request(`/api/fs/list${q}`, undefined, i18n.global.t('api.fsListFailed'))
+  return request(`/api/filesystem/list${q}`, undefined, i18n.global.t('api.fsListFailed'))
 }
 
 export function fsMkdir(parent: string, name: string): Promise<{ path: string }> {
-  return postJSON('/api/fs/mkdir', { parent, name })
+  return postJSON('/api/filesystem/mkdir', { parent, name })
 }

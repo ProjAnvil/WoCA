@@ -76,7 +76,7 @@ func TestEdgeAuthEnforcement(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized || body.Code != "revoked" {
+	if resp.StatusCode != http.StatusUnauthorized || body.Code != "S-E-0002" {
 		t.Fatalf("revoked through edge = %d code=%q", resp.StatusCode, body.Code)
 	}
 }

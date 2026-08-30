@@ -409,7 +409,7 @@ export interface ContextInfo {
   context_window?: number
 }
 
-// --- claude environment (mirror /api/claudeenv) ---
+// --- claude environment (mirror /api/claude-env) ---
 
 /** One skill detected under ~/.claude/skills. */
 export interface ClaudeSkillEntry {

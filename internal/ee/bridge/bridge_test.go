@@ -18,7 +18,6 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/platform/authz"
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/wocadb"
@@ -267,7 +266,7 @@ func TestRevocationAndGrace(t *testing.T) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	r.Body.Close()
-	if r.StatusCode != http.StatusUnauthorized || body.Code != authn.CodeRevoked {
+	if r.StatusCode != http.StatusUnauthorized || body.Code != "S-B-0002" {
 		t.Fatalf("revoked session = %d code=%q", r.StatusCode, body.Code)
 	}
 }
@@ -501,7 +500,7 @@ func TestLogoutRevokesAtCore(t *testing.T) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	r.Body.Close()
-	if r.StatusCode != http.StatusUnauthorized || body.Code != authn.CodeRevoked {
+	if r.StatusCode != http.StatusUnauthorized || body.Code != "S-B-0002" {
 		t.Fatalf("token after logout = %d code=%q", r.StatusCode, body.Code)
 	}
 }

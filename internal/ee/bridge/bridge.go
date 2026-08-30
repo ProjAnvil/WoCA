@@ -457,14 +457,21 @@ func writeAuthError(w http.ResponseWriter, code int, msg string) {
 	writeAuthErrorCode(w, code, msg, "")
 }
 
-// writeAuthErrorCode emits the auth error envelope with the enumerated
-// failure code (the client contract: {"error", "code"}).
+// writeAuthErrorCode emits the standard S-B envelope; the authn reason
+// slug survives in the transitional reason field (api-standard.md §1).
 func writeAuthErrorCode(w http.ResponseWriter, code int, msg, errCode string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	body := map[string]string{"error": msg}
-	if errCode != "" {
-		body["code"] = errCode
+	seg, num := httpx.SegBusiness, httpx.CodeUnauthorized
+	switch errCode {
+	case authn.CodeRevoked:
+		num = httpx.CodeCredentialRevoked
+	case authn.CodeForbidden:
+		num = httpx.CodeForbidden
 	}
+	body := map[string]string{"error": msg, "code": seg + "-" + num}
+	if errCode != "" {
+		body["reason"] = errCode
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(body)
 }

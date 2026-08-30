@@ -10,6 +10,8 @@
 package nativeauth
 
 import (
+	"github.com/projanvil/woca/internal/platform/httpx"
+
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -184,10 +186,20 @@ func nativeAccessToken(r *http.Request) string {
 	return ""
 }
 
+// writeNativeError emits the standard C-N envelope (api-standard.md §1):
+// native-client-surface failures carry the client segment even when the
+// server rejects the request.
 func writeNativeError(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	num := httpx.CodeInternal
+	switch code {
+	case http.StatusBadRequest:
+		num = httpx.CodeInvalidRequest
+	case http.StatusUnauthorized:
+		num = httpx.CodeUnauthorized
+	case http.StatusTooManyRequests:
+		num = "0103"
+	}
+	httpx.WriteCoded(w, httpx.CodedError{Status: code, Segment: httpx.SegClientN, Code: num, Message: msg})
 }
 
 func (na *Surface) now() time.Time {

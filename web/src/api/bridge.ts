@@ -67,12 +67,12 @@ export function getStatus(): Promise<BridgeStatus> {
 // --- bridge cloud access (design §6.5: the bridge-local config layer) ---
 
 export function getCloudAccess(): Promise<CloudAccessStatus> {
-  return request('/api/cloudaccess', undefined, i18n.global.t('api.requestFailed'))
+  return request('/api/cloud-access', undefined, i18n.global.t('api.requestFailed'))
 }
 
 export function updateCloudAccess(url: string, enrollmentToken: string): Promise<CloudAccessStatus> {
   return request(
-    '/api/cloudaccess',
+    '/api/cloud-access',
     {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -84,7 +84,7 @@ export function updateCloudAccess(url: string, enrollmentToken: string): Promise
 
 export function resetCloudAccess(): Promise<CloudAccessStatus> {
   return request(
-    '/api/cloudaccess/reset',
+    '/api/cloud-access/reset',
     { method: 'POST' },
     i18n.global.t('api.requestFailed'),
   )

@@ -2,6 +2,7 @@
 // them into the two message trees passed to vue-i18n. New domains: add a
 // module under zh-CN/ and en/, then import + spread it below.
 import agentEn from './en/agent'
+import errorsEn from './en/errors'
 import btwEn from './en/btw'
 import adminEn from './en/admin'
 import demoEn from './en/demo'
@@ -21,6 +22,7 @@ import settingsEn from './en/settings'
 import sidebarEn from './en/sidebar'
 import workspaceEn from './en/workspace'
 import agentZh from './zh-CN/agent'
+import errorsZh from './zh-CN/errors'
 import btwZh from './zh-CN/btw'
 import adminZh from './zh-CN/admin'
 import demoZh from './zh-CN/demo'
@@ -60,6 +62,7 @@ export const zhCN = {
   memoryStore: memoryStoreZh,
   native: nativeZh,
   palette: paletteZh,
+  ...errorsZh,
 }
 
 export const en = {
@@ -82,4 +85,5 @@ export const en = {
   memoryStore: memoryStoreEn,
   native: nativeEn,
   palette: paletteEn,
+  ...errorsEn,
 }

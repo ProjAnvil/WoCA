@@ -523,9 +523,9 @@ func (c *CloudAccess) Reset() error {
 // interactive surfaces, the whole section — reads included — sits behind
 // settings:write, the admin authority.
 func CloudAccessRoutes(mux *http.ServeMux, ca *CloudAccess, admin func(scope string) func(http.HandlerFunc) http.Handler) {
-	mux.Handle("GET /api/cloudaccess", admin(authz.ScopeSettingsWrite)(ca.handleGet))
-	mux.Handle("PUT /api/cloudaccess", admin(authz.ScopeSettingsWrite)(ca.handlePut))
-	mux.Handle("POST /api/cloudaccess/reset", admin(authz.ScopeSettingsWrite)(ca.handleReset))
+	mux.Handle("GET /api/cloud-access", admin(authz.ScopeSettingsWrite)(ca.handleGet))
+	mux.Handle("PUT /api/cloud-access", admin(authz.ScopeSettingsWrite)(ca.handlePut))
+	mux.Handle("POST /api/cloud-access/reset", admin(authz.ScopeSettingsWrite)(ca.handleReset))
 }
 
 func (c *CloudAccess) handleGet(w http.ResponseWriter, _ *http.Request) {

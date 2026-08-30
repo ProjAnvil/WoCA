@@ -626,12 +626,12 @@ func (h *RegistryHandler) handleResolve(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil ||
 		len(req.TokenHash) != 64 {
-		writeGW(w, http.StatusBadRequest, "invalid request")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusBadRequest, Segment: httpx.SegGateway, Code: "0100", Message: "invalid request"})
 		return
 	}
 	bridgeID, err := h.reg.ResolveAccess(r.Context(), req.TokenHash)
 	if err != nil {
-		writeGW(w, http.StatusNotFound, "unknown")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusNotFound, Segment: httpx.SegGateway, Code: "0004", Message: "unknown"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"bridge_id": bridgeID})
@@ -643,7 +643,7 @@ func (h *RegistryHandler) handleResolve(w http.ResponseWriter, r *http.Request) 
 func (h *RegistryHandler) handleBridges(w http.ResponseWriter, r *http.Request) {
 	bridges, err := h.store.ListBridges(r.Context())
 	if err != nil {
-		writeGW(w, http.StatusInternalServerError, "unavailable")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusInternalServerError, Segment: httpx.SegGateway, Code: "0500", Message: "unavailable"})
 		return
 	}
 	writeJSON(w, http.StatusOK, bridges)
@@ -660,21 +660,21 @@ func (h *RegistryHandler) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	var req enrollRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil ||
 		!machineid.ValidEnrollment(req.EnrollmentToken) || len(req.PublicKey) == 0 || len(req.PublicKey) > 512 {
-		writeGW(w, http.StatusBadRequest, "invalid request")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusBadRequest, Segment: httpx.SegGateway, Code: "0100", Message: "invalid request"})
 		return
 	}
 	if _, err := machineid.ParsePublicKeyPEM(req.PublicKey); err != nil {
-		writeGW(w, http.StatusBadRequest, "invalid request")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusBadRequest, Segment: httpx.SegGateway, Code: "0100", Message: "invalid request"})
 		return
 	}
 	bridgeID, err := h.reg.ConsumeEnrollment(r.Context(), machineid.HashToken(req.EnrollmentToken), req.PublicKey, EnrollmentTTL)
 	if err != nil {
-		writeGW(w, http.StatusUnauthorized, "enrollment rejected")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusUnauthorized, Segment: httpx.SegGateway, Code: "0001", Message: "enrollment rejected"})
 		return
 	}
 	token, exp, err := h.reg.IssueAccess(r.Context(), bridgeID, AccessTTL)
 	if err != nil {
-		writeGW(w, http.StatusInternalServerError, "unavailable")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusInternalServerError, Segment: httpx.SegGateway, Code: "0500", Message: "unavailable"})
 		return
 	}
 	h.store.AuditEvent(r.Context(), "bridge.enrolled", bridgeID, r.RemoteAddr)
@@ -701,16 +701,16 @@ func (h *RegistryHandler) handleEnrollRequest(w http.ResponseWriter, r *http.Req
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil ||
 		len(req.PublicKey) == 0 || len(req.PublicKey) > 512 {
-		writeGW(w, http.StatusBadRequest, "invalid request")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusBadRequest, Segment: httpx.SegGateway, Code: "0100", Message: "invalid request"})
 		return
 	}
 	if _, err := machineid.ParsePublicKeyPEM(req.PublicKey); err != nil {
-		writeGW(w, http.StatusBadRequest, "invalid request")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusBadRequest, Segment: httpx.SegGateway, Code: "0100", Message: "invalid request"})
 		return
 	}
 	fp, err := h.store.SubmitEnrollmentRequest(r.Context(), req.PublicKey)
 	if err != nil {
-		writeGW(w, http.StatusInternalServerError, "unavailable")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusInternalServerError, Segment: httpx.SegGateway, Code: "0500", Message: "unavailable"})
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"fingerprint": fp})
@@ -720,7 +720,7 @@ func (h *RegistryHandler) handleEnrollRequest(w http.ResponseWriter, r *http.Req
 func (h *RegistryHandler) handleEnrollStatus(w http.ResponseWriter, r *http.Request) {
 	token, ok, err := h.store.PollApproval(r.Context(), r.URL.Query().Get("fingerprint"))
 	if err != nil {
-		writeGW(w, http.StatusInternalServerError, "unavailable")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusInternalServerError, Segment: httpx.SegGateway, Code: "0500", Message: "unavailable"})
 		return
 	}
 	if !ok {
@@ -733,7 +733,7 @@ func (h *RegistryHandler) handleEnrollStatus(w http.ResponseWriter, r *http.Requ
 func (h *RegistryHandler) handleRenew(w http.ResponseWriter, r *http.Request) {
 	token, exp, err := h.reg.RenewAccess(r.Context(), machineid.HashToken(bearer(r)), AccessTTL)
 	if err != nil {
-		writeGW(w, http.StatusUnauthorized, "unauthorized")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusUnauthorized, Segment: httpx.SegGateway, Code: "0001", Message: "unauthorized"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"access_token": token, "access_expires_at": exp})
@@ -753,7 +753,7 @@ func (h *ConfigHandler) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	version, settings, err := h.cfg(r.Context(), bridgeID)
 	if err != nil {
-		writeGW(w, http.StatusInternalServerError, "unavailable")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusInternalServerError, Segment: httpx.SegGateway, Code: "0500", Message: "unavailable"})
 		return
 	}
 	if known != "" && known == version {
@@ -787,7 +787,7 @@ func (h *ConfigHandler) handleConfig(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if version, settings, err = h.cfg(r.Context(), bridgeID); err != nil {
-				writeGW(w, http.StatusInternalServerError, "unavailable")
+				httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusInternalServerError, Segment: httpx.SegGateway, Code: "0500", Message: "unavailable"})
 				return
 			}
 		}
@@ -813,11 +813,11 @@ func parseWait(v string) time.Duration {
 func (h *RegistryHandler) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	body := json.RawMessage{}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&body); err != nil {
-		writeGW(w, http.StatusBadRequest, "invalid request")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusBadRequest, Segment: httpx.SegGateway, Code: "0100", Message: "invalid request"})
 		return
 	}
 	if err := h.store.Heartbeat(r.Context(), bridgeIDFromCtx(r.Context()), body); err != nil {
-		writeGW(w, http.StatusInternalServerError, "unavailable")
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusInternalServerError, Segment: httpx.SegGateway, Code: "0500", Message: "unavailable"})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -828,12 +828,12 @@ func (h *gwBase) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := bearer(r)
 		if token == "" {
-			writeGW(w, http.StatusUnauthorized, "unauthorized")
+			httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusUnauthorized, Segment: httpx.SegGateway, Code: "0001", Message: "unauthorized"})
 			return
 		}
 		bridgeID, err := h.reg.ResolveAccess(r.Context(), machineid.HashToken(token))
 		if err != nil {
-			writeGW(w, http.StatusUnauthorized, "unauthorized")
+			httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusUnauthorized, Segment: httpx.SegGateway, Code: "0001", Message: "unauthorized"})
 			return
 		}
 		next(w, r.WithContext(withBridgeID(r.Context(), bridgeID)))

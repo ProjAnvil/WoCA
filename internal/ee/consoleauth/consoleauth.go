@@ -121,16 +121,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func (g *Gate) Login(w http.ResponseWriter, r *http.Request) {
 	if !g.gated() {
 		// No credentials set: nothing to log in to — the console is open.
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "console login is not configured", "code": "console_open"})
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusBadRequest, Segment: httpx.SegConfig, Code: httpx.CodeInvalidRequest, Message: "console login is not configured"})
 		return
 	}
 	if !g.Configured() {
 		// Half-configured pair: refuse — an open console is not what the
 		// operator asked for, and the empty half would be matchable.
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "console credentials misconfigured: set BOTH WOCA_CONSOLE_USER and WOCA_CONSOLE_PASSWORD (or neither for an open console)",
-			"code":  "console_misconfigured",
-		})
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusServiceUnavailable, Segment: httpx.SegConfig, Code: httpx.CodeInternal, Message: "console credentials misconfigured: set BOTH WOCA_CONSOLE_USER and WOCA_CONSOLE_PASSWORD (or neither for an open console)"})
 		return
 	}
 	var req struct {
@@ -142,7 +139,7 @@ func (g *Gate) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !g.check(req.Username, req.Password) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials", "code": "invalid_credentials"})
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusUnauthorized, Segment: httpx.SegConfig, Code: httpx.CodeUnauthorized, Message: "invalid credentials"})
 		return
 	}
 	token, err := g.issue()
@@ -205,10 +202,7 @@ func (g *Gate) Wrap(h http.Handler) http.Handler {
 				h.ServeHTTP(w, r)
 				return
 			}
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"error": "console credentials misconfigured: set BOTH WOCA_CONSOLE_USER and WOCA_CONSOLE_PASSWORD (or neither for an open console)",
-				"code":  "console_misconfigured",
-			})
+			httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusServiceUnavailable, Segment: httpx.SegConfig, Code: httpx.CodeInternal, Message: "console credentials misconfigured: set BOTH WOCA_CONSOLE_USER and WOCA_CONSOLE_PASSWORD (or neither for an open console)"})
 			return
 		}
 		if anonymous {
@@ -219,6 +213,6 @@ func (g *Gate) Wrap(h http.Handler) http.Handler {
 			h.ServeHTTP(w, r.WithContext(tenancy.NewContext(r.Context(), Context())))
 			return
 		}
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "console login required", "code": "console_login_required"})
+		httpx.WriteCoded(w, httpx.CodedError{Status: http.StatusUnauthorized, Segment: httpx.SegConfig, Code: httpx.CodeUnauthorized, Message: "console login required"})
 	})
 }

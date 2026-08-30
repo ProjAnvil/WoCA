@@ -20,10 +20,10 @@ import (
 // registerFS mounts the folder-browser routes; called only when Config.FS
 // is set.
 func (s *Server) registerFS(mux *http.ServeMux) {
-	s.route(mux, "GET /api/fs/list", authz.ScopeWorkspaceRead, s.handleFSList)
-	s.route(mux, "GET /api/fs/validate", authz.ScopeWorkspaceRead, s.handleFSValidate)
-	s.route(mux, "POST /api/fs/mkdir", authz.ScopeWorkspaceWrite, s.handleFSMkdir)
-	s.route(mux, "GET /api/fs/watch", authz.ScopeWorkspaceRead, s.handleFSWatch)
+	s.route(mux, "GET /api/filesystem/list", authz.ScopeWorkspaceRead, s.handleFSList)
+	s.route(mux, "GET /api/filesystem/validate", authz.ScopeWorkspaceRead, s.handleFSValidate)
+	s.route(mux, "POST /api/filesystem/mkdir", authz.ScopeWorkspaceWrite, s.handleFSMkdir)
+	s.route(mux, "GET /api/filesystem/watch", authz.ScopeWorkspaceRead, s.handleFSWatch)
 }
 
 // auditEvent forwards a workspace event to the audit seam with the

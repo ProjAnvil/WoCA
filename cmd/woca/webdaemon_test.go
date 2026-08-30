@@ -127,7 +127,7 @@ func TestRunREPLWebGUI(t *testing.T) {
 	if code := call(http.MethodPut, "/api/settings", `{"provider":"openai","memory_engine":"none"}`); code != http.StatusOK {
 		t.Fatalf("settings = %d", code)
 	}
-	if code := call(http.MethodPut, "/api/claudeenv", `{"skills":[],"mcp":[]}`); code != http.StatusOK {
+	if code := call(http.MethodPut, "/api/claude-env", `{"skills":[],"mcp":[]}`); code != http.StatusOK {
 		t.Fatalf("claudeenv = %d", code)
 	}
 	if code := call(http.MethodGet, "/api/plugins", ""); code != http.StatusOK {
