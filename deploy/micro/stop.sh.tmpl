@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# stop.sh — stop the @ROLE@ service started by start.sh.
+#
+# Order of responsibility: the pid file first (SIGTERM, wait up to
+# STOP_TIMEOUT — default 45s, covering the edge role's 40s SSE grace —
+# then SIGKILL). When the pid file is missing or its pid is no longer
+# alive, fall back to searching for the binary by name (pgrep), so a
+# wiped pid file never leaves an orphan process behind.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+SERVICE="@ROLE@"
+BIN="$PWD/$SERVICE"
+PID_FILE="$PWD/$SERVICE.pid"
+STOP_TIMEOUT="${STOP_TIMEOUT:-45}"
+
+term_wait() { # pid... — SIGTERM, wait, then SIGKILL
+    local pid waited
+    for pid in "$@"; do
+        kill -TERM "$pid" 2>/dev/null || continue
+        waited=0
+        while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$STOP_TIMEOUT" ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL "$pid" 2>/dev/null || true
+            echo "$SERVICE: pid $pid force-killed after ${STOP_TIMEOUT}s grace"
+        else
+            echo "$SERVICE: pid $pid stopped by SIGTERM after ${waited}s"
+        fi
+    done
+    rm -f "$PID_FILE"
+}
+
+if [ -f "$PID_FILE" ]; then
+    pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        term_wait "$pid"
+        exit 0
+    fi
+    rm -f "$PID_FILE"
+    echo "$SERVICE: pid file stale or pid gone; searching by binary name"
+fi
+
+# Fallback: exact binary path first, then the bare service name (covers a
+# differently-located copy launched outside this directory).
+pids="$(pgrep -f "$BIN" 2>/dev/null || true)"
+[ -n "$pids" ] || pids="$(pgrep -x "$SERVICE" 2>/dev/null || true)"
+if [ -z "$pids" ]; then
+    echo "$SERVICE: not running"
+    exit 0
+fi
+term_wait $pids

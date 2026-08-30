@@ -1,0 +1,46 @@
+# stop.ps1 — stop the @ROLE@ service started by start.ps1/start.sh.
+#
+# Order of responsibility: the pid file first; when the pid file is
+# missing or its process is gone, fall back to searching by the binary
+# name, so a wiped pid file never leaves an orphan process behind.
+#
+# On Unix (PowerShell Core on macOS/Linux) this delegates to stop.sh —
+# one implementation of the stop semantics per platform; the
+# PowerShell-native path below serves Windows hosts.
+$ErrorActionPreference = 'SilentlyContinue'
+$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $dir
+
+if (-not $IsWindows) {
+    & (Join-Path $dir 'stop.sh')
+    exit $LASTEXITCODE
+}
+
+$service = '@ROLE@'
+$pidFile = Join-Path $dir "$service.pid"
+
+$targets = @()
+if (Test-Path $pidFile) {
+    $old = Get-Content $pidFile
+    $p = Get-Process -Id $old -ErrorAction SilentlyContinue
+    if ($p) {
+        $targets += $p
+    } else {
+        Write-Host "$service pid file stale or pid gone; searching by name"
+    }
+    Remove-Item $pidFile -ErrorAction SilentlyContinue
+}
+if (-not $targets) {
+    # Process name = binary base name without the .exe extension.
+    $targets = Get-Process -Name $service -ErrorAction SilentlyContinue
+}
+if (-not $targets) {
+    Write-Host "$service not running"
+    exit 0
+}
+foreach ($p in $targets) {
+    # Windows console processes have no SIGTERM contract; Stop-Process is
+    # the supported termination path.
+    Stop-Process -Id $p.Id
+    Write-Host "$service stopped (pid $($p.Id))"
+}

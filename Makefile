@@ -242,25 +242,45 @@ build-server:
 	done
 	@echo "server artifacts: $(SERVER_ARTIFACTS)"
 
-# Microservices distribution: one tar.gz carrying every server-role binary
-# plus the generic start/stop controller (deploy/micro). Self-contained on
-# the target host: unpack, edit env/, `scripts/svc.sh <role> start`. PIDs
-# land in run/<role>.pid and every start/stop is appended to run/svc.log.
+# Per-role distribution packages (deploy/micro): `make woca-ops` bakes the
+# role name into start/stop scripts, stages the binary beside them, and
+# tars one self-contained bundle — deliver it into a container (COPY or
+# volume), extract, and operators run start.sh / start.ps1 with no
+# arguments. Cross-compile for containers by overriding the toolchain env
+# (the build is CGO-free):
+#   GOOS=linux GOARCH=amd64 make woca-worker
+# `make dist-micro` produces every role's package.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-.PHONY: dist-micro
-dist-micro: build-server
-	@rm -rf build/dist/woca-micro
-	@mkdir -p build/dist/woca-micro/bin build/dist/woca-micro/scripts build/dist/woca-micro/env
-	@for a in $(SERVER_ARTIFACTS); do cp "build/$$a" build/dist/woca-micro/bin/; done
-	@cp deploy/micro/svc.sh build/dist/woca-micro/scripts/svc.sh
-	@chmod +x build/dist/woca-micro/scripts/svc.sh
-	@cp deploy/micro/env/*.env build/dist/woca-micro/env/
-	@cp deploy/micro/README.md build/dist/woca-micro/
-	@printf '%s\n' "$(VERSION)" > build/dist/woca-micro/VERSION
-	@out="build/dist/woca-micro-$(VERSION)-$(shell go env GOOS)-$(shell go env GOARCH).tar.gz"; \
-		tar -czf "$$out" -C build/dist woca-micro; \
-		shasum -a 256 "$$out" | tee "$$out.sha256"; \
-		echo "dist: $$out"
+DIST_GOOS ?= $(shell go env GOOS)
+DIST_GOARCH ?= $(shell go env GOARCH)
+DIST_EXE := $(if $(filter windows,$(DIST_GOOS)),.exe,)
+.PHONY: $(SERVER_ARTIFACTS) dist-micro dist-role
+$(SERVER_ARTIFACTS):
+	@$(MAKE) --no-print-directory dist-role ROLE=$@
+
+dist-micro:
+	@for r in $(SERVER_ARTIFACTS); do \
+		$(MAKE) --no-print-directory dist-role ROLE=$$r || exit 1; \
+	done
+
+dist-role:
+	@test -n "$(ROLE)" || { echo "usage: make dist-role ROLE=woca-ops (or just: make woca-ops)"; exit 2; }
+	@test -d cmd/$(ROLE) || { echo "unknown role $(ROLE): no cmd/$(ROLE)"; exit 2; }
+	@stage="build/dist/.stage-$(ROLE)"; out="build/dist/$(ROLE)-$(VERSION)-$(DIST_GOOS)-$(DIST_GOARCH)"; \
+	rm -rf "$$stage" "$$out" "$$out.tar.gz"; \
+	mkdir -p "$$stage/$(ROLE)"; \
+	CGO_ENABLED=0 GOOS=$(DIST_GOOS) GOARCH=$(DIST_GOARCH) \
+		go build -trimpath -ldflags "-s -w" -o "$$stage/$(ROLE)/$(ROLE)$(DIST_EXE)" ./cmd/$(ROLE) || exit 1; \
+	for f in start.sh stop.sh start.ps1 stop.ps1; do \
+		sed -e "s/@ROLE@/$(ROLE)/g" deploy/micro/$$f.tmpl > "$$stage/$(ROLE)/$$f" || exit 1; \
+	done; \
+	chmod +x "$$stage/$(ROLE)/start.sh" "$$stage/$(ROLE)/stop.sh"; \
+	printf '%s\n' "$(VERSION)" > "$$stage/$(ROLE)/VERSION"; \
+	cp deploy/micro/README.md "$$stage/$(ROLE)/"; \
+	tar -czf "$$out.tar.gz" -C "$$stage" "$(ROLE)"; \
+	shasum -a 256 "$$out.tar.gz" | tee "$$out.tar.gz.sha256"; \
+	rm -rf "$$stage"; \
+	echo "dist: $$out.tar.gz"
 
 # Dependency hygiene: server artifacts must not link the interactive
 # surfaces (TUI, REPL) or the one-shot CLI's root command wiring.
