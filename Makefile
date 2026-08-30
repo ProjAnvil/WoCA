@@ -195,8 +195,18 @@ dev-bridge:
 	$(DEV_COMPOSE) --profile bridge up -d --build bridge
 	@echo "dev bridge: http://localhost:$${DEV_BRIDGE_PORT:-3490} (enroll via DEV_ENROLL_TOKEN from the ops console, then sign in with an org key)"
 
+# The dev Langfuse group (profile: langfuse): LLM tracing UI. The roles
+# always push spans to the woca-collector bridge (mgmt segment, always
+# on); this only brings up the Langfuse backend they end up in — no role
+# reconfiguration involved.
+dev-langfuse:
+	$(DEV_COMPOSE) --profile langfuse up -d \
+		langfuse-pg langfuse-clickhouse langfuse-redis langfuse-minio \
+		langfuse-web langfuse-worker
+	@echo "langfuse: http://localhost:$${DEV_LANGFUSE_PORT:-9300} (sign in $${LANGFUSE_INIT_USER_EMAIL:-admin@woca.local} / $${LANGFUSE_INIT_USER_PASSWORD:-woca-langfuse-admin} unless overridden in .env)"
+
 dev-down:
-	$(DEV_COMPOSE) --profile bridge down
+	$(DEV_COMPOSE) --profile bridge --profile langfuse down
 
 dev-ps:
 	$(DEV_COMPOSE) ps

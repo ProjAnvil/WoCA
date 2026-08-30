@@ -620,7 +620,7 @@ services:
       # container id, which resolves to a single interface; pin the
       # wildcard so the in-container loopback healthcheck sees the port.
       HOSTNAME: 0.0.0.0
-      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:9300}
       DATABASE_URL: postgresql://langfuse:${LANGFUSE_PG_PASSWORD:-woca-dev-langfuse-pg}@langfuse-pg:5432/langfuse
       # Dev posture: fixed secrets (the full stack demands real ones in
       # .env); no upstream telemetry.
@@ -668,7 +668,7 @@ services:
       # upstream compose (3000 = the only app port meant for humans).
       # Reach Langfuse from another machine over this port by also
       # pointing LANGFUSE_NEXTAUTH_URL at the reachable host.
-      - "${DEV_LANGFUSE_PORT:-3000}:3000"
+      - "${DEV_LANGFUSE_PORT:-9300}:3000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/public/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
