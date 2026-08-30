@@ -289,6 +289,11 @@ services:
         # The trace bridge every role pushes telemetry at (resolved from
         # WOCA_OTEL_EXPORTER_OTLP_ENDPOINT like a WOCA_DB reference).
         publish woca-obs.otlp "http://woca-collector:4318"
+        # The edge access point's plane legs (registry/auth on the service
+        # plane, config pulls, obs forward target) — same discovery
+        # discipline as every role.
+        publish woca-edge.service "http://woca-server-1:8090"
+        publish woca-edge.config "http://woca-config:8086"
         # The empty bootstrap config pack: roles refuse to start without
         # a deliverable pack, so it exists before any console write.
         publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
@@ -336,6 +341,45 @@ services:
         iptables -S DOCKER-USER | head -3
 
   # ─────────────────────────── gateway (L1, edge) ──────────────────────────
+  # The edge access point: the stateless public entry — client tunnels,
+  # the machine channel (registry, config pulls, model catalog, auth
+  # forwarding), and the /gw/obs telemetry push for enrolled bridges.
+  # Plain HTTP is the compose-stack posture; production terminates TLS on
+  # the DMZ node (deploy/terraform/aws).
+  woca-edge:
+    image: woca-edge:local
+    container_name: woca-ent-edge
+    build:
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-edge.tar.gz
+    command: ["--addr", ":8080"]
+    restart: unless-stopped
+    depends_on:
+      woca-server-1: { condition: service_started }
+      woca-config: { condition: service_started }
+      nacos-init: { condition: service_completed_successfully }
+    environment:
+      WOCA_NACOS_URL: "http://nacos:8848"
+      WOCA_SERVICE_URL: "nacos://nacos:8848/DEFAULT_GROUP/woca-edge.service"
+      WOCA_CONFIGSVC_URL: "nacos://nacos:8848/DEFAULT_GROUP/woca-edge.config"
+      WOCA_OBS_URL: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
+      WOCA_EDGE_ADDR: ":8080"
+      WOCA_SERVICE_NAME: woca-ent-edge
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
+      WOCA_EDGE_DEV_HTTP: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    ports:
+      - "${ENT_EDGE_PORT:-8453}:8080"
+    networks:
+      - woca-dmz
+      - woca-infra
+
   gateway:
     image: nginx:1.29-alpine
     container_name: woca-ent-gateway

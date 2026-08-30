@@ -185,10 +185,17 @@ env 即权威；管理台与 API 不暴露该项——放宽 TLS 是部署决策
 
 - **微服务孪生** `make dev-up` / `make dev-down`：full 的最小孪生
   （server×1 / worker×1 / config / tenant / gateway / edge / 单 PG / 单
-  NATS / ladyM），与 full 同端口互为 drop-in。bridge 工具箱容器
+  NATS / ladyM），与 full 同端口互为 drop-in。网络模型**打平**：
+  full 的五区（dmz/app/data/infra/mgmt，与 Terraform 一致）在 dev
+  折叠为单一网络——联调环境不需要威胁模型。bridge 工具箱容器
   `make dev-bridge`（profile 隔离）已改为经 **woca-edge** 接入
   （`WOCA_EDGE_URL=http://woca-edge:8080`）——注册/受管配置/心跳/隧道
-  全部走边缘接入点，与产品形态一致。
+  全部走边缘接入点，与产品形态一致。LLM 追踪 `make dev-langfuse`
+  （profile: langfuse，同样 opt-in）：Langfuse v4 全家桶；trace 走
+  **常驻**的 woca-collector 桥（mgmt 段，地址由 nacos 条目
+  `woca-obs.otlp` 下发，角色无需感知 Langfuse 地址/凭据），profile
+  关闭时桥直接丢弃。UI 在 0.0.0.0:3000（对运维开放），默认登录
+  admin@woca.local / woca-langfuse-admin。
 - **产品化边缘组** `make edge-up` / `make edge-down`（v1.5 §6.3）：控制面
   单容器组——edge + config + server + pg，`public`/`internal` 双网络分层
   代替 DMZ（public 只挂 edge，internal 为私有核心；dev 姿态 edge 走

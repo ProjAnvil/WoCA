@@ -7,23 +7,37 @@ isolation, and network-zone isolation.
 ## Architecture
 
 ```
-  host ports (via gateway only)    edge 172.28.30.0/24     data segments
-  ─────────────────────────►  gateway ────────────►  woca-pg  172.28.10.0/24
-     :8080 business entry         │                     woca-mq  172.28.20.0/24
-     :9082 skill-svc SPA          ├── woca-server ×2     ladym-pg  172.29.10.0/24
-     :9083 component discovery    ├── woca-worker ×2
-     :9084 ladyM console          ├── ladym-api ×2
-                                 └── ladym-worker
+  host ports (via gateway only)
+  ─────────────────────────►  gateway (dmz 172.28.30.0/24)
+     :8080 business entry         │
+     :9082 skill-svc SPA          ├── woca-server ×2 ┐
+     :9083 component discovery    ├── woca-worker ×2 ├ app 172.28.32.0/24
+     :9086 config console         └── woca-tenant    ┘ (legs: data + infra)
+     :3000 Langfuse ops UI
+                                 woca-pg ×2     data  172.28.10.0/24
+                                 NATS ×3, ladyM, nacos,
+                                 woca-collector + Langfuse
+                                                infra 172.28.20.0/24
+                                 woca-config, woca-ops
+                                                mgmt  172.28.50.0/24
 ```
 
+The five zones are 1:1 with the Terraform reference
+(`deploy/terraform/aws`): dmz/app is the split edge, infra folds the
+former mq/ladym/obs segments (nacos rides infra — runtime infrastructure,
+not a management surface — so an mgmt outage never blocks role
+restarts), and the firewall one-shot drops every cross-zone pair.
+
 ### Network zones (physical isolation)
-- **woca-edge**: stateless services (server/worker) + the gateway. Horizontally
-  scalable; only the gateway publishes host ports.
-- **woca-data**: woca PG primary/replica + NATS JetStream cluster. Only woca
-  services and the gateway attach here.
-- **ladym-data**: ladyM PG (pgvector) + API ×2 + System 2 worker + console.
-  Physically isolated from woca data (§6.3.3: independent fault domains,
-  backup cycles, and scaling).
+- **woca-dmz**: the gateway only — the public half of the edge. The business
+  roles never share a segment with it.
+- **woca-app**: woca-server/worker/tenant (the business half of the edge),
+  with data + infra legs.
+- **woca-data**: woca PG primary/replica.
+- **woca-infra**: the platform substrate — NATS JetStream ×3, ladyM (its PG
+  remains an independent database fault domain, §6.3.3), nacos, the
+  woca-collector trace bridge and Langfuse.
+- **woca-mgmt**: the consoles only (woca-config, woca-ops).
 
 ### Database physical isolation (§6.3.3)
 - **woca-pg** (PostgreSQL 16): sessions, runs, run_events, settings, tenant,
@@ -122,6 +136,51 @@ in `deploy/observability/README.md`; Kubernetes layouts in
 set `WOCA_GRAFANA_URL` on the woca-server containers (served via
 `/api/health`).
 
+## LLM tracing (Langfuse)
+
+[Langfuse](https://langfuse.com) v4 ships with the full stack itself
+(`langfuse-*` services, infra zone 172.28.20.0/24):
+web + worker over their own PostgreSQL, ClickHouse, Redis and MinIO, all
+isolated from every other segment by the firewall rules like the rest of
+obs. The gen_ai spans every role emits are routed through the
+`woca-collector` bridge, so tool/LLM traces land as Langfuse observations
+with no extra instrumentation.
+
+- UI: `http://<host>:3000` (`ENT_LANGFUSE_PORT`) — served by the gateway
+  (the DMZ entry), reverse-proxied into the infra zone; no direct
+  container publish. Sign-in callbacks need the externally visible origin
+  (`LANGFUSE_NEXTAUTH_URL=http://<host>:3000`). Browser-side media upload
+  (MinIO direct) is not exposed through the DMZ — same ruling as the
+  Terraform side.
+- Session reporting: every LLM call records a `chat` span carrying
+  `run_id`/`session_id`/`tenant_id` tags (internal/telemetry), the
+  collector renames `session_id`→`session.id` (and `user_id`→`user.id`)
+  onto Langfuse's OTLP conventions — sessions group traces in the UI
+  out of the box, no extra instrumentation.
+- Bootstrap: `LANGFUSE_INIT_*` seeds org `woca`, project `woca-project`,
+  admin `admin@woca.local` / `woca-langfuse-admin`, and pins the project
+  API keys to `pk-lf-woca-local` / `sk-lf-woca-local` on first boot.
+- Trace routing: the roles never learn the Langfuse address — they push
+  credential-less OTLP to the `woca-collector` bridge (mgmt segment, dual-
+  homed into obs; `deploy/collector/`), resolved through the registry
+  entry `woca-obs.otlp` exactly like the DSN. The bridge owns the Langfuse
+  path + Basic auth (`LANGFUSE_OTLP_AUTH` — the default matches the key
+  pair above; override the pair in `.env` and regenerate the header with
+  `printf 'pk:sk' | base64`) and fans traces out to the observability
+  overlay's collector (Jaeger/Prometheus) when the overlay is up. The
+  bridge also runs standalone: `deploy/collector/docker-compose.collector.yml`.
+- Note: fresh v4 installs run in events-only mode, where the legacy v3
+  REST query endpoints (`GET /api/public/traces` etc.) answer 4xx —
+  OTLP ingestion and the UI are unaffected.
+- Required `.env` additions (see `.env.example`):
+  `LANGFUSE_NEXTAUTH_SECRET`, `LANGFUSE_SALT`, `LANGFUSE_ENCRYPTION_KEY`
+  (`openssl rand -hex 32`), `LANGFUSE_PG_PASSWORD`,
+  `LANGFUSE_CLICKHOUSE_PASSWORD`, `LANGFUSE_REDIS_AUTH`,
+  `LANGFUSE_MINIO_ROOT_PASSWORD`.
+
+The dev twin gets the same group behind a profile: `make dev-langfuse`
+(everything dev-defaulted; plain `make dev-up` stays trace-free).
+
 ## Lifecycle & service governance (compose layer)
 
 The full stack mirrors the microservices architecture (design §5.3):
@@ -129,8 +188,9 @@ The full stack mirrors the microservices architecture (design §5.3):
 - **Segments**: edge (woca roles + gateway) / pg (PostgreSQL primary +
   hot-standby) / mq (NATS JetStream ×3, streams provisioned by the
   `nats-init` one-shot) / ladym (physically isolated data plane) / obs
-  (observability, via the overlay). Cross-segment forwarded traffic is
-  dropped by the `firewall` one-shot in Docker's DOCKER-USER chain.
+  (observability — Langfuse in this file, the metrics/trace pipeline via
+  the overlay). Cross-segment forwarded traffic is dropped by the
+  `firewall` one-shot in Docker's DOCKER-USER chain.
 - **Health & self-healing**: every long-running service declares a Docker
   healthcheck (`/healthz` on woca-server:8080 and woca-worker:9091, NATS
   monitor, pg_isready) plus `restart: unless-stopped`.

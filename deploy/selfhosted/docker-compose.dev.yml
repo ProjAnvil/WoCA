@@ -1,4 +1,4 @@
-# woca dev environment: the minimal twin of docker-compose.full.yml
+# woca dev environment: the minimal counterpart of docker-compose.full.yml
 #
 # Same microservice topology (gateway → woca-server/worker/config/tenant,
 # ladyM) with the smallest viable instance counts — one of everything, a
@@ -285,8 +285,8 @@ services:
       - woca-crypto:/var/lib/woca/home
 
   # Edge access point (v1.5 拓扑拆分): the stateless public entry the
-  # twin's bridge registers through — scenario four in the microservices
-  # twin. Plain HTTP is the twin's dev posture (WOCA_EDGE_DEV_HTTP).
+  # bridge registers through — scenario four. Plain HTTP is the compose
+  # posture (WOCA_EDGE_DEV_HTTP); production terminates TLS on the DMZ node.
   woca-edge:
     image: woca-edge:local
     container_name: woca-dev-edge
@@ -305,6 +305,10 @@ services:
       WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_SERVICE_URL: "nacos://nacos:8848/DEFAULT_GROUP/woca-edge.service"
       WOCA_CONFIGSVC_URL: "nacos://nacos:8848/DEFAULT_GROUP/woca-edge.config"
+      # Observability plane forward target for the /gw/obs machine channel
+      # (enrolled bridges' OTLP push) — the same trace bridge entry the
+      # infra roles resolve directly.
+      WOCA_OBS_URL: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
       WOCA_EDGE_ADDR: ":8080"
       WOCA_SERVICE_NAME: woca-dev-edge
       WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
@@ -373,10 +377,16 @@ services:
       # request --url http://woca-edge:8080` for the worker-led flow
       # (approve the fingerprint on the ops console).
       WOCA_EDGE_URL: http://woca-edge:8080
+      WOCA_EDGE_INSECURE: "1"  # dev edge is plain HTTP; production terminates TLS
       WOCA_ENROLL_TOKEN: ${DEV_ENROLL_TOKEN:-}
       WOCA_SESSION_DIR: /var/lib/woca/sessions
       # Folder-browser jail: the workspace first, home as a fallback root.
       WOCA_FS_ROOTS: /workspace:/root
+      # Telemetry: the ONLY public reporting path — the enrolled machine
+      # token rides the exporter (served wiring), pushed through the edge
+      # /gw/obs machine channel into the trace bridge.
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "http://woca-edge:8080/gw/obs"
+      WOCA_SERVICE_NAME: woca-dev-bridge
     volumes:
       - woca-bridge-home:/var/lib/woca
       - woca-bridge-workspace:/workspace
@@ -711,8 +721,6 @@ services:
       LANGFUSE_OTLP_AUTH: ${LANGFUSE_OTLP_AUTH:-Basic cGstbGYtd29jYS1sb2NhbDpzay1sZi13b2NhLWxvY2Fs}
     volumes:
       - ../collector/config-dev.yaml:/etc/otelcol/config.yaml:ro
-    ports:
-      - "127.0.0.1:4318:4318"  # host OTLP: the native embedded bridge pushes here
     restart: unless-stopped
     networks:
       - woca

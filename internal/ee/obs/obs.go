@@ -40,6 +40,7 @@ import (
 
 	otelruntime "go.opentelemetry.io/contrib/instrumentation/runtime"
 
+	"github.com/projanvil/woca/internal/ee/discovery"
 	"github.com/projanvil/woca/internal/telemetry"
 )
 
@@ -49,11 +50,22 @@ import (
 //	WOCA_SERVICE_NAME                        service.name resource attribute
 //	                                        (default: the binary name)
 //	WOCA_OTEL_EXPORTER_OTLP_ENDPOINT         OTLP collector, e.g.
-//	                                        http://otel-collector:4318
-//	                                        (falls back to OTel's standard
-//	                                        OTEL_EXPORTER_OTLP_ENDPOINT)
+//	                                        http://otel-collector:4318 — or a
+//	                                        deployment-layer registry
+//	                                        reference (nacos://nacos:8848/
+//	                                        DEFAULT_GROUP/woca-obs.otlp),
+//	                                        resolved once at startup like
+//	                                        WOCA_DB (falls back to OTel's
+//	                                        standard OTEL_EXPORTER_OTLP_ENDPOINT)
 //	WOCA_OTEL_EXPORTER_OTLP_INSECURE         "false" to use TLS; plain HTTP
 //	                                        is the in-cluster default
+//
+// Delivery contract: export is fully asynchronous and bounded — recording a
+// span enqueues into an in-memory batch queue (microseconds, no network on
+// the request path); a background goroutine flushes every 5s; a full queue
+// drops spans (never blocks the caller); an unreachable collector retries
+// with backoff and never affects the process. Metrics push the same way on
+// a 15s period.
 const (
 	envServiceName  = "WOCA_SERVICE_NAME"
 	envOTLPEndpoint = "WOCA_OTEL_EXPORTER_OTLP_ENDPOINT"
@@ -67,6 +79,11 @@ type Config struct {
 	ServiceName  string
 	OTLPEndpoint string // empty = no OTLP export (metrics still serve /metrics)
 	OTLPInsecure bool
+	// OTLPTokenProvider, when set, supplies a bearer credential on every
+	// OTLP export — the bridge form's machine token, which is loaded
+	// after startup and rotates on renewal, so it cannot ride a static
+	// exporter header.
+	OTLPTokenProvider func() string
 }
 
 // FromEnv resolves Config from the environment.
@@ -122,6 +139,14 @@ type Obs struct {
 // themselves so the local log sink stays installed (§6.5.3: remote export
 // rides on top of local logging, not instead of it).
 func Setup(ctx context.Context, cfg Config) (*Obs, error) {
+	if ref, err := discovery.Resolve(ctx, cfg.OTLPEndpoint); err != nil {
+		// A registry reference that cannot be resolved is an assembly
+		// failure — fail loudly, same posture as a WOCA_DB reference that
+		// does not resolve (plain endpoints pass through untouched).
+		return nil, fmt.Errorf("obs: resolve OTLP endpoint: %w", err)
+	} else {
+		cfg.OTLPEndpoint = ref
+	}
 	o := &Obs{serviceName: cfg.ServiceName, reg: prometheus.NewRegistry()}
 
 	res, err := resource.Merge(resource.Default(), resource.NewWithAttributes(
@@ -167,7 +192,14 @@ func Setup(ctx context.Context, cfg Config) (*Obs, error) {
 		if err != nil {
 			return nil, err
 		}
-		bsp := sdktrace.NewBatchSpanProcessor(exp)
+		// Async + bounded by design (delivery contract above): the batch
+		// queue never blocks the caller — overflow drops, the flush and
+		// the HTTP round-trips run on a background goroutine.
+		bsp := sdktrace.NewBatchSpanProcessor(exp,
+			sdktrace.WithMaxQueueSize(2048),
+			sdktrace.WithMaxExportBatchSize(512),
+			sdktrace.WithBatchTimeout(5*time.Second),
+		)
 		topts = append(topts, sdktrace.WithSpanProcessor(bsp))
 		o.shutdown(func(c context.Context) error { return bsp.Shutdown(c) })
 	}
@@ -210,12 +242,41 @@ func Setup(ctx context.Context, cfg Config) (*Obs, error) {
 	return o, nil
 }
 
+// otlpTokenTransport injects a bearer credential on every OTLP export.
+type otlpTokenTransport struct {
+	next  http.RoundTripper
+	token func() string
+}
+
+func (t otlpTokenTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if tok := t.token(); tok != "" {
+		r.Header.Set("Authorization", "Bearer "+tok)
+	}
+	next := t.next
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	return next.RoundTrip(r)
+}
+
+// tokenClient wraps the default transport with the configured token
+// provider (nil provider → nil, meaning the SDK's own client).
+func tokenClient(provider func() string) *http.Client {
+	if provider == nil {
+		return nil
+	}
+	return &http.Client{Transport: otlpTokenTransport{token: provider}}
+}
+
 // otlpTraceExporter builds the OTLP/HTTP trace exporter for cfg.
 func otlpTraceExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error) {
-	host, insecure := splitEndpoint(cfg)
-	opts := []otlptexp.Option{otlptexp.WithEndpoint(host)}
+	host, path, insecure := splitEndpoint(cfg, "/v1/traces")
+	opts := []otlptexp.Option{otlptexp.WithEndpoint(host), otlptexp.WithURLPath(path)}
 	if insecure {
 		opts = append(opts, otlptexp.WithInsecure())
+	}
+	if c := tokenClient(cfg.OTLPTokenProvider); c != nil {
+		opts = append(opts, otlptexp.WithHTTPClient(c))
 	}
 	exp, err := otlptexp.New(ctx, opts...)
 	if err != nil {
@@ -226,10 +287,13 @@ func otlpTraceExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, 
 
 // otlpMetricExporter builds the OTLP/HTTP metric exporter for cfg.
 func otlpMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, error) {
-	host, insecure := splitEndpoint(cfg)
-	opts := []otlpmexp.Option{otlpmexp.WithEndpoint(host)}
+	host, path, insecure := splitEndpoint(cfg, "/v1/metrics")
+	opts := []otlpmexp.Option{otlpmexp.WithEndpoint(host), otlpmexp.WithURLPath(path)}
 	if insecure {
 		opts = append(opts, otlpmexp.WithInsecure())
+	}
+	if c := tokenClient(cfg.OTLPTokenProvider); c != nil {
+		opts = append(opts, otlpmexp.WithHTTPClient(c))
 	}
 	exp, err := otlpmexp.New(ctx, opts...)
 	if err != nil {
@@ -238,13 +302,16 @@ func otlpMetricExporter(ctx context.Context, cfg Config) (sdkmetric.Exporter, er
 	return exp, nil
 }
 
-// splitEndpoint normalizes the configured OTLP endpoint into the host:port
-// the exporters expect (scheme and path stripped, default port 4318).
-func splitEndpoint(cfg Config) (host string, insecure bool) {
+// splitEndpoint normalizes the configured OTLP endpoint into host:port and
+// the full request path (an endpoint path prefix — e.g. the edge's
+// /gw/obs machine channel — is preserved ahead of the signal path).
+func splitEndpoint(cfg Config, signalPath string) (host, fullPath string, insecure bool) {
 	host = cfg.OTLPEndpoint
+	prefix := ""
 	insecure = cfg.OTLPInsecure
 	if u, err := url.Parse(host); err == nil && u.Host != "" {
 		host = u.Host
+		prefix = strings.TrimSuffix(u.Path, "/")
 		if u.Scheme == "https" {
 			insecure = false
 		}
@@ -252,7 +319,7 @@ func splitEndpoint(cfg Config) (host string, insecure bool) {
 	if !strings.Contains(host, ":") {
 		host += ":4318"
 	}
-	return host, insecure
+	return host, prefix + signalPath, insecure
 }
 
 func (o *Obs) shutdown(fn func(context.Context) error) {

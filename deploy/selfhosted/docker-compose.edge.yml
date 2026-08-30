@@ -15,7 +15,7 @@
 #     credentials and tune settings — prod keeps consoles strictly
 #     internal (v1.7 §6.7: the ops console is the sole management entry);
 #   * no NATS/ladyM: this group hosts the machine registry and managed
-#     settings only (the microservices dev twin covers the full plane).
+#     settings only (the microservices dev stack covers the full plane).
 #
 # First-run flow (§6.3 dev 首启):
 #   make edge-up

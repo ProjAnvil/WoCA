@@ -82,7 +82,18 @@ func main() {
 			return err
 		},
 		Obs: func(ctx context.Context) (servefront.Observability, error) {
-			o, err := obs.Setup(ctx, obs.FromEnv())
+			cfg := obs.FromEnv()
+			// The /gw/obs telemetry push authenticates with the enrolled
+			// machine identity: the exporter re-reads the live token on
+			// every export (rotation-safe; empty while unenrolled, which
+			// the edge refuses by design).
+			cfg.OTLPTokenProvider = func() string {
+				if ca := currentCA.Load(); ca != nil {
+					return ca.MachineToken()
+				}
+				return ""
+			}
+			o, err := obs.Setup(ctx, cfg)
 			if err != nil {
 				return nil, err
 			}

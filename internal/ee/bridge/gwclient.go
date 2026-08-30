@@ -1094,3 +1094,13 @@ func materializeManagedMCP(raw string) error {
 	out, _ := json.MarshalIndent(doc, "", "  ")
 	return os.WriteFile(filepath.Join(root, "mcp.json"), out, 0o644)
 }
+
+// AccessToken returns the current machine token ("" before enrollment or
+// after revocation). The serve wiring feeds it to the observability
+// exporter — the /gw/obs push authenticates with the same enrolled
+// identity as every other machine-channel call.
+func (g *GatewayClient) AccessToken() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.access
+}

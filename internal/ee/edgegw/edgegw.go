@@ -70,6 +70,9 @@ type Config struct {
 	ServiceURL string
 	// ConfigURL is the config plane base (config pulls).
 	ConfigURL string
+	// ObsURL is the observability plane base — the trace bridge
+	// (woca-collector) the /gw/obs/* machine channel forwards into.
+	ObsURL string
 }
 
 // Edge is the stateless access point.
@@ -195,6 +198,22 @@ func (e *Edge) Handler() http.Handler {
 		e.forward(e.cfg.ServiceURL).ServeHTTP(w, r)
 	}))
 	r.Handle("/gw/config", e.forward(e.cfg.ConfigURL))
+	// Observability plane (machine channel): enrolled bridges push their
+	// OTLP traces/metrics here (WOCA_OTEL_EXPORTER_OTLP_ENDPOINT=
+	// <edge>/gw/obs; the token rides the standard Authorization Bearer
+	// header via OTEL_EXPORTER_OTLP_HEADERS on the bridge side). The same
+	// resolveToken call-home as every other bridge route — an enrolled
+	// bridge identity is the only thing this public surface accepts. The
+	// /gw/obs prefix is stripped before forwarding: the collector serves
+	// the standard /v1/* OTLP paths.
+	r.Handle("/gw/obs/", e.authTunnel(func(w http.ResponseWriter, r *http.Request) {
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = strings.TrimPrefix(r.URL.Path, "/gw/obs")
+		if r2.URL.Path == "" {
+			r2.URL.Path = "/"
+		}
+		e.forward(e.cfg.ObsURL).ServeHTTP(w, r2)
+	}))
 	// The model catalog bridges pull on demand (§16) rides the same
 	// machine channel into the config plane (subtree: list + verify).
 	r.Handle("/gw/models", e.forward(e.cfg.ConfigURL))

@@ -745,3 +745,69 @@ func TestSelectCookieAttributes(t *testing.T) {
 		t.Fatal("plain-HTTP test edge must not set Secure")
 	}
 }
+
+func TestGWObsForwarding(t *testing.T) {
+	core := newFakeCore(t)
+	var gotPath, gotAuth, gotBody string
+	obs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(obs.Close)
+	e := New(Config{ServiceURL: core.svc.URL, ConfigURL: core.cfg.URL, ObsURL: obs.URL}, zerolog.Nop())
+	ts := httptest.NewServer(e.Handler())
+	t.Cleanup(ts.Close)
+	access := enroll(t, core)
+
+	// No token: the public surface admits nothing but enrolled bridges.
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/gw/obs/v1/traces", strings.NewReader("{}"))
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no token: status = %d, want 401", resp.StatusCode)
+	}
+
+	// Enrolled bridge token: forwarded with the /gw/obs prefix stripped —
+	// the collector serves the standard /v1/* OTLP paths.
+	req, _ = http.NewRequest(http.MethodPost, ts.URL+"/gw/obs/v1/traces", strings.NewReader(`{"trace":1}`))
+	req.Header.Set("Authorization", "Bearer "+access)
+	resp, err = ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("forwarded: status = %d, want 202", resp.StatusCode)
+	}
+	if gotPath != "/v1/traces" {
+		t.Fatalf("collector path = %q, want /v1/traces", gotPath)
+	}
+	if gotBody != `{"trace":1}` {
+		t.Fatalf("body = %q", gotBody)
+	}
+	_ = gotAuth
+}
+
+func TestGWObsMisconfigured(t *testing.T) {
+	core := newFakeCore(t)
+	e := New(Config{ServiceURL: core.svc.URL, ConfigURL: core.cfg.URL}, zerolog.Nop())
+	ts := httptest.NewServer(e.Handler())
+	t.Cleanup(ts.Close)
+	access := enroll(t, core)
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/gw/obs/v1/traces", nil)
+	req.Header.Set("Authorization", "Bearer "+access)
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("no obs plane: status = %d, want 500 (edge misconfigured)", resp.StatusCode)
+	}
+}

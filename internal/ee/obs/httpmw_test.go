@@ -107,3 +107,49 @@ func TestHTTPMiddlewareRequestIDFromResponseHeader(t *testing.T) {
 		t.Errorf("request id not captured from the echoed header:\n%s", buf.String())
 	}
 }
+
+func TestOTLPTokenTransport(t *testing.T) {
+	var got string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("Authorization")
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+
+	tr := otlpTokenTransport{token: func() string { return "machine-token-1" }}
+	req, _ := http.NewRequest("POST", ts.URL, nil)
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if got != "Bearer machine-token-1" {
+		t.Fatalf("Authorization = %q", got)
+	}
+
+	// Rotation: the provider is consulted per export, never cached.
+	tr = otlpTokenTransport{token: func() string { return "rotated-2" }}
+	req, _ = http.NewRequest("POST", ts.URL, nil)
+	resp, err = tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if got != "Bearer rotated-2" {
+		t.Fatalf("rotated Authorization = %q", got)
+	}
+
+	// Empty token: no header (the unenrolled posture exports bare — the
+	// edge will refuse, by design).
+	tr = otlpTokenTransport{token: func() string { return "" }}
+	req, _ = http.NewRequest("POST", ts.URL, nil)
+	req.Header.Set("Authorization", "")
+	resp, err = tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if got != "" {
+		t.Fatalf("empty token should send no Authorization, got %q", got)
+	}
+}

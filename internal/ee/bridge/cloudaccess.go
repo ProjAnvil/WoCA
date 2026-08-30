@@ -567,3 +567,17 @@ func (c *CloudAccess) handleReset(w http.ResponseWriter, _ *http.Request) {
 func writeJSONBridge(w http.ResponseWriter, code int, v any) {
 	httpx.WriteJSON(w, code, v)
 }
+
+// MachineToken returns the live gateway client's current machine token
+// ("" when no channel is up). Feeds the observability exporter's bearer
+// credential — the token rotates on renewal, so callers must re-read per
+// use, never cache.
+func (c *CloudAccess) MachineToken() string {
+	c.mu.Lock()
+	gw := c.gw
+	c.mu.Unlock()
+	if gw == nil {
+		return ""
+	}
+	return gw.AccessToken()
+}

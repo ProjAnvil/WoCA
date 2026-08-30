@@ -31,7 +31,7 @@ import (
 )
 
 func main() {
-	var logLevel, addr, tlsCert, tlsKey, serviceURL, configURL string
+	var logLevel, addr, tlsCert, tlsKey, serviceURL, configURL, obsURL string
 	root := &cobra.Command{
 		Use:           "woca-edge",
 		Short:         "woca edge access point (stateless public entry)",
@@ -66,6 +66,14 @@ func main() {
 					return fmt.Errorf("configsvc-url discovery: %w", err)
 				}
 			}
+			// Observability plane: the /gw/obs/* machine channel forwards
+			// here (enrolled bridges' OTLP push). Same discovery discipline
+			// as the other plane addresses.
+			if obsURL != "" {
+				if obsURL, err = discovery.Resolve(cmd.Context(), obsURL); err != nil {
+					return fmt.Errorf("obs-url discovery: %w", err)
+				}
+			}
 			// Registry (full-stack posture): register with nacos and keep
 			// the heartbeat. WOCA_NACOS_URL is required — without the
 			// registry the edge refuses to start (fail-closed). The edge
@@ -84,7 +92,7 @@ func main() {
 				return err
 			}
 			go rt.Loop(cmd.Context())
-			edge := edgegw.New(edgegw.Config{ServiceURL: serviceURL, ConfigURL: configURL}, log)
+			edge := edgegw.New(edgegw.Config{ServiceURL: serviceURL, ConfigURL: configURL, ObsURL: obsURL}, log)
 
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
@@ -136,12 +144,14 @@ func main() {
 	root.Flags().StringVar(&tlsKey, "tls-key", "", "TLS private key for the public listener (env WOCA_TLS_KEY)")
 	root.Flags().StringVar(&serviceURL, "service-url", "", "service plane base URL, private network (env WOCA_SERVICE_URL)")
 	root.Flags().StringVar(&configURL, "config-url", "", "config plane base URL, private network (env WOCA_CONFIGSVC_URL)")
+	root.Flags().StringVar(&obsURL, "obs-url", "", "observability plane (trace bridge) base URL the /gw/obs channel forwards to (env WOCA_OBS_URL)")
 	for _, env := range []struct{ flag, key string }{
 		{"addr", "WOCA_EDGE_ADDR"},
 		{"tls-cert", "WOCA_TLS_CERT"},
 		{"tls-key", "WOCA_TLS_KEY"},
 		{"service-url", "WOCA_SERVICE_URL"},
 		{"config-url", "WOCA_CONFIGSVC_URL"},
+		{"obs-url", "WOCA_OBS_URL"},
 	} {
 		if v := os.Getenv(env.key); v != "" {
 			_ = root.Flags().Set(env.flag, v)

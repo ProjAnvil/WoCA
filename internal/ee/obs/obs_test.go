@@ -93,17 +93,21 @@ func TestSplitEndpoint(t *testing.T) {
 	cases := []struct {
 		cfg      Config
 		wantHost string
+		wantPath string
 		wantIns  bool
 	}{
-		{Config{OTLPEndpoint: "otel-collector:4318", OTLPInsecure: true}, "otel-collector:4318", true},
-		{Config{OTLPEndpoint: "http://otel-collector:4318", OTLPInsecure: true}, "otel-collector:4318", true},
-		{Config{OTLPEndpoint: "https://collector.example.com", OTLPInsecure: true}, "collector.example.com:4318", false},
-		{Config{OTLPEndpoint: "collector:4318", OTLPInsecure: false}, "collector:4318", false},
+		{Config{OTLPEndpoint: "otel-collector:4318", OTLPInsecure: true}, "otel-collector:4318", "/v1/traces", true},
+		{Config{OTLPEndpoint: "http://otel-collector:4318", OTLPInsecure: true}, "otel-collector:4318", "/v1/traces", true},
+		{Config{OTLPEndpoint: "https://collector.example.com", OTLPInsecure: true}, "collector.example.com:4318", "/v1/traces", false},
+		{Config{OTLPEndpoint: "collector:4318", OTLPInsecure: false}, "collector:4318", "/v1/traces", false},
+		// An endpoint path prefix (the edge /gw/obs machine channel) rides
+		// ahead of the signal path.
+		{Config{OTLPEndpoint: "http://edge:8453/gw/obs", OTLPInsecure: true}, "edge:8453", "/gw/obs/v1/traces", true},
 	}
 	for _, c := range cases {
-		host, ins := splitEndpoint(c.cfg)
-		if host != c.wantHost || ins != c.wantIns {
-			t.Errorf("splitEndpoint(%+v) = (%q,%v), want (%q,%v)", c.cfg, host, ins, c.wantHost, c.wantIns)
+		host, path, ins := splitEndpoint(c.cfg, "/v1/traces")
+		if host != c.wantHost || ins != c.wantIns || path != c.wantPath {
+			t.Errorf("splitEndpoint(%+v) = (%q,%q,%v), want (%q,%q,%v)", c.cfg, host, path, ins, c.wantHost, c.wantPath, c.wantIns)
 		}
 	}
 }
