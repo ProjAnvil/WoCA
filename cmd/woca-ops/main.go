@@ -19,7 +19,6 @@ package main
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -34,7 +33,9 @@ import (
 	"github.com/projanvil/woca/internal/ee/opsconsole"
 	"github.com/projanvil/woca/internal/ee/opsui"
 	"github.com/projanvil/woca/internal/ee/tenant"
+	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/webfx"
 	"github.com/rs/zerolog"
 )
 
@@ -42,38 +43,32 @@ func main() {
 	// Registry-backed DSN references (WOCA_DB: nacos://…) resolve at open
 	// time — same as every server-role entry.
 	discovery.Install()
-	log := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}).With().Timestamp().Logger()
+	level, err := logging.ParseLevel(os.Getenv("WOCA_LOG_LEVEL"))
+	if err != nil {
+		level = zerolog.InfoLevel
+	}
+	log := logging.NewConsole(os.Stderr, level)
 	addr := os.Getenv("WOCA_OPS_ADDR")
 	if addr == "" {
 		addr = "127.0.0.1:9091"
 	}
 
-	var h http.Handler
+	router := webfx.New(webfx.Options{Logger: log, Addr: addr, Grace: 3 * time.Second})
+	router.UseDefaults()
 	switch db, upstream := os.Getenv("WOCA_DB"), os.Getenv("WOCA_OPS_UPSTREAM"); {
 	case db != "" && upstream != "":
 		log.Fatal().Msg("woca-ops: WOCA_DB (direct) and WOCA_OPS_UPSTREAM (proxy) are mutually exclusive — pick one assembly")
 	case upstream != "":
-		h = proxyAssembly(log, upstream)
+		router.Handle("/", proxyAssembly(log, upstream))
 	case db != "":
-		h = directAssembly(log, db)
+		router.Handle("/", directAssembly(log, db))
 	default:
 		log.Fatal().Msg("woca-ops: set WOCA_OPS_UPSTREAM (proxy onto woca-server) or WOCA_DB (direct) — refusing to guess an assembly")
 	}
 
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Fatal().Err(err).Str("addr", addr).Msg("woca-ops: listen failed")
-	}
-	hs := &http.Server{Addr: addr, Handler: h}
-	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-		<-sig
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = hs.Shutdown(ctx)
-	}()
-	if err := hs.Serve(ln); err != nil && err != http.ErrServerClosed {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := router.Run(ctx); err != nil {
 		log.Fatal().Err(err).Msg("woca-ops: listener stopped")
 	}
 }

@@ -10,7 +10,8 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
-	"strings"
+
+	"github.com/projanvil/woca/internal/webfx"
 )
 
 //go:embed all:spa
@@ -26,33 +27,5 @@ func Root() fs.FS {
 }
 
 // Handler serves SPA assets and falls back to index.html for client-side
-// routes (unknown non-API paths render the app shell).
-func Handler() http.Handler {
-	root := Root()
-	files := http.FileServerFS(root)
-	ix, err := fs.ReadFile(root, "index.html")
-	if err != nil {
-		panic(err)
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.NotFound(w, r)
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			http.NotFound(w, r)
-			return
-		}
-		name := strings.TrimPrefix(r.URL.Path, "/")
-		if name != "" {
-			if _, err := fs.Stat(root, name); err != nil {
-				// Client-side route: render the app shell.
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write(ix)
-				return
-			}
-		}
-		files.ServeHTTP(w, r)
-	})
-}
+// routes (the shared webfx SPA contract).
+func Handler() http.Handler { return webfx.SPA(Root()) }
