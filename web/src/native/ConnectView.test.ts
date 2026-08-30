@@ -123,7 +123,7 @@ describe('ConnectView', () => {
     expect(sessionStorageSetItem).not.toHaveBeenCalled()
   })
 
-  it('clears the API key field after a failed connection', async () => {
+  it('keeps the API key in the field after a failed connection', async () => {
     const { wrapper } = mountConnect(vi.fn().mockRejectedValue(new Error('activation failed')))
     await wrapper.get('[data-testid="url-input"]').setValue('https://enterprise.example.com')
     await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
@@ -132,7 +132,11 @@ describe('ConnectView', () => {
     expect((wrapper.get('[data-testid="url-input"]').element as HTMLInputElement).value).toBe(
       'https://enterprise.example.com',
     )
-    expect((wrapper.get('[data-testid="api-key-input"]').element as HTMLInputElement).value).toBe('')
+    // A failed attempt must not force a retype: the key stays in memory
+    // (never persisted) until a successful connect clears it.
+    expect((wrapper.get('[data-testid="api-key-input"]').element as HTMLInputElement).value).toBe(
+      'woca_test_key',
+    )
     expect(wrapper.get('[role="alert"]').text()).not.toContain('activation failed')
   })
 })
