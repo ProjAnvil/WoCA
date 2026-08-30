@@ -12,11 +12,9 @@
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -26,6 +24,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/edgegw"
 	"github.com/projanvil/woca/internal/ee/nacosrt"
 	"github.com/projanvil/woca/internal/logging"
+	"github.com/projanvil/woca/internal/webfx"
 	"github.com/spf13/cobra"
 )
 
@@ -103,28 +102,20 @@ func main() {
 			defer stop()
 			go edge.Run(ctx)
 
-			hs := &http.Server{
-				Addr:              addr,
-				Handler:           edge.Handler(),
-				ReadHeaderTimeout: 15 * time.Second,
-			}
-			serveErr := make(chan error, 1)
-			go func() { serveErr <- hs.Serve(ln) }()
+			// webfx owns the public surface: request id + request log +
+			// recovery around the edge router. The 40s grace matches the
+			// old hand-rolled block — parked clients wait up to 30s for a
+			// tunnel pickup and SSE relays stream as long as the bridge
+			// answers; a short grace would sever both mid-flight.
+			router := webfx.New(webfx.Options{
+				Logger:             log,
+				Grace:              40 * time.Second,
+				ReadHeaderTimeout:  15 * time.Second,
+			})
+			router.UseDefaults()
+			router.Handle("/", edge.Handler())
 			fmt.Fprintf(os.Stderr, "woca-edge: %s://%s (service %s, config %s)\n", scheme, ln.Addr(), serviceURL, configURL)
-			select {
-			case err := <-serveErr:
-				if err == http.ErrServerClosed {
-					return nil
-				}
-				return err
-			case <-ctx.Done():
-				// Parked clients wait up to parkPickupTimeout (30s) for a
-				// tunnel pickup and SSE relays stream as long as the bridge
-				// answers — a 5s grace would sever both mid-flight.
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-				defer cancel()
-				return hs.Shutdown(shutdownCtx)
-			}
+			return router.Serve(ctx, ln)
 		},
 	}
 	root.Flags().StringVar(&logLevel, "log-level", "info", "debug | info | warn | error")

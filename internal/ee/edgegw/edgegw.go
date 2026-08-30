@@ -33,6 +33,7 @@ import (
 
 	"github.com/projanvil/woca/internal/ee/entrygw"
 	"github.com/projanvil/woca/internal/platform/machineid"
+	"github.com/projanvil/woca/internal/webfx"
 )
 
 // BridgeCookie carries the selected target bridge (browser flow, v1.6
@@ -166,15 +167,15 @@ func (e *Edge) queue(bridgeID string) *bridgeQueue {
 	return q
 }
 
-// Handler builds the public listener surface.
+// Handler builds the public listener surface on the shared webfx router.
 func (e *Edge) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
+	r := webfx.New(webfx.Options{})
+	r.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "woca-edge"})
 	})
 	// Bridge selection (pre-auth): the inventory and the cookie setter.
-	mux.HandleFunc("GET /api/edge/bridges", e.handleBridgeList)
-	mux.HandleFunc("GET /edge/select", e.handleSelect)
+	r.HandleFunc("GET /api/edge/bridges", e.handleBridgeList)
+	r.HandleFunc("GET /edge/select", e.handleSelect)
 	// Machine channel: the bridge-facing /gw/* routes forward into the
 	// private core — config pulls to the config plane, the registry
 	// routes to the service plane. Explicitly enumerated: the
@@ -183,37 +184,37 @@ func (e *Edge) Handler() http.Handler {
 	// (entrygw's own contract), and /gw/enroll-status must not become an
 	// anonymous token dispensary.
 	for _, route := range []string{"/gw/enroll", "/gw/enroll-request", "/gw/enroll-status", "/gw/hello", "/gw/renew", "/gw/heartbeat"} {
-		mux.Handle(route, e.forward(e.cfg.ServiceURL))
+		r.Handle(route, e.forward(e.cfg.ServiceURL))
 	}
 	// Identity forwarding (v1.8 §2.7): direct-connect bridges reach the
 	// core's auth service through the machine channel — gated by the
 	// same machine-token resolution as the tunnel surface. The public
 	// listener must never expose the core's identity authority to
 	// anonymous callers (login-guessing, blind logout DoS).
-	mux.Handle("/gw/auth/", e.authTunnel(func(w http.ResponseWriter, r *http.Request) {
+	r.Handle("/gw/auth/", e.authTunnel(func(w http.ResponseWriter, r *http.Request) {
 		e.forward(e.cfg.ServiceURL).ServeHTTP(w, r)
 	}))
-	mux.Handle("/gw/config", e.forward(e.cfg.ConfigURL))
+	r.Handle("/gw/config", e.forward(e.cfg.ConfigURL))
 	// The model catalog bridges pull on demand (§16) rides the same
 	// machine channel into the config plane (subtree: list + verify).
-	mux.Handle("/gw/models", e.forward(e.cfg.ConfigURL))
-	mux.Handle("/gw/models/", e.forward(e.cfg.ConfigURL))
+	r.Handle("/gw/models", e.forward(e.cfg.ConfigURL))
+	r.Handle("/gw/models/", e.forward(e.cfg.ConfigURL))
 	// Everything else under /gw/ — including the core-internal resolve
 	// and bridges — is not a public machine-channel route.
-	mux.HandleFunc("/gw/", func(w http.ResponseWriter, _ *http.Request) {
+	r.HandleFunc("/gw/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown gateway route"})
 	})
-	mux.HandleFunc("GET /tunnel/poll", e.authTunnel(e.handlePoll))
-	mux.HandleFunc("POST /tunnel/respond/{id}", e.authTunnel(e.handleRespond))
+	r.HandleFunc("GET /tunnel/poll", e.authTunnel(e.handlePoll))
+	r.HandleFunc("POST /tunnel/respond/{id}", e.authTunnel(e.handleRespond))
 	// Client auth enforcement (v1.8 §2.2): login and logout are answered
 	// AT the edge — the core validates and issues; the cookie is
 	// edge-origin. Everything else /api/* is validated per request before
 	// tunneling (see serveClient).
-	mux.HandleFunc("POST /api/auth/login", e.handleClientLogin)
-	mux.HandleFunc("POST /api/auth/logout", e.handleClientLogout)
+	r.HandleFunc("POST /api/auth/login", e.handleClientLogin)
+	r.HandleFunc("POST /api/auth/logout", e.handleClientLogout)
 	// Everything else is client traffic routed to the selected bridge.
-	mux.HandleFunc("/", e.serveClient)
-	return mux
+	r.HandleFunc("/", e.serveClient)
+	return r.Handler()
 }
 
 // forward proxies a machine-channel route into one core plane. Flushing
