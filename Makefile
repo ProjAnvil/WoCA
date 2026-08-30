@@ -242,6 +242,26 @@ build-server:
 	done
 	@echo "server artifacts: $(SERVER_ARTIFACTS)"
 
+# Microservices distribution: one tar.gz carrying every server-role binary
+# plus the generic start/stop controller (deploy/micro). Self-contained on
+# the target host: unpack, edit env/, `scripts/svc.sh <role> start`. PIDs
+# land in run/<role>.pid and every start/stop is appended to run/svc.log.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+.PHONY: dist-micro
+dist-micro: build-server
+	@rm -rf build/dist/woca-micro
+	@mkdir -p build/dist/woca-micro/bin build/dist/woca-micro/scripts build/dist/woca-micro/env
+	@for a in $(SERVER_ARTIFACTS); do cp "build/$$a" build/dist/woca-micro/bin/; done
+	@cp deploy/micro/svc.sh build/dist/woca-micro/scripts/svc.sh
+	@chmod +x build/dist/woca-micro/scripts/svc.sh
+	@cp deploy/micro/env/*.env build/dist/woca-micro/env/
+	@cp deploy/micro/README.md build/dist/woca-micro/
+	@printf '%s\n' "$(VERSION)" > build/dist/woca-micro/VERSION
+	@out="build/dist/woca-micro-$(VERSION)-$(shell go env GOOS)-$(shell go env GOARCH).tar.gz"; \
+		tar -czf "$$out" -C build/dist woca-micro; \
+		shasum -a 256 "$$out" | tee "$$out.sha256"; \
+		echo "dist: $$out"
+
 # Dependency hygiene: server artifacts must not link the interactive
 # surfaces (TUI, REPL) or the one-shot CLI's root command wiring.
 check-server-artifacts: build-server
