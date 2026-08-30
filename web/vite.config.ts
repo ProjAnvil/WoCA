@@ -25,7 +25,10 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8899',
+        // Native wails-dev HMR mode points this at the embedded bridge's
+        // fixed dev port (set via frontend:dev:start in wails.json); the
+        // personal `woca serve` workflow keeps the historical default.
+        target: process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:8899',
         changeOrigin: true,
       },
     },
