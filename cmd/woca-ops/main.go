@@ -43,7 +43,13 @@ func main() {
 	// Registry-backed DSN references (WOCA_DB: nacos://…) resolve at open
 	// time — same as every server-role entry.
 	discovery.Install()
-	level, err := logging.ParseLevel(os.Getenv("WOCA_LOG_LEVEL"))
+	// Default to info like the original facade logger — the empty string
+	// would parse as "disabled" and silence the surface entirely.
+	levelStr := os.Getenv("WOCA_LOG_LEVEL")
+	if levelStr == "" {
+		levelStr = "info"
+	}
+	level, err := logging.ParseLevel(levelStr)
 	if err != nil {
 		level = zerolog.InfoLevel
 	}
