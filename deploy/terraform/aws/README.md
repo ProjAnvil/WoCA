@@ -49,6 +49,10 @@ DOCKER-USER matrix enforced on one host.
 ## Prerequisites
 
 1. Images in ECR (see `ecr.tf` for the repository set):
+   - Note: the woca-edge access point (client tunnels, /gw/obs public
+     telemetry push) is not yet modeled in this reference — the DMZ
+     node currently runs the nginx gateway half only; adding the edge
+     node is tracked with the v1.5 topology follow-up.
    - woca role images: `GOARCH=amd64 make dist-images` (arm64 hosts: plain
      `make dist-images`) builds every role package (`make <role>` tar, the
      packaged start.sh as entrypoint) into `woca-<role>:local` — then tag
