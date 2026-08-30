@@ -254,6 +254,20 @@ describe('request error envelope', () => {
     await expect(listSessions()).rejects.toMatchObject({ name: 'UnauthorizedError', code: 'revoked' })
   })
 
+  it('invokes the unauthorized handler on 401 so the login gate rises mid-app', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'unauthorized', code: 'unauthorized' }), { status: 401 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const transport = await import('./transport')
+    const seen: string[] = []
+    transport.setUnauthorizedHandler((code) => seen.push(code))
+    const { listSessions } = await import('./client')
+    await expect(listSessions()).rejects.toMatchObject({ name: 'UnauthorizedError' })
+    transport.setUnauthorizedHandler(null)
+    expect(seen).toEqual(['unauthorized'])
+  })
+
   it('labels non-2xx failures with the JSON error detail', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 }),

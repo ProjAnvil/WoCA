@@ -56,6 +56,17 @@ export class UnauthorizedError extends Error {
   }
 }
 
+// A 401 anywhere means the session is gone (expired, revoked, or never
+// established): the login gate must come up on the FIRST failure instead
+// of toasting "unauthorized" on every action while the app pretends to be
+// signed in. The transport layer stays store-free; the app entry wires
+// the handler (no import cycle).
+let unauthorizedHandler: ((code: string) => void) | null = null
+
+export function setUnauthorizedHandler(fn: ((code: string) => void) | null): void {
+  unauthorizedHandler = fn
+}
+
 // Shared skeleton for every non-SSE endpoint: on a non-2xx it prefers the
 // JSON body's {error} detail (the Go server's writeError always sends one)
 // over the bare status code, prefixed with a human-readable label so callers
@@ -68,6 +79,7 @@ export async function request<T>(url: string, init?: RequestInit, label?: string
       .json()
       .then((d) => (d as { code?: string }).code ?? 'unauthorized')
       .catch(() => 'unauthorized')
+    unauthorizedHandler?.(code)
     throw new UnauthorizedError(code)
   }
   if (!resp.ok) {
