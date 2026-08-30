@@ -312,3 +312,23 @@ func TestGraceOptions(t *testing.T) {
 	}
 	_ = context.Background()
 }
+
+// TestCaptureWriterReadFromFallbackNoRecursion: the fallback branch
+// (underlying writer without ReaderFrom) must not recurse — io.Copy calls
+// dst.ReadFrom when present, so copying onto the captureWriter itself
+// used to overflow the stack (found live on the tunnel respond path).
+func TestCaptureWriterReadFromFallbackNoRecursion(t *testing.T) {
+	rec := httptest.NewRecorder() // implements WriteHeader/Write only
+	sw := &captureWriter{ResponseWriter: rec, status: 200}
+	body := strings.NewReader(" streamed body ")
+	n, err := sw.ReadFrom(body)
+	if err != nil || n != int64(len(" streamed body ")) {
+		t.Fatalf("ReadFrom = %d, %v", n, err)
+	}
+	if rec.Body.String() != " streamed body " {
+		t.Fatalf("body = %q", rec.Body.String())
+	}
+	if sw.bytes != n {
+		t.Fatalf("bytes = %d, want %d", sw.bytes, n)
+	}
+}

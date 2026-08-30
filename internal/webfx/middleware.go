@@ -190,8 +190,12 @@ func (w *captureWriter) ReadFrom(r io.Reader) (int64, error) {
 		}
 		return n, err
 	}
-	n, err := io.Copy(w, r)
-	w.bytes += n
+	// Hide this writer's own ReadFrom: io.Copy(dst, src) calls
+	// dst.ReadFrom when present, so copying onto w here would recurse
+	// into this very method until the stack overflows (found live: the
+	// tunnel respond path's writer has no ReaderFrom). Byte counting
+	// happens in Write — no double add here.
+	n, err := io.Copy(struct{ io.Writer }{w}, r)
 	return n, err
 }
 
