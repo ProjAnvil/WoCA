@@ -20,21 +20,23 @@ Output: `build/dist/<role>-<version>-<os>-<arch>.tar.gz` (+ `.sha256`).
 
 ## Package layout
 
-```text
-woca-ops/
-├── woca-ops         the role binary (.exe on windows builds)
-├── start.sh         background start  (macOS + Linux, bash)
-├── stop.sh          stop              (macOS + Linux, bash)
-├── start.ps1        background start  (Windows PowerShell)
-├── stop.ps1         stop              (Windows PowerShell)
-```
+The script pair is chosen by build target: macOS/Linux builds carry the
+shell pair, Windows builds (`GOOS=windows`) carry the PowerShell pair
+**instead** — with the `.exe` binary.
 
-Platform note: on Unix (PowerShell Core on macOS/Linux) the `.ps1`
-scripts delegate to the `.sh` scripts — one implementation of the
-nohup/pid semantics per platform, same pid file, so both spellings
-behave identically.
+```text
+woca-ops/                       (macOS / Linux)
+├── woca-ops         the role binary
+├── start.sh         background start (nohup, pid file)
+├── stop.sh          stop (pid first, name fallback)
 ├── VERSION          git describe of the build
 └── README.md        this file
+
+woca-ops/                       (Windows)
+├── woca-ops.exe     the role binary
+├── start.ps1        background start (Start-Process hidden, pid file)
+├── stop.ps1         stop (pid first, name fallback)
+├── VERSION / README.md
 ```
 
 Run artifacts created beside the scripts: `woca-ops.pid` (the live pid),

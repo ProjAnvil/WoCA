@@ -271,10 +271,11 @@ dist-role:
 	mkdir -p "$$stage/$(ROLE)"; \
 	CGO_ENABLED=0 GOOS=$(DIST_GOOS) GOARCH=$(DIST_GOARCH) \
 		go build -trimpath -ldflags "-s -w" -o "$$stage/$(ROLE)/$(ROLE)$(DIST_EXE)" ./cmd/$(ROLE) || exit 1; \
-	for f in start.sh stop.sh start.ps1 stop.ps1; do \
+	if [ "$(DIST_GOOS)" = "windows" ]; then scripts="start.ps1 stop.ps1"; else scripts="start.sh stop.sh"; fi; \
+	for f in $$scripts; do \
 		sed -e "s/@ROLE@/$(ROLE)/g" deploy/micro/$$f.tmpl > "$$stage/$(ROLE)/$$f" || exit 1; \
 	done; \
-	chmod +x "$$stage/$(ROLE)/start.sh" "$$stage/$(ROLE)/stop.sh"; \
+	if [ "$(DIST_GOOS)" != "windows" ]; then chmod +x "$$stage/$(ROLE)/start.sh" "$$stage/$(ROLE)/stop.sh"; fi; \
 	printf '%s\n' "$(VERSION)" > "$$stage/$(ROLE)/VERSION"; \
 	cp deploy/micro/README.md "$$stage/$(ROLE)/"; \
 	tar -czf "$$out.tar.gz" -C "$$stage" "$(ROLE)"; \
