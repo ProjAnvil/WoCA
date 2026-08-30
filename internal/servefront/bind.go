@@ -6,7 +6,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"sync/atomic"
+
+	"github.com/projanvil/woca/internal/webfx"
 )
 
 // bindEarly is ServeWithEdition's listener phase: bind the port and answer
@@ -15,26 +16,20 @@ import (
 // the webd daemon timed out on its 5s readiness probe), terminate direct
 // TLS when configured (product design §5.3 path C), and write the ready
 // file for native-client embedding. Everything except health 503s until
-// the real handler is swapped in through the returned pointer. The serve
-// goroutine is already running when bindEarly returns nil.
-func bindEarly(addr string, obs Observability) (*http.Server, string, chan error, *atomic.Pointer[http.Handler], error) {
+// the real handler is swapped in through the returned webfx.Swap. The
+// serve goroutine is already running when bindEarly returns nil.
+func bindEarly(addr string, obs Observability) (*http.Server, string, chan error, *webfx.Swap, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, "", nil, nil, fmt.Errorf("listen %s: %w", addr, err)
 	}
-	// atomic.Pointer, not atomic.Value: the swapped-in concrete handler
-	// types differ (http.HandlerFunc vs *http.ServeMux) and atomic.Value
-	// panics on inconsistent types.
-	var handler atomic.Pointer[http.Handler]
 	starting := http.Handler(http.HandlerFunc(startingHandler))
 	if obs != nil {
 		// Probes must answer from the first moment the port is bound.
 		starting = obs.Wrap(starting)
 	}
-	handler.Store(&starting)
-	hs := &http.Server{Addr: addr, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		(*handler.Load()).ServeHTTP(w, r)
-	})}
+	swap := webfx.NewSwap(starting)
+	hs := &http.Server{Addr: addr, Handler: swap}
 	serveErr := make(chan error, 1)
 	// Direct TLS (product design §5.3 path C): WOCA_TLS_CERT/WOCA_TLS_KEY
 	// terminate TLS on the business listener itself — for public bridges
@@ -60,5 +55,5 @@ func bindEarly(addr string, obs Observability) (*http.Server, string, chan error
 		_ = os.WriteFile(f, []byte("http://"+ln.Addr().String()), 0o600)
 	}
 	go func() { serveErr <- hs.Serve(ln) }()
-	return hs, scheme, serveErr, &handler, nil
+	return hs, scheme, serveErr, swap, nil
 }

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"testing"
+
+	"github.com/rs/zerolog"
 )
 
 func TestWorkerHelp(t *testing.T) {
@@ -26,8 +29,9 @@ func TestWorkerBadLogLevel(t *testing.T) {
 }
 
 func TestServeProbesOff(t *testing.T) {
-	srv, err := serveProbes("off", nil)
-	if err != nil || srv != nil {
-		t.Fatalf("serveProbes(off) = %v, %v; want nil, nil", srv, err)
+	stop, err := serveProbes(context.Background(), "off", zerolog.Nop(), nil)
+	if err != nil {
+		t.Fatalf("serveProbes(off) err = %v", err)
 	}
+	stop() // no-op for the disabled posture
 }

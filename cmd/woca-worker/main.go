@@ -13,7 +13,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -35,6 +34,7 @@ import (
 	"github.com/projanvil/woca/internal/settingswatch"
 	"github.com/projanvil/woca/internal/telemetry"
 	"github.com/projanvil/woca/internal/wocadb"
+	"github.com/projanvil/woca/internal/webfx"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/otel/attribute"
@@ -79,13 +79,11 @@ func newWorkerRoot() *cobra.Command {
 			telemetry.SetDefault(telemetry.NewMultiSink(
 				telemetry.NewLocalSink(log), obsInst.Sink()))
 
-			probeSrv, err := serveProbes(obsAddr, obsInst)
+			probeStop, err := serveProbes(cmd.Context(), obsAddr, log, obsInst)
 			if err != nil {
 				return err
 			}
-			if probeSrv != nil {
-				defer func() { _ = probeSrv.Close() }()
-			}
+			defer probeStop()
 
 			// The settings database carries the runstate tables. The worker
 			// is a server artifact (design §5.1): the embedded ladyM engine
@@ -221,21 +219,32 @@ func defaultObsAddr() string {
 	return ":9091"
 }
 
-// serveProbes binds the /healthz + /metrics listener; "off" or a failure to
-// bind (addr in use on a co-located sidecar port) disables probing rather
-// than killing the worker — run execution outranks metrics.
-func serveProbes(addr string, o *obs.Obs) (*http.Server, error) {
+// serveProbes binds the /healthz + /metrics listener through webfx — the
+// probe surface gets the same request id + log + recovery treatment as
+// every other woca surface. "off" disables it; a failure to bind is fatal
+// (a probe port the operator asked for and cannot have is a configuration
+// error, not a degraded mode).
+func serveProbes(ctx context.Context, addr string, log zerolog.Logger, o *obs.Obs) (stop func(), err error) {
 	if addr == "" || addr == "off" {
-		return nil, nil
+		return func() {}, nil
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("obs listener %s: %w", addr, err)
 	}
-	srv := &http.Server{Handler: o.Handler()}
-	go func() { _ = srv.Serve(ln) }()
+	r := webfx.New(webfx.Options{Logger: log})
+	r.UseDefaults()
+	r.Handle("/", o.Handler())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = r.Serve(ctx, ln)
+	}()
 	fmt.Fprintf(os.Stderr, "woca-worker probes: %s\n", addr)
-	return srv, nil
+	return func() {
+		_ = ln.Close()
+		<-done
+	}, nil
 }
 
 // openWorkerSessions opens the shared session transcript store (the same

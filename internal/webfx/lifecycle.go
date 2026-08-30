@@ -7,8 +7,33 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
+
+// Swap is an atomic handler slot for surfaces that must answer from the
+// moment the port is bound: serve a placeholder while assembly completes
+// (agent build, config pull), then Store the real handler. Loads are
+// wait-free; concurrent requests during a swap see either handler, never
+// a torn one.
+type Swap struct {
+	cur atomic.Pointer[http.Handler]
+}
+
+// NewSwap returns a Swap serving placeholder until Store replaces it.
+func NewSwap(placeholder http.Handler) *Swap {
+	s := &Swap{}
+	s.cur.Store(&placeholder)
+	return s
+}
+
+// Store atomically replaces the served handler.
+func (s *Swap) Store(h http.Handler) { s.cur.Store(&h) }
+
+// ServeHTTP serves the currently installed handler.
+func (s *Swap) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	(*s.cur.Load()).ServeHTTP(w, r)
+}
 
 // Run binds Options.Addr (wrapping the listener with Options.TLS when
 // set), serves until ctx is cancelled, then shuts down gracefully within

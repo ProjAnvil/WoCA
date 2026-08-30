@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -159,6 +160,65 @@ func TestSPAFallback(t *testing.T) {
 			t.Errorf("%s %s: body = %q", tc.method, tc.path, rec.Body.String())
 		}
 	}
+}
+
+func TestSwapPlaceholderThenReal(t *testing.T) {
+	swap := NewSwap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("starting"))
+	}))
+	rec := httptest.NewRecorder()
+	swap.ServeHTTP(rec, httptest.NewRequest("GET", "/api/health", nil))
+	if rec.Body.String() != "starting" {
+		t.Fatalf("placeholder not served: %q", rec.Body.String())
+	}
+
+	swap.Store(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("real"))
+	}))
+	rec = httptest.NewRecorder()
+	swap.ServeHTTP(rec, httptest.NewRequest("GET", "/api/health", nil))
+	if rec.Body.String() != "real" {
+		t.Fatalf("swapped handler not served: %q", rec.Body.String())
+	}
+}
+
+// TestSwapConcurrentLoadsUnderRace: concurrent requests during swaps must
+// each see exactly one complete handler (run under -race in CI).
+func TestSwapConcurrentLoadsUnderRace(t *testing.T) {
+	mk := func(tag string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(tag))
+		})
+	}
+	swap := NewSwap(mk("a"))
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				rec := httptest.NewRecorder()
+				swap.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+				body := rec.Body.String()
+				if body != "a" && body != "b" {
+					t.Errorf("torn handler response: %q", body)
+					return
+				}
+			}
+		}()
+	}
+	for i := 0; i < 200; i++ {
+		swap.Store(mk("a"))
+		swap.Store(mk("b"))
+	}
+	close(done)
+	wg.Wait()
 }
 
 func TestHealthzPayloadContract(t *testing.T) {

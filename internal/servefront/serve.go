@@ -484,7 +484,7 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 	if obs != nil {
 		real = obs.Wrap(real)
 	}
-	swapHandler.Store(&real)
+	swapHandler.Store(real)
 	if ed.Handler != nil {
 		ed.Handler(real)
 	}
