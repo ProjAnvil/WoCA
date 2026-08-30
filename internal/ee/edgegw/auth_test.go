@@ -129,7 +129,7 @@ func mustListKeys(t *testing.T, core *fakeCore) []struct {
 	RevokedAt      int64
 } {
 	t.Helper()
-	rows, _, err := core.keys.ListKeys(t.Context(), "local", "", "", 200, 0)
+	rows, _, err := core.keys.ListKeys(t.Context(), "local", "", "", "", 200, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

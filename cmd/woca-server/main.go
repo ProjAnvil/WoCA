@@ -30,6 +30,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/edition"
 	"github.com/projanvil/woca/internal/ee/entrygw"
 	"github.com/projanvil/woca/internal/ee/nacosrt"
+	"github.com/projanvil/woca/internal/ee/nativeauth"
 	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/ee/opsconsole"
 	"github.com/projanvil/woca/internal/ee/tenant"
@@ -133,6 +134,11 @@ func main() {
 			gwMux := http.NewServeMux()
 			entrygw.NewRegistryHandler(gwStore).RegisterRoutes(gwMux)
 			gwMux.Handle("/gw/auth/", authcore.Handler(auth, audit))
+			// The native-client credential surface's machine channel: the
+			// edge fronts public native clients (activation proxy, DPoP
+			// proof checks at its own origin) and calls home here — the
+			// same tenant tables the public /api/native/* surface uses.
+			gwMux.Handle("/gw/native/", nativeauth.MachineHandler(nativeauth.New(tenantStore, tenant.NewAPIKeyProvider(tenantStore))))
 			console := opsconsole.New(st, gwStore, auth, tenantStore, log)
 			// Gateway-policy writes ride the config pack in the
 			// full-stack posture (nil = the direct dev console, which

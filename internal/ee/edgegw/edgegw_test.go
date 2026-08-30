@@ -18,6 +18,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/authcore"
 	"github.com/projanvil/woca/internal/ee/bridge"
 	"github.com/projanvil/woca/internal/ee/entrygw"
+	"github.com/projanvil/woca/internal/ee/nativeauth"
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/platform/machineid"
 	"github.com/projanvil/woca/internal/wocadb"
@@ -58,6 +59,9 @@ func newFakeCore(t *testing.T) *fakeCore {
 	}
 	svcMux := http.NewServeMux()
 	entrygw.NewRegistryHandler(store).RegisterRoutes(svcMux)
+	// The native credential machine channel (what woca-server mounts
+	// beside authcore on its gateway listener).
+	svcMux.Handle("/gw/native/", nativeauth.MachineHandler(nativeauth.New(keys, tenant.NewAPIKeyProvider(keys))))
 	svc := httptest.NewServer(svcMux)
 	t.Cleanup(svc.Close)
 	core := &fakeCore{store: store, auth: auth, keys: keys, svc: svc}

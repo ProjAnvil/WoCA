@@ -84,6 +84,10 @@ type Edge struct {
 	// auth is the in-process validation cache (§2.5 R7: ≤60s,
 	// non-authoritative, never persisted).
 	auth authCache
+	// nativeAuth caches the last core introspection per native DPoP
+	// token; the proof itself is verified on every request.
+	nativeAuth    nativeAuthCache
+	nativeLimiter nativeActivateLimiter
 
 	mu      sync.Mutex
 	queues  map[string]*bridgeQueue
@@ -105,6 +109,11 @@ func New(cfg Config, log zerolog.Logger) *Edge {
 			},
 		},
 		queues: map[string]*bridgeQueue{},
+		nativeLimiter: nativeActivateLimiter{
+			window:  time.Minute,
+			max:     10,
+			buckets: map[string]int{},
+		},
 	}
 }
 
@@ -231,6 +240,12 @@ func (e *Edge) Handler() http.Handler {
 	// tunneling (see serveClient).
 	r.HandleFunc("POST /api/auth/login", e.handleClientLogin)
 	r.HandleFunc("POST /api/auth/logout", e.handleClientLogout)
+	// Native-client credential surface (DPoP devices): activation proxies
+	// to the core's machine channel, session reads and revocation verify
+	// the RFC 9449 proof at this origin first.
+	r.HandleFunc("POST /api/native/activate", e.handleNativeActivate)
+	r.HandleFunc("GET /api/native/session", e.handleNativeSession)
+	r.HandleFunc("DELETE /api/native/session", e.handleNativeLogout)
 	// Everything else is client traffic routed to the selected bridge.
 	r.HandleFunc("/", e.serveClient)
 	return r.Handler()
@@ -267,13 +282,31 @@ func (e *Edge) forward(target string) http.Handler {
 }
 
 // handleBridgeList serves the pre-auth bridge inventory (selection UI).
+// Only servable bridges are listed: a row the user cannot successfully
+// pick (offline zombies, local-trust bridges without a tunnel) is noise
+// that dead-ends the picker.
 func (e *Edge) handleBridgeList(w http.ResponseWriter, r *http.Request) {
 	bridges, err := e.coreBridges(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "0502", "core plane unreachable")
 		return
 	}
-	writeJSON(w, http.StatusOK, bridges)
+	writeJSON(w, http.StatusOK, servableBridges(bridges))
+}
+
+// servableBridges keeps the bridges a client can actually be routed to:
+// live, and not local-trust (a closed tunnel parks every request into a
+// 30s dead end — R1). Tunnel capability is explicit in the heartbeat;
+// unknown (never reported) stays servable for pre-upgrade bridges.
+func servableBridges(bridges []entrygw.BridgeInfo) []entrygw.BridgeInfo {
+	out := make([]entrygw.BridgeInfo, 0, len(bridges))
+	for _, b := range bridges {
+		if !b.Live || (b.Tunnel != nil && !*b.Tunnel) {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
 }
 
 // coreBridges fetches the registration inventory from the service plane —
@@ -336,7 +369,8 @@ func (e *Edge) handleSelect(w http.ResponseWriter, r *http.Request) {
 
 // writeSelectionPage renders the minimal built-in bridge picker (no
 // secrets, no assets — a stateless page that asks the service plane for
-// the live list on every load).
+// the live list on every load). Only servable bridges are offered: an
+// unpickable row (offline, local-trust) is a dead end, not a choice.
 func (e *Edge) writeSelectionPage(w http.ResponseWriter, r *http.Request) {
 	bridges, err := e.coreBridges(r.Context())
 	if err != nil {
@@ -344,24 +378,13 @@ func (e *Edge) writeSelectionPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var rows strings.Builder
-	for _, b := range bridges {
-		status, css := "offline", "color:#8b93a1"
-		if b.Live {
-			status, css = "online", "color:#2fbf71"
-		}
-		// R1 made visible: a local-trust bridge never carries public
-		// client traffic — selectable bridges must have reported the
-		// tunnel capability as open. Unknown (never reported) stays
-		// selectable for pre-upgrade compatibility.
-		if b.Tunnel != nil && !*b.Tunnel {
-			fmt.Fprintf(&rows,
-				`<li><code>%s</code> <span style="color:#8b93a1">● %s — no tunnel (local trust)</span></li>`,
-				b.BridgeID, status)
-			continue
-		}
+	for _, b := range servableBridges(bridges) {
 		fmt.Fprintf(&rows,
-			`<li><a href="/edge/select?bridge=%s"><code>%s</code> <span style="%s">● %s</span></a></li>`,
-			url.QueryEscape(b.BridgeID), b.BridgeID, css, status)
+			`<li><a href="/edge/select?bridge=%s"><code>%s</code> <span style="color:#2fbf71">● online</span></a></li>`,
+			url.QueryEscape(b.BridgeID), b.BridgeID)
+	}
+	if rows.Len() == 0 {
+		rows.WriteString(`<li style="color:#8b93a1">No bridge is currently online.</li>`)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>woca · 选择 bridge / Select bridge</title>
@@ -385,10 +408,11 @@ func (e *Edge) serveClient(w http.ResponseWriter, r *http.Request) {
 	// the intercepted login/logout above) validates against the core
 	// before tunneling — the bridge never sees the credential, only the
 	// assertion. Non-API paths (the SPA) tunnel anonymously; the bridge's
-	// own R2 anonymous list applies there.
+	// own R2 anonymous list applies there. Native DPoP clients carry a
+	// per-request proof and validate on their own path.
 	var actor *ActorAssertion
 	if strings.HasPrefix(r.URL.Path, "/api/") {
-		assert, err := e.validateClient(r.Context(), clientCredential(r))
+		assert, err := e.validateClientAPI(r)
 		if err != nil {
 			switch {
 			case errors.Is(err, errCoreAuthDown):
@@ -420,9 +444,11 @@ func (e *Edge) serveClient(w http.ResponseWriter, r *http.Request) {
 	headers := tunnelableHeaders(r.Header)
 	// Credentials stay at the edge — the bridge sees the assertion, never
 	// the session token (§2.2); anonymous traffic forwards no edge-origin
-	// cookies either.
+	// cookies either. The DPoP proof is bound to this origin and dies
+	// with the request.
 	delete(headers, "Cookie")
 	delete(headers, "Authorization")
+	delete(headers, "DPoP")
 	p := &parked{
 		id:        requestID(),
 		w:         w,
@@ -523,17 +549,13 @@ func (e *Edge) targetBridge(w http.ResponseWriter, r *http.Request) string {
 		writeErr(w, http.StatusBadGateway, "0502", "core plane unreachable")
 		return ""
 	}
-	// Auto-route counts LIVE bridges only: stale registrations (offline
-	// zombies from old container generations) cannot serve traffic, so a
-	// single live bridge goes straight through even when the registry
-	// holds several rows. The selection page appears only when two or
-	// more bridges could actually answer.
-	var live []entrygw.BridgeInfo
-	for _, b := range bridges {
-		if b.Live {
-			live = append(live, b)
-		}
-	}
+	// Auto-route counts SERVABLE bridges only: stale registrations
+	// (offline zombies from old container generations) cannot serve
+	// traffic, and neither can a local-trust bridge whose tunnel is
+	// closed — a single servable bridge goes straight through even when
+	// the registry holds several rows. The selection page appears only
+	// when two or more bridges could actually answer.
+	live := servableBridges(bridges)
 	switch len(live) {
 	case 0:
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no bridge online"})

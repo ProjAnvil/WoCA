@@ -25,6 +25,8 @@ const (
 const (
 	CodeInvalidRequest = "0100"
 	CodeMalformedJSON  = "0101"
+	// CodeRateLimited: the caller tripped an attempt limiter (HTTP 429).
+	CodeRateLimited = "0103"
 )
 
 // Common internal/downstream codes (0500–0599).
