@@ -190,6 +190,8 @@ services:
         ROLE_PKG: woca-ops.tar.gz
     environment:
       WOCA_OPS_ADDR: ":8091"
+      WOCA_SERVICE_NAME: woca-dev-ops
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_HOME: "/var/lib/woca/home"
       WOCA_CONSOLE_USER: ${WOCA_CONSOLE_USER:-}
@@ -304,6 +306,8 @@ services:
       WOCA_SERVICE_URL: "nacos://nacos:8848/DEFAULT_GROUP/woca-edge.service"
       WOCA_CONFIGSVC_URL: "nacos://nacos:8848/DEFAULT_GROUP/woca-edge.config"
       WOCA_EDGE_ADDR: ":8080"
+      WOCA_SERVICE_NAME: woca-dev-edge
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
       WOCA_EDGE_DEV_HTTP: "1"
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/api/health || exit 1"]

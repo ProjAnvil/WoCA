@@ -449,6 +449,8 @@ services:
         ROLE_PKG: woca-ops.tar.gz
     environment:
       WOCA_OPS_ADDR: ":8091"
+      WOCA_SERVICE_NAME: woca-ent-ops
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
       WOCA_OPS_UPSTREAM: "nacos://nacos:8848/DEFAULT_GROUP/woca-ops.upstream"
     # Dev-only host publish of the ops console. Prod keeps it strictly
     # internal.

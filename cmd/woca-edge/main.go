@@ -12,6 +12,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -23,6 +24,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/discovery"
 	"github.com/projanvil/woca/internal/ee/edgegw"
 	"github.com/projanvil/woca/internal/ee/nacosrt"
+	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/webfx"
 	"github.com/spf13/cobra"
@@ -41,6 +43,15 @@ func main() {
 				return err
 			}
 			log := logging.NewConsole(os.Stderr, level)
+			// Observability: request spans only. The edge's public
+			// listener deliberately exposes no probe endpoints —
+			// healthz/metrics stay off the internet-facing surface.
+			obsInst, err := obs.Setup(cmd.Context(), obs.FromEnv())
+			if err != nil {
+				return fmt.Errorf("observability: %w", err)
+			}
+			defer func() { _ = obsInst.Shutdown(context.WithoutCancel(cmd.Context())) }()
+			obsInst.Install(cmd.Context())
 			if serviceURL == "" {
 				return fmt.Errorf("the service plane is required (set --service-url or WOCA_SERVICE_URL)")
 			}
@@ -108,11 +119,12 @@ func main() {
 			// tunnel pickup and SSE relays stream as long as the bridge
 			// answers; a short grace would sever both mid-flight.
 			router := webfx.New(webfx.Options{
-				Logger:             log,
-				Grace:              40 * time.Second,
-				ReadHeaderTimeout:  15 * time.Second,
+				Logger:            log,
+				Grace:             40 * time.Second,
+				ReadHeaderTimeout: 15 * time.Second,
 			})
 			router.UseDefaults()
+			router.Use(obsInst.HTTPMiddleware())
 			router.Handle("/", edge.Handler())
 			fmt.Fprintf(os.Stderr, "woca-edge: %s://%s (service %s, config %s)\n", scheme, ln.Addr(), serviceURL, configURL)
 			return router.Serve(ctx, ln)

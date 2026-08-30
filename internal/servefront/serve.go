@@ -134,7 +134,11 @@ type Edition struct {
 	// finished and the settings store is open (the bridge's gateway
 	// channel: enrollment, config pull, heartbeats). It runs in its own
 	// goroutine until the serve context ends; nil does nothing.
-	Start func(ctx context.Context, st *settings.Store, log zerolog.Logger)
+	// Start runs after the main listener is up (optional; goroutine). The
+	// obs instance is handed over so extra listeners mount the same
+	// healthz/metrics plane and the HTTP span middleware — one observability
+	// identity per process instead of per-listener ad-hoc setups.
+	Start func(ctx context.Context, obs Observability, st *settings.Store, log zerolog.Logger)
 	// Audit receives sensitive-operation events (run creation, workspace
 	// writes) with the acting identity — the bridge wires it to its local
 	// audit trail (product design R5). Nil skips auditing.
@@ -481,6 +485,16 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 		},
 	})
 	real := http.Handler(srv.Handler())
+	// HTTP span plane (obs): one telemetry span per request, attributed to
+	// the service's registry identity — the counterpart of the chat/tool
+	// spans. Optional-interface seam: plain-core Observability (personal
+	// edition, or an edition that opts out, e.g. the bridge) simply lacks
+	// the method.
+	if hm, ok := obs.(interface {
+		HTTPMiddleware() func(http.Handler) http.Handler
+	}); ok {
+		real = hm.HTTPMiddleware()(real)
+	}
 	if obs != nil {
 		real = obs.Wrap(real)
 	}
@@ -499,7 +513,7 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 	defer stop()
 
 	if ed.Start != nil {
-		go ed.Start(ctx, ap.Settings, log)
+		go ed.Start(ctx, obs, ap.Settings, log)
 	}
 
 	// Config-plane watcher (design §16.3/§16.7): the config service owns

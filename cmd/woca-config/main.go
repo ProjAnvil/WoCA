@@ -91,6 +91,10 @@ func main() {
 				Grace:  3 * time.Second,
 			})
 			router.UseDefaults()
+			// Request spans: every config-plane request lands in the
+			// collector attributed to the service's registry identity —
+			// the HTTP counterpart of the chat/tool spans.
+			router.Use(obsInst.HTTPMiddleware())
 			router.Handle("/", svc.Handler())
 			if obsAddr != "" && obsAddr != "off" {
 				router.SetWrap(obsInst.Wrap)

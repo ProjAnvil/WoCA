@@ -30,6 +30,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/authcore"
 	"github.com/projanvil/woca/internal/ee/discovery"
 	"github.com/projanvil/woca/internal/ee/entrygw"
+	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/ee/opsconsole"
 	"github.com/projanvil/woca/internal/ee/opsui"
 	"github.com/projanvil/woca/internal/ee/tenant"
@@ -59,8 +60,19 @@ func main() {
 		addr = "127.0.0.1:9091"
 	}
 
+	// Observability: request spans with the service identity + the
+	// healthz/metrics plane on this internal listener.
+	obsInst, err := obs.Setup(context.Background(), obs.FromEnv())
+	if err != nil {
+		log.Fatal().Err(err).Msg("woca-ops: observability setup failed")
+	}
+	defer func() { _ = obsInst.Shutdown(context.WithoutCancel(context.Background())) }()
+	obsInst.Install(context.Background())
+
 	router := webfx.New(webfx.Options{Logger: log, Addr: addr, Grace: 3 * time.Second})
 	router.UseDefaults()
+	router.Use(obsInst.HTTPMiddleware())
+	router.SetWrap(obsInst.Wrap)
 	switch db, upstream := os.Getenv("WOCA_DB"), os.Getenv("WOCA_OPS_UPSTREAM"); {
 	case db != "" && upstream != "":
 		log.Fatal().Msg("woca-ops: WOCA_DB (direct) and WOCA_OPS_UPSTREAM (proxy) are mutually exclusive — pick one assembly")

@@ -82,7 +82,15 @@ func main() {
 			return err
 		},
 		Obs: func(ctx context.Context) (servefront.Observability, error) {
-			return obs.Setup(ctx, obs.FromEnv())
+			o, err := obs.Setup(ctx, obs.FromEnv())
+			if err != nil {
+				return nil, err
+			}
+			// The bridge opts out of the per-request HTTP span plane
+			// (its business surface is the local chat UI; healthz/metrics
+			// via Wrap stay). Embedding only the seam interface hides the
+			// concrete method servefront's optional assertion looks for.
+			return spansOff{Observability: o}, nil
 		},
 		Authn: func(st *settings.Store) (authn.Provider, server.NativeAuth, error) {
 			if st == nil {
@@ -246,7 +254,7 @@ func main() {
 				_ = json.NewEncoder(w).Encode(payload)
 			})
 		},
-		Start: func(ctx context.Context, st *settings.Store, log zerolog.Logger) {
+		Start: func(ctx context.Context, _ servefront.Observability, st *settings.Store, log zerolog.Logger) {
 			if ca := currentCA.Load(); ca != nil {
 				ca.WithLogger(log)
 				go ca.Run(ctx)
@@ -288,4 +296,11 @@ func tunnelAuthMode(mode string) string {
 		return "apikey"
 	}
 	return mode
+}
+
+// spansOff hides the obs HTTP span middleware from servefront's optional
+// interface while keeping every Observability seam method (Install, Wrap,
+// Shutdown, SetRunState) intact.
+type spansOff struct {
+	servefront.Observability
 }

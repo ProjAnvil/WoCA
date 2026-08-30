@@ -18,9 +18,11 @@ import (
 
 // Span kinds (map onto OTel GenAI operation names).
 const (
-	KindTool  = "tool"
-	KindLLM   = "llm"
-	KindSkill = "skill"
+	KindTool   = "tool"
+	KindLLM    = "llm"
+	KindSkill  = "skill"
+	KindHTTP   = "http"
+	KindServer = "server"
 )
 
 // Status values.
