@@ -33,6 +33,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/platform/authz"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/webfx"
 	"github.com/projanvil/woca/internal/wocadb"
 	"github.com/rs/zerolog"
 )
@@ -169,43 +170,46 @@ func (s *Service) notifyConfig() error {
 // session-cookie login), per-route scope checks, and the console SPA on
 // non-API paths.
 func (s *Service) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
+	r := webfx.New(webfx.Options{})
+	r.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "woca-config"})
 	})
-	mux.Handle("GET /api/settings", s.requireScope(authz.ScopeSettingsRead, s.handleGet))
-	mux.Handle("PUT /api/settings", s.requireScope(authz.ScopeSettingsWrite, s.handleUpdate))
-	mux.Handle("GET /api/settings/export", s.requireScope(authz.ScopeSettingsRead, s.handleExport))
-	mux.Handle("POST /api/settings/import", s.requireScope(authz.ScopeSettingsWrite, s.handleImport))
-	mux.Handle("GET /api/config/status", s.requireScope(authz.ScopeSettingsRead, s.handleStatus))
+	r.Handle("GET /api/settings", s.requireScope(authz.ScopeSettingsRead, s.handleGet))
+	r.Handle("PUT /api/settings", s.requireScope(authz.ScopeSettingsWrite, s.handleUpdate))
+	r.Handle("GET /api/settings/export", s.requireScope(authz.ScopeSettingsRead, s.handleExport))
+	r.Handle("POST /api/settings/import", s.requireScope(authz.ScopeSettingsWrite, s.handleImport))
+	r.Handle("GET /api/config/status", s.requireScope(authz.ScopeSettingsRead, s.handleStatus))
 	// Model presets (design §16): named model configurations authored by
 	// operators. No active flag — consumers pick.
-	mux.Handle("GET /api/models", s.requireScope(authz.ScopeSettingsRead, s.handleListModels))
-	mux.Handle("POST /api/models", s.requireScope(authz.ScopeSettingsWrite, s.handleSaveModel))
-	mux.Handle("DELETE /api/models/{id}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteModel))
+	r.Handle("GET /api/models", s.requireScope(authz.ScopeSettingsRead, s.handleListModels))
+	r.Handle("POST /api/models", s.requireScope(authz.ScopeSettingsWrite, s.handleSaveModel))
+	r.Handle("DELETE /api/models/{id}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteModel))
 	// Operator-delivered skills & MCP (§16): the admin authors them here;
 	// enrolled bridges materialize them as their lowest merge layer.
-	mux.Handle("GET /api/skills", s.requireScope(authz.ScopeSettingsRead, s.handleListManagedSkills))
-	mux.Handle("PUT /api/skills", s.requireScope(authz.ScopeSettingsWrite, s.handlePutManagedSkill))
-	mux.Handle("DELETE /api/skills/{name}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteManagedSkill))
-	mux.Handle("GET /api/mcp", s.requireScope(authz.ScopeSettingsRead, s.handleListManagedMCP))
-	mux.Handle("PUT /api/mcp", s.requireScope(authz.ScopeSettingsWrite, s.handlePutManagedMCP))
-	mux.Handle("DELETE /api/mcp/{name}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteManagedMCP))
+	r.Handle("GET /api/skills", s.requireScope(authz.ScopeSettingsRead, s.handleListManagedSkills))
+	r.Handle("PUT /api/skills", s.requireScope(authz.ScopeSettingsWrite, s.handlePutManagedSkill))
+	r.Handle("DELETE /api/skills/{name}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteManagedSkill))
+	r.Handle("GET /api/mcp", s.requireScope(authz.ScopeSettingsRead, s.handleListManagedMCP))
+	r.Handle("PUT /api/mcp", s.requireScope(authz.ScopeSettingsWrite, s.handlePutManagedMCP))
+	r.Handle("DELETE /api/mcp/{name}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteManagedMCP))
 	spaRoot, err := fs.Sub(spaFS, "spa")
 	if err != nil {
 		panic(err)
 	}
-	mux.Handle("/", spaWithFallback(spaRoot))
+	r.Handle("/", webfx.SPA(spaRoot))
 
-	gwMux := http.NewServeMux()
 	// The config plane keeps the /gw/config pull (v1.5 拓扑拆分) plus the
 	// model catalog bridges pull on demand (§16: presets are config-plane
 	// assets — bridges fetch the list and verify their preferred model
 	// here; enrollment/renewal/heartbeat live on the service plane).
+	// entrygw's route registrar is mux-typed, so it mounts on a stdlib mux
+	// delegated from the router as a subtree (paths stay absolute).
+	gwMux := http.NewServeMux()
 	s.entrygw.RegisterRoutes(gwMux)
 	gwMux.Handle("GET /gw/models", s.entrygw.RouteAuth(s.handleGWListModels))
 	gwMux.Handle("POST /gw/models/verify", s.entrygw.RouteAuth(s.handleGWVerifyModel))
-	top := http.NewServeMux()
+
+	top := webfx.New(webfx.Options{})
 	top.Handle("/gw/", gwMux)
 	// Console credential exchange: mounted at the top level — the login
 	// route must be reachable before a session exists, so it cannot live
@@ -215,8 +219,8 @@ func (s *Service) Handler() http.Handler {
 	// The console surface: open when no credentials are configured,
 	// session-gated otherwise. The machine channel and the login route
 	// above never pass through this gate.
-	top.Handle("/", s.console.Wrap(mux))
-	return top
+	top.Handle("/", s.console.Wrap(r.Handler()))
+	return top.Handler()
 }
 
 // patches translates an update into (key, value) pairs for settings.Apply.
@@ -418,36 +422,9 @@ func updateKeys(u *update) []string {
 	return keys
 }
 
-// spaWithFallback serves SPA assets and falls back to index.html for
-// client-side routes (unknown non-API paths render the app).
-func spaWithFallback(root fs.FS) http.Handler {
-	files := http.FileServerFS(root)
-	ix, err := fs.ReadFile(root, "index.html")
-	if err != nil {
-		panic(err)
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.NotFound(w, r)
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			http.NotFound(w, r)
-			return
-		}
-		name := strings.TrimPrefix(r.URL.Path, "/")
-		if name != "" {
-			if _, err := fs.Stat(root, name); err != nil {
-				// Client-side route: render the app shell.
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write(ix)
-				return
-			}
-		}
-		files.ServeHTTP(w, r)
-	})
-}
+// spaWithFallback is retired: the shared webfx.SPA helper serves the
+// identical contract (asset → client-route fallback → index.html, /api/
+// never falls back).
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	httpx.WriteJSON(w, status, v)

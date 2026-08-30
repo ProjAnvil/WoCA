@@ -10,7 +10,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -24,6 +23,7 @@ import (
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/webfx"
 	"github.com/spf13/cobra"
 )
 
@@ -81,28 +81,24 @@ func main() {
 			if err := svc.AttachNacos(cmd.Context(), nacosBase); err != nil {
 				return err
 			}
-			handler := svc.Handler()
+			// The webfx router owns the surface: request id + request log +
+			// recovery around the config plane's handler, with the obs
+			// probe plane (healthz/metrics) at the outermost edge when
+			// enabled. Shutdown rides the router's 3s grace.
+			router := webfx.New(webfx.Options{
+				Logger: log,
+				Addr:   addr,
+				Grace:  3 * time.Second,
+			})
+			router.UseDefaults()
+			router.Handle("/", svc.Handler())
 			if obsAddr != "" && obsAddr != "off" {
-				handler = obsInst.Wrap(handler)
+				router.SetWrap(obsInst.Wrap)
 			}
-			hs := &http.Server{Addr: addr, Handler: handler}
-			serveErr := make(chan error, 1)
-			go func() { serveErr <- hs.ListenAndServe() }()
-			fmt.Fprintf(os.Stderr, "woca-config: %s\n", addr)
-
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
-			select {
-			case err := <-serveErr:
-				if err == http.ErrServerClosed {
-					return nil
-				}
-				return err
-			case <-ctx.Done():
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				defer cancel()
-				return hs.Shutdown(shutdownCtx)
-			}
+			fmt.Fprintf(os.Stderr, "woca-config: %s\n", addr)
+			return router.Run(ctx)
 		},
 	}
 	root.Flags().StringVar(&logLevel, "log-level", "info", "debug | info | warn | error")
