@@ -9,6 +9,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -18,9 +20,14 @@ import (
 	"github.com/projanvil/woca/native-client/internal/bridgeproc"
 )
 
-// embeddedBridgeVersion keys the install-on-first-run upgrade check; tie
-// it to the client build when the release pipeline bundles the artifact.
-const embeddedBridgeVersion = "dev"
+// embeddedBridgeVersion keys the install-on-first-run upgrade check. It
+// is the content digest of the bundled binary, so every restaged build
+// (a rebuilt woca-bridge with new behavior) replaces the installed copy —
+// a constant string silently kept running the previous binary.
+func embeddedBridgeVersion(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:6])
+}
 
 // setupEmbeddedBridge installs+starts the bundled bridge and adopts it as
 // the default profile on first run. Best-effort: a failure degrades to
@@ -34,11 +41,20 @@ func setupEmbeddedBridge(ctx context.Context, dataDir string, firstRun func(base
 	if err := os.WriteFile(src, data, 0o755); err != nil {
 		return nil, nil
 	}
-	bin, err := bridgeproc.Install(src, embeddedBridgeVersion)
+	bin, err := bridgeproc.Install(src, embeddedBridgeVersion(data))
 	if err != nil {
 		return nil, nil
 	}
-	mgr := bridgeproc.New(bin)
+	// Dev ergonomics: a fixed bridge port (WOCA_NATIVE_BRIDGE_ADDR) lets
+	// the vite dev server proxy /api at a known target — wails dev's HMR
+	// mode loads the SPA from vite, so the embedded server's own asset
+	// proxy is not in the loop. The flag is appended after the default
+	// --addr, and the later flag wins.
+	var extra []string
+	if addr := os.Getenv("WOCA_NATIVE_BRIDGE_ADDR"); addr != "" {
+		extra = []string{"--addr", addr}
+	}
+	mgr := bridgeproc.New(bin, extra...)
 	baseURL, err := mgr.Start(ctx)
 	if err != nil {
 		return nil, nil
