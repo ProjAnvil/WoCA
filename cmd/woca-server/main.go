@@ -35,6 +35,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/servefront"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/webfx"
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 )
@@ -126,9 +127,12 @@ func main() {
 				return
 			}
 			audit := func(event, subject, detail string) { gwStore.AuditEvent(context.Background(), event, subject, detail) }
-			mux := http.NewServeMux()
-			entrygw.NewRegistryHandler(gwStore).RegisterRoutes(mux)
-			mux.Handle("/gw/auth/", authcore.Handler(auth, audit))
+			// entrygw's route registrar is mux-typed, so the machine
+			// channel mounts on a stdlib mux delegated as a subtree
+			// (paths stay absolute); everything else is webfx.
+			gwMux := http.NewServeMux()
+			entrygw.NewRegistryHandler(gwStore).RegisterRoutes(gwMux)
+			gwMux.Handle("/gw/auth/", authcore.Handler(auth, audit))
 			console := opsconsole.New(st, gwStore, auth, tenantStore, log)
 			// Gateway-policy writes ride the config pack in the
 			// full-stack posture (nil = the direct dev console, which
@@ -136,21 +140,17 @@ func main() {
 			if base := nacosrt.ServerFromEnv(); base != "" {
 				console.AttachPublisher(nacosrt.NewClient(base))
 			}
-			mux.Handle("/", console.Handler())
+			router := webfx.New(webfx.Options{Logger: log, Grace: 3 * time.Second})
+			router.UseDefaults()
+			router.Handle("/gw/", gwMux)
+			router.Handle("/", console.Handler())
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
 				log.Error().Err(err).Str("addr", addr).Msg("woca-server: gateway listener failed")
 				return
 			}
-			hs := &http.Server{Addr: addr, Handler: mux}
 			go func() {
-				<-ctx.Done()
-				shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				defer cancel()
-				_ = hs.Shutdown(shutdownCtx)
-			}()
-			go func() {
-				if err := hs.Serve(ln); err != nil && err != http.ErrServerClosed {
+				if err := router.Serve(ctx, ln); err != nil {
 					log.Error().Err(err).Msg("woca-server: gateway listener stopped")
 				}
 			}()
