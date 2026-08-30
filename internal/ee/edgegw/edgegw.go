@@ -309,6 +309,16 @@ func (e *Edge) handleSelect(w http.ResponseWriter, r *http.Request) {
 		e.writeSelectionPage(w, r)
 		return
 	}
+	// A local-trust bridge must not be selected: its tunnel is closed by
+	// design and every client request would park into a 30s dead end.
+	if bridges, err := e.coreBridges(r.Context()); err == nil {
+		for _, b := range bridges {
+			if b.BridgeID == id && b.Tunnel != nil && !*b.Tunnel {
+				writeErr(w, http.StatusForbidden, "0003", "this bridge does not accept remote client traffic (local trust)")
+				return
+			}
+		}
+	}
 	// Secure follows the connection unless the operator forces it on:
 	// TLS terminates at a reverse proxy in the outsourced-edge shapes
 	// (CF Tunnel / Tailscale Funnel, design §5.4), where r.TLS is nil.
@@ -338,6 +348,16 @@ func (e *Edge) writeSelectionPage(w http.ResponseWriter, r *http.Request) {
 		status, css := "offline", "color:#8b93a1"
 		if b.Live {
 			status, css = "online", "color:#2fbf71"
+		}
+		// R1 made visible: a local-trust bridge never carries public
+		// client traffic — selectable bridges must have reported the
+		// tunnel capability as open. Unknown (never reported) stays
+		// selectable for pre-upgrade compatibility.
+		if b.Tunnel != nil && !*b.Tunnel {
+			fmt.Fprintf(&rows,
+				`<li><code>%s</code> <span style="color:#8b93a1">● %s — no tunnel (local trust)</span></li>`,
+				b.BridgeID, status)
+			continue
 		}
 		fmt.Fprintf(&rows,
 			`<li><a href="/edge/select?bridge=%s"><code>%s</code> <span style="%s">● %s</span></a></li>`,

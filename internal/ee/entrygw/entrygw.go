@@ -390,13 +390,17 @@ type BridgeInfo struct {
 	CreatedAt int64  `json:"created_at"`
 	LastSeen  int64  `json:"last_seen"`
 	Live      bool   `json:"live"`
+	// Tunnel reports the bridge's latest heartbeat capability bit
+	// (nil = never reported; false = local-trust, must not carry public
+	// client traffic). The edge's selection surface refuses false.
+	Tunnel *bool `json:"tunnel,omitempty"`
 }
 
 // ListBridges returns the registered, unrevoked bridges with heartbeat
 // freshness — the edge's selection inventory (v1.6 入口②).
 func (s *Store) ListBridges(_ context.Context) ([]BridgeInfo, error) {
 	rows, err := s.db.Query(`
-		SELECT b.id, b.created_at, COALESCE(h.at, 0)
+		SELECT b.id, b.created_at, COALESCE(h.at, 0), COALESCE(h.status, '')
 		FROM gw_bridges b LEFT JOIN gw_heartbeats h ON h.bridge_id = b.id
 		WHERE b.revoked_at IS NULL ORDER BY b.created_at`)
 	if err != nil {
@@ -407,10 +411,19 @@ func (s *Store) ListBridges(_ context.Context) ([]BridgeInfo, error) {
 	var out []BridgeInfo
 	for rows.Next() {
 		var b BridgeInfo
-		if err := rows.Scan(&b.BridgeID, &b.CreatedAt, &b.LastSeen); err != nil {
+		var status string
+		if err := rows.Scan(&b.BridgeID, &b.CreatedAt, &b.LastSeen, &status); err != nil {
 			return nil, err
 		}
 		b.Live = b.LastSeen != 0 && now-b.LastSeen < BridgeLiveAfter
+		if status != "" {
+			var beat struct {
+				Tunnel *bool `json:"tunnel"`
+			}
+			if json.Unmarshal([]byte(status), &beat) == nil && beat.Tunnel != nil {
+				b.Tunnel = beat.Tunnel
+			}
+		}
 		out = append(out, b)
 	}
 	return out, rows.Err()

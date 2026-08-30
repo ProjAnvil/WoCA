@@ -377,6 +377,18 @@ func (c *CloudAccess) start() {
 		OnPin:           onPin,
 	}, c.log)
 	gw.StatusFn = c.StatusFn
+	// The heartbeat payload always carries the tunnel capability (R1: a
+	// local-trust bridge never accepts public client traffic) — the edge's
+	// selection page refuses such bridges up front instead of letting
+	// clients park into a 30s dead end. TunnelGate is wired by the serve
+	// layer after start; the closure re-reads it on every beat.
+	if gw.StatusFn == nil {
+		gw.StatusFn = func() json.RawMessage {
+			open := c.TunnelGate != nil && c.TunnelGate()
+			b, _ := json.Marshal(map[string]bool{"tunnel": open})
+			return b
+		}
+	}
 	gw.Apply = func(kv map[string]string) error {
 		err := applyManaged(c.st, kv)
 		if errors.Is(err, ErrLayerViolation) && c.Audit != nil {
