@@ -249,18 +249,37 @@ build-server:
 # arguments. Cross-compile for containers by overriding the toolchain env
 # (the build is CGO-free):
 #   GOOS=linux GOARCH=amd64 make woca-worker
-# `make dist-micro` produces every role's package.
+# `make dist-micro` produces every role's package. `make dist-linux`
+# produces the linux set consumed by the compose stacks and
+# `make dist-images` (docker on the same host); override GOARCH for
+# foreign servers, e.g. GOARCH=amd64 make dist-images.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 DIST_GOOS ?= $(shell go env GOOS)
 DIST_GOARCH ?= $(shell go env GOARCH)
 DIST_EXE := $(if $(filter windows,$(DIST_GOOS)),.exe,)
-.PHONY: $(SERVER_ARTIFACTS) dist-micro dist-role
+.PHONY: $(SERVER_ARTIFACTS) dist-micro dist-role dist-linux dist-images
 $(SERVER_ARTIFACTS):
 	@$(MAKE) --no-print-directory dist-role ROLE=$@
 
 dist-micro:
 	@for r in $(SERVER_ARTIFACTS); do \
 		$(MAKE) --no-print-directory dist-role ROLE=$$r || exit 1; \
+	done
+
+dist-linux:
+	@for r in $(SERVER_ARTIFACTS); do \
+		GOOS=linux GOARCH=$(DIST_GOARCH) $(MAKE) --no-print-directory dist-role ROLE=$$r || exit 1; \
+	done
+
+# Bake every role package into a local image (woca-<role>:local) through
+# the shared deploy/micro/Dockerfile. Tag and push for the Terraform/ECR
+# flow: see deploy/terraform/aws/README.md.
+dist-images: dist-linux
+	@for r in $(SERVER_ARTIFACTS); do \
+		docker build -q -t $$r:local \
+			-f build/dist/Dockerfile --build-arg ROLE_PKG=$$r.tar.gz \
+			build/dist || exit 1; \
+		echo "image: $$r:local"; \
 	done
 
 dist-role:
@@ -281,7 +300,9 @@ dist-role:
 	tar -czf "$$out.tar.gz" -C "$$stage" "$(ROLE)"; \
 	shasum -a 256 "$$out.tar.gz" | tee "$$out.tar.gz.sha256"; \
 	rm -rf "$$stage"; \
-	echo "dist: $$out.tar.gz"
+	cp "$$out.tar.gz" "build/dist/$(ROLE).tar.gz"; \
+	cp deploy/micro/Dockerfile build/dist/Dockerfile; \
+	echo "dist: $$out.tar.gz (alias: build/dist/$(ROLE).tar.gz)"
 
 # Dependency hygiene: server artifacts must not link the interactive
 # surfaces (TUI, REPL) or the one-shot CLI's root command wiring.

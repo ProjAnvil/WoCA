@@ -61,8 +61,10 @@ services:
     image: woca-server:edge-dev
     container_name: woca-edge-dev-server
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.server
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-server.tar.gz
     command: ["serve", "--addr", ":8080", "--auth", "apikey"]
     environment:
       WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@pg:5432/woca?sslmode=disable"
@@ -102,8 +104,10 @@ services:
     image: woca-ops:edge-dev
     container_name: woca-edge-dev-ops
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.ops
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-ops.tar.gz
     environment:
       WOCA_OPS_ADDR: ":8091"
       WOCA_OPS_UPSTREAM: "http://server:8090"
@@ -123,8 +127,11 @@ services:
     image: woca-config:edge-dev
     container_name: woca-edge-dev-config
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.config
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-config.tar.gz
+    command: ["--addr", ":8080"]
     environment:
       WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@pg:5432/woca?sslmode=disable"
       WOCA_NACOS_URL: "http://nacos:8848"
@@ -164,8 +171,11 @@ services:
     image: woca-tenant:edge-dev
     container_name: woca-edge-dev-tenant
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.tenant
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-tenant.tar.gz
+    entrypoint: ["sh", "-c", "echo 'woca-tenant: use docker exec to run commands' && sleep infinity"]
     environment:
       WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@pg:5432/woca?sslmode=disable"
       WOCA_HOME: /var/lib/woca/home
@@ -182,8 +192,11 @@ services:
     image: woca-edge:edge-dev
     container_name: woca-edge-dev-edge
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.edge
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-edge.tar.gz
+    command: ["--addr", ":8080"]
     environment:
       WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_SERVICE_URL: http://server:8090

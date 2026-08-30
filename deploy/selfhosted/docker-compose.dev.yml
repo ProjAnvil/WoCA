@@ -6,14 +6,14 @@
 # observability stack. Built for development 联调: fast to start, cheap to
 # throw away, ports identical to full so the two are drop-in replacements.
 #
-#   full (unchanged)                     dev (this file)
-#   ────────────────────────────────     ─────────────────────────────
-#   pg-primary + pg-replica              pg ×1
-#   nats-js ×3 (R3 streams)              nats ×1 (R1 streams)
-#   woca-server ×2 / worker ×2           server ×1 / worker ×1
-#   ladym-api ×2 + worker                ladym-api ×1 + worker
-#   firewall one-shot (DOCKER-USER)      —
-#   observability overlay (§12.3)        —
+# The full stack's five-zone model (dmz/app/data/infra/mgmt — see
+# docker-compose.full.yml, kept 1:1 with the Terraform reference) is
+# deliberately FLATTENED here: one network, every service on it. Dev is a
+# 联调 harness, not a threat model — the zone split buys nothing at this
+# scale and costs a wall of network boilerplate. What still mirrors full:
+# the service inventory (one of each role), the nacos-addressed trace
+# bridge (woca-collector + Langfuse via `make dev-langfuse`), the host
+# ports, and the data model.
 #
 # Volumes are dev-owned (woca-dev-*): dev data never touches full's.
 # Lifecycle: `make dev-up` / `make dev-down`. The full stack must be down
@@ -46,7 +46,7 @@ services:
       - woca-pg-primary-data:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d:ro
     networks:
-      - woca-pg
+      - woca
 
   # ─────────────────────── NATS JetStream (segment: mq) ───────────────────
   nats-js-1:
@@ -70,7 +70,7 @@ services:
     volumes:
       - nats-js-1-data:/data
     networks:
-      - woca-mq
+      - woca
 
   # One-shot: the same platform streams as full, single-node (R1).
   nats-init:
@@ -99,7 +99,7 @@ services:
         echo "woca-dev JetStream streams ready"
     restart: "no"
     networks:
-      - woca-mq
+      - woca
 
   # ─────────────────────────── gateway (L1, edge) ──────────────────────────
   gateway:
@@ -121,17 +121,18 @@ services:
     volumes:
       - ./gateway/nginx-dev.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - woca-edge
-      - ladym-data
-      - woca-mgmt
+      - woca
 
   # ─────────────────── woca roles (stateless, edge) ──────────────────────
   woca-server-1:
     image: woca-server:local
     container_name: woca-dev-server-1
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.server
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-server.tar.gz
+    command: ["serve", "--addr", ":8080"]
     environment:
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_NACOS_URL: "http://nacos:8848"
@@ -153,6 +154,12 @@ services:
       # gateway posture is seeded by the SERVER role (it owns the
       # registry), not the config plane.
       WOCA_INSECURE_BRIDGES: "1"
+      # Telemetry (§12.2 env layer): the trace bridge address resolved
+      # from the registry at startup, exactly like WOCA_DB — LLM/session
+      # spans land in Langfuse when its profile is on, the bridge drops
+      # them otherwise.
+      WOCA_SERVICE_NAME: woca-dev-server-1
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
     volumes:
       - woca-sessions:/var/lib/woca/sessions
       - woca-crypto:/var/lib/woca/home
@@ -167,11 +174,7 @@ services:
       woca-pg-primary: { condition: service_healthy }
       nacos-init: { condition: service_completed_successfully }
     networks:
-      - woca-edge
-      - woca-pg
-      - ladym-data
-      - woca-mq
-      - woca-mgmt
+      - woca
 
   # The console as its own service (v1.7 §6.7, split). The dev stack uses
   # the direct assembly: the console runs self-contained over the shared
@@ -181,8 +184,10 @@ services:
     image: woca-ops:dev
     container_name: woca-dev-ops
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.ops
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-ops.tar.gz
     environment:
       WOCA_OPS_ADDR: ":8091"
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
@@ -202,21 +207,27 @@ services:
     ports:
       - "127.0.0.1:${DEV_OPS_PORT:-9091}:8091"
     networks:
-      - woca-mgmt
-      - woca-pg
+      - woca
 
   woca-worker-1:
     image: woca-worker:local
     container_name: woca-dev-worker-1
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.worker
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-worker.tar.gz
     environment:
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_OBS_ADDR: ":9091"
       WOCA_SESSION_DIR: "/var/lib/woca/sessions"
       WOCA_HOME: "/var/lib/woca/home"
+      # Same registry-resolved trace bridge as woca-server-1 — the worker
+      # is where runs execute, so this is where LLM/session spans
+      # originate.
+      WOCA_SERVICE_NAME: woca-dev-worker-1
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
     volumes:
       - woca-sessions:/var/lib/woca/sessions
       - woca-crypto:/var/lib/woca/home
@@ -231,11 +242,7 @@ services:
       woca-pg-primary: { condition: service_healthy }
       nacos-init: { condition: service_completed_successfully }
     networks:
-      - woca-edge
-      - woca-pg
-      - ladym-data
-      - woca-mq
-      - woca-mgmt
+      - woca
 
   # Config plane (design §16): settings management + its console (woca
   # settings domains only — tenant/bridge governance lives on the server
@@ -246,8 +253,11 @@ services:
     image: woca-config:local
     container_name: woca-dev-config
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.config
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-config.tar.gz
+    command: ["--addr", ":8080"]
     restart: unless-stopped
     depends_on:
       woca-pg-primary: { condition: service_healthy }
@@ -268,10 +278,7 @@ services:
       retries: 12
       start_period: 10s
     networks:
-      - woca-edge
-      - woca-mgmt
-      - woca-pg
-      - woca-mq
+      - woca
     volumes:
       - woca-crypto:/var/lib/woca/home
 
@@ -282,8 +289,11 @@ services:
     image: woca-edge:local
     container_name: woca-dev-edge
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.edge
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-edge.tar.gz
+    command: ["--addr", ":8080"]
     restart: unless-stopped
     depends_on:
       woca-server-1: { condition: service_started }
@@ -303,8 +313,7 @@ services:
     ports:
       - "${ENT_EDGE_PORT:-8453}:8080"
     networks:
-      - woca-edge
-      - woca-mgmt
+      - woca
 
   # Admin toolbox: tenant/key commands via `docker exec woca-dev-tenant`
   # (business-plane API keys; the config console itself no longer uses keys).
@@ -312,8 +321,11 @@ services:
     image: woca-tenant:local
     container_name: woca-dev-tenant
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.tenant
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-tenant.tar.gz
+    entrypoint: ["sh", "-c", "echo 'woca-tenant: use docker exec to run commands' && sleep infinity"]
     restart: unless-stopped
     depends_on:
       woca-pg-primary: { condition: service_healthy }
@@ -321,9 +333,7 @@ services:
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_HOME: "/var/lib/woca/home"
     networks:
-      - woca-mgmt
-      - woca-pg
-      - woca-mq
+      - woca
     volumes:
       - woca-crypto:/var/lib/woca/home
 
@@ -338,8 +348,11 @@ services:
     container_name: woca-dev-bridge
     profiles: ["bridge"]
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.bridge-dev
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-bridge.tar.gz
+    command: ["serve", "--addr", "0.0.0.0:8080", "--auth", "apikey"]
     restart: unless-stopped
     ports:
       # The bridge serves the same SPA as woca web (design D1) — open
@@ -370,13 +383,7 @@ services:
       retries: 12
       start_period: 10s
     networks:
-      - woca-edge
-      # Data-plane reachability for the config-delivered storage/memory
-      # domain (checkpoint/memory postgres + the remote ladyM service):
-      # the coordinates the config console delivers must resolve from the
-      # bridge. Control-plane traffic still goes through the edge only.
-      - woca-pg
-      - ladym-data
+      - woca
 
   # ─────────────────── ladyM (minimal: one api + worker) ──────────────────
   # Same dict-baked image as the full stack: the operator-built base
@@ -400,7 +407,7 @@ services:
     volumes:
       - ladym-pg-data:/var/lib/postgresql/data
     networks:
-      - ladym-data
+      - woca
 
   ladym-api:
     image: ladym-enterprise:local-dict
@@ -418,7 +425,7 @@ services:
       LADYM_STORE_DSN: "postgres://ladym:${LADYM_PG_PASSWORD}@ladym-pg:5432/ladym"
     restart: unless-stopped
     networks:
-      - ladym-data
+      - woca
 
   ladym-worker:
     image: ladym-enterprise:local-dict
@@ -437,7 +444,7 @@ services:
     command: ["worker"]
     restart: unless-stopped
     networks:
-      - ladym-data
+      - woca
 
   # ─────────────────── nacos: discovery + config delivery ────────────────
   # Same posture as the full stack: the registry carries the service
@@ -457,7 +464,7 @@ services:
       start_period: 15s
     restart: unless-stopped
     networks:
-      - woca-mgmt
+      - woca
 
   nacos-init:
     image: curlimages/curl:8.10.1
@@ -486,36 +493,231 @@ services:
         publish woca-ops.upstream "http://woca-server-1:8090"
         publish woca-edge.service "http://woca-server-1:8090"
         publish woca-edge.config "http://woca-config:8080"
+        publish woca-obs.otlp "http://woca-collector:4318"
         publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
         echo "nacos entries ready"
     restart: "no"
     networks:
-      - woca-mgmt
+      - woca
 
+  # ─────────────── Langfuse (profile: langfuse) ───────────────────────────
+  # LLM tracing for dev 联调: the same Langfuse v4 group as the full
+  # stack's infra zone (see docker-compose.full.yml) — web + worker over
+  # their own PostgreSQL, ClickHouse, Redis and MinIO. Opt in with `make
+  # dev-langfuse`; everything is dev-defaulted (fixed keys/passwords,
+  # woca-dev-* volumes). The roles' spans already flow to the always-on
+  # woca-collector bridge; with this profile off the bridge drops them,
+  # plain dev-up stays otherwise identical.
+  langfuse-pg:
+    image: postgres:17-alpine
+    container_name: woca-dev-langfuse-pg
+    profiles: ["langfuse"]
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_PG_PASSWORD:-woca-dev-langfuse-pg}
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    volumes:
+      - langfuse-pg-data:/var/lib/postgresql/data
+    networks:
+      - woca
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:25.12
+    container_name: woca-dev-langfuse-clickhouse
+    profiles: ["langfuse"]
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-woca-dev-langfuse-ch}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+    restart: unless-stopped
+    volumes:
+      - langfuse-clickhouse-data:/var/lib/clickhouse
+      - langfuse-clickhouse-logs:/var/log/clickhouse-server
+    networks:
+      - woca
+
+  langfuse-redis:
+    image: redis:7-alpine
+    container_name: woca-dev-langfuse-redis
+    profiles: ["langfuse"]
+    command:
+      - redis-server
+      - --requirepass
+      - ${LANGFUSE_REDIS_AUTH:-woca-dev-langfuse-redis}
+      - --maxmemory-policy
+      - noeviction
+    environment:
+      # For the healthcheck below ($$ = compose escape, shell-side value).
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:-woca-dev-langfuse-redis}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_AUTH\" ping | grep -q PONG"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    volumes:
+      - langfuse-redis-data:/data
+    networks:
+      - woca
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    container_name: woca-dev-langfuse-minio
+    profiles: ["langfuse"]
+    entrypoint: sh
+    command:
+      - -c
+      - mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_ROOT_USER:-langfuse}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD:-woca-dev-langfuse-minio}
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+    restart: unless-stopped
+    volumes:
+      - langfuse-minio-data:/data
+    # Browser-facing blob endpoint for the Langfuse UI's media uploads:
+    # published on all interfaces (the UI is served to ops the same way).
+    ports:
+      - "${DEV_LANGFUSE_MINIO_PORT:-9090}:9000"
+    networks:
+      - woca
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4.24.0
+    container_name: woca-dev-langfuse-web
+    profiles: ["langfuse"]
+    depends_on: &langfuse-depends-on
+      langfuse-pg: { condition: service_healthy }
+      langfuse-clickhouse: { condition: service_healthy }
+      langfuse-redis: { condition: service_healthy }
+      langfuse-minio: { condition: service_healthy }
+    environment: &langfuse-env
+      # Next.js standalone binds to $HOSTNAME — Docker injects the
+      # container id, which resolves to a single interface; pin the
+      # wildcard so the in-container loopback healthcheck sees the port.
+      HOSTNAME: 0.0.0.0
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_PG_PASSWORD:-woca-dev-langfuse-pg}@langfuse-pg:5432/langfuse
+      # Dev posture: fixed secrets (the full stack demands real ones in
+      # .env); no upstream telemetry.
+      SALT: ${LANGFUSE_SALT:-woca-dev-langfuse-salt}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-eb2016df8cf11b0ad8e563d8904b97864c03c514ca69d79406b5108d3827cddd}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:-woca-dev-langfuse-ch}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-langfuse}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:-woca-dev-langfuse-minio}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-langfuse}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:-woca-dev-langfuse-minio}
+      # The browser-reachable MinIO address (media upload bypasses web).
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: ${LANGFUSE_MINIO_EXTERNAL_ENDPOINT:-http://localhost:9090}
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:-woca-dev-langfuse-redis}
+      # Deterministic bootstrap (same defaults as the full stack): the
+      # seeded project keys match LANGFUSE_OTLP_AUTH below.
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-woca-dev-langfuse-nextauth}
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-woca-org}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-woca}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-woca-project}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-woca}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-pk-lf-woca-local}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-sk-lf-woca-local}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@woca.local}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-woca admin}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-woca-langfuse-admin}
+    restart: unless-stopped
+    ports:
+      # Ops-facing UI: published on all interfaces like the official
+      # upstream compose (3000 = the only app port meant for humans).
+      # Reach Langfuse from another machine over this port by also
+      # pointing LANGFUSE_NEXTAUTH_URL at the reachable host.
+      - "${DEV_LANGFUSE_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/public/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - woca
+
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4.24.0
+    container_name: woca-dev-langfuse-worker
+    profiles: ["langfuse"]
+    depends_on: *langfuse-depends-on
+    environment:
+      <<: *langfuse-env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3030/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - woca
+
+  # ─────────────── woca-collector: the trace bridge ──────────────────────
+  # Always on (deploy/collector/): the roles push credential-less OTLP
+  # here (the nacos entry woca-obs.otlp points at it — resolved at startup
+  # like WOCA_DB), the bridge owns the Langfuse path + Basic auth and the
+  # session.id tag mapping. With the langfuse profile off, exports fail
+  # fast and drop — plain dev-up carries no tracing dependencies beyond
+  # this lightweight hop. On the flat network, like everything else in
+  # dev.
+  woca-collector:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.136.0
+    container_name: woca-dev-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      LANGFUSE_OTLP_AUTH: ${LANGFUSE_OTLP_AUTH:-Basic cGstbGYtd29jYS1sb2NhbDpzay1sZi13b2NhLWxvY2Fs}
+    volumes:
+      - ../collector/config-dev.yaml:/etc/otelcol/config.yaml:ro
+    restart: unless-stopped
+    networks:
+      - woca
 networks:
-  # Distinct names + subnets from full (172.28.x): a stale full container
+  # One flat network: the five-zone model is full's job, not dev's.
+  # Distinct name + subnet from full's zones, so a stale full container
   # cannot silently collide with dev networking.
-  woca-edge:
-    name: woca-dev-edge
+  woca:
+    name: woca-dev-net
     ipam:
-      config: [{ subnet: 172.28.130.0/24 }]
-  woca-pg:
-    name: woca-dev-pg
-    ipam:
-      config: [{ subnet: 172.28.110.0/24 }]
-  woca-mq:
-    name: woca-dev-mq
-    ipam:
-      config: [{ subnet: 172.28.120.0/24 }]
-  ladym-data:
-    name: woca-dev-ladym
-    ipam:
-      config: [{ subnet: 172.29.110.0/24 }]
-  # Management plane: the registry (nacos) and the consoles.
-  woca-mgmt:
-    name: woca-dev-mgmt
-    ipam:
-      config: [{ subnet: 172.28.140.0/24 }]
+      config: [{ subnet: 172.28.190.0/24 }]
 
 volumes:
   woca-sessions:
@@ -532,3 +734,13 @@ volumes:
     name: woca-dev-nats
   ladym-pg-data:
     name: woca-dev-ladym-pg
+  langfuse-pg-data:
+    name: woca-dev-langfuse-pg
+  langfuse-clickhouse-data:
+    name: woca-dev-langfuse-clickhouse
+  langfuse-clickhouse-logs:
+    name: woca-dev-langfuse-clickhouse-logs
+  langfuse-redis-data:
+    name: woca-dev-langfuse-redis
+  langfuse-minio-data:
+    name: woca-dev-langfuse-minio

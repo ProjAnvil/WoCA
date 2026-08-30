@@ -1,13 +1,13 @@
-#!/usr/bin/env bash
-# stop.sh — stop the @ROLE@ service started by start.sh.
+#!/bin/sh
+# stop.sh — stop the @ROLE@ service started by start.sh. POSIX sh.
 #
 # Order of responsibility: the pid file first (SIGTERM, wait up to
 # STOP_TIMEOUT — default 45s, covering the edge role's 40s SSE grace —
 # then SIGKILL). When the pid file is missing or its pid is no longer
 # alive, fall back to searching for the binary by name (pgrep), so a
 # wiped pid file never leaves an orphan process behind.
-set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+set -eu
+cd "$(dirname "$0")"
 
 SERVICE="@ROLE@"
 BIN="$PWD/$SERVICE"
@@ -15,7 +15,6 @@ PID_FILE="$PWD/$SERVICE.pid"
 STOP_TIMEOUT="${STOP_TIMEOUT:-45}"
 
 term_wait() { # pid... — SIGTERM, wait, then SIGKILL
-    local pid waited
     for pid in "$@"; do
         kill -TERM "$pid" 2>/dev/null || continue
         waited=0
@@ -51,4 +50,5 @@ if [ -z "$pids" ]; then
     echo "$SERVICE: not running"
     exit 0
 fi
+# shellcheck disable=SC2086
 term_wait $pids

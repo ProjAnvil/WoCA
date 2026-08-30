@@ -32,9 +32,9 @@ deployments (see `deploy/observability/README.md`).
 ## Deploy
 
 ```sh
-# images are built from the repo root (adjust the tag/registry):
-docker build -f deploy/selfhosted/Dockerfile.server -t woca-server:local .
-docker build -f deploy/selfhosted/Dockerfile.worker -t woca-worker:local .
+# images are baked from the per-role distribution packages (adjust tags):
+make dist-images   # woca-server:local, woca-worker:local, ... from the
+                   # make <role> tar packages (deploy/micro/README.md)
 # load into your cluster (kind):
 kind load docker-image woca-server:local woca-worker:local
 

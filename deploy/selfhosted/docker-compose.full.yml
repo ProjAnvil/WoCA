@@ -1,27 +1,28 @@
-# woca-enterprise: full microservices deployment (design doc §4/§5.3/§6.3)
+# woca-enterprise: full microservices deployment (design §4/§5.3/§6.3)
 #
-# Combines the woca microservice roles with ladyM enterprise and the shared
-# data plane, segmented per component class. Mirrors the Kubernetes topology
-# of deploy/k8s/: service-addressing by DNS, every long-running service with
-# a healthcheck and a restart policy, cross-segment traffic denied at the
-# Docker firewall, and the only host entry being the gateway.
+# Zone-first network model, kept 1:1 with the Terraform reference
+# (deploy/terraform/aws — five zones: dmz / app / data / infra / mgmt).
+# Every zone is one compose network; dual-homed services carry one
+# interface per zone; the firewall one-shot drops cross-zone forwarding
+# (everything legal stays intra-zone on a shared leg); the only host
+# entry is the gateway.
 #
-# Topology (design §5.3):
+#   dmz  172.28.30.0/24   gateway (nginx) — the public half of the edge
+#   app  172.28.32.0/24   woca-server ×2, woca-worker ×2, woca-tenant
+#   data 172.28.10.0/24   woca-pg-primary + hot-standby
+#   infra 172.28.20.0/24  the platform substrate: NATS ×3, ladyM, nacos,
+#                         woca-collector (trace bridge) + Langfuse (LLM
+#                         tracing) — the former obs/mq/ladym segments
+#                         folded in, exactly like the Terraform mapping
+#   mgmt 172.28.50.0/24   the consoles only (woca-config, woca-ops)
 #
-#   host (via gateway only)      edge 172.28.30.0/24        data segments
-#   ─────────────────────►  gateway (nginx, L1) ───►  pg   172.28.10.0/24
-#      :8080 business entry        │                     pg-primary + hot-standby
-#      :9082 skill-svc SPA         ├── woca-server ×2  mq  172.28.20.0/24
-#      :9083 component discovery   ├── woca-worker ×2      nats-js-1/2/3 (JetStream R3)
-#                                  └── woca-tenant (CLI, business-plane keys)
-#      :9091 tenant ops console (v1.7 §6.7: tenants & keys, enrollment,
-#            audit — server-1 loopback publish; multi-tenancy grows this
-#            console, it does not get a second one)
-#                                 ladym 172.29.10.0/24   obs 172.28.40.0/24
-#   mgmt (nacos + the consoles)   mgmt  172.28.50.0/24 — roles attach an
-#                                 interface for registry + delivery
-#      :8085 Grafana (obs overlay)   ladym-pg / api ×2      (deploy/observability
-#                                    / worker               docker-compose.observability.yml)
+# Two rulings carried over from the Terraform side:
+#   - dmz/app split: the business roles never share a segment with the
+#     public gateway; the only dmz→app flows are the gateway's proxy
+#     targets (:8080/:8090).
+#   - nacos rides infra (not mgmt): nacosrt is a hard startup gate for
+#     every role — runtime infrastructure, not a management surface — so
+#     an mgmt outage never blocks role restarts/scale-outs.
 #
 # Roles (§5.1 artifact matrix):
 #   - woca-server  ×2  L1+L2 modular-monolith role (auth, routing, sessions,
@@ -29,6 +30,8 @@
 #   - woca-worker  ×2  L3 execution role (claims queued runs; probe port 9091)
 #   - woca-tenant  ×1  admin toolbox (`docker exec` for tenant/key commands)
 #   - gateway      ×1  nginx: TLS-less edge proxy, the only published ports
+#                      (incl. :3000 = the Langfuse ops UI, reverse-proxied
+#                      to infra)
 #
 # Database physical isolation (§6.3.3): woca-pg (OLTP) ≠ ladym-pg (pgvector),
 # independent fault domains, no cross-database joins.
@@ -39,7 +42,7 @@
 name: woca-enterprise-full
 
 services:
-  # ─────────────────────── PostgreSQL (segment: pg) ───────────────────────
+  # ─────────────────────── PostgreSQL (zone: data) ────────────────────────
   woca-pg-primary:
     image: postgres:16-alpine
     container_name: woca-ent-pg-primary
@@ -68,7 +71,7 @@ services:
       - woca-pg-primary-data:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d:ro
     networks:
-      - woca-pg
+      - woca-data
 
   # Hot-standby replica: the shared init script base-backs-up an empty
   # PGDATA (slot woca_replica) and hands off to the stock entrypoint as the
@@ -92,9 +95,9 @@ services:
       - woca-pg-replica-data:/var/lib/postgresql/data
       - ./pg/init-replica.sh:/usr/local/bin/init-replica.sh:ro
     networks:
-      - woca-pg
+      - woca-data
 
-  # ─────────────────────── NATS JetStream (segment: mq) ───────────────────
+  # ─────────────────────── NATS JetStream (zone: infra) ────────────────────
   # Client port 4222, cluster port 6222, monitoring 8222 (healthcheck).
   nats-js-1: &nats
     image: nats:2.11-alpine
@@ -123,7 +126,7 @@ services:
     volumes:
       - nats-js-1-data:/data
     networks:
-      - woca-mq
+      - woca-infra
 
   nats-js-2:
     <<: *nats
@@ -198,7 +201,30 @@ services:
         echo "woca-enterprise JetStream streams ready"
     restart: "no"
     networks:
-      - woca-mq
+      - woca-infra
+
+  # ─────────────── woca-collector: the trace bridge ────────────────────────
+  # The single ingestion point for role telemetry (deploy/collector/): the
+  # roles push credential-less OTLP over their existing mgmt leg (the
+  # nacos entry woca-obs.otlp below points here), this bridge owns the
+  # Langfuse path + Basic auth and fans traces out to langfuse-web and the
+  # obs overlay's collector (Jaeger/Prometheus; dropped when the overlay
+  # is off). Dual-homed mgmt+obs: receive on mgmt, export on obs — no
+  # cross-segment forwarding, the DOCKER-USER isolation rules keep
+  # applying to everyone else.
+  woca-collector:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.136.0
+    container_name: woca-ent-collector
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      # "Basic " + base64 of the bootstrap project key pair; matches the
+      # LANGFUSE_INIT_PROJECT_*_KEY defaults (see langfuse-web below).
+      LANGFUSE_OTLP_AUTH: ${LANGFUSE_OTLP_AUTH:-Basic cGstbGYtd29jYS1sb2NhbDpzay1sZi13b2NhLWxvY2Fs}
+    volumes:
+      - ../collector/config-full.yaml:/etc/otelcol/config.yaml:ro
+    restart: unless-stopped
+    networks:
+      - woca-infra
 
   # ─────────────── cross-segment isolation (DOCKER-USER) ──────────────────
   # Recent Docker networking stacks no longer isolate inter-network traffic
@@ -226,7 +252,7 @@ services:
       start_period: 15s
     restart: unless-stopped
     networks:
-      - woca-mgmt
+      - woca-infra
 
   # One-shot: publish the stack's service addresses as config entries.
   # Re-running is idempotent (same values republished). Entries:
@@ -260,13 +286,16 @@ services:
         }
         publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
         publish woca-ops.upstream "http://woca-server-1:8090"
+        # The trace bridge every role pushes telemetry at (resolved from
+        # WOCA_OTEL_EXPORTER_OTLP_ENDPOINT like a WOCA_DB reference).
+        publish woca-obs.otlp "http://woca-collector:4318"
         # The empty bootstrap config pack: roles refuse to start without
         # a deliverable pack, so it exists before any console write.
         publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
         echo "nacos service addresses ready"
     restart: "no"
     networks:
-      - woca-mgmt
+      - woca-infra
 
   firewall:
     image: alpine:3.22
@@ -287,35 +316,18 @@ services:
         set -e
         iptables -N WOCA-ENT-ISOLATION 2>/dev/null || true
         iptables -F WOCA-ENT-ISOLATION
-        for pair in \
-            "172.28.30.0/24 172.28.10.0/24" \
-            "172.28.30.0/24 172.28.20.0/24" \
-            "172.28.30.0/24 172.29.10.0/24" \
-            "172.28.30.0/24 172.28.40.0/24" \
-            "172.28.10.0/24 172.28.30.0/24" \
-            "172.28.10.0/24 172.28.20.0/24" \
-            "172.28.10.0/24 172.29.10.0/24" \
-            "172.28.10.0/24 172.28.40.0/24" \
-            "172.28.20.0/24 172.28.30.0/24" \
-            "172.28.20.0/24 172.28.10.0/24" \
-            "172.28.20.0/24 172.29.10.0/24" \
-            "172.28.20.0/24 172.28.40.0/24" \
-            "172.29.10.0/24 172.28.30.0/24" \
-            "172.29.10.0/24 172.28.10.0/24" \
-            "172.29.10.0/24 172.28.20.0/24" \
-            "172.29.10.0/24 172.28.40.0/24" \
-            "172.28.40.0/24 172.28.30.0/24" \
-            "172.28.40.0/24 172.28.10.0/24" \
-            "172.28.40.0/24 172.28.20.0/24" \
-            "172.28.40.0/24 172.29.10.0/24" \
-            "172.28.40.0/24 172.28.50.0/24" \
-            "172.28.50.0/24 172.28.30.0/24" \
-            "172.28.50.0/24 172.28.10.0/24" \
-            "172.28.50.0/24 172.28.20.0/24" \
-            "172.28.50.0/24 172.29.10.0/24" \
-            "172.28.50.0/24 172.28.40.0/24"; do
-          set -- $$pair
-          iptables -A WOCA-ENT-ISOLATION -s $$1 -d $$2 -j DROP
+        # Five zones, every pair dropped both ways (the Terraform NACL
+        # matrix translated to DOCKER-USER): dmz 172.28.30, app 172.28.32,
+        # data 172.28.10, infra 172.28.20, mgmt 172.28.50. Legitimate
+        # flows never cross at the IP layer — dual-homed services reach
+        # peers over the zone they share.
+        ZONES="172.28.30.0/24 172.28.32.0/24 172.28.10.0/24 172.28.20.0/24 172.28.50.0/24"
+        for src in $$ZONES; do
+          for dst in $$ZONES; do
+            if [ "$$src" != "$$dst" ]; then
+              iptables -A WOCA-ENT-ISOLATION -s $$src -d $$dst -j DROP
+            fi
+          done
         done
         iptables -A WOCA-ENT-ISOLATION -j RETURN
         iptables -C DOCKER-USER -j WOCA-ENT-ISOLATION 2>/dev/null || \
@@ -345,11 +357,15 @@ services:
       - "${ENT_DISCOVERY_PORT:-9083}:8083"
       # Config console (design §16): the settings management plane
       - "${ENT_CONFIG_PORT:-9086}:8086"
+      # Langfuse ops UI (LLM tracing), reverse-proxied to the infra zone
+      - "${ENT_LANGFUSE_PORT:-3000}:3000"
     volumes:
       - ./gateway/nginx-full.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - woca-edge
-      - ladym-data
+      - woca-dmz
+      # Infra leg: ladyM stats (:8083 proxy targets) and the Langfuse
+      # ops UI (:3000 reverse proxy).
+      - woca-infra
       # Management-plane leg: the config console lives on woca-mgmt now.
       - woca-mgmt
 
@@ -358,8 +374,11 @@ services:
     image: woca-server:local
     container_name: woca-ent-server-1
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.server
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-server.tar.gz
+    command: ["serve", "--addr", ":8080"]
     environment: &woca-server-env
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_NACOS_URL: "http://nacos:8848"
@@ -375,6 +394,11 @@ services:
       # ladyM wiring is operator-owned settings now (config console,
       # design §16) — no WOCA_LADYM_* env here.
       WOCA_HOME: "/var/lib/woca/home"
+      # Telemetry (§12.2 env layer): the trace bridge address comes from
+      # the registry like the DSN — resolved once at startup. Traces are
+      # LLM/session reporting into Langfuse via woca-collector.
+      WOCA_SERVICE_NAME: woca-server-1
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
       # Tenant ops console (v1.7 §6.7) on the internal gateway listener —
       # org credentials, enrollments, audit. Console sign-in env rides the
       # shared pair below; the listener stays on the internal networks.
@@ -396,24 +420,20 @@ services:
       nacos-init: { condition: service_completed_successfully }
       woca-pg-primary: { condition: service_healthy }
     networks:
-      - woca-edge
-      - woca-pg
-      - ladym-data
-      # Message-plane leg (design §5.4): with msg-plane-mode pg+nats the
-      # gateway publishes dispatch notifications and the workers subscribe,
-      # so the execution roles need direct reach into the mq segment. The
-      # container holds an interface on the mq bridge itself — no
-      # cross-segment forwarding, so the DOCKER-USER isolation rules keep
-      # applying to everyone else.
-      - woca-mq
-      # Management leg: registry registration + pack delivery (nacos).
-      - woca-mgmt
+      - woca-app
+      - woca-data
+      # Infra leg (the compose 5-leg → 3 fold): NATS dispatch
+      # notifications, nacos registry/pack delivery, ladyM, and the
+      # woca-collector trace bridge all live on the infra zone now —
+      # one interface, no cross-zone forwarding.
+      - woca-infra
 
   woca-server-2:
     <<: *woca-server
     container_name: woca-ent-server-2
     environment:
       <<: *woca-server-env
+      WOCA_SERVICE_NAME: woca-server-2
     ports: []
 
   # The console UI as its own service (v1.7 §6.7, split): the SPA plus a
@@ -423,8 +443,10 @@ services:
     image: woca-ops:local
     container_name: woca-ent-ops
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.ops
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-ops.tar.gz
     environment:
       WOCA_OPS_ADDR: ":8091"
       WOCA_OPS_UPSTREAM: "nacos://nacos:8848/DEFAULT_GROUP/woca-ops.upstream"
@@ -439,18 +461,25 @@ services:
       nacos-init: { condition: service_completed_successfully }
     networks:
       - woca-mgmt
-      - woca-edge
+      - woca-app
 
   woca-worker-1: &woca-worker
     image: woca-worker:local
     container_name: woca-ent-worker-1
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.worker
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-worker.tar.gz
     environment: &woca-worker-env
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_OBS_ADDR: ":9091"
+      # Telemetry (§12.2 env layer): the trace bridge via the registry,
+      # same as the servers — the worker is where runs execute, so this
+      # is where LLM/session spans originate.
+      WOCA_SERVICE_NAME: woca-worker-1
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
       # Shared session transcripts (the same volume the servers mount), so
       # dispatched runs continue their session's history. WOCA_SANDBOX_*
       # would additionally route all tool execution to a sandbox service.
@@ -471,19 +500,17 @@ services:
       # The nacos entries must exist before the role resolves its DSN.
       nacos-init: { condition: service_completed_successfully }
     networks:
-      - woca-edge
-      - woca-pg
-      - ladym-data
-      # Message-plane leg: see the servers' note above.
-      - woca-mq
-      # Management leg: registry registration + pack delivery (nacos).
-      - woca-mgmt
+      - woca-app
+      - woca-data
+      # Infra leg: see the servers' note above.
+      - woca-infra
 
   woca-worker-2:
     <<: *woca-worker
     container_name: woca-ent-worker-2
     environment:
       <<: *woca-worker-env
+      WOCA_SERVICE_NAME: woca-worker-2
 
   # Config plane (design §16): the standalone settings management role —
   # settings API (read/write/export/import) + the embedded ops console
@@ -495,8 +522,11 @@ services:
     image: woca-config:local
     container_name: woca-ent-config
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.config
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-config.tar.gz
+    command: ["--addr", ":8080"]
     restart: unless-stopped
     depends_on:
       woca-pg-primary: { condition: service_healthy }
@@ -519,9 +549,9 @@ services:
       start_period: 10s
     networks:
       - woca-mgmt
-      - woca-pg
-      # Message-plane leg (design §16.7): tenant.dispatch wake-ups.
-      - woca-mq
+      - woca-data
+      # Infra leg: tenant.dispatch wake-ups (NATS) + the nacos registry.
+      - woca-infra
     volumes:
       - woca-crypto:/var/lib/woca/home
 
@@ -533,8 +563,11 @@ services:
     image: woca-tenant:local
     container_name: woca-ent-tenant
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.tenant
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-tenant.tar.gz
+    entrypoint: ["sh", "-c", "echo 'woca-tenant: use docker exec to run commands' && sleep infinity"]
     restart: unless-stopped
     depends_on:
       woca-pg-primary: { condition: service_healthy }
@@ -544,15 +577,19 @@ services:
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_HOME: "/var/lib/woca/home"
     networks:
-      - woca-edge
-      - woca-pg
-      # Tenant-plane notification leg (design §16.7): tenant mutations
-      # publish tenant.dispatch wake-ups over the message plane.
-      - woca-mq
+      - woca-app
+      - woca-data
+      # Infra leg: tenant.dispatch wake-ups (NATS) + the nacos registry
+      # (WOCA_DB resolves against nacos at startup).
+      - woca-infra
     volumes:
       - woca-crypto:/var/lib/woca/home
 
-  # ─────────────────── ladyM (physically isolated) ────────────────────────
+  # ─────────────────────── ladyM (zone: infra) ────────────────────────────
+  # Database physical isolation (§6.3.3) is instance-level: ladym-pg is
+  # its own PostgreSQL/pgvector with its own volume and fault domain — no
+  # cross-database joins with woca-pg. The former dedicated ladym network
+  # folded into the infra zone (Terraform parity).
   # ladyM services run the dict-baked image: the operator-built base
   # (ladym-enterprise:local, see README-FULL.md) plus the sha256-pinned CJK
   # segmentation dictionary at /opt/ladym/dict — CJK recall works out of
@@ -575,7 +612,7 @@ services:
     volumes:
       - ladym-pg-data:/var/lib/postgresql/data
     networks:
-      - ladym-data
+      - woca-infra
 
   # The image entrypoint is /ladym with subcommands `serve` (HTTP
   # data-plane, the image's default CMD) and `worker`.
@@ -595,7 +632,7 @@ services:
       LADYM_STORE_DSN: "postgres://ladym:${LADYM_PG_PASSWORD}@ladym-pg:5432/ladym"
     restart: unless-stopped
     networks:
-      - ladym-data
+      - woca-infra
 
   ladym-api-2:
     <<: *ladym-api
@@ -617,42 +654,226 @@ services:
     command: ["worker"]
     restart: unless-stopped
     networks:
-      - ladym-data
+      - woca-infra
+
+  # ─────────────── Langfuse (LLM tracing, zone: infra) ────────────────────
+  # Langfuse v4 self-host (github.com/langfuse/langfuse, docker-compose.yml
+  # of the upstream repo is the reference): web + worker over their own
+  # dependency set — PostgreSQL (metadata), ClickHouse (traces), Redis
+  # (queues), MinIO (blobs). Everything lives inside the observability
+  # segment next to the obs overlay's pipeline, so the DOCKER-USER rules
+  # isolate it from every other segment like the rest of obs.
+  #
+  # Trace wiring: the obs overlay's otel-collector fans OTLP traces out to
+  # langfuse-web's /api/public/otel endpoint (Basic auth via
+  # LANGFUSE_OTLP_AUTH — woca's exporter speaks credential-less OTLP, the
+  # collector adds the headers). LANGFUSE_INIT_* seeds the org, project,
+  # admin user and pins the project API keys on first boot, so the auth
+  # header default below matches the default keys.
+  langfuse-pg:
+    image: postgres:17-alpine
+    container_name: woca-ent-langfuse-pg
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_PG_PASSWORD:?set in .env}
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    volumes:
+      - langfuse-pg-data:/var/lib/postgresql/data
+    networks:
+      - woca-infra
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:25.12
+    container_name: woca-ent-langfuse-clickhouse
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?set in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+    restart: unless-stopped
+    volumes:
+      - langfuse-clickhouse-data:/var/lib/clickhouse
+      - langfuse-clickhouse-logs:/var/log/clickhouse-server
+    networks:
+      - woca-infra
+
+  langfuse-redis:
+    image: redis:7-alpine
+    container_name: woca-ent-langfuse-redis
+    command:
+      - redis-server
+      - --requirepass
+      - ${LANGFUSE_REDIS_AUTH:?set in .env}
+      - --maxmemory-policy
+      - noeviction
+    environment:
+      # For the healthcheck below ($$ = compose escape, shell-side value).
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:?set in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_AUTH\" ping | grep -q PONG"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+    volumes:
+      - langfuse-redis-data:/data
+    networks:
+      - woca-infra
+
+  # Blob storage (events overflow, media, exports): the bucket is created
+  # by the entrypoint before the server starts (upstream pattern).
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    container_name: woca-ent-langfuse-minio
+    entrypoint: sh
+    command:
+      - -c
+      - mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_ROOT_USER:-langfuse}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_ROOT_PASSWORD:?set in .env}
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+    restart: unless-stopped
+    volumes:
+      - langfuse-minio-data:/data
+    # Browser-facing blob endpoint (UI media upload): NOT published — the
+    # same ruling as the Terraform side (media upload through the DMZ is
+    # a later nginx location; not part of the ops surface).
+    networks:
+      - woca-infra
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4.24.0
+    container_name: woca-ent-langfuse-web
+    depends_on: &langfuse-depends-on
+      langfuse-pg: { condition: service_healthy }
+      langfuse-clickhouse: { condition: service_healthy }
+      langfuse-redis: { condition: service_healthy }
+      langfuse-minio: { condition: service_healthy }
+    environment: &langfuse-env
+      # Next.js standalone binds to $HOSTNAME — Docker injects the
+      # container id, which resolves to a single interface; pin the
+      # wildcard so the in-container loopback healthcheck sees the port.
+      HOSTNAME: 0.0.0.0
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_PG_PASSWORD:?set in .env}@langfuse-pg:5432/langfuse
+      SALT: ${LANGFUSE_SALT:?set in .env}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?set in .env}
+      # Private-deployment posture: no upstream telemetry.
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?set in .env}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-langfuse}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:?set in .env}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_ROOT_USER:-langfuse}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_ROOT_PASSWORD:?set in .env}
+      # The browser-reachable MinIO address (media upload bypasses web).
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: ${LANGFUSE_MINIO_EXTERNAL_ENDPOINT:-http://localhost:9090}
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: ${LANGFUSE_REDIS_AUTH:?set in .env}
+      # Deterministic bootstrap: org/project/admin user seeded on first
+      # boot with pinned API keys, so the collector's Basic auth default
+      # matches. Override the key pair in .env AND the LANGFUSE_OTLP_AUTH
+      # header together (printf 'pk:sk' | base64).
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?set in .env}
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-woca-org}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-woca}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-woca-project}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-woca}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-pk-lf-woca-local}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-sk-lf-woca-local}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@woca.local}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-woca admin}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-woca-langfuse-admin}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/public/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - woca-infra
+
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4.24.0
+    container_name: woca-ent-langfuse-worker
+    depends_on: *langfuse-depends-on
+    environment:
+      <<: *langfuse-env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3030/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - woca-infra
 
 networks:
-  # Edge: the stateless woca roles + the gateway; horizontally scalable.
-  woca-edge:
-    name: woca-ent-edge
+  # Five zones, 1:1 with the Terraform reference (deploy/terraform/aws):
+  # dmz = the public gateway half of the edge, app = the business half,
+  # data = OLTP storage, infra = the platform substrate (NATS + ladyM +
+  # nacos + trace bridge + Langfuse), mgmt = the consoles only.
+  woca-dmz:
+    name: woca-ent-dmz
     ipam:
       config: [{ subnet: 172.28.30.0/24 }]
 
-  # woca OLTP data plane: PG primary + hot-standby. The woca roles reach it
-  # through their pg-side interface (dual-homed), never across segments.
-  woca-pg:
-    name: woca-ent-pg
+  woca-app:
+    name: woca-ent-app
+    ipam:
+      config: [{ subnet: 172.28.32.0/24 }]
+
+  woca-data:
+    name: woca-ent-data
     ipam:
       config: [{ subnet: 172.28.10.0/24 }]
 
-  # Message plane: NATS JetStream cluster (future RunQueue/EventBus remote
-  # implementations; the PG queue serves until then, design §5.4).
-  woca-mq:
-    name: woca-ent-mq
+  woca-infra:
+    name: woca-ent-infra
     ipam:
       config: [{ subnet: 172.28.20.0/24 }]
 
-  # Management plane: the registry (nacos) and the consoles. The roles
-  # reach it over an mgmt-side interface (registration + pack delivery);
-  # nothing else crosses segments at the IP layer.
+  # Management zone: the consoles only. Roles never attach here (nacos
+  # rides infra), so an mgmt outage never blocks role restarts.
   woca-mgmt:
     name: woca-ent-mgmt
     ipam:
       config: [{ subnet: 172.28.50.0/24 }]
-
-  # ladyM data plane: physically isolated from woca data (§6.3.3).
-  ladym-data:
-    name: woca-ent-ladym
-    ipam:
-      config: [{ subnet: 172.29.10.0/24 }]
 
 volumes:
   woca-sessions:
@@ -671,3 +892,13 @@ volumes:
     name: woca-ent-full-nats-3
   ladym-pg-data:
     name: woca-ent-full-ladym-pg
+  langfuse-pg-data:
+    name: woca-ent-full-langfuse-pg
+  langfuse-clickhouse-data:
+    name: woca-ent-full-langfuse-clickhouse
+  langfuse-clickhouse-logs:
+    name: woca-ent-full-langfuse-clickhouse-logs
+  langfuse-redis-data:
+    name: woca-ent-full-langfuse-redis
+  langfuse-minio-data:
+    name: woca-ent-full-langfuse-minio

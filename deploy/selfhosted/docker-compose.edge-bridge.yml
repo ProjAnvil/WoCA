@@ -28,8 +28,11 @@ services:
     image: woca-bridge-dev:edge
     container_name: woca-edge-dev-bridge
     build:
-      context: ../..
-      dockerfile: deploy/selfhosted/Dockerfile.bridge-dev
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-bridge.tar.gz
+    command: ["serve", "--addr", "0.0.0.0:8080", "--auth", "apikey"]
     restart: unless-stopped
     ports:
       # The bridge's own SPA + web config page (direct entry ③).

@@ -8,6 +8,9 @@ services:
   woca-server:
     image: ${images["woca-server"]}
     container_name: woca-server
+    # The role images are baked from the make <role> packages; their
+    # start.sh entrypoint passes this through to the binary.
+    command: ["serve", "--addr", ":8080"]
     restart: unless-stopped
     ports:
       - "8080:8080" # business entry (gateway nginx upstream)
@@ -21,6 +24,11 @@ services:
       WOCA_SESSION_DIR: /var/lib/woca-data/sessions
       WOCA_HOME: /var/lib/woca/home
       WOCA_GW_ADDR: ":8090"
+      # Telemetry (§12.2 env layer): the trace bridge address resolves from
+      # the registry at startup like the DSN — LLM/session spans land in
+      # Langfuse via the infra node's woca-collector.
+      WOCA_SERVICE_NAME: woca-server
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "${nacos_url}/DEFAULT_GROUP/woca-obs.otlp"
       WOCA_CONSOLE_USER: $${WOCA_CONSOLE_USER:-}
       WOCA_CONSOLE_PASSWORD: $${WOCA_CONSOLE_PASSWORD:-}
     volumes:
@@ -43,6 +51,10 @@ services:
       WOCA_DB: "${nacos_url}/DEFAULT_GROUP/woca-db.dsn"
       WOCA_NACOS_URL: "${nacos_url}"
       WOCA_OBS_ADDR: ":9091"
+      # Same registry-resolved trace bridge as woca-server — the worker is
+      # where runs execute, so this is where LLM/session spans originate.
+      WOCA_SERVICE_NAME: woca-worker
+      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "${nacos_url}/DEFAULT_GROUP/woca-obs.otlp"
       WOCA_SESSION_DIR: /var/lib/woca-data/sessions
       WOCA_HOME: /var/lib/woca/home
     volumes:
@@ -60,6 +72,7 @@ services:
   woca-tenant:
     image: ${images["woca-tenant"]}
     container_name: woca-tenant
+    entrypoint: ["sh", "-c", "echo 'woca-tenant: use docker exec to run commands' && sleep infinity"]
     restart: unless-stopped
     environment:
       WOCA_DB: "${nacos_url}/DEFAULT_GROUP/woca-db.dsn"
