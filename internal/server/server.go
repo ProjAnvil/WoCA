@@ -28,6 +28,7 @@ import (
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/store"
+	"github.com/projanvil/woca/internal/webfx"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -397,13 +398,15 @@ func (s *Server) Handler() http.Handler {
 		localGate = gateway.RequireLocalTenant(append(s.hostGateExempt, "/api/runs", "/api/models")...)
 	}
 	if s.nativeAuth != nil {
-		return gateway.Authenticate(s.auth, s.nativeAuth.SessionAuthenticator(), s.anonymousAPI)(
+		h := gateway.Authenticate(s.auth, s.nativeAuth.SessionAuthenticator(), s.anonymousAPI)(
 			localGate(mux),
 		)
+		return webfx.Chain(h, webfx.RequestID(), webfx.Logger(s.log), webfx.Recovery(s.log))
 	}
-	return gateway.Authenticate(s.auth, nil, s.anonymousAPI)(
+	h := gateway.Authenticate(s.auth, nil, s.anonymousAPI)(
 		localGate(mux),
 	)
+	return webfx.Chain(h, webfx.RequestID(), webfx.Logger(s.log), webfx.Recovery(s.log))
 }
 
 // streamReauthInterval bounds how long a revoked credential can keep an
