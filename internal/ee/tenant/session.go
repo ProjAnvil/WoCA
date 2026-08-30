@@ -120,14 +120,34 @@ func (s *Store) IssueSession(_ context.Context, tenantID, userID, deviceID, thum
 // LookupSession resolves a full session id and verifies the hash in constant
 // time. Expired or revoked sessions do not authenticate. Errors from the
 // database are returned; a merely invalid session yields ok=false.
-func (s *Store) LookupSession(_ context.Context, full string) (NativeSession, bool, error) {
+func (s *Store) LookupSession(ctx context.Context, full string) (NativeSession, bool, error) {
+	sess, state, err := s.LookupSessionState(ctx, full)
+	return sess, state == SessionActive, err
+}
+
+// SessionState distinguishes why a session did not authenticate: revocation
+// is terminal and callers surface it as a distinct error code (0002), while
+// unknown/expired credentials are plain 0001.
+type SessionState int
+
+const (
+	SessionActive SessionState = iota
+	SessionRevoked
+	SessionExpired
+	SessionUnknown
+)
+
+// LookupSessionState is LookupSession with the failure reason. The constant
+// time and shape validation match LookupSession.
+func (s *Store) LookupSessionState(_ context.Context, full string) (NativeSession, SessionState, error) {
 	parts := strings.Split(full, "_")
 	if len(parts) != 3 || parts[0] != sessionScheme ||
 		len(parts[1]) != sessionPrefixLen || len(parts[2]) != sessionSecretLen {
-		return NativeSession{}, false, nil
+		hashKey(full)
+		return NativeSession{}, SessionUnknown, nil
 	}
 	if !isHex(parts[1]) || !isHex(parts[2]) {
-		return NativeSession{}, false, nil
+		return NativeSession{}, SessionUnknown, nil
 	}
 	var (
 		sess    NativeSession
@@ -141,18 +161,23 @@ func (s *Store) LookupSession(_ context.Context, full string) (NativeSession, bo
 			&sess.ExpiresAt, &sess.CreatedAt, &sess.LastValidatedAt, &revoked, &idHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		hashKey(full)
-		return NativeSession{}, false, nil
+		return NativeSession{}, SessionUnknown, nil
 	}
 	if err != nil {
-		return NativeSession{}, false, fmt.Errorf("tenant: lookup session: %w", err)
+		return NativeSession{}, SessionUnknown, fmt.Errorf("tenant: lookup session: %w", err)
 	}
-	if revoked.Valid || sess.ExpiresAt <= nowMilli() {
-		return NativeSession{}, false, nil
+	if revoked.Valid {
+		hashKey(full)
+		return NativeSession{}, SessionRevoked, nil
+	}
+	if sess.ExpiresAt <= nowMilli() {
+		hashKey(full)
+		return NativeSession{}, SessionExpired, nil
 	}
 	if !constantTimeEqualHex(hashKey(full), idHash) {
-		return NativeSession{}, false, nil
+		return NativeSession{}, SessionUnknown, nil
 	}
-	return sess, true, nil
+	return sess, SessionActive, nil
 }
 
 // RevokeSession marks a session inactive. Revoking an unknown session is not

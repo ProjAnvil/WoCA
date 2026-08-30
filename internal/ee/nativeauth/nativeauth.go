@@ -12,7 +12,9 @@ package nativeauth
 import (
 	"github.com/projanvil/woca/internal/platform/httpx"
 
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -86,34 +88,69 @@ func (na *Surface) handleActivate(w http.ResponseWriter, r *http.Request) {
 		writeNativeError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	if req.APIKey == "" || req.DeviceID == "" || len(req.DPoPJWK) == 0 {
-		writeNativeError(w, http.StatusBadRequest, "invalid request")
+	out, err := na.activate(r.Context(), req)
+	if err != nil {
+		writeNativeError(w, nativeActivateStatus(err), nativeActivateMessage(err))
 		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// activate validates the exchange and issues the session — the shared core
+// of the public route and the machine channel (the edge fronts remote
+// clients and applies its own per-caller limiter there).
+func (na *Surface) activate(ctx context.Context, req activateRequest) (activateResponse, error) {
+	if req.APIKey == "" || req.DeviceID == "" || len(req.DPoPJWK) == 0 {
+		return activateResponse{}, errInvalidRequest
 	}
 	thumbprint, err := dpop.ParseJWKThumbprint(req.DPoPJWK)
 	if err != nil {
-		writeNativeError(w, http.StatusBadRequest, "invalid request")
-		return
+		return activateResponse{}, errInvalidRequest
 	}
-	tc, err := na.Keys.Authenticate(r.Context(), req.APIKey)
+	tc, err := na.Keys.Authenticate(ctx, req.APIKey)
 	if err != nil {
-		writeNativeError(w, http.StatusUnauthorized, "unauthorized")
-		return
+		return activateResponse{}, errUnauthorized
 	}
 	// The session freezes the caller's scopes at activation; the tenancy
 	// context's scope set cannot be reversed to a role name, so the member
 	// role is pinned (admin scopes continue to flow through API keys).
-	sess, full, err := na.Store.IssueSession(r.Context(), tc.TenantID, tc.UserID, req.DeviceID, thumbprint, nativeSessionRole(tc), nativeSessionTTL)
+	sess, full, err := na.Store.IssueSession(ctx, tc.TenantID, tc.UserID, req.DeviceID, thumbprint, nativeSessionRole(tc), nativeSessionTTL)
 	if err != nil {
-		writeNativeError(w, http.StatusInternalServerError, "unavailable")
-		return
+		return activateResponse{}, errUnavailable
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(activateResponse{
+	return activateResponse{
 		SessionID: full,
 		ExpiresAt: sess.ExpiresAt,
 		DeviceID:  sess.DeviceID,
-	})
+	}, nil
+}
+
+// Activation failure kinds shared by both surfaces (the machine channel
+// maps them to HTTP itself).
+var (
+	errInvalidRequest = errors.New("invalid request")
+	errUnauthorized   = errors.New("unauthorized")
+	errUnavailable    = errors.New("unavailable")
+)
+
+func nativeActivateStatus(err error) int {
+	switch err {
+	case errInvalidRequest:
+		return http.StatusBadRequest
+	case errUnauthorized:
+		return http.StatusUnauthorized
+	case errUnavailable:
+		return http.StatusInternalServerError
+	}
+	return http.StatusInternalServerError
+}
+
+func nativeActivateMessage(err error) string {
+	if err == errInvalidRequest {
+		return "invalid request"
+	}
+	return "unauthorized"
 }
 
 // nativeSessionRole derives the frozen role for a session from the
@@ -197,7 +234,7 @@ func writeNativeError(w http.ResponseWriter, code int, msg string) {
 	case http.StatusUnauthorized:
 		num = httpx.CodeUnauthorized
 	case http.StatusTooManyRequests:
-		num = "0103"
+		num = httpx.CodeRateLimited
 	}
 	httpx.WriteCoded(w, httpx.CodedError{Status: code, Segment: httpx.SegClientN, Code: num, Message: msg})
 }

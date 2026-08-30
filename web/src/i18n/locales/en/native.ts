@@ -19,6 +19,7 @@ export default {
   connect: 'Connect',
   connecting: 'Connecting…',
   retry: 'Retry',
+  backToConnect: 'Back to connect page',
   keyHint: 'Your key is stored on this device only.',
   invalidInput: 'Enter the URL and API key.',
   invalidOrigin:

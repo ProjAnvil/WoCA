@@ -96,8 +96,17 @@ export function useThemePreference() {
 
 export async function hydrateNativePreferences(bridge: NativeBridge): Promise<void> {
   activeBridge = bridge
+  // Preferences are cosmetic (theme/locale/tool toggles): a failing read
+  // degrades to "absent" instead of throwing — a hydration error must never
+  // trap a freshly-connected session on the gate's error screen.
   const values = await Promise.all(
-    PREFERENCE_KEYS.map(async (key) => ({ key, preference: await bridge.Preference(key) })),
+    PREFERENCE_KEYS.map(async (key) => {
+      try {
+        return { key, preference: await bridge.Preference(key) }
+      } catch {
+        return { key, preference: { value: '', found: false } }
+      }
+    }),
   )
   const hydrated = new Map<PreferenceKey, PreferenceState>()
   for (const { key, preference } of values) {

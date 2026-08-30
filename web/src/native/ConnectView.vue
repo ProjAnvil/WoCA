@@ -94,6 +94,7 @@ async function submit() {
     serverUrl.value = origin
     if (directBridge) {
       await doConnect(directBridge)
+      apiKey.value = '' // succeeded — the view unmounts; clear for symmetry
       return
     }
     // Entry ② semantics: an edge may front several bridges — ask for the
@@ -122,10 +123,12 @@ async function submit() {
       }
     }
     await doConnect()
+    apiKey.value = '' // succeeded — the view unmounts; clear for symmetry
   } catch {
+    // A failed attempt keeps the key in the field (memory only, never
+    // persisted) so a retry does not force the user to retype it.
     error.value = t('native.connectionError')
   } finally {
-    if (!keepKey) apiKey.value = ''
     pending.value = false
   }
 }
@@ -144,10 +147,12 @@ async function pickBridge(id: string) {
   pending.value = true
   try {
     await doConnect(id)
+    apiKey.value = '' // succeeded — the view unmounts; clear for symmetry
   } catch {
+    // Failed pick keeps the key in memory (never persisted) so a retry or
+    // another bridge does not force the user to retype it.
     error.value = t('native.connectionError')
   } finally {
-    apiKey.value = ''
     pending.value = false
   }
 }

@@ -19,6 +19,7 @@ export default {
   connect: '连接',
   connecting: '正在连接…',
   retry: '重试',
+  backToConnect: '返回连接页',
   keyHint: '你的密钥只保存在这台设备上。',
   invalidInput: '请输入地址和 API 密钥。',
   invalidOrigin:

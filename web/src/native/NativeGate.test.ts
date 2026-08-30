@@ -164,24 +164,20 @@ describe('NativeGate', () => {
     expect(wrapper.get('[data-testid="app-marker"]').text()).toBe('Woca app')
   })
 
-  it('keeps the app gated with a sanitized retry when preference hydration fails', async () => {
+  it('degrades to preference defaults when hydration fails, never trapping the gate', async () => {
     const bridge = nativeBridge(async () => ({ state: 'ready' }))
     bridge.Preference = vi
       .fn<NativeBridge['Preference']>()
-      .mockRejectedValueOnce(new Error('stored secret: woca_test_key'))
-      .mockResolvedValue({ value: '', found: false })
+      .mockRejectedValue(new Error('stored secret: woca_test_key'))
     getNativeBridge.mockReturnValue(bridge)
 
     const wrapper = mountGate()
     await flushPromises()
 
-    expect(wrapper.get('[role="alert"]').text()).not.toContain('woca_test_key')
-    expect(wrapper.find('[data-testid="app-marker"]').exists()).toBe(false)
-
-    await wrapper.get('button').trigger('click')
-    await flushPromises()
-
+    // A preference read failure is cosmetic: the session proceeds and the
+    // raw error (which may echo key material) never reaches the DOM.
     expect(wrapper.get('[data-testid="app-marker"]').text()).toBe('Woca app')
+    expect(wrapper.text()).not.toContain('woca_test_key')
   })
 
   it('keeps the server URL when authorization is required', async () => {
@@ -219,6 +215,30 @@ describe('NativeGate', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="app-marker"]').text()).toBe('Woca app')
+  })
+
+  it('always offers a way back to the connect page from the error screen', async () => {
+    // Bootstrap keeps failing: retry must not become a dead-end loop —
+    // the second button returns to the connect page regardless.
+    getNativeBridge.mockReturnValue(
+      nativeBridge(
+        vi.fn<NativeBridge['Bootstrap']>().mockRejectedValue(new Error('binding down')),
+      ),
+    )
+
+    const wrapper = mountGate()
+    await flushPromises()
+
+    const buttons = wrapper.findAll('button')
+    expect(buttons.length).toBe(2)
+    expect(buttons[0].text()).toBe('Retry')
+    expect(buttons[1].text()).toBe('Back to connect page')
+
+    await buttons[1].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="connect-view"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="app-marker"]').exists()).toBe(false)
   })
 
   it('shows a localized fatal local-data screen without mounting app or connection UI', async () => {

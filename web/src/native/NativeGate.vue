@@ -114,6 +114,14 @@ async function connectEmbedded() {
   }
 }
 
+// The error screen's way back: whatever failed (bootstrap, connect,
+// hydration), the user can always return to the connect page instead of
+// being trapped in a retry loop.
+function backToConnect() {
+  error.value = ''
+  state.value = serverUrl.value ? 'authorization_required' : 'unconfigured'
+}
+
 onMounted(() => {
   void bootstrap()
 })
@@ -202,7 +210,12 @@ onMounted(() => {
         <span class="gate-brand-tag">ENTERPRISE</span>
       </div>
       <p>{{ error }}</p>
-      <button type="button" class="gate-ghost" @click="bootstrap">{{ t('native.retry') }}</button>
+      <div class="gate-error-actions">
+        <button type="button" class="gate-ghost" @click="bootstrap">{{ t('native.retry') }}</button>
+        <button type="button" class="gate-ghost" @click="backToConnect">
+          {{ t('native.backToConnect') }}
+        </button>
+      </div>
     </section>
   </main>
 </template>
