@@ -711,6 +711,8 @@ services:
       LANGFUSE_OTLP_AUTH: ${LANGFUSE_OTLP_AUTH:-Basic cGstbGYtd29jYS1sb2NhbDpzay1sZi13b2NhLWxvY2Fs}
     volumes:
       - ../collector/config-dev.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:4318:4318"  # host OTLP: the native embedded bridge pushes here
     restart: unless-stopped
     networks:
       - woca
