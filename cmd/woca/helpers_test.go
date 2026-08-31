@@ -20,6 +20,7 @@ import (
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/hooks"
+	"github.com/projanvil/woca/internal/repl"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/tools"
 )
@@ -160,10 +161,10 @@ func TestIsTerminal(t *testing.T) {
 }
 
 func TestRunShellCommand(t *testing.T) {
-	if out := runShellCommand("echo shell-ok"); !strings.Contains(out, "shell-ok") {
+	if out := repl.RunShell("echo shell-ok"); !strings.Contains(out, "shell-ok") {
 		t.Fatalf("echo out = %q", out)
 	}
-	out := runShellCommand("exit 3")
+	out := repl.RunShell("exit 3")
 	if !strings.Contains(out, "[exit:") {
 		t.Fatalf("failing out = %q", out)
 	}

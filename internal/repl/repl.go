@@ -3,7 +3,12 @@
 // command history.
 package repl
 
-import "strings"
+import (
+	"bytes"
+	"fmt"
+	"os/exec"
+	"strings"
+)
 
 // Kind classifies a parsed input line.
 type Kind int
@@ -95,4 +100,29 @@ func (h *History) Next() (string, bool) {
 		return "", true
 	}
 	return h.lines[h.idx], true
+}
+
+// RunShell executes a `!command` line and returns its combined output. It
+// stays on plain os/exec: the shell escape is a terminal-frontend convenience
+// that always runs on the machine woca was started from. The shell feed
+// format ([shell]\n$ cmd\n<output>) is shared by the REPL and the TUI so the
+// model sees the same message shape from either frontend.
+const ShellFeedTag = "[shell]"
+
+// RunShell runs command through bash and returns its combined stdout/stderr
+// (with the exit status appended on failure).
+func RunShell(command string) string {
+	cmd := exec.Command("bash", "-c", command)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(&out, "\n[exit: %v]", err)
+	}
+	return out.String()
+}
+
+// ShellFeed renders the history message body for one `!command` run.
+func ShellFeed(command, output string) string {
+	return ShellFeedTag + "\n$ " + command + "\n" + output
 }

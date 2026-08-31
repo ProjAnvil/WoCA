@@ -14,14 +14,12 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -638,9 +636,9 @@ func (r *replLoop) Loop(ctx context.Context) error {
 				r.submit(ctx, res.Prompt)
 			}
 		case repl.KindShell:
-			out := runShellCommand(action.Text)
+			out := repl.RunShell(action.Text)
 			fmt.Fprint(r.stdout, out)
-			r.history = append(r.history, messages.Human("[shell]\n$ "+action.Text+"\n"+out))
+			r.history = append(r.history, messages.Human(repl.ShellFeed(action.Text, out)))
 		default: // KindPrompt
 			r.submit(ctx, submitHooks(ctx, r.agent, action.Text))
 		}
@@ -660,20 +658,6 @@ func (r *replLoop) submit(ctx context.Context, text string) {
 		return
 	}
 	r.history = stripSystem(result)
-}
-
-// runShellCommand executes a `!command` line and returns its combined output.
-// It stays on plain os/exec: the shell escape is a terminal-frontend
-// convenience that always runs on the machine woca was started from.
-func runShellCommand(command string) string {
-	cmd := exec.Command("bash", "-c", command)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(&out, "\n[exit: %v]", err)
-	}
-	return out.String()
 }
 
 // turnTokenBudgetFromEnv resolves WOCA_TURN_TOKEN_BUDGET: the per-turn
