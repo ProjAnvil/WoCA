@@ -42,16 +42,22 @@ func (c *Console) keybindingsCmd() Result {
 	var b strings.Builder
 	b.WriteString("keybindings:\n")
 	b.WriteString("  input\n")
-	b.WriteString("    enter            send / run command\n")
+	b.WriteString("    enter            send / run command (while running: queue next)\n")
+	b.WriteString("    up (empty line)  take back the queued next message\n")
 	b.WriteString("    ctrl+a / ctrl+e  cursor to start / end\n")
 	b.WriteString("    ctrl+u           clear input\n")
-	b.WriteString("    up / down        history (or command menu)\n")
-	b.WriteString("    tab              complete command\n")
+	b.WriteString("    up / down        history (or command / skill / @agent menu)\n")
+	b.WriteString("    tab              complete highlighted menu entry\n")
 	b.WriteString("  session\n")
-	b.WriteString("    esc              interrupt running turn (or deny a pending approval)\n")
-	b.WriteString("    ctrl+c / ctrl+d  exit\n")
+	b.WriteString("    esc esc          interrupt running turn (<300ms, web parity)\n")
+	b.WriteString("    ctrl+c           interrupt while running; idle: clear input, twice to exit\n")
+	b.WriteString("    ctrl+d           exit\n")
+	b.WriteString("    ctrl+o           transcript review (fold/unfold full tool output)\n")
+	b.WriteString("    ctrl+k           command palette\n")
+	b.WriteString("    ctrl+r           resume a saved session\n")
 	b.WriteString("    pgup / pgdown    scroll transcript\n")
-	b.WriteString("    y / n            approve / deny a pending approval\n")
+	b.WriteString("    y / n            approve / deny a pending approval (enter runs the\n")
+	b.WriteString("                     highlighted choice; deny is the default)\n")
 	b.WriteString("  vim mode (/vim)\n")
 	b.WriteString("    i / a / A        insert here / after / at end\n")
 	b.WriteString("    h / l / 0 / $    cursor left / right / line start / line end\n")
@@ -63,10 +69,11 @@ func (c *Console) keybindingsCmd() Result {
 
 // themeNames and themeDescriptions mirror the TUI palettes without importing
 // the tui package (which imports console).
-var themeNames = []string{"dark", "light", "high-contrast"}
+var themeNames = []string{"dark", "light", "high-contrast", "mono"}
 
 var themeDescriptions = map[string]string{
 	"dark":          "dark default (cyan prompt, orange accents)",
 	"light":         "light palette for bright terminals",
 	"high-contrast": "maximum contrast (accessibility)",
+	"mono":          "no chrome color (bold/faint); diff and error reds stay",
 }

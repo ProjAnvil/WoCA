@@ -15,7 +15,7 @@ func TestThemeCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"dark", "light", "high-contrast"} {
+	for _, want := range []string{"dark", "light", "high-contrast", "mono"} {
 		if !strings.Contains(res.Output, want) {
 			t.Fatalf("theme list missing %q:\n%s", want, res.Output)
 		}

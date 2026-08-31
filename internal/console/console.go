@@ -178,6 +178,10 @@ func (c *Console) Execute(ctx context.Context, name string, args []string, sessi
 		return c.rewind(args, session)
 	case "branch":
 		return c.branch(args, session)
+	case "resume":
+		return c.resumeCmd(args, session)
+	case "changes":
+		return c.changesCmd(args)
 	case "doctor":
 		return c.doctorCmd(), nil
 	case "export":
@@ -270,6 +274,9 @@ func (c *Console) permissions(args []string) (Result, error) {
 
 func (c *Console) model(args []string) (Result, error) {
 	if len(args) == 0 {
+		if text := c.modelCatalogText(); text != "" {
+			return Result{Output: text}, nil
+		}
 		return Result{Output: "current model=" + c.deps.Cfg.Model + " (use /model <name> to switch)\n"}, nil
 	}
 	name := args[0]

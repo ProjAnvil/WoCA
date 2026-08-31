@@ -30,6 +30,8 @@ func Builtin() []Command {
 		{Name: "init", Description: "analyze the codebase and generate an AGENTS.md project guide"},
 		{Name: "rewind", Description: "rewind the conversation to an earlier point"},
 		{Name: "branch", Description: "branch off a copy of the current session"},
+		{Name: "resume", Description: "list or load a saved session snapshot (/resume [name])"},
+		{Name: "changes", Description: "show pending workspace changes (preview before /undo)"},
 		{Name: "doctor", Description: "check config, credentials, storage, hooks, and permissions"},
 		{Name: "export", Description: "export the conversation as markdown or resumable JSON"},
 		{Name: "rename", Description: "name the current session snapshot for later --resume"},
