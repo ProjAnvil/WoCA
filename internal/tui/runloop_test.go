@@ -212,14 +212,9 @@ func TestRendererEmitsGoalDeltas(t *testing.T) {
 		Role:      messages.RoleAI,
 		ToolCalls: []messages.ToolCall{{ID: "g1", Name: "Edit", Args: map[string]any{"old_string": "a", "new_string": "b"}}},
 	}}})
-	if s := string((<-ch).(streamMsg)); !strings.Contains(s, "Edit") {
-		t.Fatalf("goal delta tool chip = %q", s)
-	}
-	if s := string((<-ch).(streamMsg)); !strings.Contains(s, "- a") {
-		t.Fatalf("goal delta diff del = %q", s)
-	}
-	if s := string((<-ch).(streamMsg)); !strings.Contains(s, "+ b") {
-		t.Fatalf("goal delta diff add = %q", s)
+	tc := (<-ch).(toolCallMsg)
+	if tc.name != "Edit" || tc.id != "g1" || tc.args["old_string"] != "a" {
+		t.Fatalf("goal delta tool call = %+v", tc)
 	}
 	if flight := (<-ch).(inFlightMsg); len(flight) != 1 || flight[0] != "Edit" {
 		t.Fatalf("goal delta in-flight = %v", flight)

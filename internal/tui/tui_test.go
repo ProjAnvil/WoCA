@@ -34,16 +34,15 @@ func TestRendererEmitsDeltasAndTools(t *testing.T) {
 		{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{Name: "Bash", Args: map[string]any{"command": "ls"}}}},
 	}}}})
 
-	got := make([]string, 0, 3)
-	for i := 0; i < 3; i++ {
-		msg := <-ch
-		got = append(got, string(msg.(streamMsg)))
+	if s := string((<-ch).(streamMsg)); s != "hello " {
+		t.Fatalf("delta 1 = %q", s)
 	}
-	if got[0] != "hello " || got[1] != "world" {
-		t.Fatalf("deltas = %q", got[:2])
+	if s := string((<-ch).(streamMsg)); s != "world" {
+		t.Fatalf("delta 2 = %q", s)
 	}
-	if !strings.Contains(got[2], "Bash") {
-		t.Fatalf("tool line = %q", got[2])
+	tc := (<-ch).(toolCallMsg)
+	if tc.name != "Bash" || tc.args["command"] != "ls" {
+		t.Fatalf("tool call = %+v", tc)
 	}
 }
 

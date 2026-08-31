@@ -100,10 +100,21 @@ func TestPendingPlanApproval(t *testing.T) {
 	if v := m.View(); !strings.Contains(v, "Approve this plan?") {
 		t.Fatalf("view missing plan approval: %s", v)
 	}
+	// Enter executes the highlighted option, and the highlight defaults to
+	// the safe choice (deny) — approving needs either the y shortcut or an
+	// explicit move onto allow.
 	model, _ := m.Update(key("enter"))
-	m = model.(*Model)
-	if ans := <-answerCh; ans != "y" {
-		t.Fatalf("enter must approve, got %v", ans)
+	_ = model.(*Model)
+	if ans := <-answerCh; ans != "n" {
+		t.Fatalf("enter must execute the deny default, got %v", ans)
+	}
+	m2, answerCh2 := newPendingModel(t, agent.PlanApprovalRequest{Plan: "do the thing"})
+	mm2, _ := m2.Update(ctrlKey("right"))
+	_ = mm2.(*Model)
+	mm2b, _ := m2.Update(key("enter"))
+	_ = mm2b.(*Model)
+	if ans := <-answerCh2; ans != "y" {
+		t.Fatalf("enter on the highlighted allow must approve, got %v", ans)
 	}
 }
 

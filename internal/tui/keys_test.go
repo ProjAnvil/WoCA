@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -64,10 +66,51 @@ func isQuitCmd(cmd tea.Cmd) bool {
 }
 
 func TestQuitKeys(t *testing.T) {
-	for _, k := range []string{"ctrl+c", "ctrl+d"} {
-		m := New(nil, nil, config.Config{})
-		if _, cmd := m.Update(ctrlKey(k)); !isQuitCmd(cmd) {
-			t.Fatalf("%s must quit the program", k)
+	// ctrl+d always quits immediately.
+	m := New(nil, nil, config.Config{})
+	if _, cmd := m.Update(ctrlKey("ctrl+d")); !isQuitCmd(cmd) {
+		t.Fatal("ctrl+d must quit the program")
+	}
+	// Idle ctrl+c with an empty draft arms the exit; the second press inside
+	// the window quits.
+	m = New(nil, nil, config.Config{})
+	if _, cmd := m.Update(ctrlKey("ctrl+c")); isQuitCmd(cmd) {
+		t.Fatal("the first idle ctrl+c must only arm the exit")
+	}
+	if _, cmd := m.Update(ctrlKey("ctrl+c")); !isQuitCmd(cmd) {
+		t.Fatal("the second idle ctrl+c must quit the program")
+	}
+	// Idle ctrl+c with a draft clears the draft instead of arming the exit.
+	m = New(nil, nil, config.Config{})
+	m.input = "draft"
+	m = press(m, ctrlKey("ctrl+c"))
+	if m.input != "" {
+		t.Fatalf("idle ctrl+c must clear the draft, got %q", m.input)
+	}
+	if _, cmd := m.Update(ctrlKey("ctrl+c")); isQuitCmd(cmd) {
+		t.Fatal("the press that cleared the draft must not quit")
+	}
+	// While a turn runs, ctrl+c interrupts it (the cancel is wired through
+	// a real context).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := New(nil, nil, config.Config{})
+	r.running = true
+	r.cancelRun = cancel
+	canceled := make(chan struct{})
+	context.AfterFunc(ctx, func() { close(canceled) })
+	r = press(r, ctrlKey("ctrl+c"))
+	if !r.interrupting {
+		t.Fatal("ctrl+c while running must mark the interrupt")
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case <-canceled:
+			return
+		case <-deadline:
+			t.Fatal("ctrl+c while running must cancel the run context")
+		case <-time.After(time.Millisecond):
 		}
 	}
 }
@@ -131,16 +174,27 @@ func TestEditingKeys(t *testing.T) {
 		t.Fatalf("delete input = %q, want ac", m.input)
 	}
 
-	// Every editing key is inert while a run is in flight.
+	// Editing keys keep working while a run is in flight: the composer stays
+	// live and enter parks the next message instead of swallowing it.
 	r := New(nil, nil, config.Config{})
 	r.running = true
 	r.input = "abc"
 	r.cursor = 1
-	for _, k := range []string{"ctrl+a", "ctrl+e", "ctrl+u", "left", "right", "backspace", "delete"} {
+	for _, k := range []string{"right", "backspace", "ctrl+u"} {
 		r = press(r, ctrlKey(k))
 	}
-	if r.input != "abc" || r.cursor != 1 {
+	if r.input != "" || r.cursor != 0 {
 		t.Fatalf("editing during a run changed input=%q cursor=%d", r.input, r.cursor)
+	}
+	r.input = "next message"
+	r = press(r, key("enter"))
+	if r.queued == nil || r.queued.text != "next message" || r.input != "" {
+		t.Fatalf("enter during a run must park the message: queued=%+v input=%q", r.queued, r.input)
+	}
+	// ↑ on an empty line takes the parked message back for editing.
+	r = press(r, ctrlKey("up"))
+	if r.queued != nil || r.input != "next message" {
+		t.Fatalf("up must recall the parked message: queued=%+v input=%q", r.queued, r.input)
 	}
 }
 
@@ -186,14 +240,19 @@ func TestHistoryNavigationUpDown(t *testing.T) {
 		t.Fatalf("down past end: input=%q idx=%d", m.input, m.histIdx)
 	}
 
-	// Arrows are ignored while running.
+	// Arrows keep working while a run is in flight (history navigation and
+	// menu movement stay live with the composer).
 	r := New(nil, nil, config.Config{})
 	r.running = true
-	r.input = "draft"
+	r.inputHist = []string{"one"}
+	r.histIdx = 1
 	r = press(r, ctrlKey("up"))
+	if r.input != "one" {
+		t.Fatalf("up during a run must browse history, got %q", r.input)
+	}
 	r = press(r, ctrlKey("down"))
-	if r.input != "draft" {
-		t.Fatalf("arrows during a run changed the input to %q", r.input)
+	if r.input != "" {
+		t.Fatalf("down during a run must return to the empty draft, got %q", r.input)
 	}
 }
 
@@ -234,12 +293,13 @@ func TestTabCompletionClampsSelection(t *testing.T) {
 	if m.input != "plain" {
 		t.Fatalf("tab completed a plain prompt: %q", m.input)
 	}
-	// Tab while running does nothing.
+	// Tab keeps completing while a run is in flight (the composer stays
+	// live; enter parks instead of submitting).
 	m.running = true
-	m.input = "/"
+	m.input = "/ag"
 	m = press(m, ctrlKey("tab"))
-	if m.input != "/" {
-		t.Fatalf("tab during a run changed the input: %q", m.input)
+	if m.input != "/agents" {
+		t.Fatalf("tab during a run completed to %q, want /agents", m.input)
 	}
 }
 
@@ -284,12 +344,16 @@ func TestEnterKeyFlow(t *testing.T) {
 		}
 	}
 
-	// Enter while running is swallowed.
+	// Enter while running parks the line as the next message (no command
+	// is produced).
 	r := New(nil, nil, config.Config{})
 	r.running = true
 	r.input = "queued"
 	if _, c := r.Update(key("enter")); c != nil {
 		t.Fatal("enter during a run must not produce a command")
+	}
+	if r.queued == nil || r.queued.text != "queued" || r.input != "" {
+		t.Fatalf("park: queued=%+v input=%q", r.queued, r.input)
 	}
 }
 
@@ -533,10 +597,11 @@ func TestReadCmd(t *testing.T) {
 
 func TestAppendTrimsTranscript(t *testing.T) {
 	m := New(nil, nil, config.Config{})
-	for i := 0; i < 502; i++ {
+	total := transcriptLimit + 2
+	for i := 0; i < total; i++ {
 		m.append(fmt.Sprintf("l%d", i))
 	}
-	if len(m.lines) != 500 || m.lines[0] != "l2" || m.lines[499] != "l501" {
+	if len(m.lines) != transcriptLimit || m.lines[0] != "l2" || m.lines[transcriptLimit-1] != fmt.Sprintf("l%d", total-1) {
 		t.Fatalf("append trim: len=%d first=%q last=%q", len(m.lines), m.lines[0], m.lines[len(m.lines)-1])
 	}
 }
@@ -555,10 +620,13 @@ func TestPendingPromptDefaultAndMultiQuestion(t *testing.T) {
 	if got := m.pendingPrompt(); got != "Continue?" {
 		t.Fatalf("unknown interrupt prompt = %q", got)
 	}
+	// AskUserQuestion renders one question at a time; with a direct
+	// pending assignment the counter starts at the first question.
 	m.pending = &interruptMsg{value: agent.AskUserRequest{Questions: []tools.Question{
 		{Question: "a"}, {Question: "b"},
 	}}}
-	if got := m.pendingPrompt(); !strings.Contains(got, "separated by ;") {
+	m.pendingBegin()
+	if got := m.pendingPrompt(); !strings.Contains(got, "(1/2) a") {
 		t.Fatalf("multi-question prompt = %q", got)
 	}
 }

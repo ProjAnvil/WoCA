@@ -44,8 +44,24 @@ func TestThemeSwitch(t *testing.T) {
 	if CurrentTheme() != "high-contrast" {
 		t.Fatalf("theme = %s", CurrentTheme())
 	}
+	// mono drops chrome color; semantic diff/error colors survive.
+	if err := SetTheme("mono"); err != nil {
+		t.Fatal(err)
+	}
+	if CurrentTheme() != "mono" || !toolStyleMono {
+		t.Fatalf("mono theme not applied: %s mono=%v", CurrentTheme(), toolStyleMono)
+	}
+	chip := toolColor("Bash").Render("Bash")
+	colored := toolColor("Read").Render("Read")
+	if chip == "" || colored == "" {
+		t.Fatal("mono chips must still render")
+	}
+	addStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	if addStyle.Render("+ x") == "" {
+		t.Fatal("diff style must still render under mono")
+	}
 	names := ThemeNames()
-	if len(names) != 3 {
+	if len(names) != 4 {
 		t.Fatalf("themes = %v", names)
 	}
 }

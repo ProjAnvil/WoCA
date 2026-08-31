@@ -5,11 +5,13 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -19,11 +21,14 @@ import (
 
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/console"
 	"github.com/projanvil/woca/internal/notify"
+	"github.com/projanvil/woca/internal/repl"
 	"github.com/projanvil/woca/internal/runner"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/skills"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -42,26 +47,26 @@ var (
 	selDescStyle = lipgloss.NewStyle().Background(lipgloss.Color("5")).Foreground(lipgloss.Color("15")).Faint(true)
 )
 
-// toolColor returns a per-tool accent color used for colored tool-name chips.
-func toolColor(name string) lipgloss.Style {
-	color := lipgloss.Color("6") // cyan default
-	switch name {
-	case "Bash":
-		color = lipgloss.Color("2") // green
-	case "Read", "Glob", "Grep":
-		color = lipgloss.Color("6") // cyan
-	case "Edit", "Write", "NotebookEdit":
-		color = lipgloss.Color("3") // yellow
-	case "TodoWrite", "Task", "TaskCreate", "TaskUpdate":
-		color = lipgloss.Color("5") // magenta
-	case "WebFetch", "WebSearch":
-		color = lipgloss.Color("4") // blue
-	}
-	return lipgloss.NewStyle().Bold(true).Foreground(color)
-}
-
 // streamMsg carries one increment of live output.
 type streamMsg string
+
+// toolCallMsg carries one tool invocation (live rendering + review blocks).
+type toolCallMsg struct {
+	id   string
+	name string
+	args map[string]any
+}
+
+// toolResultMsg carries one tool result.
+type toolResultMsg struct {
+	id      string
+	content string
+}
+
+// reasoningMsg carries one reasoning (chain-of-thought) increment.
+type reasoningMsg struct {
+	text string
+}
 
 // todosMsg carries a fresh todo-list snapshot for live updates.
 type todosMsg []tools.Todo
@@ -89,7 +94,7 @@ func (m *Model) bannerLines() []string {
 		logo,
 		welcome,
 		dimStyle.Render("  /help for help · /settings to configure · /permissions <mode> to change permissions"),
-		dimStyle.Render("  ! for bash mode · esc to interrupt · ctrl-c to exit"),
+		dimStyle.Render("  ! for bash mode · esc-esc to interrupt · enter queues the next message while running"),
 	}
 }
 
@@ -131,18 +136,81 @@ type Model struct {
 	lastPrompt string
 	// settings backs the per-run debug-log dynamic refresh (optional).
 	settings *settings.Store
+	// cancelRun aborts the in-flight run goroutine (double-esc or ctrl+c
+	// while running). Nil when the session is idle.
+	cancelRun context.CancelFunc
+	// interrupting marks a user-requested cancel so the resulting
+	// context.Canceled error renders as a marker instead of a failure.
+	interrupting bool
+	// lastEsc timestamps the previous esc press; a second esc inside
+	// escDoubleWindow interrupts the running turn (same semantics and
+	// threshold as the web UI).
+	lastEsc time.Time
+	// lastCtrlC arms the idle two-press exit window.
+	lastCtrlC time.Time
+	// hint is a transient footer message (cleared by the next keypress).
+	hint string
+	// queued parks one message typed while a run is in flight — single
+	// slot, last-write-wins, flushed automatically the moment the run goes
+	// idle (web useMessageQueue parity).
+	queued *queuedMsg
+	// draftHeld/draft preserve the composer line and cursor while a
+	// decision box owns the keyboard.
+	draftHeld bool
+	draft     string
+	// decSel is the highlighted allow/deny cell for permission and plan
+	// approvals (0 = allow, 1 = deny, the safe default).
+	decSel int
+	// askIdx/askSel/askPicks/askAnswers drive the sequential AskUserQuestion
+	// machine: one question at a time, options as a selectable list.
+	askIdx     int
+	askSel     int
+	askPicks   []bool
+	askAnswers []string
+	// blocks is the structured transcript behind the review overlay
+	// (ctrl+o): full tool args/results, reasoning, prompts, and command
+	// output, untruncated.
+	blocks []block
+	// overlay is the open full-screen layer (review, palette, sessions);
+	// esc pops back to the base view, which keeps updating underneath.
+	overlay overlayKind
+	// review state: selected block, fold flags (absent = default folded),
+	// and the scroll offset.
+	reviewSel    int
+	reviewFolded map[int]bool
+	reviewScroll int
+	// palette state (ctrl+k): filter text and highlighted entry.
+	paletteFilter string
+	paletteSel    int
+	// sessions state (ctrl+r): filter text, highlighted entry, and the
+	// snapshot list loaded when the picker opened.
+	sessionsFilter  string
+	sessionsSel     int
+	sessionsEntries []console.SessionEntry
+	// models state (bare /model): filter text, highlighted entry, and the
+	// catalog list loaded when the picker opened.
+	modelsFilter  string
+	modelsSel     int
+	modelsEntries []console.ModelEntry
+	// completion inventories (skills for "/", subagents for "@"),
+	// refreshed after every submitted turn.
+	skillList []skills.Skill
+	agentList []agents.Definition
+	// ctxInfo is the post-run context-usage snapshot for the status bar.
+	ctxInfo *agent.ContextInfo
 }
 
 // New creates the TUI model.
 func New(a *agent.Agent, history []messages.Message, cfg config.Config) *Model {
 	return &Model{
-		agent:    a,
-		history:  history,
-		cfg:      cfg,
-		version:  "0.3.0",
-		viewport: NewViewport(),
-		height:   24,
-		spinner:  spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		agent:        a,
+		history:      history,
+		cfg:          cfg,
+		version:      "0.3.0",
+		viewport:     NewViewport(),
+		height:       24,
+		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		reviewFolded: map[int]bool{},
 	}
 }
 
@@ -169,6 +237,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pending != nil {
 			return m.resolvePendingKey(msg)
 		}
+		// An open overlay owns the keyboard next; unconsumed keys fall
+		// through to the base handler.
+		if consumed, cmd := m.overlayKey(msg); consumed {
+			return m, cmd
+		}
 		// Vim modal input (/vim): in normal mode keys edit,
 		// enter still submits. Interception happens before the standard
 		// handling; enter falls through to it.
@@ -178,29 +251,71 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch msg.String() {
-		case "ctrl+c", "ctrl+d":
+		case "ctrl+d":
 			return m, tea.Quit
+		case "ctrl+c":
+			// While a turn runs, ctrl+c interrupts it (same as double-esc).
+			// Idle: first press clears the draft, second press inside the
+			// window exits.
+			if m.running {
+				m.interrupt()
+				return m, nil
+			}
+			now := time.Now()
+			if m.input != "" {
+				m.input = ""
+				m.cursor = 0
+				m.sel = 0
+				m.hint = ""
+				return m, nil
+			}
+			if now.Sub(m.lastCtrlC) < ctrlCExitWindow {
+				return m, tea.Quit
+			}
+			m.lastCtrlC = now
+			m.hint = "ctrl+c again to exit"
+			return m, nil
 		case "esc":
+			m.hint = ""
 			if VimMode() && m.vimInsert {
 				m.vimInsert = false
 			}
+			// Double-esc inside the window interrupts the running turn (the
+			// single first press only arms; idle presses do nothing).
+			now := time.Now()
+			if m.running && now.Sub(m.lastEsc) < escDoubleWindow {
+				m.interrupt()
+				m.lastEsc = time.Time{}
+			} else {
+				m.lastEsc = now
+			}
 		case "ctrl+a":
-			if !m.running {
-				m.cursor = 0
-			}
+			m.cursor = 0
 		case "ctrl+e":
-			if !m.running {
-				m.cursor = len(m.input)
-			}
+			m.cursor = len(m.input)
 		case "pgup":
 			m.viewport.PageUp()
 		case "pgdown":
 			m.viewport.PageDown()
+		case "ctrl+o":
+			m.openReview()
+			return m, nil
+		case "ctrl+k":
+			m.openPalette()
+			return m, nil
+		case "ctrl+r":
+			m.openSessions()
+			return m, nil
 		case "up":
-			if m.running {
-				break
+			// An empty line recalls the parked next message for editing
+			// before falling through to history navigation.
+			if m.input == "" && m.queued != nil {
+				m.input = m.queued.text
+				m.cursor = len(m.input)
+				m.queued = nil
+				return m, nil
 			}
-			if cmds := suggestions(m.input); len(cmds) > 0 {
+			if cmds := m.allSuggestions(m.input); len(cmds) > 0 {
 				if m.sel >= len(cmds) {
 					m.sel = len(cmds) - 1
 				}
@@ -213,10 +328,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = len(m.input)
 			}
 		case "down":
-			if m.running {
-				break
-			}
-			if cmds := suggestions(m.input); len(cmds) > 0 {
+			if cmds := m.allSuggestions(m.input); len(cmds) > 0 {
 				if m.sel >= len(cmds) {
 					m.sel = len(cmds) - 1
 				}
@@ -233,48 +345,45 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = len(m.input)
 			}
 		case "tab":
-			if !m.running && strings.HasPrefix(m.input, "/") {
-				if cmds := suggestions(m.input); len(cmds) > 0 {
+			if strings.HasPrefix(m.input, "/") || atTrigger(m.input) >= 0 {
+				if cmds := m.allSuggestions(m.input); len(cmds) > 0 {
 					if m.sel >= len(cmds) {
 						m.sel = len(cmds) - 1
 					}
-					m.input = cmds[m.sel].name
-					m.cursor = len(m.input)
-					m.sel = 0
+					m.acceptCompletion(cmds[m.sel].name)
 				}
 			}
 		case "ctrl+u":
-			if !m.running {
-				m.input = ""
-				m.cursor = 0
-				m.sel = 0
-			}
+			m.input = ""
+			m.cursor = 0
+			m.sel = 0
 		case "left":
-			if !m.running && m.cursor > 0 {
+			if m.cursor > 0 {
 				m.cursor--
 			}
 		case "right":
-			if !m.running && m.cursor < len(m.input) {
+			if m.cursor < len(m.input) {
 				m.cursor++
 			}
 		case "enter":
+			// While a turn runs, enter parks the line as the next message
+			// instead of swallowing it.
 			if m.running {
+				m.park()
 				return m, nil
 			}
-			// In the command menu, Enter first completes the highlighted
-			// command; a second Enter runs it.
-			if strings.HasPrefix(m.input, "/") {
-				if cmds := suggestions(m.input); len(cmds) > 0 {
-					sel := m.sel
-					if sel >= len(cmds) {
-						sel = len(cmds) - 1
-					}
-					if strings.TrimSpace(m.input) != cmds[sel].name {
-						m.input = cmds[sel].name
-						m.cursor = len(m.input)
-						m.sel = 0
-						return m, nil
-					}
+			// In a completion menu (commands, skills, or @agents), Enter
+			// first accepts the highlighted entry; a second Enter submits.
+			if m.completionsMenuVisible() {
+				cmds := m.allSuggestions(m.input)
+				sel := m.sel
+				if sel >= len(cmds) {
+					sel = len(cmds) - 1
+				}
+				entry := cmds[sel].name
+				if strings.TrimSpace(m.input) != entry {
+					m.acceptCompletion(entry)
+					return m, nil
 				}
 			}
 			text := strings.TrimSpace(m.input)
@@ -283,36 +392,52 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				return m, nil
 			}
-			if len(m.inputHist) == 0 || m.inputHist[len(m.inputHist)-1] != text {
-				m.inputHist = append(m.inputHist, text)
-			}
-			m.histIdx = len(m.inputHist)
-			if text == "/exit" || text == "/quit" || text == "/q" {
-				return m, tea.Quit
-			}
-			if handled, cmd := m.handleCommand(text); handled {
-				return m, cmd
-			}
-			return m, m.submit(text)
+			m.remember(text)
+			return m, m.dispatch(text)
 		case "backspace":
-			if !m.running && m.cursor > 0 {
+			if m.cursor > 0 {
 				m.input = m.input[:m.cursor-1] + m.input[m.cursor:]
 				m.cursor--
 			}
 		case "delete":
-			if !m.running && m.cursor < len(m.input) {
+			if m.cursor < len(m.input) {
 				m.input = m.input[:m.cursor] + m.input[m.cursor+1:]
 			}
 		default:
-			if !m.running && len(msg.Runes) > 0 {
+			if len(msg.Runes) > 0 {
 				r := string(msg.Runes)
 				m.input = m.input[:m.cursor] + r + m.input[m.cursor:]
 				m.cursor += len(msg.Runes)
 				m.sel = 0
+				m.hint = ""
 			}
 		}
 	case streamMsg:
+		m.appendStreamText(blockAssistant, string(msg))
 		m.write(string(msg))
+		if m.ch != nil {
+			return m, readCmd(m.ch)
+		}
+	case reasoningMsg:
+		m.appendStreamText(blockReasoning, msg.text)
+		m.write(dimStyle.Render(msg.text))
+		if m.ch != nil {
+			return m, readCmd(m.ch)
+		}
+	case toolCallMsg:
+		m.appendToolCall(msg.id, msg.name, msg.args)
+		m.write("\n" + toolColor(msg.name).Render("⏺ "+msg.name) + " " + dimStyle.Render(fmt.Sprintf("%v", msg.args)) + "\n")
+		if msg.name == "Edit" || msg.name == "Write" {
+			for _, l := range diffLines(msg.args) {
+				m.write("  " + l + "\n")
+			}
+		}
+		if m.ch != nil {
+			return m, readCmd(m.ch)
+		}
+	case toolResultMsg:
+		m.attachToolResult(msg.id, msg.content)
+		m.write(dimStyle.Render("  ⎿ "+summarize(msg.content)) + "\n")
 		if m.ch != nil {
 			return m, readCmd(m.ch)
 		}
@@ -327,9 +452,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, readCmd(m.ch)
 		}
 	case interruptMsg:
-		// A run is paused awaiting this decision; render the approval UI and
-		// keep draining the run channel while the user decides.
+		// A run is paused awaiting this decision; park the composer draft so
+		// the decision keys can never swallow typing in progress, render the
+		// approval UI, and keep draining the run channel while the user
+		// decides.
+		m.holdDraft()
 		m.pending = &msg
+		m.pendingBegin()
 		notify.Attention(os.Stdout, "woca: awaiting your decision")
 		if m.ch != nil {
 			return m, readCmd(m.ch)
@@ -340,17 +469,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case runDone:
 		m.running = false
+		m.cancelRun = nil
+		wasInterrupted := m.interrupting
+		m.interrupting = false
 		m.flush()
 		m.ch = nil
 		if msg.err != nil {
-			m.write("Error: " + msg.err.Error() + "\n")
-			notify.Attention(os.Stdout, "woca: run failed")
+			if wasInterrupted || errors.Is(msg.err, context.Canceled) {
+				m.systemLine(dimStyle.Render("⏹ interrupted by user") + "\n")
+			} else {
+				m.systemLine("Error: " + msg.err.Error() + "\n")
+				notify.Attention(os.Stdout, "woca: run failed")
+			}
 		} else {
 			m.history = stripSystem(msg.result)
 			notify.Attention(os.Stdout, "woca: response ready")
 		}
 		if m.agent != nil {
 			m.todos = m.agent.Todos()
+		}
+		m.refreshCompletions()
+		m.refreshContext()
+		// The parked next message flushes the moment the run goes idle —
+		// after a natural completion or an interrupt alike (web parity).
+		if q := m.queued; q != nil {
+			m.queued = nil
+			m.remember(q.text)
+			return m, m.dispatch(q.text)
 		}
 		// Goal continuation scheduling (Codex's idle detection): after a run
 		// finishes and the session is idle, an active goal keeps looping.
@@ -394,14 +539,17 @@ func (m *Model) obsEnd(run string, final []messages.Message, err error) {
 }
 
 // run starts the agent in a goroutine and returns a command that reads from
-// the output channel.
+// the output channel. The run is cancelable: double-esc or ctrl+c cancels
+// the context, which unwinds the graph and ends the turn.
 func (m *Model) run() tea.Cmd {
 	ch := make(chan tea.Msg, 512)
 	m.ch = ch
 	obsRun := m.obsBegin(m.lastPrompt)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelRun = cancel
 	go func() {
 		r := runner.New(m.agent, interruptHandler(ch), m.renderer(ch))
-		result, err := r.Run(context.Background(), m.history)
+		result, err := r.Run(ctx, m.history)
 		m.obsEnd(obsRun, result, err)
 		ch <- runDone{result: result, err: err}
 		close(ch)
@@ -411,13 +559,17 @@ func (m *Model) run() tea.Cmd {
 
 // runGoal starts the goal loop in a goroutine; its steps render exactly like
 // a normal run (cycle headers and verdicts as deltas, tool use as chips).
+// Double-esc interrupts the in-flight cycle; the loop then stays idle until
+// /goal resume.
 func (m *Model) runGoal() tea.Cmd {
 	ch := make(chan tea.Msg, 512)
 	m.ch = ch
 	obsRun := m.obsBegin("(goal loop)")
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelRun = cancel
 	go func() {
 		r := runner.New(m.agent, interruptHandler(ch), m.renderer(ch))
-		result, err := r.RunGoal(context.Background(), m.history)
+		result, err := r.RunGoal(ctx, m.history)
 		m.obsEnd(obsRun, result, err)
 		ch <- runDone{result: result, err: err}
 		close(ch)
@@ -435,7 +587,7 @@ func (m *Model) maybeKickGoal() tea.Cmd {
 	if g == nil || g.Status != agent.GoalActive || m.agent.GoalRunning() {
 		return nil
 	}
-	m.write(dimStyle.Render("⏵ goal loop running (esc-free; /goal pause to stop at the next cycle)") + "\n")
+	m.write(dimStyle.Render("⏵ goal loop running (esc-esc interrupts the current cycle; /goal pause to stop at the next cycle)") + "\n")
 	m.running = true
 	return m.runGoal()
 }
@@ -450,9 +602,10 @@ func readCmd(ch <-chan tea.Msg) tea.Cmd {
 	}
 }
 
-// renderer converts graph steps into streamMsg increments, styled with
-// colored tool-name chips, dimmed results, edit diffs, live todo
-// snapshots, and an in-flight tool spinner tree.
+// renderer converts graph steps into structured messages (stream deltas,
+// reasoning, tool calls and results); Update renders the live styled lines
+// from them and records the review blocks, keeping the two views from ever
+// drifting apart.
 func (m *Model) renderer(ch chan<- tea.Msg) runner.Renderer {
 	running := map[string]string{} // toolCallID -> tool name
 	renderMsg := func(msg messages.Message) {
@@ -460,17 +613,12 @@ func (m *Model) renderer(ch chan<- tea.Msg) runner.Renderer {
 		case messages.RoleAI:
 			for _, tc := range msg.ToolCalls {
 				running[tc.ID] = tc.Name
-				ch <- streamMsg("\n" + toolColor(tc.Name).Render("⏺ "+tc.Name) + " " + dimStyle.Render(fmt.Sprintf("%v", tc.Args)) + "\n")
-				if tc.Name == "Edit" || tc.Name == "Write" {
-					for _, l := range diffLines(tc.Args) {
-						ch <- streamMsg("  " + l + "\n")
-					}
-				}
+				ch <- toolCallMsg{id: tc.ID, name: tc.Name, args: tc.Args}
 			}
 			ch <- inFlightMsg(sortedValues(running))
 		case messages.RoleTool:
 			delete(running, msg.ToolCallID)
-			ch <- streamMsg(dimStyle.Render("  ⎿ "+summarize(msg.Content)) + "\n")
+			ch <- toolResultMsg{id: msg.ToolCallID, content: msg.Content}
 			if m.agent != nil {
 				ch <- todosMsg(m.agent.Todos())
 			}
@@ -485,6 +633,11 @@ func (m *Model) renderer(ch chan<- tea.Msg) runner.Renderer {
 				return
 			}
 			switch p := chunk.Payload.(type) {
+			// Reasoning streams dimmed, in full, as it arrives.
+			case agent.ReasoningDelta:
+				if p.Text != "" {
+					ch <- reasoningMsg{text: p.Text}
+				}
 			// Goal cycles stream their tool use through the custom channel.
 			case agent.GoalDelta:
 				renderMsg(p.Message)
@@ -558,48 +711,9 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-len(s))
 }
 
-// resolvePendingKey handles a keypress while an interrupt awaits a decision.
-func (m *Model) resolvePendingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if _, isAsk := m.pending.value.(agent.AskUserRequest); !isAsk {
-		switch msg.String() {
-		case "y", "Y", "enter":
-			m.resolvePending("y")
-		case "n", "N", "esc":
-			m.resolvePending("n")
-		}
-		return m, nil
-	}
-	// AskUserQuestion: the input line collects the answer(s); enter submits
-	// (multiple answers separated by ";").
-	switch msg.String() {
-	case "enter":
-		answers := strings.Split(m.input, ";")
-		for i := range answers {
-			answers[i] = strings.TrimSpace(answers[i])
-		}
-		m.input = ""
-		m.cursor = 0
-		m.resolvePending(agent.AskUserAnswer{Answers: answers})
-	case "backspace":
-		if m.cursor > 0 {
-			m.input = m.input[:m.cursor-1] + m.input[m.cursor:]
-			m.cursor--
-		}
-	case "ctrl+c", "ctrl+d":
-		m.resolvePending(agent.AskUserAnswer{})
-		return m, tea.Quit
-	default:
-		if len(msg.Runes) > 0 {
-			r := string(msg.Runes)
-			m.input = m.input[:m.cursor] + r + m.input[m.cursor:]
-			m.cursor += len(msg.Runes)
-		}
-	}
-	return m, nil
-}
-
 // resolvePending answers the pending interrupt and echoes the decision into
-// the transcript. The run goroutine unblocks and the runner resumes.
+// the transcript. The run goroutine unblocks and the runner resumes. Any
+// held composer draft returns to the input line.
 func (m *Model) resolvePending(answer any) {
 	p := m.pending
 	if p == nil {
@@ -620,31 +734,14 @@ func (m *Model) resolvePending(answer any) {
 		}
 		m.write("\n" + dimStyle.Render(fmt.Sprintf("[plan approval] (%s by user)", verdict)) + "\n")
 	case agent.AskUserRequest:
-		m.write("\n" + dimStyle.Render("[question] answered by user") + "\n")
+		answers := ""
+		if aa, ok := answer.(agent.AskUserAnswer); ok {
+			answers = strings.Join(aa.Answers, " · ")
+		}
+		m.write("\n" + dimStyle.Render("[question] answered by user: "+answers) + "\n")
 	}
+	m.restoreDraft()
 	p.answerCh <- answer
-}
-
-// pendingPrompt renders the plain-text body of the pending interrupt.
-func (m *Model) pendingPrompt() string {
-	switch v := m.pending.value.(type) {
-	case agent.PermissionRequest:
-		return fmt.Sprintf("Allow %s? — %s", v.ToolName, v.Reason)
-	case agent.PlanApprovalRequest:
-		return "Approve this plan?"
-	case agent.AskUserRequest:
-		var b strings.Builder
-		for _, q := range v.Questions {
-			b.WriteString(tools.FormatQuestion(0, q))
-		}
-		b.WriteString("Type your answer")
-		if len(v.Questions) > 1 {
-			b.WriteString("s, separated by ;")
-		}
-		b.WriteString(" and press enter")
-		return b.String()
-	}
-	return "Continue?"
 }
 
 // interruptHandler surfaces run interrupts to the UI and blocks the run until
@@ -681,6 +778,13 @@ func goalFooter(g *agent.Goal) string {
 	return s
 }
 
+// systemLine writes a system fragment (command output, errors, markers)
+// into both the live transcript and the review blocks.
+func (m *Model) systemLine(s string) {
+	m.appendSystemBlock(s)
+	m.write(s)
+}
+
 // write appends a fragment, splitting complete lines into the transcript.
 func (m *Model) write(s string) {
 	m.cur += s
@@ -702,17 +806,25 @@ func (m *Model) flush() {
 	}
 }
 
+// transcriptLimit bounds the live transcript lines (long sessions scroll the
+// oldest display out; the structured blocks keep a deeper untruncated copy).
+const transcriptLimit = 5000
+
 func (m *Model) append(line string) {
 	m.lines = append(m.lines, line)
-	if len(m.lines) > 500 {
-		m.lines = m.lines[len(m.lines)-500:]
+	if len(m.lines) > transcriptLimit {
+		m.lines = m.lines[len(m.lines)-transcriptLimit:]
 	}
 	m.viewport.SetLines(m.lines)
 }
 
 // View renders the transcript (through the viewport), a todo panel, the
-// prompt box, and a footer status line.
+// prompt box, and a footer status line. An open overlay replaces the whole
+// screen; the base view keeps updating underneath through Update.
 func (m *Model) View() string {
+	if m.overlay != overlayNone {
+		return m.overlayView()
+	}
 	var b strings.Builder
 
 	if len(m.lines) == 0 {
@@ -763,20 +875,46 @@ func (m *Model) View() string {
 		title := boldDimStyle.Render("⏵ awaiting your decision")
 		body := m.pendingPrompt()
 		var hint string
-		if _, isAsk := m.pending.value.(agent.AskUserRequest); isAsk {
-			hint = m.renderInput()
+		if ask, isAsk := m.pending.value.(agent.AskUserRequest); isAsk {
+			if m.askIdx < len(ask.Questions) && len(ask.Questions[m.askIdx].Options) > 0 {
+				if ask.Questions[m.askIdx].MultiSelect {
+					hint = dimStyle.Render("↑↓ move · space toggle · enter confirm · esc skip")
+				} else {
+					hint = dimStyle.Render("↑↓ select · enter confirm · esc skip")
+				}
+			} else {
+				hint = m.renderInput()
+			}
 		} else {
-			hint = dimStyle.Render("y = allow · enter = allow · n / esc = deny")
+			hint = dimStyle.Render("←→ select · enter = highlighted (deny) · y allow · n / esc deny")
 		}
-		b.WriteString(boxStyle.Render(title + "\n" + body + "\n" + hint))
+		if m.draftHeld {
+			body += dimStyle.Render("draft (restored after): "+m.draft) + "\n"
+		}
+		b.WriteString(boxStyle.Render(title + "\n" + body + hint))
 		b.WriteString("\n")
 	}
+	if m.queued != nil {
+		b.WriteString(dimStyle.Render("⏳ next: "+summarize(m.queued.text)) + dimStyle.Render(" · ↑ to edit") + "\n")
+	}
 	content := promptStyle.Render("❯ ") + m.renderInput()
-	hints := dimStyle.Render("! for bash mode · / for commands · esc to interrupt · ctrl-c to exit")
-	b.WriteString(boxStyle.Render(content + "\n" + hints))
+	hints := "! bash · / commands & skills · @ agents · pgup/pgdn scroll"
+	if m.running {
+		hints = "esc-esc interrupt · enter queue next message · pgup/pgdn scroll"
+	}
+	if m.hint != "" {
+		hints = m.hint
+	}
+	b.WriteString(boxStyle.Render(content + "\n" + dimStyle.Render(hints)))
 	b.WriteString("\n")
-	const col = 18 // command-name column width
-	for i, c := range suggestions(m.input) {
+	const col = 18 // entry-name column width
+	menu := m.allSuggestions(m.input)
+	lastGroup := ""
+	for i, c := range menu {
+		if c.group != "" && c.group != lastGroup {
+			lastGroup = c.group
+			b.WriteString(boldDimStyle.Render("  "+c.group) + "\n")
+		}
 		name := padRight(c.name, col)
 		if i == m.sel {
 			b.WriteString(selStyle.Render("  "+name) + selDescStyle.Render("  "+c.desc) + "\n")
@@ -802,7 +940,14 @@ func (m *Model) View() string {
 			status += " · vim: NORMAL"
 		}
 	}
-	b.WriteString(dimStyle.Render(status))
+	if seg := ctxFooter(m.ctxInfo); seg != "" {
+		// The ctx segment styles itself (semantic threshold colors), so it
+		// joins after the dim render instead of under it.
+		status = dimStyle.Render(status) + " · " + seg
+	} else {
+		status = dimStyle.Render(status)
+	}
+	b.WriteString(status)
 	b.WriteString("\n")
 	return b.String()
 }
@@ -921,6 +1066,9 @@ func stripSystem(msgs []messages.Message) []messages.Message {
 // the command hands back a prompt (/init). Returns (false, nil) for plain
 // prompts.
 func (m *Model) handleCommand(text string) (bool, tea.Cmd) {
+	if !strings.HasPrefix(text, "/") {
+		return false, nil
+	}
 	if m.console == nil {
 		if text == "/help" {
 			m.write("Commands: /help /exit /quit (attach a console for the full set)\n")
@@ -935,17 +1083,19 @@ func (m *Model) handleCommand(text string) (bool, tea.Cmd) {
 	session := &console.Session{History: m.history}
 	res, err := m.console.Execute(context.Background(), parts[0], parts[1:], session)
 	if err != nil {
-		m.write("Error: " + err.Error() + "\n")
+		m.systemLine("Error: " + err.Error() + "\n")
 		return true, nil
 	}
 	m.history = session.History
 	if res.Clear {
 		m.lines = nil
 		m.cur = ""
+		m.blocks = nil
+		m.reviewFolded = map[int]bool{}
 		m.viewport.SetLines(nil)
 	}
 	if res.Output != "" {
-		m.write(res.Output)
+		m.systemLine(res.Output)
 	}
 	if res.Prompt != "" {
 		return true, m.submit(res.Prompt)
@@ -958,16 +1108,96 @@ func (m *Model) handleCommand(text string) (bool, tea.Cmd) {
 // submit appends a user message and starts one agent run.
 func (m *Model) submit(text string) tea.Cmd {
 	m.write(userStyle.Render("❯ "+text) + "\n")
+	m.appendUserBlock(text)
 	m.history = append(m.history, messages.Human(text))
 	m.running = true
 	m.lastPrompt = text
+	m.refreshCompletions()
 	return m.run()
 }
 
-// command is a slash command with its description.
+// dispatch routes one submitted line exactly like the line REPL classifies
+// them (repl.Parse): `!command` runs in the shell and feeds the output to
+// the conversation, `/name` runs a console command, a `/skill-name` line
+// that matches a loaded skill becomes a model turn (web parity — the Skill
+// tool owns it), and everything else is a plain prompt.
+func (m *Model) dispatch(text string) tea.Cmd {
+	switch a := repl.Parse(text); a.Kind {
+	case repl.KindQuit:
+		return tea.Quit
+	case repl.KindShell:
+		m.runShellLine(a.Text)
+		return nil
+	case repl.KindCommand:
+		// A bare /model with a catalog opens the picker instead of the
+		// text listing (the line REPL keeps the listing).
+		if a.Text == "model" && len(a.Args) == 0 && m.hasModelCatalog() {
+			m.openModels()
+			return nil
+		}
+		if m.knownCommand(a.Text) {
+			_, cmd := m.handleCommand(text)
+			return cmd
+		}
+		if m.isSkillName(a.Text) {
+			return m.submit(text)
+		}
+		m.systemLine("Error: unknown command /" + a.Text + " (try /help)\n")
+		return nil
+	}
+	return m.submit(text)
+}
+
+// knownCommand reports whether name is in the console command table.
+func (m *Model) knownCommand(name string) bool {
+	if m.console == nil {
+		return name == "help"
+	}
+	for _, c := range console.Commands() {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// isSkillName reports whether name matches a loaded skill, making a
+// `/skill-name` line a Skill-tool turn instead of a console command.
+func (m *Model) isSkillName(name string) bool {
+	if m.agent == nil {
+		return false
+	}
+	for _, s := range m.agent.SkillsIn(context.Background()) {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// runShellLine executes one `!command` line, echoes the output into the
+// transcript, and feeds it to the conversation (the model sees the same
+// [shell] message shape as the line REPL).
+func (m *Model) runShellLine(command string) {
+	out := repl.RunShell(command)
+	m.systemLine("$ " + command + "\n" + out + "\n")
+	m.history = append(m.history, messages.Human(repl.ShellFeed(command, out)))
+}
+
+// remember appends a submitted line to the input history (deduplicated).
+func (m *Model) remember(text string) {
+	if len(m.inputHist) == 0 || m.inputHist[len(m.inputHist)-1] != text {
+		m.inputHist = append(m.inputHist, text)
+	}
+	m.histIdx = len(m.inputHist)
+}
+
+// command is one completion entry with its description and menu group
+// (commands, skills, or agents).
 type command struct {
-	name string
-	desc string
+	name  string
+	desc  string
+	group string
 }
 
 // slashCommands is the completion table, derived from the console command
@@ -975,7 +1205,7 @@ type command struct {
 var slashCommands = func() []command {
 	var out []command
 	for _, c := range console.Commands() {
-		out = append(out, command{name: "/" + c.Name, desc: c.Description})
+		out = append(out, command{name: "/" + c.Name, desc: c.Description, group: groupCommands})
 	}
 	return out
 }()
