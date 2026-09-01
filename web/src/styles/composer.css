@@ -544,10 +544,19 @@
   border-radius: 8px;
   background: var(--accent);
   color: var(--on-accent);
-  transition: background 0.12s ease, opacity 0.12s ease;
+  transition:
+    background 160ms var(--ease-out),
+    opacity var(--dur-slow) var(--ease-in-out),
+    transform 160ms var(--ease-out);
 }
 .send-btn:hover {
   background: var(--accent-hover);
+}
+.send-btn:not(:disabled):not(.stop):hover {
+  transform: translateY(-1px);
+}
+.send-btn:not(:disabled):active {
+  transform: translateY(0) scale(0.96);
 }
 .send-btn:disabled {
   opacity: 0.4;

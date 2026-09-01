@@ -173,6 +173,7 @@ const latestEvent = computed(() => {
     <div class="chat-stream">
       <div ref="messagesEl" class="chat-messages">
         <ChatItemView v-for="item in store.activeItems" :key="item.id" :item="item" />
+      <Transition name="fade">
         <div v-if="store.historyLoading" class="msg-skeleton-wrap" role="status" aria-busy="true">
           <span class="sr-only">{{ t('common.loading') }}</span>
           <div v-for="i in 3" :key="i" class="msg-skeleton">
@@ -184,9 +185,13 @@ const latestEvent = computed(() => {
             </div>
           </div>
         </div>
+      </Transition>
+      <Transition name="fade">
         <div v-if="store.activeStatus === 'error'" class="error-banner">
           {{ store.activeError }}
         </div>
+      </Transition>
+      <Transition name="fade">
         <WEmptyState v-if="store.activeItems.length === 0 && !busy && !store.historyLoading" :hint="t('chat.emptyHint')">
           <template #actions>
             <button v-for="p in emptyPrompts" :key="p" class="empty-prompt-chip" type="button" @click="usePrompt(p)">
@@ -194,6 +199,7 @@ const latestEvent = computed(() => {
             </button>
           </template>
         </WEmptyState>
+      </Transition>
       </div>
       <Transition name="jump-latest">
         <button v-if="!pinned" class="jump-latest" :aria-label="t('chat.jumpToLatest')" @click="jumpToLatest()">

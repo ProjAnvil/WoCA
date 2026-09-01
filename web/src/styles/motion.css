@@ -1,0 +1,128 @@
+/* ============================================================================
+   woca motion language — four shared grammars (design spec:
+   woca-internal-docs/login-redesign-motion-spec.md §4).
+
+   fade    pure opacity            same-position state swaps
+   rise    opacity + 6px rise      entrances (messages, panels) — 320ms
+   settle  opacity + 4px settle    exits — always one tier faster than rise
+   reveal  grid-rows 0fr↔1fr       block expand/collapse (WCollapseCard pattern)
+
+   Three iron rules: displacement ≤ 6px (container-level transitions may go
+   to 12px); blur only on container-level transitions (gate, modals); entering
+   is always slower than leaving. Animate transform/opacity only; grid-rows,
+   borders and shadows stay on low-frequency one-shot interactions.
+   ========================================================================== */
+
+/* --- fade: same-position cross-fade ---------------------------------------- */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--dur-base) var(--ease-in-out);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* --- rise / settle: the default enter/leave pair ---------------------------- */
+.rise-enter-active {
+  transition: opacity 320ms var(--ease-out), transform 320ms var(--ease-out);
+}
+.rise-leave-active {
+  transition: opacity var(--dur-fast) var(--ease-in-out), transform var(--dur-fast) var(--ease-in-out);
+}
+.rise-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.rise-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* --- panel-pop: overlay cards (settings / goal / memory panels) -------------
+ * Backdrop fades in place; the card rises with a hair of scale. Exit is a
+ * one-tier-faster settle. Only the card gets transform (backdrop is a huge
+ * paint area — opacity only).                                              */
+.panel-pop-enter-active {
+  transition: opacity var(--dur-slow) var(--ease-out);
+}
+.panel-pop-enter-active .card,
+.panel-pop-enter-active .interrupt-card {
+  transition: opacity 320ms var(--ease-out), transform 320ms var(--ease-out);
+}
+.panel-pop-leave-active {
+  transition: opacity var(--dur-fast) var(--ease-in-out);
+}
+.panel-pop-leave-active .card,
+.panel-pop-leave-active .interrupt-card {
+  transition: opacity var(--dur-fast) var(--ease-in-out), transform var(--dur-fast) var(--ease-in-out);
+}
+.panel-pop-enter-from {
+  opacity: 0;
+}
+.panel-pop-enter-from .card,
+.panel-pop-enter-from .interrupt-card {
+  opacity: 0;
+  transform: translateY(8px) scale(0.99);
+}
+.panel-pop-leave-to {
+  opacity: 0;
+}
+.panel-pop-leave-to .card,
+.panel-pop-leave-to .interrupt-card {
+  opacity: 0;
+  transform: translateY(4px) scale(0.995);
+}
+
+/* --- gate dissolve: login gate → app handoff -------------------------------- *
+ * Enter side is intentionally inert: the gate choreographs its own entrance
+ * internally (LoginGate.vue), so Vue only animates the leave.               */
+.gate-dissolve-enter-active {
+  transition: none;
+}
+.gate-dissolve-leave-active {
+  transition: opacity 320ms var(--ease-in-out), transform 320ms var(--ease-in-out),
+    filter 320ms var(--ease-in-out);
+  pointer-events: none;
+}
+.gate-dissolve-leave-to {
+  opacity: 0;
+  transform: scale(1.015);
+  filter: blur(8px);
+}
+
+/* --- app enter: the main surface rising underneath the dissolving gate ------ *
+ * One-shot (WocaApp toggles .app-entering after authentication); overlaps the
+ * gate's 320ms dissolve by ~150ms for a continuous cross-fade handoff.      */
+@keyframes app-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.app-shell.app-entering {
+  animation: app-enter 400ms var(--ease-out) 80ms both;
+}
+
+/* --- chat: message + stream-card entrance ----------------------------------- *
+ * Runs on element insertion: history loads rise as one block, each new item
+ * rises individually. Streaming text never animates — the typing is the
+ * motion.                                                                   */
+@keyframes msg-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.message,
+.stream-card {
+  animation: msg-rise 320ms var(--ease-out) both;
+}

@@ -6,6 +6,49 @@
    Rules: no bare hex / px shadows outside this file (npm run check:tokens).
    ========================================================================== */
 
+/* --- theme cross-fade ---------------------------------------------------- *
+ * The semantic color tokens are @property-registered so they can transition:
+ * toggling html.dark then morphs every surface 240ms ("ink dilution") instead
+ * of snapping. The transition is gated behind html.theme-anim (added once the
+ * app has mounted — see WocaApp.vue) so the boot-time dark-class application
+ * never animates. Reduced-motion is covered by the global waiver below.     */
+@property --bg           { syntax: '<color>'; inherits: true; initial-value: #f6f6f4; }
+@property --bg-sidebar   { syntax: '<color>'; inherits: true; initial-value: #fbfbfa; }
+@property --bg-soft      { syntax: '<color>'; inherits: true; initial-value: #efefec; }
+@property --surface      { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
+@property --surface-2    { syntax: '<color>'; inherits: true; initial-value: #f3f3f1; }
+@property --surface-hover { syntax: '<color>'; inherits: true; initial-value: #efefec; }
+@property --surface-active { syntax: '<color>'; inherits: true; initial-value: #e4e4e0; }
+@property --panel        { syntax: '<color>'; inherits: true; initial-value: #f3f3f1; }
+@property --border-subtle { syntax: '<color>'; inherits: true; initial-value: rgba(20, 20, 16, 0.05); }
+@property --border       { syntax: '<color>'; inherits: true; initial-value: rgba(20, 20, 16, 0.09); }
+@property --border-strong { syntax: '<color>'; inherits: true; initial-value: rgba(20, 20, 16, 0.16); }
+@property --text         { syntax: '<color>'; inherits: true; initial-value: #1b1b19; }
+@property --text-2       { syntax: '<color>'; inherits: true; initial-value: #55554f; }
+@property --muted        { syntax: '<color>'; inherits: true; initial-value: #8b8b83; }
+@property --faint        { syntax: '<color>'; inherits: true; initial-value: #b3b3aa; }
+@property --accent       { syntax: '<color>'; inherits: true; initial-value: #1f1f1d; }
+@property --accent-hover { syntax: '<color>'; inherits: true; initial-value: #000000; }
+@property --on-accent    { syntax: '<color>'; inherits: true; initial-value: #ffffff; }
+@property --brand-soft   { syntax: '<color>'; inherits: true; initial-value: rgba(20, 20, 16, 0.08); }
+@property --brand-text   { syntax: '<color>'; inherits: true; initial-value: #1b1b19; }
+@property --link         { syntax: '<color>'; inherits: true; initial-value: #4a6a9e; }
+
+html.theme-anim {
+  transition:
+    --bg 240ms var(--ease-in-out), --bg-sidebar 240ms var(--ease-in-out),
+    --bg-soft 240ms var(--ease-in-out), --surface 240ms var(--ease-in-out),
+    --surface-2 240ms var(--ease-in-out), --surface-hover 240ms var(--ease-in-out),
+    --surface-active 240ms var(--ease-in-out), --panel 240ms var(--ease-in-out),
+    --border-subtle 240ms var(--ease-in-out), --border 240ms var(--ease-in-out),
+    --border-strong 240ms var(--ease-in-out), --text 240ms var(--ease-in-out),
+    --text-2 240ms var(--ease-in-out), --muted 240ms var(--ease-in-out),
+    --faint 240ms var(--ease-in-out), --accent 240ms var(--ease-in-out),
+    --accent-hover 240ms var(--ease-in-out), --on-accent 240ms var(--ease-in-out),
+    --brand-soft 240ms var(--ease-in-out), --brand-text 240ms var(--ease-in-out),
+    --link 240ms var(--ease-in-out);
+}
+
 :root {
   /* --- primitives: warm graphite grays ---------------------------------- */
   --w-gray-0: #ffffff;
@@ -111,6 +154,12 @@
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
+  /* --- primitives: gate textures ------------------------------------------ *
+   * feTurbulence grain: kills banding on the dark radial stage so the
+   * grayscale gradient reads as material instead of display artifact.       */
+  --gate-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --gate-noise-opacity: 0.03;
+
   /* --- semantic: surfaces & borders (light) ------------------------------- */
   --bg: var(--w-gray-50);
   --bg-sidebar: #fbfbfa;
@@ -163,6 +212,21 @@
   --info-soft: rgba(9, 105, 218, 0.08);
   --info-text: #0856b3;
   --on-info: #ffffff;
+
+  /* --- semantic: login gate (light) ---------------------------------------- *
+   * The gate is "a sheet of paper in a dark room" — even in light theme the
+   * stage keeps a soft radial falloff. Field/focus tokens are gate-local
+   * variants of border/accent so the app-wide focus ring stays untouched.   */
+  --gate-bg-glow: #fcfcfb;
+  --gate-bg-edge: #e7e7e2;
+  --gate-card-hi: var(--w-gray-0);
+  --gate-card-lo: #fafaf8;
+  --gate-inner-hi: rgba(255, 255, 255, 0.6);
+  --gate-field: rgba(20, 20, 16, 0.035);
+  --focus-ring: rgba(20, 20, 16, 0.08);
+  --focus-border: rgba(27, 27, 25, 0.45);
+  --brand-mark-hi: #2e2e2b;
+  --brand-mark-lo: #1f1f1d;
 
   /* Chat column (messages + tool cards). Widens by display size below so
      wide monitors get more room for content. */
@@ -241,6 +305,19 @@ html.dark {
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
   --shadow-overlay: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border);
+
+  /* --- semantic: login gate (dark) — the ink variant ----------------------- */
+  --gate-bg-glow: #1c1c21;
+  --gate-bg-edge: var(--w-gray-950);
+  --gate-card-hi: #26262b;
+  --gate-card-lo: var(--w-gray-800);
+  --gate-inner-hi: rgba(255, 255, 255, 0.055);
+  --gate-field: rgba(0, 0, 0, 0.22);
+  --focus-ring: rgba(236, 236, 239, 0.09);
+  --focus-border: rgba(236, 236, 239, 0.32);
+  --brand-mark-hi: #f4f4f6;
+  --brand-mark-lo: #e2e2e6;
+  --gate-noise-opacity: 0.045;
 }
 
 /* Global reduced-motion waiver: streaming pulse degrades to a steady dot. */

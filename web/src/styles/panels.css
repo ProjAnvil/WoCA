@@ -162,7 +162,7 @@
   overflow: hidden;
   background: var(--bg-sidebar);
   border-left: 1px solid var(--border);
-  transition: width 0.22s ease;
+  transition: width var(--dur-slow) var(--ease-in-out);
 }
 
 /* Width comes from the workspace store (--ws-w, set while dragging or on
@@ -411,18 +411,25 @@ html.dark .shiki-host span {
 /* Chat items (tool cards, streaming cursor, banners)                          */
 /* -------------------------------------------------------------------------- */
 
+/* Streaming cursor: an opacity breath (never a hard blink) — the typing
+   itself is the motion, the cursor just signals aliveness. */
 .cursor {
   display: inline-block;
-  width: 7px;
+  width: 3px;
   height: 15px;
   margin-left: 2px;
   vertical-align: -2px;
+  border-radius: 1px;
   background: var(--accent);
-  animation: blink 1s steps(2, start) infinite;
+  animation: cursor-breathe 1.2s var(--ease-in-out) infinite;
 }
-@keyframes blink {
-  to {
-    visibility: hidden;
+@keyframes cursor-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
   }
 }
 

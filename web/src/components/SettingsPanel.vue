@@ -270,31 +270,37 @@ onBeforeUnmount(() => {
               {{ t('settings.managedBannerLink') }}
             </button>
           </div>
-          <AppearanceSection v-if="active === 'appearance'" />
-          <PreferencesSection v-if="active === 'preferences'" />
-          <ProviderSection v-if="active === 'provider'" :locked="providerLocked" @navigate="active = $event" />
-          <ClaudeEnvSection v-if="active === 'claudeenv'" :bridge="isBridge" />
-          <ManagedSection v-if="active === 'managed'" :status="statusInfo" />
-          <PluginsSection v-if="active === 'plugins'" :bridge="isBridge" />
-          <StorageSection v-if="active === 'storage'" :bridge="isBridge" />
-          <!-- Message plane is not a private-cloud concept (product design
-               §2 rule 2): the section disappears on managed bridges. -->
-          <MessagePlaneSection
-            v-if="active === 'msgplane' && server.server?.msg_plane_available && !server.managedFields.length"
-          />
-          <MemorySection v-if="active === 'memory'" />
-          <ModelSection v-if="active === 'model'" />
-          <StatsSection v-if="active === 'stats'" />
-          <CloudAccessSection v-if="active === 'cloudaccess'" />
-          <AdminSection v-if="active === 'admin'" />
-          <EdgeSwitchSection
-            v-if="active === 'edge'"
-            :bridges="edgeBridges ?? []"
-            :current="statusInfo?.cloud?.bridge_id"
-            @refresh="refreshEdgeBridges"
-          />
-          <RemotesSection v-if="active === 'remotes'" />
-          <NativeConnectSection v-if="active === 'nativeconnect'" />
+          <!-- Section cross-fade: one keyed host so switching nav entries
+               dissolves between sections instead of hard-cutting. -->
+          <Transition name="fade" mode="out-in">
+            <div :key="active" class="settings-section-host">
+              <AppearanceSection v-if="active === 'appearance'" />
+              <PreferencesSection v-if="active === 'preferences'" />
+              <ProviderSection v-if="active === 'provider'" :locked="providerLocked" @navigate="active = $event" />
+              <ClaudeEnvSection v-if="active === 'claudeenv'" :bridge="isBridge" />
+              <ManagedSection v-if="active === 'managed'" :status="statusInfo" />
+              <PluginsSection v-if="active === 'plugins'" :bridge="isBridge" />
+              <StorageSection v-if="active === 'storage'" :bridge="isBridge" />
+              <!-- Message plane is not a private-cloud concept (product design
+                   §2 rule 2): the section disappears on managed bridges. -->
+              <MessagePlaneSection
+                v-if="active === 'msgplane' && server.server?.msg_plane_available && !server.managedFields.length"
+              />
+              <MemorySection v-if="active === 'memory'" />
+              <ModelSection v-if="active === 'model'" />
+              <StatsSection v-if="active === 'stats'" />
+              <CloudAccessSection v-if="active === 'cloudaccess'" />
+              <AdminSection v-if="active === 'admin'" />
+              <EdgeSwitchSection
+                v-if="active === 'edge'"
+                :bridges="edgeBridges ?? []"
+                :current="statusInfo?.cloud?.bridge_id"
+                @refresh="refreshEdgeBridges"
+              />
+              <RemotesSection v-if="active === 'remotes'" />
+              <NativeConnectSection v-if="active === 'nativeconnect'" />
+            </div>
+          </Transition>
 
           <!-- Shared datalist for the free-form model inputs -->
           <datalist id="woca-model-suggestions">

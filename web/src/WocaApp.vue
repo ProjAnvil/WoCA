@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import WorkspaceSidebar from './components/WorkspaceSidebar.vue'
@@ -69,6 +69,27 @@ function onGlobalKeydown(e: KeyboardEvent) {
 onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown))
 
+// Theme cross-fade: the @property-registered color tokens (tokens.css) morph
+// 240ms on theme toggle. Opt in only after first paint so the boot-time
+// dark-class application never animates.
+onMounted(() => document.documentElement.classList.add('theme-anim'))
+
+// Gate → app handoff: when the login gate closes after a successful login,
+// the shell underneath rises once (motion.css .app-entering, 400ms) and
+// overlaps the gate's 320ms dissolve into one continuous cross-fade.
+const appEntering = ref(false)
+let appEnterTimer = 0
+watch(
+  () => auth.gateOpen,
+  (open, was) => {
+    if (was && !open) {
+      appEntering.value = true
+      window.clearTimeout(appEnterTimer)
+      appEnterTimer = window.setTimeout(() => (appEntering.value = false), 560)
+    }
+  },
+)
+
 onMounted(() => {
   void auth.probe()
   void sessions.init()
@@ -95,18 +116,26 @@ watch(
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" :class="{ 'app-entering': appEntering }">
     <Sidebar />
     <main class="main">
       <ChatPanel />
     </main>
     <WorkspaceSplitHandle v-if="workspace.panelOpen" />
     <WorkspaceSidebar />
-    <SettingsPanel v-if="settings.panelOpen" />
-    <GoalPanel v-if="sessions.goalPanelOpen" />
-    <MemoryPanel v-if="memory.panelOpen" />
+    <Transition name="panel-pop">
+      <SettingsPanel v-if="settings.panelOpen" />
+    </Transition>
+    <Transition name="panel-pop">
+      <GoalPanel v-if="sessions.goalPanelOpen" />
+    </Transition>
+    <Transition name="panel-pop">
+      <MemoryPanel v-if="memory.panelOpen" />
+    </Transition>
     <InterruptModal v-if="sessions.activeInterrupt" />
-    <LoginGate v-if="auth.gateOpen" :revoked="auth.gateCode === 'revoked'" @authenticated="auth.onAuthenticated" />
+    <Transition name="gate-dissolve">
+      <LoginGate v-if="auth.gateOpen" :revoked="auth.gateCode === 'revoked'" @authenticated="auth.onAuthenticated" />
+    </Transition>
     <WConfirmDialog />
     <BtwPanel />
     <WCommandPalette :commands="commands" />

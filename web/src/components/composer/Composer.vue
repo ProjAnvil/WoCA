@@ -202,15 +202,17 @@ defineExpose({ fillPrompt })
         @paste="onPaste"
         @blur="onBlurCloseAc"
       ></textarea>
-      <button
-        v-if="busy"
-        class="send-btn stop"
-        :title="t('chat.stop')"
-        :aria-label="t('chat.stop')"
-        @click="store.cancel()"
-      >
-        <Square :size="14" />
-      </button>
+      <Transition name="fade">
+        <button
+          v-if="busy"
+          class="send-btn stop"
+          :title="t('chat.stop')"
+          :aria-label="t('chat.stop')"
+          @click="store.cancel()"
+        >
+          <Square :size="14" />
+        </button>
+      </Transition>
       <button
         class="send-btn"
         :class="{ 'queue-send': busy }"

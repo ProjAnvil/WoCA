@@ -46,8 +46,9 @@ function onFreeText(qi: number, e: Event) {
 </script>
 
 <template>
-  <div v-if="intr" class="overlay">
-    <div class="card interrupt-card">
+  <Transition name="panel-pop">
+    <div v-if="intr" class="overlay">
+      <div class="card interrupt-card">
       <div class="card-head">
         <span class="card-title">
           <template v-if="intr.kind === 'permission'">{{ t('chat.permissionTitle') }}</template>
@@ -108,6 +109,7 @@ function onFreeText(qi: number, e: Event) {
           <button class="btn btn-primary" @click="approve">{{ t('chat.allow') }}</button>
         </template>
       </div>
+      </div>
     </div>
-  </div>
+  </Transition>
 </template>

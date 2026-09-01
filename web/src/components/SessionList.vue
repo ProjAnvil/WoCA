@@ -88,7 +88,8 @@ async function removeSession(s: Session) {
         </button>
       </div>
 
-      <div v-if="isOpen(g.key)" class="ws-sessions">
+      <Transition name="fade">
+        <div v-if="isOpen(g.key)" class="ws-sessions">
         <div
           v-for="s in g.sessions"
           :key="s.id"
@@ -120,8 +121,9 @@ async function removeSession(s: Session) {
           >
             <Trash2 :size="12" />
           </button>
+          </div>
         </div>
-      </div>
+      </Transition>
     </div>
   </div>
 </template>

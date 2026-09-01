@@ -37,7 +37,10 @@ export const useAuthStore = defineStore("auth", () => {
   async function onAuthenticated() {
     gateOpen.value = false;
     gateCode.value = "";
-    window.location.reload();
+    // The reload refreshes the data stores, but it would also kill the gate's
+    // 320ms dissolve + app-rise handoff (motion.css) mid-flight — so it waits
+    // one animation window. Timing only: the reload itself is unconditional.
+    window.setTimeout(() => window.location.reload(), 380);
   }
 
   return { gateOpen, gateCode, me, probe, raise, onAuthenticated };

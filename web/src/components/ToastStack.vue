@@ -21,14 +21,15 @@ function runAction(id: number, run: () => void) {
 
 <template>
   <div v-if="toast.toasts.length" class="toast-stack" aria-live="polite">
-    <div
-      v-for="t in toast.toasts"
-      :key="t.id"
-      class="toast"
-      :class="`toast-${t.kind}`"
-      role="status"
-      @click="toast.dismiss(t.id)"
-    >
+    <TransitionGroup name="rise">
+      <div
+        v-for="t in toast.toasts"
+        :key="t.id"
+        class="toast"
+        :class="`toast-${t.kind}`"
+        role="status"
+        @click="toast.dismiss(t.id)"
+      >
       <component :is="ICONS[t.kind]" :size="15" class="toast-icon" aria-hidden="true" />
       <span class="toast-message">{{ t.message }}</span>
       <button
@@ -39,11 +40,17 @@ function runAction(id: number, run: () => void) {
       >
         {{ t.action.label }}
       </button>
-    </div>
+      </div>
+    </TransitionGroup>
   </div>
 </template>
 
 <style scoped>
+/* rise transition classes live in styles/motion.css; the move class covers
+   reordering when an older toast expires out from under a newer one. */
+.rise-move {
+  transition: transform var(--dur-base) var(--ease-in-out);
+}
 .toast-stack {
   position: fixed;
   bottom: 18px;
