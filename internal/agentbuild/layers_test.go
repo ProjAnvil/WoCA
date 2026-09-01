@@ -127,6 +127,11 @@ func TestLoadAgentsLayered(t *testing.T) {
 }
 
 func TestMergeMCPSpecs(t *testing.T) {
+	// mergeMCPSpecs folds in the managed layer from the real woca home —
+	// pin HOME so a host that once materialized a managed overlay (e.g.
+	// mcp.json with a fetch server) cannot leak into the assertion.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("WOCA_HOME", "")
 	var buf bytes.Buffer
 	got := mergeMCPSpecs(
 		[]string{"dup=flag-cmd", "flagonly=flag-cmd", "dup2=flag-a", "dup2=flag-b", "bad-no-eq"},
