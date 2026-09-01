@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
@@ -340,10 +341,10 @@ func TestCloudAccessLegacyMigration(t *testing.T) {
 	t.Setenv("HOME", home)
 	_, priv, _ := ed25519.GenerateKey(nil)
 	state := map[string]any{
-		"bridge_id":     "br_legacy",
-		"private_key":   []byte(priv),
-		"access_token":  "tok",
-		"access_expiry": time.Now().Add(time.Hour).UnixMilli(),
+		"bridge_id":         "br_legacy",
+		"private_key":       []byte(priv),
+		"access_token":      "tok",
+		"access_expires_at": time.Now().Add(time.Hour).UnixMilli(),
 	}
 	data, _ := json.Marshal(state)
 	legacy := filepath.Join(home, ".woca", "bridge-gateway.json")
@@ -648,5 +649,125 @@ func TestPullWaitRidesPinnedTransport(t *testing.T) {
 	// The pinned original still answers.
 	if _, err := client.PullWait(ctx, 2*time.Second); err != nil {
 		t.Fatalf("PullWait against the pinned edge failed: %v", err)
+	}
+}
+
+// TestCloudAccessLegacyMigrationNewerFileSupersedesDeadIdentity: after a
+// stack rebuild the database can hold residue whose token has expired; a
+// fresh CLI enrollment (a strictly later expiry in the legacy file) must
+// win and replace it — otherwise the operator's one-time token is
+// swallowed, its private key deleted with the file, and the server keeps
+// an orphan registration nobody can authenticate as.
+func TestCloudAccessLegacyMigrationNewerFileSupersedesDeadIdentity(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_, oldPriv, _ := ed25519.GenerateKey(nil)
+	_, newPriv, _ := ed25519.GenerateKey(nil)
+
+	st := newBridgeSettings(t)
+	persist := &settingsPersist{kv: NewLocalKV(st.DB()), st: st}
+	if err := persist.Save(stateFile{
+		BridgeID:     "br_dead",
+		PrivateKey:   oldPriv,
+		AccessToken:  "tok_dead",
+		AccessExpiry: time.Now().Add(-time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	legacy := filepath.Join(home, ".woca", "bridge-gateway.json")
+	data, err := json.Marshal(stateFile{
+		BridgeID:     "br_fresh",
+		PrivateKey:   newPriv,
+		AccessToken:  "tok_fresh",
+		AccessExpiry: time.Now().Add(6 * time.Hour).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ca := newCloudAccess(t, st)
+	if err := ca.Configure("https://edge.example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ca.Run(ctx)
+	waitForCond(t, 5*time.Second, func() bool {
+		after, err := persist.Load()
+		return err == nil && after.BridgeID == "br_fresh"
+	})
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatal("legacy state file not removed after migration")
+	}
+	after, err := persist.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after.PrivateKey, newPriv) {
+		t.Fatal("migrated identity kept the dead residue's private key")
+	}
+}
+
+// TestCloudAccessLegacyMigrationStaleFileLoses: the file is the older
+// generation; a live database identity with a later expiry wins and the
+// file is discarded (the original residue protection).
+func TestCloudAccessLegacyMigrationStaleFileLoses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_, livePriv, _ := ed25519.GenerateKey(nil)
+	_, stalePriv, _ := ed25519.GenerateKey(nil)
+
+	st := newBridgeSettings(t)
+	persist := &settingsPersist{kv: NewLocalKV(st.DB()), st: st}
+	if err := persist.Save(stateFile{
+		BridgeID:     "br_live",
+		PrivateKey:   livePriv,
+		AccessToken:  "tok_live",
+		AccessExpiry: time.Now().Add(5 * time.Hour).UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	legacy := filepath.Join(home, ".woca", "bridge-gateway.json")
+	data, err := json.Marshal(stateFile{
+		BridgeID:     "br_stale",
+		PrivateKey:   stalePriv,
+		AccessToken:  "tok_stale",
+		AccessExpiry: time.Now().Add(time.Hour).UnixMilli(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ca := newCloudAccess(t, st)
+	if err := ca.Configure("https://edge.example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ca.Run(ctx)
+	waitForCond(t, 5*time.Second, func() bool {
+		_, err := os.Stat(legacy)
+		return os.IsNotExist(err)
+	})
+	after, err := persist.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.BridgeID != "br_live" {
+		t.Fatalf("stale file clobbered the live identity: %+v", after)
 	}
 }

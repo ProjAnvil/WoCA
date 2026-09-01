@@ -253,31 +253,45 @@ func (c *CloudAccess) PullNow(ctx context.Context) bool {
 }
 
 // migrateLegacy imports the v1.4 file-based state once, then removes it.
-// An identity already present in the settings database always wins — the
-// file may be stale residue from an older container generation.
+// Between the two generations the NEWER enrollment wins, judged by the
+// access token's expiry — a proxy for when each identity was issued. A
+// stale file from an older container generation still never clobbers a
+// live database identity, but a fresh CLI enrollment (a strictly later
+// expiry, written by an operator holding a one-time token) now
+// supersedes database residue whose token has expired — the trap where
+// re-enrollment after a stack rebuild was silently swallowed by dead
+// rows, its private key deleted along with the file, leaving an orphan
+// registration on the server.
 func (c *CloudAccess) migrateLegacy() {
 	if c.legacyPath == "" {
 		return
 	}
-	if existing, err := (&settingsPersist{kv: c.kv, st: c.st}).Load(); err == nil && existing.BridgeID != "" {
-		_ = os.Remove(c.legacyPath)
-		return
-	}
+	p := &settingsPersist{kv: c.kv, st: c.st}
+	existing, dbErr := p.Load()
+	dbHasIdentity := dbErr == nil && existing.BridgeID != ""
 	data, err := os.ReadFile(c.legacyPath)
 	if err != nil {
 		return
 	}
-	var st stateFile
-	if err := json.Unmarshal(data, &st); err != nil || st.BridgeID == "" {
+	var file stateFile
+	if err := json.Unmarshal(data, &file); err != nil || file.BridgeID == "" {
+		// Unreadable residue: drop it once the database holds an identity.
+		if dbHasIdentity {
+			_ = os.Remove(c.legacyPath)
+		}
 		return
 	}
-	p := &settingsPersist{kv: c.kv, st: c.st}
-	if err := p.Save(st); err != nil {
+	if dbHasIdentity && existing.AccessExpiry >= file.AccessExpiry {
+		// The database carries the same or a newer generation.
+		_ = os.Remove(c.legacyPath)
+		return
+	}
+	if err := p.Save(file); err != nil {
 		c.log.Warn().Err(err).Msg("bridge: legacy gateway state migration failed (keeping the file)")
 		return
 	}
 	if err := os.Remove(c.legacyPath); err == nil {
-		c.log.Info().Str("bridge", st.BridgeID).Msg("bridge: migrated gateway state into the settings database")
+		c.log.Info().Str("bridge", file.BridgeID).Msg("bridge: migrated gateway state into the settings database")
 	}
 }
 
