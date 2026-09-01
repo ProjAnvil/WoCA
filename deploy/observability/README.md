@@ -9,7 +9,7 @@ pane stays the woca SPA, which embeds a link to Grafana (see below).
 
 ```
 deploy/observability/
-├── otelcol/config.yaml                  collector: OTLP in → Prometheus/Jaeger out
+├── otelcol/config.yaml                  collector: OTLP in → Prometheus/Jaeger/Langfuse out
 ├── prometheus/prometheus.yml            scrape config (compose service names)
 ├── prometheus/rules/woca-rules.yaml     alert rules (service down, 5xx, worker stall…)
 ├── alertmanager/alertmanager.yml        routing (point the webhook at your channel)
@@ -17,6 +17,23 @@ deploy/observability/
 │   └── dashboards/woca-services.json    the "woca Services" dashboard (deliverable)
 └── docker-compose.observability.yml     overlay onto docker-compose.full.yml
 ```
+
+Trace fan-out: this stack's collector is fed by the **woca-collector**
+trace bridge (mgmt segment, `deploy/collector/` — the roles push OTLP
+there unconditionally, addressed through the nacos entry `woca-obs.otlp`);
+when the overlay is up the bridge forwards traces here (→ Jaeger) and
+metrics here (→ Prometheus), when it is down the exports fail fast and
+drop. The same bridge also fans every trace out to **Langfuse** for LLM
+tracing with the `session.id` mapping applied there (see
+`deploy/collector/README.md`).
+
+Session grouping: every `chat`/`invoke_tool` span carries woca's
+`run_id`/`session_id`/`tenant_id` tags (internal/telemetry); the bridge
+renames `session_id`→`session.id` (and `user_id`→`user.id`) onto
+Langfuse's OTLP conventions, so traces group by session in the Langfuse
+UI with no extra instrumentation. Ingestion is asynchronous (queue →
+worker → ClickHouse) — expect a minute of delay between a run and its
+traces appearing.
 
 ## What each woca binary exposes (Phase 3 governance baseline)
 
@@ -42,7 +59,7 @@ the OTLP endpoint with `gen_ai.*` attributes (OTel GenAI semconv) plus
 | variable | meaning | default |
 |---|---|---|
 | `WOCA_SERVICE_NAME` | `service.name` resource attribute | binary name |
-| `WOCA_OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector (`http://…:4318`) | unset = no OTLP push (metrics still scrape) |
+| `WOCA_OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector (`http://…:4318`), or a `nacos://…` registry reference (`woca-obs.otlp`) resolved at startup | unset = no OTLP push (metrics still scrape) |
 | `WOCA_OTEL_EXPORTER_OTLP_INSECURE` | `false` to use TLS | insecure (in-cluster default) |
 | `WOCA_OBS_ADDR` (worker) | probe listener | `:9091`, `off` disables |
 | `WOCA_GRAFANA_URL` | ops-console link surfaced via `/api/health` → SPA | unset = hidden |

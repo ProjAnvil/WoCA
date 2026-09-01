@@ -1,6 +1,6 @@
 output "nlb_dns" {
   value       = aws_lb.dmz.dns_name
-  description = "The public entry (business :80, skills :9082, discovery :9083, config console :9086)."
+  description = "The public entry (business :80, skills :9082, discovery :9083, config console :9086, Langfuse UI :3000)."
 }
 
 output "node_ips" {
@@ -32,4 +32,10 @@ output "ladym_pg_password" {
 output "ecr_repositories" {
   value       = { for repo, r in aws_ecr_repository.this : repo => r.repository_url }
   description = "Push the woca + ladym images here before `terraform apply` (tag = var.woca_version)."
+}
+
+output "langfuse_admin_password" {
+  value       = local.langfuse_admin_password
+  sensitive   = true
+  description = "Generated Langfuse bootstrap admin password (admin@woca.local) — UI on NLB :3000 (when var.langfuse_admin_password was empty)."
 }

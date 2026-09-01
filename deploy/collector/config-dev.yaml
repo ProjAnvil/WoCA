@@ -1,0 +1,59 @@
+# woca-collector: the dev-stack trace bridge (deploy/selfhosted/
+# docker-compose.dev.yml). Lives on the management segment like every
+# assembly-plane peer: the roles already hold an mgmt leg (nacos), so trace
+# push needs no extra network hop, and the obs segment stays
+# infrastructure-only (langfuse).
+#
+# woca's OTLP exporter (internal/ee/obs contract) pushes credential-less
+# OTLP/HTTP on the default path; Langfuse ingests at /api/public/otel with
+# Basic auth — this hop bridges the two. The transform renames woca's
+# telemetry tags onto Langfuse's OTLP conventions (session.id / user.id).
+# Metrics are accepted and dropped: Langfuse ingests traces only, and the
+# dev stack has no metrics pipeline.
+#
+# Delivery posture: async and lossy by design — when langfuse is down (or
+# the profile is off) exports fail fast and drop (no queue, no retry),
+# never affecting the roles.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+  transform/langfuse:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["session.id"], attributes["session_id"]) where attributes["session_id"] != nil
+          - set(attributes["user.id"], attributes["user_id"]) where attributes["user_id"] != nil
+
+exporters:
+  otlphttp/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    headers:
+      Authorization: "${env:LANGFUSE_OTLP_AUTH}"
+      x-langfuse-ingestion-version: "4"
+    sending_queue:
+      enabled: false
+    retry_on_failure:
+      enabled: false
+  debug:
+    verbosity: basic
+
+service:
+  telemetry:
+    metrics:
+      level: basic
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform/langfuse, batch]
+      exporters: [otlphttp/langfuse]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

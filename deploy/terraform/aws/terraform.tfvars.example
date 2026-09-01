@@ -13,3 +13,11 @@ app_count   = "1"   # 2 needs the shared sessions volume (README)
 woca_version = "v0.0.0" # the release tag pushed to ECR
 
 # allow_dmz_egress = true  # first-boot image pulls only — lock it back
+
+# Langfuse (LLM tracing) — every password empty = generated. The UI is on
+# NLB :3000 (admin@woca.local); set the sign-in password to choose it.
+# langfuse_admin_password = "choose-one"
+
+# NEXTAUTH sign-in callbacks need the externally visible origin:
+# set this on the infra node's /etc/woca/.env after apply
+# (LANGFUSE_NEXTAUTH_URL=http://<nlb-host>:3000).

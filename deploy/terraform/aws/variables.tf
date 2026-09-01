@@ -102,3 +102,53 @@ variable "data_volume_gb" {
   default     = 50
   description = "EBS volume size for the data and memory nodes (PG data)."
 }
+
+# ── Langfuse (LLM tracing, infra node): generated when not provided ────────
+
+variable "langfuse_pg_password" {
+  type        = string
+  default     = ""
+  description = "Langfuse PostgreSQL password. Empty = generated."
+}
+
+variable "langfuse_clickhouse_password" {
+  type        = string
+  default     = ""
+  description = "Langfuse ClickHouse password. Empty = generated."
+}
+
+variable "langfuse_redis_auth" {
+  type        = string
+  default     = ""
+  description = "Langfuse Redis requirepass. Empty = generated."
+}
+
+variable "langfuse_minio_root_password" {
+  type        = string
+  default     = ""
+  description = "Langfuse MinIO root password. Empty = generated."
+}
+
+variable "langfuse_nextauth_secret" {
+  type        = string
+  default     = ""
+  description = "Langfuse NEXTAUTH_SECRET. Empty = generated."
+}
+
+variable "langfuse_salt" {
+  type        = string
+  default     = ""
+  description = "Langfuse SALT. Empty = generated."
+}
+
+variable "langfuse_admin_password" {
+  type        = string
+  default     = ""
+  description = "Langfuse bootstrap admin sign-in password (admin@woca.local). Empty = generated (see outputs)."
+}
+
+variable "langfuse_otlp_auth" {
+  type        = string
+  default     = ""
+  description = "The collector's Langfuse OTLP Authorization header ('Basic ' + base64(pk:sk)). Default matches the seeded pk-lf-woca-local/sk-lf-woca-local pair; override it together with the key pair env on the infra node (printf 'pk:sk' | base64)."
+}

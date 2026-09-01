@@ -1,0 +1,64 @@
+# woca-collector: the full-stack trace bridge (deploy/selfhosted/
+# docker-compose.full.yml). Dual-homed: mgmt leg receives the roles' OTLP
+# push (every role already holds an mgmt leg for the registry — no extra
+# network hop, the DOCKER-USER isolation stays untouched), obs leg fans out
+# to the observability segment.
+#
+# Fan-out:
+#   traces  -> langfuse-web (LLM tracing, Basic auth from
+#              LANGFUSE_OTLP_AUTH injected by the compose file)
+#           -> the observability overlay's otel-collector (Jaeger +
+#              Prometheus via its own pipelines). Without the overlay the
+#              export fails fast and drops — the obs stack is opt-in.
+#   metrics -> the overlay's otel-collector (Prometheus :8889); dropped the
+#              same way when the overlay is off.
+#
+# The transform renames woca's telemetry tags onto Langfuse's OTLP
+# conventions (session.id / user.id); Jaeger receives them via the obs
+# collector either way (the rename is additive — underscore originals ride
+# along).
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+  transform/langfuse:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["session.id"], attributes["session_id"]) where attributes["session_id"] != nil
+          - set(attributes["user.id"], attributes["user_id"]) where attributes["user_id"] != nil
+
+exporters:
+  otlphttp/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    headers:
+      Authorization: "${env:LANGFUSE_OTLP_AUTH}"
+      x-langfuse-ingestion-version: "4"
+  otlphttp/obs:
+    endpoint: http://otel-collector:4318
+    sending_queue:
+      enabled: false
+    retry_on_failure:
+      enabled: false
+  debug:
+    verbosity: basic
+
+service:
+  telemetry:
+    metrics:
+      level: basic
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform/langfuse, batch]
+      exporters: [otlphttp/langfuse, otlphttp/obs]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/obs]

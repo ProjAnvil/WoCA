@@ -29,11 +29,13 @@ locals {
   # Legal CROSS-subnet flows — everything else inside the VPC is denied at
   # the NACL (the DOCKER-USER matrix made real). Dual-homed services carry
   # their other legs as ENIs, so nearly all compose traffic stays
-  # intra-subnet; the one genuinely cross-subnet flow is the gateway
-  # (dmz) → woca-server (app) business proxy target.
+  # intra-subnet; the genuinely cross-subnet flows are the gateway (dmz) →
+  # woca-server (app) business proxy target and the gateway → langfuse-web
+  # (infra) ops-UI reverse proxy.
   cross_flows = [
     { from = "dmz", to = "app", port = 8080, proto = "tcp", note = "gateway nginx → woca-server business entry" },
     { from = "dmz", to = "app", port = 8090, proto = "tcp", note = "gateway nginx → woca-server service-plane listener (WOCA_GW_ADDR)" },
+    { from = "dmz", to = "infra", port = 3000, proto = "tcp", note = "gateway nginx → langfuse-web ops UI (NLB :3000)" },
   ]
 }
 
@@ -221,16 +223,17 @@ resource "aws_network_acl_rule" "deny_vpc_in" {
 }
 
 # DMZ only: the published service ports from the internet (client-IP
-# preserving NLB). 80/8082/8083/8086 = the compose gateway ports block.
+# preserving NLB). 80/8082/8083/8086 = the compose gateway ports block;
+# 3000 = the Langfuse ops UI (reverse-proxied by the gateway nginx).
 resource "aws_network_acl_rule" "dmz_public_in" {
-  count = length([80, 8082, 8083, 8086])
+  count = length([80, 3000, 8082, 8083, 8086])
 
   network_acl_id = aws_network_acl.zone["dmz"].id
   rule_number    = 200 + count.index
   egress         = false
   protocol       = "tcp"
-  from_port      = element([80, 8082, 8083, 8086], count.index)
-  to_port        = element([80, 8082, 8083, 8086], count.index)
+  from_port      = element([80, 3000, 8082, 8083, 8086], count.index)
+  to_port        = element([80, 3000, 8082, 8083, 8086], count.index)
   rule_action    = "allow"
   cidr_block     = "0.0.0.0/0"
 }

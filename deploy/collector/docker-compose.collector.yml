@@ -1,0 +1,28 @@
+# woca-collector standalone: the trace bridge as its own deployment unit.
+#
+# Publishes OTLP :4318 for woca roles (point the nacos entry
+# DEFAULT_GROUP/woca-obs.otlp at this host) and forwards to a Langfuse
+# instance whose address and Basic auth come from the environment. Run it
+# wherever the traffic shaping needs it — the roles never learn the
+# Langfuse address, only this collector's.
+#
+#   docker compose -f deploy/collector/docker-compose.collector.yml up -d
+#
+# Required env (this file or the shell):
+#   LANGFUSE_OTLP_ENDPOINT  e.g. https://langfuse.example.com/api/public/otel
+#   LANGFUSE_OTLP_AUTH      "Basic " + base64 of pk:sk (printf 'pk:sk' | base64)
+name: woca-collector
+
+services:
+  woca-collector:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.136.0
+    container_name: woca-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      LANGFUSE_OTLP_ENDPOINT: ${LANGFUSE_OTLP_ENDPOINT:?point at your Langfuse, e.g. https://langfuse.example.com/api/public/otel}
+      LANGFUSE_OTLP_AUTH: ${LANGFUSE_OTLP_AUTH:?Basic base64(pk:sk), see printf 'pk:sk' | base64}
+    ports:
+      - "4318:4318"
+    volumes:
+      - ./config-standalone.yaml:/etc/otelcol/config.yaml:ro

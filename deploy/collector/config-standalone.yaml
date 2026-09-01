@@ -1,0 +1,48 @@
+# woca-collector: the standalone trace bridge (docker-compose.collector.yml
+# in this directory) — for deployments that run the collector as its own
+# unit outside a compose stack (own host/container), with woca roles
+# pointing at it through the nacos entry (woca-obs.otlp).
+#
+# Same bridge semantics as the stack-embedded variants, with the Langfuse
+# address and credentials injected via environment (LANGFUSE_OTLP_ENDPOINT,
+# LANGFUSE_OTLP_AUTH) so the same artifact serves any topology. Metrics are
+# dropped: route them through an observability collector instead.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+  transform/langfuse:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["session.id"], attributes["session_id"]) where attributes["session_id"] != nil
+          - set(attributes["user.id"], attributes["user_id"]) where attributes["user_id"] != nil
+
+exporters:
+  otlphttp/langfuse:
+    endpoint: "${env:LANGFUSE_OTLP_ENDPOINT}"
+    headers:
+      Authorization: "${env:LANGFUSE_OTLP_AUTH}"
+      x-langfuse-ingestion-version: "4"
+  debug:
+    verbosity: basic
+
+service:
+  telemetry:
+    metrics:
+      level: basic
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform/langfuse, batch]
+      exporters: [otlphttp/langfuse]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

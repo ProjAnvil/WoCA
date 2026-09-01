@@ -1,6 +1,8 @@
 # The public entry: an internet NLB in the DMZ subnet targeting the
 # gateway node's published host ports (the compose gateway ports block:
-# 80 business, 8082 skill SPA, 8083 discovery, 8086 config console).
+# 80 business, 8082 skill SPA, 8083 discovery, 8086 config console, plus
+# 3000 = the Langfuse ops UI the gateway nginx reverse-proxies to the
+# infra node).
 
 locals {
   published = {
@@ -8,6 +10,7 @@ locals {
     skills    = 8082
     discovery = 8083
     config    = 8086
+    langfuse  = 3000
   }
 }
 

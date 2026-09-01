@@ -1,10 +1,15 @@
-# OTel Collector for the woca enterprise stack (design §12.3).
+# OTel Collector for the woca enterprise observability stack (design
+# §12.3). Fed by the woca-collector trace bridge (deploy/collector/), which
+# the roles push to over the management segment — this collector only sees
+# traffic when the overlay is up (the bridge fails fast and drops
+# otherwise).
 #
 # Receives OTLP/HTTP from every server artifact (woca-server on its business
 # port, woca-worker over the same push), exports:
 #   - metrics -> Prometheus exposition at :8889 (scraped by Prometheus)
 #   - traces  -> Jaeger (Tempo is a drop-in replacement via the otlphttp
-#                endpoint)
+#                endpoint); LLM traces additionally fan out to Langfuse at
+#                the bridge, not here
 #   - logs    -> not wired yet; Loki/Tempo arrive with the log pipeline.
 receivers:
   otlp:

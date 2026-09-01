@@ -22,15 +22,72 @@ resource "random_password" "console" {
   length = 16
 }
 
+# ── Langfuse (LLM tracing, infra node) ─────────────────────────────────────
+resource "random_password" "langfuse_pg" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "langfuse_clickhouse" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "langfuse_redis" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "langfuse_minio" {
+  length  = 24
+  special = false
+}
+
+resource "random_password" "langfuse_nextauth_secret" {
+  length  = 32
+  special = false
+}
+
+resource "random_password" "langfuse_salt" {
+  length  = 24
+  special = false
+}
+
+# ENCRYPTION_KEY: hex-32 (64 hex chars), like `openssl rand -hex 32`.
+resource "random_id" "langfuse_encryption_key" {
+  byte_length = 32
+}
+
+resource "random_password" "langfuse_admin" {
+  length  = 16
+  special = false
+}
+
+# The collector's Basic auth for Langfuse OTLP ingestion: "Basic " +
+# base64(pk:sk). The default matches the seeded key pair below (override
+# the pair AND this header together: printf 'pk:sk' | base64).
+locals {
+  langfuse_otlp_auth_default = "Basic cGstbGYtd29jYS1sb2NhbDpzay1sZi13b2NhLWxvY2Fs"
+}
+
 locals {
   woca_pg_password      = var.woca_pg_password != "" ? var.woca_pg_password : random_password.woca_pg.result
   woca_pg_repl_password = var.woca_pg_repl_password != "" ? var.woca_pg_repl_password : random_password.woca_pg_repl.result
   ladym_pg_password     = var.ladym_pg_password != "" ? var.ladym_pg_password : random_password.ladym_pg.result
   console_password      = var.console_password != "" ? var.console_password : random_password.console.result
 
+  langfuse_pg_password            = var.langfuse_pg_password != "" ? var.langfuse_pg_password : random_password.langfuse_pg.result
+  langfuse_clickhouse_password    = var.langfuse_clickhouse_password != "" ? var.langfuse_clickhouse_password : random_password.langfuse_clickhouse.result
+  langfuse_redis_password         = var.langfuse_redis_auth != "" ? var.langfuse_redis_auth : random_password.langfuse_redis.result
+  langfuse_minio_password         = var.langfuse_minio_root_password != "" ? var.langfuse_minio_root_password : random_password.langfuse_minio.result
+  langfuse_nextauth_secret        = var.langfuse_nextauth_secret != "" ? var.langfuse_nextauth_secret : random_password.langfuse_nextauth_secret.result
+  langfuse_salt                   = var.langfuse_salt != "" ? var.langfuse_salt : random_password.langfuse_salt.result
+  langfuse_admin_password         = var.langfuse_admin_password != "" ? var.langfuse_admin_password : random_password.langfuse_admin.result
+
   nacos_url    = "http://${local.node_ips["infra"]}:8848"
   pg_host      = local.node_ips["data"]
   ladym_host   = local.node_ips["infra"]
+  infra_host   = local.node_ips["infra"]
   app_upstream = "http://${local.node_ips["app-1"]}:8090"
   server_upstreams = var.app_count == "2" ? [
     "${local.node_ips["app-1"]}:8080",
@@ -44,6 +101,15 @@ locals {
     "LADYM_PG_PASSWORD=${local.ladym_pg_password}",
     "WOCA_CONSOLE_USER=${var.console_user}",
     "WOCA_CONSOLE_PASSWORD=${local.console_password}",
+    "LANGFUSE_PG_PASSWORD=${local.langfuse_pg_password}",
+    "LANGFUSE_CLICKHOUSE_PASSWORD=${local.langfuse_clickhouse_password}",
+    "LANGFUSE_REDIS_AUTH=${local.langfuse_redis_password}",
+    "LANGFUSE_MINIO_ROOT_PASSWORD=${local.langfuse_minio_password}",
+    "LANGFUSE_NEXTAUTH_SECRET=${local.langfuse_nextauth_secret}",
+    "LANGFUSE_SALT=${local.langfuse_salt}",
+    "LANGFUSE_ENCRYPTION_KEY=${random_id.langfuse_encryption_key.hex}",
+    "LANGFUSE_INIT_USER_PASSWORD=${local.langfuse_admin_password}",
+    "LANGFUSE_OTLP_AUTH=${var.langfuse_otlp_auth != "" ? var.langfuse_otlp_auth : local.langfuse_otlp_auth_default}",
     "",
   ])
 
@@ -52,6 +118,7 @@ locals {
     server_upstreams = local.server_upstreams
     ladym_host       = local.ladym_host
     config_host      = local.node_ips["mgmt"]
+    infra_host       = local.infra_host
   })
 
   compose_dmz = templatefile("${path.module}/templates/compose-dmz.yml.tftpl", {})
@@ -67,6 +134,7 @@ locals {
   compose_infra = templatefile("${path.module}/templates/compose-infra.yml.tftpl", {
     images       = local.images
     pg_host      = local.pg_host
+    infra_host   = local.infra_host
     app_upstream = local.app_upstream
   })
   compose_mgmt = templatefile("${path.module}/templates/compose-mgmt.yml.tftpl", {
@@ -94,7 +162,10 @@ locals {
       { "docker-compose.yml" = local.compose_data },
       { for name, content in local.pg_init : "pg/${name}" => content },
     )
-    infra = { "docker-compose.yml" = local.compose_infra }
+    infra = merge(
+      { "docker-compose.yml" = local.compose_infra },
+      { "collector/config.yaml" = file("${path.module}/templates/otelcol-collector.yaml") },
+    )
     mgmt  = { "docker-compose.yml" = local.compose_mgmt }
   }
 

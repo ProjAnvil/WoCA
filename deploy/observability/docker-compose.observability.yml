@@ -10,9 +10,16 @@
 # volume paths against the first file's directory, which is why the mounts
 # below say ../observability/...
 #
-# Adds: OTel Collector (OTLP in, Prometheus/Jaeger out), Prometheus (+alert
-# rules), Alertmanager, Grafana (provisioned dashboard "woca Services"),
-# Jaeger (trace search). Host entry for Grafana is the gateway :8085.
+# Adds: OTel Collector (the observability pipeline: Prometheus/Jaeger out),
+# Prometheus (+alert rules), Alertmanager, Grafana (provisioned dashboard
+# "woca Services"), Jaeger (trace search). Host entry for Grafana is the
+# gateway :8085.
+#
+# Role instrumentation no longer rides this overlay: the roles push OTLP
+# unconditionally to the woca-collector trace bridge (docker-compose.full.yml,
+# infra zone, addressed through the nacos entry woca-obs.otlp), and that
+# bridge fans traces/metrics out to this stack's collector when the overlay
+# is up — the overlay only provides the pipeline itself.
 #
 # §12.2 config separation: everything here is infrastructure config (env +
 # files under deploy/observability/); tenant/business configuration stays in
@@ -20,58 +27,18 @@
 name: woca-enterprise-full
 
 services:
-  # Existing services gain OTLP export + service identity (env merges).
   gateway:
     ports:
       - "${ENT_GRAFANA_PORT:-8085}:8085"
     networks:
-      - woca-edge
-      - ladym-data
-      - woca-obs
+      - woca-dmz
+      - woca-infra
+      - woca-mgmt
 
-  woca-server-1:
-    networks:
-      woca-edge: {}
-      woca-pg: {}
-      ladym-data: {}
-      woca-obs:
-        aliases: [woca-server]
-    environment:
-      WOCA_SERVICE_NAME: woca-server-1
-      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-
-  woca-server-2:
-    networks:
-      woca-edge: {}
-      woca-pg: {}
-      ladym-data: {}
-      woca-obs:
-        aliases: [woca-server]
-    environment:
-      WOCA_SERVICE_NAME: woca-server-2
-      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-
-  woca-worker-1:
-    networks:
-      woca-edge: {}
-      woca-pg: {}
-      ladym-data: {}
-      woca-obs:
-        aliases: [woca-worker]
-    environment:
-      WOCA_SERVICE_NAME: woca-worker-1
-      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
-
-  woca-worker-2:
-    networks:
-      woca-edge: {}
-      woca-pg: {}
-      ladym-data: {}
-      woca-obs:
-        aliases: [woca-worker]
-    environment:
-      WOCA_SERVICE_NAME: woca-worker-2
-      WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  # The roles need no overlay changes anymore: telemetry export and the
+  # mgmt-side path to the woca-collector bridge are part of the base stack
+  # (docker-compose.full.yml); these network mappings only re-declare the
+  # base segments so the overlay stays self-describing.
 
   # ─────────────────── Observability pipeline ───────────────────
   otel-collector:
@@ -80,14 +47,14 @@ services:
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ../observability/otelcol/config.yaml:/etc/otelcol/config.yaml:ro
-    networks: [woca-obs]
+    networks: [woca-infra]
 
   jaeger:
     image: jaegertracing/all-in-one:1.65.0
     container_name: woca-ent-jaeger
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
-    networks: [woca-obs]
+    networks: [woca-infra]
 
   prometheus:
     image: prom/prometheus:v3.4.1
@@ -99,14 +66,14 @@ services:
       - ../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../observability/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
-    networks: [woca-obs]
+    networks: [woca-infra]
 
   alertmanager:
     image: prom/alertmanager:v0.28.1
     container_name: woca-ent-alertmanager
     volumes:
       - ../observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-    networks: [woca-obs]
+    networks: [woca-infra]
 
   grafana:
     image: grafana/grafana:11.6.0
@@ -121,13 +88,15 @@ services:
       - ../observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../observability/grafana/provisioning/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
-    networks: [woca-obs]
+    networks: [woca-infra]
 
 networks:
-  woca-obs:
-    name: woca-ent-obs
+  # The pipeline rides the infra zone (docker-compose.full.yml) — the
+  # former dedicated obs segment folded in, Terraform parity.
+  woca-infra:
+    name: woca-ent-infra
     ipam:
-      config: [{ subnet: 172.28.40.0/24 }]
+      config: [{ subnet: 172.28.20.0/24 }]
 
 volumes:
   prometheus-data:

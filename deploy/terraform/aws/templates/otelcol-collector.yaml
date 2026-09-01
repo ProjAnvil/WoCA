@@ -1,0 +1,49 @@
+# woca-collector config for the Terraform infra node — the deploy/collector/
+# bridge semantics (see deploy/collector/README.md). Roles push
+# credential-less OTLP on :4318; this bridge owns the Langfuse path (Basic
+# auth from LANGFUSE_OTLP_AUTH) and the session.id tag mapping. Langfuse
+# runs on the same node, so the fan-out stays on the docker bridge. Metrics
+# are accepted and dropped (no observability pipeline on this deployment).
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 5s
+  transform/langfuse:
+    error_mode: ignore
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["session.id"], attributes["session_id"]) where attributes["session_id"] != nil
+          - set(attributes["user.id"], attributes["user_id"]) where attributes["user_id"] != nil
+
+exporters:
+  otlphttp/langfuse:
+    endpoint: http://langfuse-web:3000/api/public/otel
+    headers:
+      Authorization: "${env:LANGFUSE_OTLP_AUTH}"
+      x-langfuse-ingestion-version: "4"
+    sending_queue:
+      enabled: false
+    retry_on_failure:
+      enabled: false
+  debug:
+    verbosity: basic
+
+service:
+  telemetry:
+    metrics:
+      level: basic
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform/langfuse, batch]
+      exporters: [otlphttp/langfuse]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

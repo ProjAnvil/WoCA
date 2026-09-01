@@ -55,8 +55,9 @@ resource "aws_security_group_rule" "dmz_egress" {
   description       = var.allow_dmz_egress ? "dmz egress OPEN (first-boot image pulls — lock it back)" : "dmz egress: VPC only (locked posture)"
 }
 
-# The one genuinely cross-zone flow: gateway (dmz) → woca-server (app).
-# Expresses the nginx upstreams of gateway/nginx-full.conf.
+# The genuinely cross-zone flows. Expresses the nginx upstreams of
+# gateway/nginx-full.conf: the business proxy targets (dmz → app) and the
+# Langfuse ops-UI reverse proxy (dmz → infra).
 resource "aws_security_group_rule" "dmz_to_app" {
   for_each = toset(["8080", "8090"])
 
@@ -67,4 +68,14 @@ resource "aws_security_group_rule" "dmz_to_app" {
   to_port                  = tonumber(each.value)
   protocol                 = "tcp"
   description              = "gateway nginx → woca-server (${each.value})"
+}
+
+resource "aws_security_group_rule" "dmz_to_infra_langfuse" {
+  type                     = "ingress"
+  security_group_id        = aws_security_group.zone["infra"].id
+  source_security_group_id = aws_security_group.zone["dmz"].id
+  from_port                = 3000
+  to_port                  = 3000
+  protocol                 = "tcp"
+  description              = "gateway nginx to langfuse-web ops UI"
 }

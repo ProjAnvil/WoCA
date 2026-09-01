@@ -1,14 +1,21 @@
 # Infra node compose — the platform runtime substrate, merging the compose
 # full stack's woca-mq (nats-js-1/2/3 + nats-init) and ladym-data
-# (ladym-pg + ladym-api-1/2 + ladym-worker) networks plus nacos.
+# (ladym-pg + ladym-api-1/2 + ladym-worker) networks plus nacos, the
+# woca-collector trace bridge and the Langfuse group.
 #
 # nacos rides infra (not mgmt) because nacosrt is a hard startup gate for
 # every business role: it is runtime infrastructure. The mgmt zone keeps
 # only the human consoles, so an mgmt outage never blocks role
-# restarts/scale-outs.
+# restarts/scale-outs. The collector and Langfuse follow the same ruling:
+# the bridge is on every role's hot path (addressed through the nacos
+# entry woca-obs.otlp, like the DSN), and Langfuse's backing stores are
+# platform infrastructure — the roles never learn the Langfuse address,
+# only the collector's.
 #
 # Published host ports serve the nodes whose ENI legs land in this subnet:
 #   4222 NATS (app, mgmt)  8080 ladym-api (dmz, app)  8848/9848 nacos (all)
+#   4318 woca-collector (app roles' OTLP push)
+#   3000 langfuse-web (dmz gateway nginx reverse proxy, NLB :3000)
 name: woca-private-infra
 
 x-nats: &nats
@@ -183,6 +190,176 @@ services:
       retries: 30
       start_period: 15s
 
+  # ── trace bridge: woca-collector (deploy/collector/ correspondence) ────
+  # The roles push credential-less OTLP here (nacos entry woca-obs.otlp);
+  # the bridge owns the Langfuse path + Basic auth and the session.id tag
+  # mapping (config: /etc/woca/collector/config.yaml, injected by
+  # cloud-init). Same node as Langfuse, so the fan-out stays on the docker
+  # bridge — no network policy involved. 4318 is published for the app
+  # nodes' roles (their infra-leg ENIs, same path as nats:4222).
+  woca-collector:
+    image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.136.0
+    container_name: woca-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      LANGFUSE_OTLP_AUTH: $${LANGFUSE_OTLP_AUTH:?set in .env}
+    volumes:
+      - /etc/woca/collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4318:4318"
+
+  # ── LLM tracing: Langfuse v4 (mirrors docker-compose.full.yml) ─────────
+  # web + worker over their own PostgreSQL, ClickHouse, Redis and MinIO.
+  # Next.js standalone binds to $HOSTNAME — pin the wildcard so healthchecks
+  # and the gateway proxy see the port (upstream gotcha).
+  langfuse-pg:
+    image: postgres:17-alpine
+    container_name: woca-langfuse-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: $${LANGFUSE_PG_PASSWORD:?set in .env}
+      POSTGRES_DB: langfuse
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - /var/lib/woca-data/langfuse-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:25.12
+    container_name: woca-langfuse-clickhouse
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: $${LANGFUSE_CLICKHOUSE_PASSWORD:?set in .env}
+    volumes:
+      - /var/lib/woca-data/langfuse-clickhouse:/var/lib/clickhouse
+      - /var/lib/woca-data/langfuse-clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  langfuse-redis:
+    image: redis:7-alpine
+    container_name: woca-langfuse-redis
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "$${LANGFUSE_REDIS_AUTH:?set in .env}", "--maxmemory-policy", "noeviction"]
+    environment:
+      REDIS_AUTH: $${LANGFUSE_REDIS_AUTH:?set in .env}
+    volumes:
+      - /var/lib/woca-data/langfuse-redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_AUTH\" ping | grep -q PONG"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  langfuse-minio:
+    image: cgr.dev/chainguard/minio
+    container_name: woca-langfuse-minio
+    restart: unless-stopped
+    entrypoint: sh
+    command:
+      - -c
+      - mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data
+    environment:
+      MINIO_ROOT_USER: langfuse
+      MINIO_ROOT_PASSWORD: $${LANGFUSE_MINIO_ROOT_PASSWORD:?set in .env}
+    volumes:
+      - /var/lib/woca-data/langfuse-minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4.24.0
+    container_name: woca-langfuse-web
+    restart: unless-stopped
+    depends_on: &langfuse-depends-on
+      langfuse-pg: { condition: service_healthy }
+      langfuse-clickhouse: { condition: service_healthy }
+      langfuse-redis: { condition: service_healthy }
+      langfuse-minio: { condition: service_healthy }
+    environment: &langfuse-env
+      HOSTNAME: 0.0.0.0
+      NEXTAUTH_URL: $${LANGFUSE_NEXTAUTH_URL:-}
+      DATABASE_URL: postgresql://langfuse:$${LANGFUSE_PG_PASSWORD}@langfuse-pg:5432/langfuse
+      SALT: $${LANGFUSE_SALT:?set in .env}
+      ENCRYPTION_KEY: $${LANGFUSE_ENCRYPTION_KEY:?set in .env}
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: langfuse
+      CLICKHOUSE_PASSWORD: $${LANGFUSE_CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: $${LANGFUSE_MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: $${LANGFUSE_MINIO_ROOT_PASSWORD}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: "6379"
+      REDIS_AUTH: $${LANGFUSE_REDIS_AUTH}
+      NEXTAUTH_SECRET: $${LANGFUSE_NEXTAUTH_SECRET:?set in .env}
+      # Deterministic bootstrap: the org/project/admin user and pinned API
+      # keys are seeded on first boot; the collector's auth default below
+      # matches the key pair. Override both together in .env
+      # (printf 'pk:sk' | base64).
+      LANGFUSE_INIT_ORG_ID: woca-org
+      LANGFUSE_INIT_ORG_NAME: woca
+      LANGFUSE_INIT_PROJECT_ID: woca-project
+      LANGFUSE_INIT_PROJECT_NAME: woca
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: $${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-pk-lf-woca-local}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: $${LANGFUSE_INIT_PROJECT_SECRET_KEY:-sk-lf-woca-local}
+      LANGFUSE_INIT_USER_EMAIL: $${LANGFUSE_INIT_USER_EMAIL:-admin@woca.local}
+      LANGFUSE_INIT_USER_NAME: $${LANGFUSE_INIT_USER_NAME:-woca admin}
+      LANGFUSE_INIT_USER_PASSWORD: $${LANGFUSE_INIT_USER_PASSWORD:?set in .env}
+    ports:
+      - "3000:3000" # ops UI — the dmz gateway nginx reverse-proxies it (NLB :3000)
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/public/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4.24.0
+    container_name: woca-langfuse-worker
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    environment:
+      <<: *langfuse-env
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3030/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
   # One-shot address publish — same entries as the original, with hosts
   # resolved to this deployment's node IPs.
   nacos-init:
@@ -212,6 +389,7 @@ services:
         }
         publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@${pg_host}:5432/woca?sslmode=disable"
         publish woca-ops.upstream "${app_upstream}"
+        publish woca-obs.otlp "http://${infra_host}:4318"
         publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
         echo "nacos service addresses ready"
     restart: "no"
