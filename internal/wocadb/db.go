@@ -344,17 +344,22 @@ func (d *DB) migrate() error {
 			blob BYTEA,
 			PRIMARY KEY (thread_id, checkpoint_ns, channel, version)
 		)`,
-			`CREATE TABLE IF NOT EXISTS lgcp.checkpoint_writes (
-			thread_id TEXT NOT NULL,
-			checkpoint_ns TEXT NOT NULL DEFAULT '',
-			checkpoint_id TEXT NOT NULL,
-			task_id TEXT NOT NULL,
-			idx INTEGER NOT NULL,
-			channel TEXT NOT NULL,
-			type TEXT,
-			blob BYTEA NOT NULL,
-			PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
-		)`,
+		`CREATE TABLE IF NOT EXISTS lgcp.checkpoint_writes (
+		thread_id TEXT NOT NULL,
+		checkpoint_ns TEXT NOT NULL DEFAULT '',
+		checkpoint_id TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		idx INTEGER NOT NULL,
+		channel TEXT NOT NULL,
+		type TEXT,
+		blob BYTEA NOT NULL,
+		task_path TEXT NOT NULL DEFAULT '',
+		PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+	)`,
+		// Pre-created volumes from before the saver's v9 migration miss the
+		// task_path column; the saver's own Setup chain would add it, but
+		// keep the pre-creation self-consistent too.
+		`ALTER TABLE lgcp.checkpoint_writes ADD COLUMN IF NOT EXISTS task_path TEXT NOT NULL DEFAULT ''`,
 			`CREATE INDEX IF NOT EXISTS runs_thread_id_idx ON runs(thread_id)`,
 		)
 		// Ownership lookup: SECURITY DEFINER so the policy sees the true

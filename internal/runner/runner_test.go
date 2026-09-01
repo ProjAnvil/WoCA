@@ -366,7 +366,17 @@ func TestRunnerOutputLimitEscalation(t *testing.T) {
 	if last := out[len(out)-1]; last.Content != "full at 64k" {
 		t.Fatalf("final = %+v", last)
 	}
-	if a.CurrentModel() != primary {
+	// The original model is restored after the turn (behind the agent's
+	// observing wrapper — unwrap before comparing).
+	base := a.CurrentModel()
+	for {
+		u, ok := base.(interface{ Unwrap() language.ChatModel })
+		if !ok || u.Unwrap() == nil {
+			break
+		}
+		base = u.Unwrap()
+	}
+	if base != primary {
 		t.Fatal("original model not restored after escalation")
 	}
 }
