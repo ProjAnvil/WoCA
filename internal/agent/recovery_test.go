@@ -163,8 +163,9 @@ func TestInvokeOutputLimitEscalation(t *testing.T) {
 	if last := out[len(out)-1]; last.Content != "full answer at 64k" {
 		t.Fatalf("final message = %+v", last)
 	}
-	// The original model is restored after the turn.
-	if a.CurrentModel() != primary {
+	// The original model is restored after the turn (behind the agent's
+	// observing wrapper).
+	if baseChatModel(a.CurrentModel()) != primary {
 		t.Fatal("original model not restored after escalation")
 	}
 }

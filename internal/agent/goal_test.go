@@ -715,7 +715,7 @@ func TestGoalEvaluatorNativeStructuredOutput(t *testing.T) {
 	g := a.Goal()
 	// The agent binds tools into a fresh wrapper copy — read the schema
 	// log off the bound model, not the construction-time fake.
-	bound := a.goalModel().(*structuredFake)
+	bound := baseChatModel(a.goalModel()).(*structuredFake)
 	if len(bound.schemas) == 0 {
 		t.Fatalf("evaluator never used the native structured path; goal=%+v status=%s", g, g.Status)
 	}

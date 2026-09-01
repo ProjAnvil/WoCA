@@ -466,6 +466,12 @@ func New(cfg Config) (*Agent, error) {
 		}
 		runtimeModel = router
 	}
+	// LLM tracing: every model entering the agent records "chat" spans
+	// (one per logical request, retries included in the same span). Same
+	// wrap as SetModel applies on swaps — the two assembly paths must not
+	// diverge.
+	runtimeModel = model.Observe(runtimeModel)
+	a.model = model.Observe(a.model)
 
 	base := cfg.Registry.All()
 	if cfg.Subagent {
@@ -865,11 +871,14 @@ func (a *Agent) ToolNames() []string {
 // SetModel swaps the chat model used by the model node at runtime, rebinding
 // the tool set. Safe to call while a run is in flight (the settings API and
 // thinking-level endpoint do): the model snapshot is taken under a.mu and the
-// swap is committed under it.
+// swap is committed under it. Every model entering the agent is wrapped with
+// the chat-span decorator here — the one seam shared by the initial build,
+// settings swaps and fallback recovery, in every deployment form.
 func (a *Agent) SetModel(m language.ChatModel) error {
 	if m == nil {
 		return fmt.Errorf("agent: model is required")
 	}
+	m = model.Observe(m)
 	a.mu.Lock()
 	tools := a.toolList
 	a.mu.Unlock()

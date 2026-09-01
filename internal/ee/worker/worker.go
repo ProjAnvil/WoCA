@@ -11,6 +11,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/runstate"
+	"github.com/projanvil/woca/internal/telemetry"
 	"github.com/rs/zerolog"
 )
 
@@ -156,6 +157,12 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 		if snap.Workspace != "" {
 			ctx = agent.WithRunWorkspace(ctx, snap.Workspace)
 		}
+		// Tag the execution ctx with the run/session identity so every
+		// telemetry span the agent records (chat, tools) carries it — in the
+		// queue-dispatch form this process is where runs execute, and spans
+		// without these tags cannot be grouped by session downstream
+		// (Langfuse session.id, per-run filtering).
+		ctx = telemetry.WithRun(ctx, run.RunID, run.SessionID)
 		history := []messages.Message{humanMessage(snap)}
 		if w.sessions != nil && snap.SessionID != "" {
 			if prev := w.sessions.Load(snap.SessionID); len(prev) > 0 {

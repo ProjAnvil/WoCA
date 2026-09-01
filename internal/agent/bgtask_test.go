@@ -33,6 +33,19 @@ func newBypassAgent(t *testing.T, model language.ChatModel) *Agent {
 	return a
 }
 
+// baseChatModel strips woca's model wrappers (Observe/Router/namedModel)
+// down to the configured model, for tests asserting the configuration
+// identity behind the decorators the agent installs.
+func baseChatModel(m language.ChatModel) language.ChatModel {
+	for {
+		u, ok := m.(interface{ Unwrap() language.ChatModel })
+		if !ok || u.Unwrap() == nil {
+			return m
+		}
+		m = u.Unwrap()
+	}
+}
+
 func TestBackgroundTaskOutputBuffering(t *testing.T) {
 	bt := &backgroundTask{status: TaskRunning}
 	bt.appendOutput("")
