@@ -61,8 +61,9 @@ async function save() {
   }
 }
 
-// 注销: wipe the local machine identity. Server-side revocation stays
-// the administrator's action (console), this only clears this bridge.
+// Deregister: wipe the local machine identity. Server-side revocation
+// stays the administrator's action (console), this only clears this
+// bridge.
 async function deregister() {
   if (resetting.value) return
   const ok = await confirmDialog.ask({

@@ -51,7 +51,7 @@ describe('StorageSection', () => {
     settings.checkpointBackend = 'postgres'
     settings.memoryBackend = 'postgres'
     const w = mountSection(pinia, true)
-    expect(w.find('.mem-intro').text()).toContain('private cloud')
+    expect(w.find('.mem-intro').text()).toContain('organization')
     for (const s of w.findAll('select.field')) {
       expect((s.element as HTMLSelectElement).disabled).toBe(true)
     }

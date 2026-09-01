@@ -23,7 +23,7 @@ describe('MessagePlaneSection', () => {
     const settings = useServerSettingsStore()
     settings.server = { managed_fields: [], msg_plane_available: false } as unknown as AppSettings
     const w = mountSection(pinia)
-    expect(w.text()).toContain('Enterprise-only')
+    expect(w.text()).toContain('enterprise feature')
     // The controls stay rendered (bound to store drafts) but the note is
     // the operative signal.
     expect(w.findAll('select.field')).toHaveLength(1)

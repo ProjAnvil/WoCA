@@ -213,6 +213,116 @@ func profileBridgeKey(baseURL string) string {
 	return "connection.bridge." + baseURL
 }
 
+// ProfileRow is one profile plus its session/bookkeeping columns for the
+// connect page's saved-connection list (LEFT JOIN shape).
+type ProfileRow struct {
+	Profile
+	Active           bool
+	HasSession       bool
+	SessionExpiresAt int64 // UnixMilli; 0 when HasSession is false
+}
+
+// ListProfiles returns every saved profile with its session columns,
+// newest-touched first. The connect page renders the active-session ones
+// on top; the raw order here is by updated_at so callers can re-sort.
+func (s *Store) ListProfiles(ctx context.Context) ([]ProfileRow, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.id, p.base_url, p.created_at, p.updated_at, p.active,
+		       (n.profile_id IS NOT NULL), COALESCE(n.expires_at, 0)
+		FROM connection_profiles p
+		LEFT JOIN native_sessions n ON n.profile_id = p.id
+		ORDER BY p.updated_at DESC, p.id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list connection profiles: %w", err)
+	}
+	defer rows.Close()
+	var out []ProfileRow
+	for rows.Next() {
+		var row ProfileRow
+		var active int
+		if err := rows.Scan(&row.ID, &row.BaseURL, &row.CreatedAt, &row.UpdatedAt, &active, &row.HasSession, &row.SessionExpiresAt); err != nil {
+			return nil, fmt.Errorf("scan connection profile: %w", err)
+		}
+		row.Active = active == 1
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// ProfileByID loads one profile regardless of active state.
+func (s *Store) ProfileByID(ctx context.Context, id int64) (Profile, bool, error) {
+	profile, err := scanProfile(s.db.QueryRowContext(ctx, `
+		SELECT id, base_url, created_at, updated_at
+		FROM connection_profiles WHERE id = ?`, id))
+	if err == sql.ErrNoRows {
+		return Profile{}, false, nil
+	}
+	if err != nil {
+		return Profile{}, false, err
+	}
+	return profile, true, nil
+}
+
+// ActivateProfile makes the given profile the active one (the profile
+// Bootstrap resumes on next start). Mirrors SaveProfile's exclusive-active
+// contract.
+func (s *Store) ActivateProfile(ctx context.Context, id int64) (Profile, bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Profile{}, false, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE connection_profiles SET active = 0 WHERE active = 1`); err != nil {
+		return Profile{}, false, fmt.Errorf("clear active connection profile: %w", err)
+	}
+	now := time.Now().Unix()
+	res, err := tx.ExecContext(ctx, `UPDATE connection_profiles SET active = 1, updated_at = ? WHERE id = ?`, now, id)
+	if err != nil {
+		return Profile{}, false, fmt.Errorf("activate connection profile: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Profile{}, false, nil
+	}
+	profile, err := scanProfile(tx.QueryRowContext(ctx, `
+		SELECT id, base_url, created_at, updated_at
+		FROM connection_profiles WHERE id = ?`, id))
+	if err != nil {
+		return Profile{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Profile{}, false, err
+	}
+	return profile, true, nil
+}
+
+// DeleteProfile removes a profile, its sealed session (FK cascade), and
+// its bridge-pin preference. Returns false when the id is unknown.
+func (s *Store) DeleteProfile(ctx context.Context, id int64) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	var baseURL string
+	err = tx.QueryRowContext(ctx, `SELECT base_url FROM connection_profiles WHERE id = ?`, id).Scan(&baseURL)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM preferences WHERE key = ?`, profileBridgeKey(baseURL)); err != nil {
+		return false, fmt.Errorf("delete profile bridge pin: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM connection_profiles WHERE id = ?`, id); err != nil {
+		return false, fmt.Errorf("delete connection profile: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) Preference(ctx context.Context, key string) (string, bool, error) {
 	var value string
 	err := s.db.QueryRowContext(ctx, `SELECT value FROM preferences WHERE key = ?`, key).Scan(&value)

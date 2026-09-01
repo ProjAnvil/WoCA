@@ -22,10 +22,12 @@ import (
 // it to the client build when the release pipeline bundles the artifact.
 const embeddedBridgeVersion = "dev"
 
-// setupEmbeddedBridge installs+starts the bundled bridge and adopts it as
-// the default profile on first run. Best-effort: a failure degrades to
-// manual profiles, it never blocks the app.
-func setupEmbeddedBridge(ctx context.Context, dataDir string, firstRun func(baseURL string)) (*bridgeproc.Manager, *bridgeproc.KeyStore) {
+// setupEmbeddedBridge installs+starts the bundled bridge and returns it
+// with its key store. Best-effort: a failure degrades to manual profiles,
+// it never blocks the app. The adoption decision (zero-login local entry
+// vs an enrolled bridge's sign-in entry) stays with the caller — it needs
+// the enrollment marker and the service, both assembled after the spawn.
+func setupEmbeddedBridge(ctx context.Context, dataDir string, spawnArgs []string) (*bridgeproc.Manager, *bridgeproc.KeyStore) {
 	data := embeddedBridgeBytes()
 	if len(data) == 0 {
 		return nil, nil
@@ -38,13 +40,9 @@ func setupEmbeddedBridge(ctx context.Context, dataDir string, firstRun func(base
 	if err != nil {
 		return nil, nil
 	}
-	mgr := bridgeproc.New(bin)
-	baseURL, err := mgr.Start(ctx)
-	if err != nil {
+	mgr := bridgeproc.New(bin, spawnArgs...)
+	if _, err := mgr.Start(ctx); err != nil {
 		return nil, nil
-	}
-	if firstRun != nil {
-		firstRun(baseURL)
 	}
 	ks, err := bridgeproc.OpenKeyStore(dataDir)
 	if err != nil {

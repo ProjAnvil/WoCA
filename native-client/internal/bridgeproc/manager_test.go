@@ -125,3 +125,67 @@ func TestInstallVersionGuard(t *testing.T) {
 		t.Fatalf("stamp = %q", stamp)
 	}
 }
+
+func TestNewEmbedsExtraArgs(t *testing.T) {
+	m := New("/bin/true", "--auth", "apikey")
+	cmd := m.Command("/tmp/ready")
+	want := []string{"/bin/true", "serve", "--addr", "127.0.0.1:0", "--no-browser", "--auth", "apikey"}
+	if !argsEqualTest(cmd.Args, want) {
+		t.Fatalf("args = %v, want %v", cmd.Args, want)
+	}
+	// RestartWith swaps the args the next spawn uses (atomic: the closure
+	// reads them without the process mutex).
+	m.extraArgs.Store([]string(nil))
+	cmd = m.Command("/tmp/ready2")
+	want = []string{"/bin/true", "serve", "--addr", "127.0.0.1:0", "--no-browser"}
+	if !argsEqualTest(cmd.Args, want) {
+		t.Fatalf("args after swap = %v, want %v", cmd.Args, want)
+	}
+}
+
+func argsEqualTest(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestManagerRestartWith(t *testing.T) {
+	m := &Manager{Command: fakeBridgeCommand}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	baseURL, err := m.Start(ctx)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	again, err := m.RestartWith(ctx, "--auth", "apikey")
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if again == "" {
+		t.Fatal("restart returned an empty URL")
+	}
+	if !m.Running() {
+		t.Fatal("not running after restart")
+	}
+	// The pre-restart URL is gone from the process's view; the fresh one
+	// answers health (Start's own gate already proved it, this guards
+	// regressions that would return before the handshake).
+	resp, err := http.Get(again + "/api/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health after restart = %d", resp.StatusCode)
+	}
+	_ = baseURL
+	if err := m.Stop(); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+}

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../i18n'
 
 import ConnectView from './ConnectView.vue'
+import type { EnrollEmbeddedInput, EnrollResult } from './bridge'
 
 function mountConnect(connect = vi.fn().mockResolvedValue({ state: 'ready' })) {
   return {
@@ -241,5 +242,312 @@ describe('ConnectView three-entry model (design §6.6)', () => {
       api_key: 'woca_test_key',
       bridge_id: 'br_pinned',
     })
+  })
+
+  // The saved-connection list (one-tap resume): profiles with a live
+  // session continue directly; expired ones prefill the key form.
+  function profileListApp() {
+    return {
+      ...nativeApp(),
+      Profiles: vi.fn(async () => [
+        { id: 7, server_url: 'https://edge.example.com', bridge_id: 'br_live', session_state: 'active' as const, last_used_at: 2, active: true },
+        { id: 8, server_url: 'https://other.example.com', session_state: 'expired' as const, last_used_at: 1, active: false },
+      ]),
+      ResumeProfile: vi.fn(async () => ({ state: 'ready' as const })),
+      DeleteProfile: vi.fn(async () => ({ deleted: true, had_session: true, revoked: true })),
+    }
+  }
+
+  it('lists saved connections and resumes a signed-in profile in one tap', async () => {
+    const app = profileListApp()
+    vi.stubGlobal('go', { main: { App: app } })
+    const resume = vi.fn().mockResolvedValue({ state: 'ready' })
+    const wrapper = mount(ConnectView, {
+      props: { connect: vi.fn().mockResolvedValue({ state: 'ready' }), resume },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+
+    const list = wrapper.get('[data-testid="saved-profiles"]')
+    expect(list.text()).toContain('edge.example.com')
+    expect(list.text()).toContain('Signed in')
+    expect(list.text()).toContain('Last used')
+
+    const rows = wrapper.findAll('.gate-profile-main')
+    expect(rows).toHaveLength(2)
+    await rows[0].trigger('click')
+    await flushPromises()
+    expect(resume).toHaveBeenCalledWith(7)
+  })
+
+  it('prefills the key form when picking a profile whose session expired', async () => {
+    const app = profileListApp()
+    vi.stubGlobal('go', { main: { App: app } })
+    const resume = vi.fn().mockResolvedValue({ state: 'ready' })
+    const wrapper = mount(ConnectView, {
+      props: { connect: vi.fn().mockResolvedValue({ state: 'ready' }), resume },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+
+    const rows = wrapper.findAll('.gate-profile-main')
+    await rows[1].trigger('click')
+    await flushPromises()
+
+    expect(resume).not.toHaveBeenCalled()
+    expect((wrapper.get('[data-testid="url-input"]').element as HTMLInputElement).value).toBe(
+      'https://other.example.com',
+    )
+  })
+
+  it('deletes a saved connection after an inline confirmation and flags a failed revocation', async () => {
+    const app = profileListApp()
+    app.DeleteProfile = vi.fn(async () => ({ deleted: true, had_session: true, revoked: false }))
+    vi.stubGlobal('go', { main: { App: app } })
+    const { wrapper } = mountConnect()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="profile-delete-confirm"]').exists()).toBe(false)
+    await wrapper.findAll('.gate-profile-delete')[0].trigger('click')
+    expect(app.DeleteProfile).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="profile-delete-confirm"]').exists()).toBe(true)
+
+    await wrapper.get('.gate-profile-confirm-delete').trigger('click')
+    await flushPromises()
+    expect(app.DeleteProfile).toHaveBeenCalledWith(7)
+    expect(wrapper.findAll('.gate-profile-main')).toHaveLength(1)
+    // The local deletion went through; the residual server session is
+    // reported instead of being papered over.
+    expect(wrapper.get('.gate-profile-note').text()).toContain(
+      'signing out the server session failed',
+    )
+  })
+})
+
+describe('ConnectView embedded-bridge enrollment (three-field registration)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('go', undefined)
+    vi.unstubAllGlobals()
+    i18n.global.locale.value = 'en'
+  })
+
+  interface EnrollMountOpts {
+    enrolled?: boolean
+    bridgeId?: string
+    edgeURL?: string
+    enroll?: (input: EnrollEmbeddedInput) => Promise<EnrollResult>
+    deregister?: () => Promise<EnrollResult>
+    connect?: (input: ConnectionInput) => Promise<unknown>
+  }
+
+  function enrollApp(o: EnrollMountOpts) {
+    return {
+      Bootstrap: vi.fn(async () => ({ state: 'ready' as const })),
+      Connect: vi.fn(async () => ({ state: 'ready' as const })),
+      Logout: vi.fn(async () => ({ state: 'authorization_required' as const })),
+      ConnectEmbedded: vi.fn(async () => ({ state: 'ready' as const })),
+      EdgeBridges: vi.fn(async () => [] as EdgeBridge[]),
+      StreamCredentials: vi.fn(async () => ({ scheme: '', token: '' })),
+      Preference: vi.fn(async () => ({ value: '', found: false })),
+      SetPreference: vi.fn(async () => ({ revision: 1, applied: true })),
+      CancelRequest: vi.fn(async () => true),
+      EmbeddedCloudStatus: vi.fn(async () => ({
+        available: true,
+        enrolled: Boolean(o.enrolled),
+        bridge_id: o.bridgeId ?? 'br_emb',
+        edge_url: o.edgeURL ?? 'https://edge.example.com',
+      })),
+      EnrollEmbedded:
+        o.enroll ??
+        vi.fn(async (): Promise<EnrollResult> => ({ state: { state: 'ready' }, error: '' })),
+      DeregisterEmbedded: o.deregister ?? vi.fn(async () => ({ state: { state: 'unconfigured' as const }, error: '' })),
+    }
+  }
+
+  function mountEnroll(o: EnrollMountOpts = {}) {
+    const connect = o.connect ?? vi.fn().mockResolvedValue({ state: 'ready' })
+    const app = enrollApp(o)
+    vi.stubGlobal('go', { main: { App: app } })
+    const wrapper = mount(ConnectView, {
+      props: {
+        connect,
+        embeddedUrl: 'http://127.0.0.1:39871',
+        enroll: o.enroll,
+        deregister: o.deregister,
+      },
+      global: { plugins: [i18n] },
+    })
+    return { app, connect, wrapper }
+  }
+
+  async function openEnrollForm(wrapper: ReturnType<typeof mount>) {
+    await flushPromises()
+    await wrapper.get('[data-testid="embedded-enroll-open"]').trigger('click')
+  }
+
+  it('shows the registration link on an unenrolled embedded bridge', async () => {
+    const { wrapper } = mountEnroll()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="embedded-enroll-open"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="embedded-signin"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="embedded-deregister-arm"]').exists()).toBe(false)
+  })
+
+  it('shows the enrolled badge with sign-in instead of the zero-input local entry', async () => {
+    const { wrapper } = mountEnroll({ enrolled: true, bridgeId: 'br_prod' })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="embedded-connect"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="embedded-enroll-open"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="embedded-entry"]').text()).toContain('br_prod')
+    expect(wrapper.find('[data-testid="embedded-signin"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="embedded-deregister-arm"]').exists()).toBe(true)
+  })
+
+  it('validates all three fields before calling the binding', async () => {
+    const enroll = vi.fn(async (): Promise<EnrollResult> => ({ state: { state: 'ready' }, error: '' }))
+    const { wrapper } = mountEnroll({ enroll })
+    await openEnrollForm(wrapper)
+
+    await wrapper.get('[data-testid="enroll-submit"]').trigger('submit')
+    expect(wrapper.get('[data-testid="enroll-validation"]').text()).toContain('enrollment token')
+    expect(enroll).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="enroll-url"]').setValue('https://edge.example.com')
+    await wrapper.get('[data-testid="enroll-key"]').setValue('woca_test_key')
+    await wrapper.get('[data-testid="enroll-token"]').setValue('woca_user_key_wrong_shape')
+    await wrapper.get('[data-testid="enroll-submit"]').trigger('submit')
+    expect(wrapper.get('[data-testid="enroll-validation"]').text()).toContain('woca_enroll_')
+    expect(enroll).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="enroll-url"]').setValue('https://edge.example.com/app')
+    await wrapper.get('[data-testid="enroll-token"]').setValue('woca_enroll_secret')
+    await wrapper.get('[data-testid="enroll-submit"]').trigger('submit')
+    expect(wrapper.get('[data-testid="enroll-validation"]').text()).toContain('no path')
+    expect(enroll).not.toHaveBeenCalled()
+  })
+
+  it('submits the three fields exactly once and clears secrets on success', async () => {
+    const enroll = vi.fn(async (): Promise<EnrollResult> => ({ state: { state: 'ready' }, error: '' }))
+    const { wrapper } = mountEnroll({ enroll })
+    await openEnrollForm(wrapper)
+    await wrapper.get('[data-testid="enroll-url"]').setValue('https://edge.example.com')
+    await wrapper.get('[data-testid="enroll-token"]').setValue('woca_enroll_secret')
+    await wrapper.get('[data-testid="enroll-key"]').setValue('woca_test_key')
+    await wrapper.get('[data-testid="enroll-submit"]').trigger('submit')
+    await flushPromises()
+
+    expect(enroll).toHaveBeenCalledTimes(1)
+    expect(enroll).toHaveBeenCalledWith({
+      edge_url: 'https://edge.example.com',
+      enrollment_token: 'woca_enroll_secret',
+      api_key: 'woca_test_key',
+    })
+    expect((wrapper.get('[data-testid="enroll-token"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.get('[data-testid="enroll-key"]').element as HTMLInputElement).value).toBe('')
+  })
+
+  it.each([
+    ['edge_unreachable', 'private cloud is unreachable', 'enroll-step'],
+    ['enroll_token', 'invalid, expired, or already used', 'enroll-step'],
+    ['bridge_write', 'write the enrollment settings', 'enroll-step'],
+    ['bridge_restart', 'cloud posture', 'enroll-step'],
+  ])('reports a terminal %s failure on the three-field form', async (cls, copy, step) => {
+    const enroll = vi.fn(async () => ({ error: cls as EnrollResult['error'] }))
+    const { wrapper } = mountEnroll({ enroll })
+    await openEnrollForm(wrapper)
+    await wrapper.get('[data-testid="enroll-url"]').setValue('https://edge.example.com')
+    await wrapper.get('[data-testid="enroll-token"]').setValue('woca_enroll_secret')
+    await wrapper.get('[data-testid="enroll-key"]').setValue('woca_test_key')
+    await wrapper.get('[data-testid="enroll-submit"]').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="enroll-error"]').text()).toContain(copy)
+    expect(wrapper.find(`[data-testid="${step}"]`).exists()).toBe(true)
+    // The values stay for the retry (the token field is masked).
+    expect((wrapper.get('[data-testid="enroll-token"]').element as HTMLInputElement).value).toBe('woca_enroll_secret')
+  })
+
+  it('routes a rejected key to the single-field sign-in — the machine stays enrolled', async () => {
+    const enroll = vi.fn(async () => ({
+      state: { state: 'authorization_required' as const },
+      bridge_id: 'br_emb',
+      error: 'user_key' as const,
+    }))
+    const { wrapper } = mountEnroll({ enroll })
+    await openEnrollForm(wrapper)
+    await wrapper.get('[data-testid="enroll-url"]').setValue('https://edge.example.com')
+    await wrapper.get('[data-testid="enroll-token"]').setValue('woca_enroll_secret')
+    await wrapper.get('[data-testid="enroll-key"]').setValue('woca_test_key')
+    await wrapper.get('[data-testid="enroll-submit"]').trigger('submit')
+    await flushPromises()
+
+    // The sign-in view carries the failure copy, no token field exists,
+    // and the typed key is prefilled for correction.
+    expect(wrapper.find('[data-testid="enroll-login-step"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="enroll-login-error"]').text()).toContain('API key was rejected')
+    expect(wrapper.find('[data-testid="enroll-token"]').exists()).toBe(false)
+    expect((wrapper.get('[data-testid="enroll-login-key"]').element as HTMLInputElement).value).toBe('woca_test_key')
+  })
+
+  it('signs an enrolled bridge in through the standard connect path', async () => {
+    const connect = vi.fn().mockResolvedValue({ state: 'ready' })
+    const { wrapper } = mountEnroll({ enrolled: true, connect })
+    await flushPromises()
+    await wrapper.get('[data-testid="embedded-signin"]').trigger('click')
+    await wrapper.get('[data-testid="enroll-login-key"]').setValue('woca_test_key')
+    await wrapper.get('[data-testid="enroll-login-submit"]').trigger('submit')
+    await flushPromises()
+
+    expect(connect).toHaveBeenCalledWith({
+      server_url: 'https://edge.example.com',
+      api_key: 'woca_test_key',
+      bridge_id: 'br_emb',
+    })
+  })
+
+  it('keeps the key after a failed sign-in', async () => {
+    const connect = vi.fn().mockRejectedValue(new Error('activation failed'))
+    const { wrapper } = mountEnroll({ enrolled: true, connect })
+    await flushPromises()
+    await wrapper.get('[data-testid="embedded-signin"]').trigger('click')
+    await wrapper.get('[data-testid="enroll-login-key"]').setValue('woca_test_key')
+    await wrapper.get('[data-testid="enroll-login-submit"]').trigger('submit')
+    await flushPromises()
+
+    expect((wrapper.get('[data-testid="enroll-login-key"]').element as HTMLInputElement).value).toBe('woca_test_key')
+    expect(wrapper.get('[data-testid="enroll-login-error"]').text()).toContain("Couldn't connect")
+  })
+
+  it('deregisters behind a two-step confirm and returns to the unenrolled page', async () => {
+    const deregister = vi.fn(async (): Promise<EnrollResult> => ({ state: { state: 'unconfigured' }, error: '' }))
+    const { wrapper } = mountEnroll({ enrolled: true, deregister })
+    await flushPromises()
+    await wrapper.get('[data-testid="embedded-deregister-arm"]').trigger('click')
+    expect(wrapper.find('[data-testid="embedded-deregister-confirm"]').exists()).toBe(true)
+    expect(deregister).not.toHaveBeenCalled()
+
+    await wrapper.get('[data-testid="embedded-deregister-confirm-btn"]').trigger('click')
+    await flushPromises()
+    expect(deregister).toHaveBeenCalledTimes(1)
+
+    // The fresh page shows the unenrolled shape again.
+    expect(wrapper.find('[data-testid="embedded-enroll-open"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="embedded-signin"]').exists()).toBe(false)
+  })
+
+  it('never writes the enrollment token or key to web storage', async () => {
+    const ls = vi.spyOn(window.localStorage, 'setItem')
+    const ss = vi.spyOn(window.sessionStorage, 'setItem')
+    const enroll = vi.fn(async () => ({ error: 'enroll_token' as const }))
+    const { wrapper } = mountEnroll({ enroll })
+    await openEnrollForm(wrapper)
+    await wrapper.get('[data-testid="enroll-url"]').setValue('https://edge.example.com')
+    await wrapper.get('[data-testid="enroll-token"]').setValue('woca_enroll_secret')
+    await wrapper.get('[data-testid="enroll-key"]').setValue('woca_test_key')
+    await wrapper.get('[data-testid="enroll-submit"]').trigger('submit')
+    await flushPromises()
+
+    expect(ls).not.toHaveBeenCalled()
+    expect(ss).not.toHaveBeenCalled()
   })
 })

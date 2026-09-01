@@ -28,7 +28,7 @@ describe('ProviderSection', () => {
 
   it('grays the whole domain with the managed notice in the bridge form', async () => {
     const w = mountSection(true)
-    expect(w.find('.mem-intro').text()).toContain('private cloud')
+    expect(w.find('.mem-intro').text()).toContain('organization')
     for (const field of w.findAll('input.field, select.field')) {
       expect((field.element as HTMLInputElement).disabled).toBe(true)
     }

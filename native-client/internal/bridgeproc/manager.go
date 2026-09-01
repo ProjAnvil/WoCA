@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,24 +28,48 @@ type Manager struct {
 	// OnExit observes the process ending (crash reporting).
 	OnExit func(err error)
 
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	baseURL string
-	done    chan struct{}
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	baseURL   string
+	done      chan struct{}
+	extraArgs atomic.Value // []string, read inside Command while Start holds mu
 }
 
 // ErrNotRunning is returned by BaseURL when no bridge is up.
 var ErrNotRunning = errors.New("bridgeproc: bridge not running")
 
-// New builds a manager running the given woca-bridge binary.
+// New builds a manager running the given woca-bridge binary. The extra
+// args ride every spawn (the enrollment flow swaps them via RestartWith —
+// e.g. "--auth apikey" once the bridge joins a private cloud).
 func New(binary string, extraArgs ...string) *Manager {
-	return &Manager{Command: func(readyFile string) *exec.Cmd {
-		args := append([]string{"serve", "--addr", "127.0.0.1:0", "--no-browser"}, extraArgs...)
+	m := &Manager{}
+	m.extraArgs.Store(append([]string(nil), extraArgs...))
+	m.Command = func(readyFile string) *exec.Cmd {
+		args := append([]string{"serve", "--addr", "127.0.0.1:0", "--no-browser"}, m.currentArgs()...)
 		cmd := exec.Command(binary, args...)
 		cmd.Env = append(os.Environ(), "WOCA_READY_FILE="+readyFile, "WOCA_NO_BROWSER=1")
 		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 		return cmd
-	}}
+	}
+	return m
+}
+
+// currentArgs snapshots the extra args (atomic: Command runs while Start
+// holds the process mutex, so this must not take it).
+func (m *Manager) currentArgs() []string {
+	args, _ := m.extraArgs.Load().([]string)
+	return append([]string(nil), args...)
+}
+
+// RestartWith stops the bridge and spawns a fresh process with the given
+// extra args, returning the new base URL once healthy. The port is
+// randomized per spawn — callers must re-publish the URL they receive.
+func (m *Manager) RestartWith(ctx context.Context, extraArgs ...string) (string, error) {
+	m.extraArgs.Store(append([]string(nil), extraArgs...))
+	if err := m.Stop(); err != nil {
+		return "", fmt.Errorf("bridgeproc: restart: %w", err)
+	}
+	return m.Start(ctx)
 }
 
 // Start spawns the bridge and returns its base URL once healthy.

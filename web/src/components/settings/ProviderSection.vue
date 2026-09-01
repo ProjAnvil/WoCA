@@ -6,6 +6,7 @@ import { useServerSettingsStore } from '../../stores/serverSettings'
 import WInfoTip from '../ui/WInfoTip.vue'
 
 defineProps<{ locked?: boolean }>()
+const emit = defineEmits<{ navigate: [section: string] }>()
 
 const { t } = useI18n()
 const settings = useServerSettingsStore()
@@ -31,8 +32,14 @@ const providerHint = computed(
   <section class="setting-section">
     <div class="setting-section-title">
       <Server :size="13" style="vertical-align: -2px" /> {{ t('settings.provider.title') }}
+      <span v-if="locked" class="managed-badge">{{ t('settings.managedBadge') }}</span>
     </div>
-    <p v-if="locked" class="mem-intro">{{ t('settings.provider.managedNotice') }}</p>
+    <p v-if="locked" class="mem-intro">
+      {{ t('settings.provider.managedNotice') }}
+      <button type="button" class="managed-cta" @click="emit('navigate', 'model')">
+        {{ t('settings.provider.managedCta') }}
+      </button>
+    </p>
 
     <div class="setting-row">
       <div>
@@ -108,3 +115,31 @@ const providerHint = computed(
     </div>
   </section>
 </template>
+
+<style scoped>
+/* Org-managed badge (locked domains): who owns this section. */
+.managed-badge {
+  margin-left: 8px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-2);
+  vertical-align: 1px;
+}
+/* "Where to pick models" — the locked provider's only actionable path. */
+.managed-cta {
+  border: none;
+  background: none;
+  padding: 0;
+  margin-left: 6px;
+  color: var(--link);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.managed-cta:hover {
+  text-decoration: underline;
+}
+</style>

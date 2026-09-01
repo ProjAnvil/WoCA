@@ -57,6 +57,18 @@ func (f *fakeBridgeAPI) Logout(ctx context.Context) (bridge.BootstrapState, erro
 	return f.logoutState, nil
 }
 
+func (f *fakeBridgeAPI) Profiles(context.Context) ([]bridge.ProfileSummary, error) {
+	return nil, nil
+}
+
+func (f *fakeBridgeAPI) ResumeProfile(context.Context, int64) (bridge.BootstrapState, error) {
+	return bridge.BootstrapState{}, nil
+}
+
+func (f *fakeBridgeAPI) DeleteProfile(context.Context, int64) (bridge.ProfileDeletion, error) {
+	return bridge.ProfileDeletion{}, nil
+}
+
 func (f *fakeBridgeAPI) Preference(ctx context.Context, key string) (bridge.PreferenceValue, error) {
 	f.preferenceKey = key
 	return f.preferenceValue, nil

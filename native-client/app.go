@@ -24,6 +24,9 @@ type bridgeAPI interface {
 	Connect(context.Context, bridge.ConnectionInput) (bridge.BootstrapState, error)
 	Logout(context.Context) (bridge.BootstrapState, error)
 	ConnectEmbedded(context.Context) (bridge.BootstrapState, error)
+	Profiles(context.Context) ([]bridge.ProfileSummary, error)
+	ResumeProfile(context.Context, int64) (bridge.BootstrapState, error)
+	DeleteProfile(context.Context, int64) (bridge.ProfileDeletion, error)
 	Preference(context.Context, string) (bridge.PreferenceValue, error)
 	SetPreference(context.Context, bridge.PreferenceInput) (bridge.PreferenceWriteResult, error)
 }
@@ -59,6 +62,7 @@ type App struct {
 	cancellations requestCancellationRegistry
 	streamAuth    streamCredentialSource
 	storeKey      keySink
+	enroller      *enroller
 	onShutdown    func()
 	shutdownOnce  sync.Once
 
@@ -142,6 +146,33 @@ func (a *App) Logout() (bridge.BootstrapState, error) {
 	return a.bridge.Logout(a.context())
 }
 
+// Profiles lists the saved connections (the connect page's one-tap
+// resume list). Ordering is decided in the bridge service: live sessions
+// first, then recency.
+func (a *App) Profiles() ([]bridge.ProfileSummary, error) {
+	if a.bridge == nil {
+		return nil, errors.New("native bridge is required")
+	}
+	return a.bridge.Profiles(a.context())
+}
+
+// ResumeProfile re-enters a saved connection along its stored session.
+func (a *App) ResumeProfile(id int64) (bridge.BootstrapState, error) {
+	if a.bridge == nil {
+		return bridge.BootstrapState{}, errors.New("native bridge is required")
+	}
+	return a.bridge.ResumeProfile(a.context(), id)
+}
+
+// DeleteProfile removes a saved connection; a live session is revoked at
+// the server first (best effort — reported, never blocking).
+func (a *App) DeleteProfile(id int64) (bridge.ProfileDeletion, error) {
+	if a.bridge == nil {
+		return bridge.ProfileDeletion{}, errors.New("native bridge is required")
+	}
+	return a.bridge.DeleteProfile(a.context(), id)
+}
+
 // ConnectEmbedded is connection-page entry ① (design §6.6): adopt the
 // embedded bridge — auto-launched, loopback-trusted, zero inputs.
 func (a *App) ConnectEmbedded() (bridge.BootstrapState, error) {
@@ -149,6 +180,64 @@ func (a *App) ConnectEmbedded() (bridge.BootstrapState, error) {
 		return bridge.BootstrapState{}, errors.New("native bridge is required")
 	}
 	return a.bridge.ConnectEmbedded(a.context())
+}
+
+// EmbeddedCloudStatus reports the embedded bridge's enrollment state for
+// the connect page's embedded entry. Available mirrors the process; the
+// enrolled view comes from the native-side posture marker — an apikey
+// bridge's status API is not anonymous-readable, so the app's own record
+// is the authority (the app owns the posture, hence the state).
+type EmbeddedCloudStatus struct {
+	Available bool   `json:"available"`
+	Enrolled  bool   `json:"enrolled"`
+	BridgeID  string `json:"bridge_id,omitempty"`
+	EdgeURL   string `json:"edge_url,omitempty"`
+}
+
+func (a *App) EmbeddedCloudStatus() (EmbeddedCloudStatus, error) {
+	if a.enroller == nil {
+		// Dev builds without the bundled binary have no embedded bridge.
+		return EmbeddedCloudStatus{}, nil
+	}
+	m := a.enroller.marker()
+	available := false
+	if a.enroller.proc != nil {
+		_, err := a.enroller.proc.BaseURL()
+		available = err == nil
+	}
+	return EmbeddedCloudStatus{
+		Available: available,
+		Enrolled:  m.Enrolled,
+		BridgeID:  m.BridgeID,
+		EdgeURL:   m.EdgeURL,
+	}, nil
+}
+
+// EnrollEmbedded runs the embedded bridge's private-cloud enrollment
+// (connect page enrollment view): machine-plane registration, posture
+// flip, then the user-plane login through the edge — one guided flow.
+// Flow failures ride EnrollResult.Error as class tokens rather than
+// rejecting: a rejected key still leaves the machine enrolled, and the
+// frontend needs both facts.
+func (a *App) EnrollEmbedded(input EnrollEmbeddedInput) (EnrollResult, error) {
+	if a.enroller == nil {
+		return EnrollResult{Error: enrollErrAbsent}, nil
+	}
+	ctx, cancel := context.WithTimeout(a.context(), 5*time.Minute)
+	defer cancel()
+	return a.enroller.enroll(ctx, input), nil
+}
+
+// DeregisterEmbedded drops the embedded bridge out of its private cloud
+// (back to local posture, local identity wiped, marker cleared). The
+// server-side revocation stays the administrator's action.
+func (a *App) DeregisterEmbedded() (EnrollResult, error) {
+	if a.enroller == nil {
+		return EnrollResult{Error: enrollErrAbsent}, nil
+	}
+	ctx, cancel := context.WithTimeout(a.context(), 2*time.Minute)
+	defer cancel()
+	return a.enroller.deregister(ctx), nil
 }
 
 // EdgeBridge is one bridge behind an edge access point.

@@ -67,8 +67,8 @@ describe('ManagedSection', () => {
     const w = mountSection(enrolledStatus())
     await flushPromises()
 
-    expect(w.text()).toContain('No skills delivered by the config plane')
-    expect(w.text()).toContain('No MCP servers delivered by the config plane')
+    expect(w.text()).toContain('No skills enabled')
+    expect(w.text()).toContain('No MCP servers enabled')
   })
 
   it('flags the STALE cache posture from the cloud snapshot', async () => {
@@ -77,7 +77,7 @@ describe('ManagedSection', () => {
     const w = mountSection(enrolledStatus({ stale: true }))
     await flushPromises()
 
-    expect(w.get('[data-testid="managed-sync"]').text()).toContain('Cached')
+    expect(w.get('[data-testid="managed-sync"]').text()).toContain('Cannot reach your organization')
   })
 
   it('surfaces a failed fetch instead of an empty success', async () => {

@@ -9,6 +9,7 @@ import {
   Cpu,
   Database,
   Globe,
+  Lock,
   LogOut,
   Network,
   Palette,
@@ -17,6 +18,7 @@ import {
   Radio,
   Server,
   Settings2,
+  Unplug,
   X,
 } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth'
@@ -48,6 +50,10 @@ const { t } = useI18n()
 const settings = useSettingsStore()
 const server = useServerSettingsStore()
 const auth = useAuthStore()
+
+// Admin gating for the cloud-access/admin sections: the core's role label
+// is "tenant-admin" ('admin' kept for older bridges).
+const isAdmin = computed(() => auth.me?.role === 'admin' || auth.me?.role === 'tenant-admin')
 
 // Sidebar navigation: each entry maps to one section of the right pane.
 const baseSections = [
@@ -95,14 +101,24 @@ const sections = computed(() => [
     : []),
   // The bridge cloud-access page (edge URL / enrollment, §6.5) and the
   // read-only admin page (sessions/audit — v1.7: no key management on
-  // the bridge) — admin keys only.
-  ...(auth.me?.role === 'admin' || statusAuth.value === 'local'
+  // the bridge) — admin keys only. The core issues roles as
+  // tenant-admin/member/viewer; 'admin' is kept for older bridges.
+  ...(isAdmin.value || statusAuth.value === 'local'
     ? [{ id: 'cloudaccess', label: 'settings.nav.cloudaccess', icon: CloudUpload }]
     : []),
-  ...(auth.me?.role === 'admin' ? [{ id: 'admin', label: 'settings.nav.admin', icon: ShieldCheck }] : []),
+  ...(isAdmin.value ? [{ id: 'admin', label: 'settings.nav.admin', icon: ShieldCheck }] : []),
 ])
 
 const active = ref<string>('appearance')
+
+// The native app switches sessions through its own binding: the web
+// logout route only revokes the server session, and the reload's
+// Bootstrap would re-open along the vault's stored copy — never reaching
+// the connect page. The native Logout drops that copy (profiles survive)
+// and the reload lands on the connect page with the saved-connection
+// list. The capability probe is the edition seam — same pattern as the
+// nav gating above.
+const native = getNativeBridge()
 
 // The bridge edition's model-provider domain is cloud-governed (the catalog
 // pull + verify is the selection surface; keys never live user-side), and
@@ -111,7 +127,7 @@ const active = ref<string>('appearance')
 const providerLocked = computed(
   () =>
     statusInfo.value?.edition === 'bridge' &&
-    (statusInfo.value.managed || Boolean(statusInfo.value.cloud?.enrolled)) &&
+    (statusInfo.value.managed || Boolean(statusInfo.value?.cloud?.enrolled)) &&
     statusAuth.value !== 'local',
 )
 const isBridge = computed(() => statusInfo.value?.edition === 'bridge')
@@ -120,7 +136,19 @@ const isBridge = computed(() => statusInfo.value?.edition === 'bridge')
 // the edge intercepts its own — the reload lands on the login gate either
 // way. Only deployments with sessions (apikey posture) show it.
 const canLogout = computed(() => Boolean(auth.me) || statusAuth.value === 'apikey')
+const loggingOut = ref(false)
 async function doLogout() {
+  if (loggingOut.value) return
+  loggingOut.value = true
+  if (native) {
+    try {
+      await native.Logout()
+    } catch {
+      // Local cleanup already ran; the reload decides the gate.
+    }
+    window.location.reload()
+    return
+  }
   try {
     await apiLogout()
   } catch {
@@ -129,6 +157,17 @@ async function doLogout() {
   auth.me = null
   window.location.reload()
 }
+
+// The identity card's role badge: localized labels for the known roles,
+// the raw value for anything a newer backend might introduce.
+const roleLabel = computed(() => {
+  const role = auth.me?.role
+  if (!role) return ''
+  if (role === 'admin' || role === 'tenant-admin') return t('settings.roles.admin')
+  if (role === 'member') return t('settings.roles.member')
+  if (role === 'viewer') return t('settings.roles.viewer')
+  return role
+})
 
 // The cloud-access section follows the auth posture (§6.6): admin keys on
 // apikey bridges, and every local-trust bridge — the embedded default is
@@ -197,27 +236,43 @@ onBeforeUnmount(() => {
           </button>
 
           <!-- Bottom-left identity + logout (bridge/public-web sessions):
-               the embedded personal edition has no session to end. -->
+               the embedded personal edition has no session to end. The
+               native app shows the same action as the connect section —
+               disconnecting back to the connect page. -->
           <div v-if="canLogout" class="settings-nav-footer">
             <div class="nav-identity">
               <span class="nav-identity-name">{{ auth.me?.remark || auth.me?.user_id }}</span>
-              <span v-if="auth.me?.role" class="nav-identity-role">{{ auth.me.role }}</span>
+              <span v-if="roleLabel" class="nav-identity-role">{{ roleLabel }}</span>
             </div>
-            <button class="settings-nav-item nav-logout" @click="doLogout()">
-              <LogOut :size="14" />
-              <span>{{ t('settings.logout') }}</span>
+            <button
+              class="settings-nav-item nav-logout"
+              :disabled="loggingOut"
+              @click="doLogout()"
+            >
+              <Unplug v-if="native" :size="14" />
+              <LogOut v-else :size="14" />
+              <span>{{ native ? t('settings.nativeConnect.button') : t('settings.logout') }}</span>
             </button>
           </div>
         </nav>
 
         <!-- Right pane: the selected section's fields -->
         <div class="settings-content">
-          <div v-if="server.managedFields.length" class="managed-banner">
-            {{ t('settings.managedBanner') }}
+          <div v-if="server.managedFields.length" class="managed-banner" role="note">
+            <Lock :size="13" class="managed-banner-lock" />
+            <span class="managed-banner-text">{{ t('settings.managedBanner') }}</span>
+            <button
+              v-if="isBridge"
+              type="button"
+              class="managed-banner-link"
+              @click="active = 'managed'"
+            >
+              {{ t('settings.managedBannerLink') }}
+            </button>
           </div>
           <AppearanceSection v-if="active === 'appearance'" />
           <PreferencesSection v-if="active === 'preferences'" />
-          <ProviderSection v-if="active === 'provider'" :locked="providerLocked" />
+          <ProviderSection v-if="active === 'provider'" :locked="providerLocked" @navigate="active = $event" />
           <ClaudeEnvSection v-if="active === 'claudeenv'" :bridge="isBridge" />
           <ManagedSection v-if="active === 'managed'" :status="statusInfo" />
           <PluginsSection v-if="active === 'plugins'" :bridge="isBridge" />
@@ -327,7 +382,14 @@ onBeforeUnmount(() => {
   color: var(--faint);
 }
 .nav-logout {
-  color: var(--danger);
+  color: var(--text-2);
+}
+.nav-logout:hover {
+  color: var(--text);
+}
+.nav-logout:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .settings-nav-item {
@@ -360,6 +422,41 @@ onBeforeUnmount(() => {
   min-width: 0;
   overflow-y: auto;
   padding: 6px 24px 16px;
+}
+
+/* Managed-domains banner: lock + who manages it + where to look. */
+.managed-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.managed-banner-lock {
+  flex: none;
+  color: var(--faint);
+}
+.managed-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+.managed-banner-link {
+  flex: none;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--link);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.managed-banner-link:hover {
+  text-decoration: underline;
 }
 
 /* Sticky save bar shared by the server-backed sections. */

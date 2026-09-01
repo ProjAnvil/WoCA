@@ -83,7 +83,7 @@ describe('SettingsPanel', () => {
     mountPanel()
     await flushPromises()
     const nav = navLabels()
-    expect(nav.join('|')).not.toContain('Remote config')
+    expect(nav.join('|')).not.toContain('Org config')
     expect(nav.join('|')).not.toContain('Access point')
     expect(nav.join('|')).not.toContain('Administration')
     expect(q('.nav-logout')).toBeNull()
@@ -99,7 +99,7 @@ describe('SettingsPanel', () => {
     await flushPromises()
 
     const nav = navLabels().join('|')
-    expect(nav).toContain('Remote config')
+    expect(nav).toContain('Org config')
     expect(nav).toContain('Access point')
     expect(nav).toContain('Cloud access')
     expect(nav).toContain('Admin')
@@ -116,7 +116,7 @@ describe('SettingsPanel', () => {
     await flushPromises()
 
     const nav = navLabels().join('|')
-    expect(nav).toContain('Remote config')
+    expect(nav).toContain('Org config')
     expect(nav).not.toContain('Cloud access')
     expect(nav).not.toContain('Admin')
     // Logout exists for any session-holding deployment.
@@ -142,6 +142,45 @@ describe('SettingsPanel', () => {
     await flushPromises()
     expect(api.logout).toHaveBeenCalledTimes(1)
     expect(reload).toHaveBeenCalledTimes(1)
+    vi.unstubAllGlobals()
+  })
+
+  it('native mode: the identity action disconnects via the binding, not the web route', async () => {
+    const reload = vi.fn()
+    vi.stubGlobal('location', {
+      get href() {
+        return 'http://localhost:34115/'
+      },
+      set href(_v: string) {
+        /* navigation no-op */
+      },
+      reload,
+    })
+    const logout = vi.fn().mockResolvedValue({ state: 'authorization_required' })
+    ;(window as unknown as { go: unknown }).go = { main: { App: { Logout: logout } } }
+
+    api.getStatus.mockResolvedValue(bridgeStatus())
+    mountPanel()
+    const auth = useAuthStore()
+    // The core issues "tenant-admin" (not the legacy "admin") — the
+    // governance gating and the localized role badge both accept it.
+    auth.me = { user_id: 'u1', remark: 'ops', role: 'tenant-admin' }
+    await flushPromises()
+
+    expect(navLabels().join('|')).toContain('Admin')
+    expect(q('.nav-identity')?.textContent ?? '').toContain('Admin')
+    expect(q('.nav-logout')?.textContent ?? '').toContain('Disconnect')
+
+    click(q('.nav-logout')!)
+    await flushPromises()
+    // The native binding revokes AND drops the stored session (the web
+    // route alone would leave Bootstrap re-opening along it); the reload
+    // then lands on the connect page.
+    expect(logout).toHaveBeenCalledTimes(1)
+    expect(api.logout).not.toHaveBeenCalled()
+    expect(reload).toHaveBeenCalledTimes(1)
+
+    delete (window as unknown as { go: unknown }).go
     vi.unstubAllGlobals()
   })
 

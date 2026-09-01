@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ConnectView from './ConnectView.vue'
-import { getNativeBridge } from './bridge'
+import { getNativeBridge, type EnrollEmbeddedInput, type EnrollResult } from './bridge'
 import { setStreamAuth, setStreamBase, setStreamBridge } from '../api/client'
 import { hydrateNativePreferences, readPreference } from './preferences'
 import { applyStoredLocalePreference } from '../i18n'
@@ -114,6 +114,41 @@ async function connectEmbedded() {
   }
 }
 
+// The embedded bridge's enrollment view (three-field form): the Go side
+// orchestrates machine-plane registration, the posture flip, and the
+// user-plane login; a class-token error routes the UI instead of a
+// rejection (a rejected key still leaves the machine enrolled).
+async function enroll(input: EnrollEmbeddedInput): Promise<EnrollResult> {
+  if (!bridge?.EnrollEmbedded) {
+    return { error: 'enroll_unavailable' }
+  }
+  const res = await bridge.EnrollEmbedded(input)
+  if (!res.error && res.state) {
+    await useBootstrapState(res.state)
+  }
+  return res
+}
+
+// Deregister drops the embedded bridge back to local mode; the fresh
+// bootstrap state re-renders the connect page unenrolled.
+async function deregister(): Promise<EnrollResult> {
+  if (!bridge?.DeregisterEmbedded) {
+    return { error: 'enroll_unavailable' }
+  }
+  const res = await bridge.DeregisterEmbedded()
+  if (!res.error && res.state) {
+    await useBootstrapState(res.state)
+  }
+  return res
+}
+
+// One-tap resume of a saved profile along its stored session (the
+// connect page's saved-connections list).
+async function resume(id: number) {
+  if (!bridge?.ResumeProfile) return
+  await useBootstrapState(await bridge.ResumeProfile(id))
+}
+
 // The error screen's way back: whatever failed (bootstrap, connect,
 // hydration), the user can always return to the connect page instead of
 // being trapped in a retry loop.
@@ -159,6 +194,9 @@ onMounted(() => {
     :authorization-required="state === 'authorization_required'"
     :embedded-url="embeddedUrl"
     :connect="connect"
+    :resume="resume"
+    :enroll="enroll"
+    :deregister="deregister"
     @connect-embedded="connectEmbedded"
   />
 

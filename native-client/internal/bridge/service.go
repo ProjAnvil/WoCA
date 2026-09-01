@@ -7,8 +7,10 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -67,6 +69,10 @@ type nativeStore interface {
 	ActiveProfile(context.Context) (configstore.Profile, bool, error)
 	SetProfileBridge(context.Context, string, string) error
 	ProfileBridge(context.Context, string) string
+	ListProfiles(context.Context) ([]configstore.ProfileRow, error)
+	ProfileByID(context.Context, int64) (configstore.Profile, bool, error)
+	ActivateProfile(context.Context, int64) (configstore.Profile, bool, error)
+	DeleteProfile(context.Context, int64) (bool, error)
 	PutPreferenceVersioned(context.Context, string, string, uint64) (bool, error)
 	Preference(context.Context, string) (string, bool, error)
 }
@@ -96,13 +102,15 @@ type Service struct {
 	mu           sync.RWMutex
 	readyBaseURL string
 	embeddedURL  string
+	// now stamps session-expiry comparisons; tests shrink the clock.
+	now func() time.Time
 }
 
 func NewService(store nativeStore, activator auth.Activator, opts ...ServiceOption) *Service {
 	if activator == nil {
 		activator = auth.UnavailableActivator{}
 	}
-	s := &Service{store: store, activator: activator}
+	s := &Service{store: store, activator: activator, now: time.Now}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -265,6 +273,136 @@ func (s *Service) Logout(ctx context.Context) (BootstrapState, error) {
 	// The connect page's entry ① must survive logout — the embedded
 	// bridge is still running and re-adoptable.
 	return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL, EmbeddedURL: s.embeddedBaseURL()}, nil
+}
+
+// Session states for ProfileSummary (the connect page's badges).
+const (
+	ProfileSessionActive    = "active"
+	ProfileSessionExpired   = "expired"
+	ProfileSessionSignedOut = "signed_out"
+)
+
+// ProfileSummary is one saved connection on the connect page: where it
+// points, whether its stored session can still open the app, and whether
+// it is the profile Bootstrap would resume.
+type ProfileSummary struct {
+	ID           int64  `json:"id"`
+	ServerURL    string `json:"server_url"`
+	BridgeID     string `json:"bridge_id,omitempty"`
+	SessionState string `json:"session_state"`
+	LastUsedAt   int64  `json:"last_used_at"` // Unix seconds
+	Active       bool   `json:"active"`
+}
+
+// ProfileDeletion reports what a DeleteProfile did: the local records are
+// gone, and — when a live session existed — whether the server-side
+// revocation succeeded (best effort, same contract as Logout).
+type ProfileDeletion struct {
+	Deleted    bool `json:"deleted"`
+	HadSession bool `json:"had_session"`
+	Revoked    bool `json:"revoked"`
+}
+
+// Profiles lists the saved connections for the connect page, live
+// sessions first (one-tap resume), then most recently used.
+func (s *Service) Profiles(ctx context.Context) ([]ProfileSummary, error) {
+	if s.store == nil {
+		return nil, errors.New("connection profile store is required")
+	}
+	rows, err := s.store.ListProfiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	nowMilli := s.now().UnixMilli()
+	out := make([]ProfileSummary, 0, len(rows))
+	for _, row := range rows {
+		state := ProfileSessionSignedOut
+		if row.HasSession {
+			if row.SessionExpiresAt > nowMilli {
+				state = ProfileSessionActive
+			} else {
+				state = ProfileSessionExpired
+			}
+		}
+		out = append(out, ProfileSummary{
+			ID:           row.ID,
+			ServerURL:    row.BaseURL,
+			BridgeID:     s.store.ProfileBridge(ctx, row.BaseURL),
+			SessionState: state,
+			LastUsedAt:   row.UpdatedAt,
+			Active:       row.Active,
+		})
+	}
+	// Live sessions first (the one-tap path), then recency.
+	sort.SliceStable(out, func(i, j int) bool {
+		if (out[i].SessionState == ProfileSessionActive) != (out[j].SessionState == ProfileSessionActive) {
+			return out[i].SessionState == ProfileSessionActive
+		}
+		return out[i].LastUsedAt > out[j].LastUsedAt
+	})
+	return out, nil
+}
+
+// ResumeProfile makes the given profile active and re-enters it along its
+// stored session — one tap back into a signed-in bridge. A profile
+// without a live session still activates; the caller lands on the key
+// form with the URL prefilled.
+func (s *Service) ResumeProfile(ctx context.Context, id int64) (BootstrapState, error) {
+	if s.store == nil {
+		return BootstrapState{}, errors.New("connection profile store is required")
+	}
+	profile, ok, err := s.store.ActivateProfile(ctx, id)
+	if err != nil {
+		return BootstrapState{}, err
+	}
+	if !ok {
+		return BootstrapState{}, errors.New("connection profile not found")
+	}
+	// A newly selected profile must not inherit readiness from the prior one.
+	s.clearReady()
+	state := BootstrapState{
+		ServerURL:   profile.BaseURL,
+		BridgeID:    s.store.ProfileBridge(ctx, profile.BaseURL),
+		EmbeddedURL: s.embeddedBaseURL(),
+	}
+	if s.vault != nil {
+		if sessionID, ok := s.vault.Load(ctx, profile.ID); ok && sessionID != "" {
+			s.markReady(profile.BaseURL)
+			state.State = StateReady
+			return state, nil
+		}
+	}
+	state.State = StateAuthorizationNeeded
+	return state, nil
+}
+
+// DeleteProfile removes a saved connection and its local session. A live
+// session is revoked at the server first (best effort — a failed
+// revocation never blocks the local deletion, mirroring Logout).
+func (s *Service) DeleteProfile(ctx context.Context, id int64) (ProfileDeletion, error) {
+	if s.store == nil {
+		return ProfileDeletion{}, errors.New("connection profile store is required")
+	}
+	profile, ok, err := s.store.ProfileByID(ctx, id)
+	if err != nil {
+		return ProfileDeletion{}, err
+	}
+	if !ok {
+		return ProfileDeletion{}, errors.New("connection profile not found")
+	}
+	out := ProfileDeletion{}
+	if s.vault != nil {
+		if sessionID, live := s.vault.Load(ctx, profile.ID); live && sessionID != "" {
+			out.HadSession = true
+			out.Revoked = s.vault.Revoke(ctx, profile.BaseURL, sessionID) == nil
+		}
+		_ = s.vault.Delete(ctx, profile.ID)
+	}
+	if s.isReadyFor(profile.BaseURL) {
+		s.clearReady()
+	}
+	out.Deleted, err = s.store.DeleteProfile(ctx, id)
+	return out, err
 }
 
 func (s *Service) Preference(ctx context.Context, key string) (PreferenceValue, error) {
