@@ -103,7 +103,15 @@ func openStorageBackends(ctx context.Context, opts Options, dbSettings settings.
 				// public; wocadb pre-creates the schema and its RLS
 				// ownership policies).
 				if s, err := lgcppostgres.NewFromConnString(ctx, dsnWithLgcpSchema(dsn), serializer); err == nil {
-					checkpointer = s
+					// Setup applies the saver's migration chain — wocadb's
+					// pre-created tables only carry the base schema, so
+					// without this every upstream schema revision (e.g. the
+					// v9 task_path column) would crash at first write.
+					if err := s.Setup(ctx); err != nil {
+						log.Warn().Err(err).Msg("checkpoint postgres migrations failed")
+					} else {
+						checkpointer = s
+					}
 				} else {
 					log.Warn().Err(err).Msg("checkpoint postgres backend unavailable")
 				}
