@@ -132,7 +132,7 @@ async function remove(id: string) {
 <style scoped>
 .preset-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
 .preset-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid #e4e7eb; border-radius: 6px; cursor: pointer; }
-.preset-row.active { background: #eff6ff; border-color: #bfdbfe; }
+.preset-row.active { background: #e4e7eb; border-color: #cbd2d9; }
 .preset-main { display: flex; flex-direction: column; gap: 1px; }
 .preset-name { font-weight: 500; font-size: 13px; }
 .preset-sub { color: #616e7c; font-size: 11px; }

@@ -100,6 +100,8 @@ func (s *Service) Handler() http.Handler {
 	mux.Handle("POST /api/tenant/users", s.requireScope(authz.ScopeSettingsWrite, s.handleUserIssue))
 	mux.Handle("GET /api/tenant/users", s.requireScope(authz.ScopeSettingsRead, s.handleUserList))
 	mux.Handle("DELETE /api/tenant/users/{prefix}", s.requireScope(authz.ScopeSettingsWrite, s.handleUserRevoke))
+	mux.Handle("POST /api/tenant/users/revoke", s.requireScope(authz.ScopeSettingsWrite, s.handleUserRevokeBatch))
+	mux.Handle("POST /api/tenant/tenants/delete", s.requireScope(authz.ScopeSettingsWrite, s.handleTenantDelete))
 	// Core-issued sessions (§2.1): the live inventory with one-click
 	// revocation per session.
 	mux.Handle("GET /api/tenant/sessions", s.requireScope(authz.ScopeSettingsRead, s.handleSessionList))
@@ -337,15 +339,20 @@ func (s *Service) handleUserList(w http.ResponseWriter, r *http.Request) {
 		"last_used": "last_used", "last_used_desc": "last_used_desc",
 	}[orderParam(r)]
 	// The console lists across every business unit; an explicit tenant
-	// filter narrows to one.
+	// filter narrows to one, and ?state= splits active/revoked (unknown
+	// values behave as "all").
+	stateFilter := r.URL.Query().Get("state")
+	if stateFilter != "active" && stateFilter != "revoked" {
+		stateFilter = ""
+	}
 	tenantFilter := strings.TrimSpace(r.URL.Query().Get("tenant"))
 	listFn := s.keys.ListKeysForAll
 	if tenantFilter != "" {
-		listFn = func(ctx context.Context, qq, o string, l, off int) ([]tenant.APIKey, int, error) {
-			return s.keys.ListKeys(ctx, tenantFilter, qq, o, l, off)
+		listFn = func(ctx context.Context, qq, o, st string, l, off int) ([]tenant.APIKey, int, error) {
+			return s.keys.ListKeys(ctx, tenantFilter, qq, o, st, l, off)
 		}
 	}
-	keys, total, err := listFn(r.Context(), q, order, limit, offset)
+	keys, total, err := listFn(r.Context(), q, order, stateFilter, limit, offset)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unavailable"})
 		return
@@ -386,6 +393,99 @@ func (s *Service) handleUserRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	s.gw.AuditEvent(r.Context(), "user.revoked", prefix, "sessions killed")
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleUserRevokeBatch is the console's bulk revoke: every listed prefix
+// dies together with the sessions it issued — immediate and final (§2.1),
+// no partial-failure rollback. Prefixes that were already revoked or
+// never existed simply do not count toward the revoked total.
+func (s *Service) handleUserRevokeBatch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Prefixes []string `json:"prefixes"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&req); err != nil || len(req.Prefixes) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prefixes required"})
+		return
+	}
+	if len(req.Prefixes) > 500 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "too many prefixes (max 500)"})
+		return
+	}
+	prefixes := make([]string, 0, len(req.Prefixes))
+	seen := map[string]bool{}
+	for _, p := range req.Prefixes {
+		if p = strings.TrimSpace(p); p != "" && !seen[p] {
+			seen[p] = true
+			prefixes = append(prefixes, p)
+		}
+	}
+	if len(prefixes) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prefixes required"})
+		return
+	}
+	for _, p := range prefixes {
+		if err := s.auth.RevokeKeySessions(r.Context(), p); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unavailable"})
+			return
+		}
+	}
+	revoked, err := s.keys.RevokeKeys(r.Context(), prefixes)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unavailable"})
+		return
+	}
+	s.gw.AuditEvent(r.Context(), "user.batch_revoked", "batch", fmt.Sprintf("revoked=%d requested=%d", revoked, len(prefixes)))
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "revoked": revoked, "requested": len(prefixes)})
+}
+
+// handleTenantDelete is the console's bulk tenant delete — final and
+// cascading: every key and user row of the tenant goes, every live
+// session dies on the spot (no grace window). The platform tenant
+// ("local", the seeded machine identity) is protected and reported under
+// blocked; unknown ids are reported under missing. Neither is fatal —
+// the response states exactly what happened.
+func (s *Service) handleTenantDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10)).Decode(&req); err != nil || len(req.IDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ids required"})
+		return
+	}
+	if len(req.IDs) > 200 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "too many ids (max 200)"})
+		return
+	}
+	seen := map[string]bool{}
+	var deleted, blocked, missing []string
+	for _, id := range req.IDs {
+		if id = strings.TrimSpace(id); id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if id == platformTenant {
+			blocked = append(blocked, id)
+			continue
+		}
+		if _, err := s.keys.TenantByID(r.Context(), id); err != nil {
+			missing = append(missing, id)
+			continue
+		}
+		// Sessions die first (their rows stay for the audit read), then the
+		// tenant's rows go in FK order.
+		if err := s.auth.RevokeTenantSessions(r.Context(), id); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unavailable"})
+			return
+		}
+		keysN, usersN, err := s.keys.DeleteTenant(r.Context(), id)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unavailable"})
+			return
+		}
+		s.gw.AuditEvent(r.Context(), "tenant.deleted", id, fmt.Sprintf("keys=%d users=%d sessions killed", keysN, usersN))
+		deleted = append(deleted, id)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": deleted, "blocked": blocked, "missing": missing})
 }
 
 // handleSessionList serves one page of the login-state inventory

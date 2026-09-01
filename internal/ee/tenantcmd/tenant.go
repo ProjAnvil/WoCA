@@ -162,7 +162,7 @@ func New() *cobra.Command {
 				return err
 			}
 			defer closeDB()
-			ks, _, err := st.ListKeys(cmd.Context(), args[0], "", "", 200, 0)
+			ks, _, err := st.ListKeys(cmd.Context(), args[0], "", "", "", 200, 0)
 			if err != nil {
 				return err
 			}

@@ -529,3 +529,127 @@ func TestMultiTenantLifecycle(t *testing.T) {
 		t.Fatalf("session tenant search = %+v total=%d", sessDoc.Items, sessDoc.Total)
 	}
 }
+
+// TestBatchRevokeAndTenantDelete: the console's bulk actions — batch key
+// revoke kills the listed keys with their sessions (tolerant of repeats
+// and unknowns), tenant delete cascades for good (keys and users removed,
+// live sessions killed, no grace), the platform tenant is protected, and
+// unknown ids are reported instead of failing the batch.
+func TestBatchRevokeAndTenantDelete(t *testing.T) {
+	f := newFixture(t)
+
+	_, raw := f.do("POST", "/api/tenant/tenants", map[string]string{"name": "BU X"})
+	var bu tenantRow
+	_ = json.Unmarshal(raw, &bu)
+
+	issue := func(remark string) (prefix, full string) {
+		resp, raw := f.do("POST", "/api/tenant/users", map[string]string{"remark": remark, "role": "member", "tenant_id": bu.ID})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("issue %s = %d %s", remark, resp.StatusCode, raw)
+		}
+		var doc struct {
+			Key  string  `json:"key"`
+			User userRow `json:"user"`
+		}
+		_ = json.Unmarshal(raw, &doc)
+		return doc.User.Prefix, doc.Key
+	}
+	pAlice, kAlice := issue("alice")
+	pBob, _ := issue("bob")
+	_, kCarol := issue("carol")
+	// A key outside the business unit (the platform circle) must survive
+	// the tenant delete.
+	resp, raw := f.do("POST", "/api/tenant/users", map[string]string{"remark": "eve", "role": "member"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("issue eve = %d %s", resp.StatusCode, raw)
+	}
+
+	// Batch revoke two keys (one duplicated in the request), with an
+	// unknown prefix mixed in — all tolerated.
+	resp, raw = f.do("POST", "/api/tenant/users/revoke", map[string]any{"prefixes": []string{pAlice, pBob, pAlice, "deadbeef"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("batch revoke = %d %s", resp.StatusCode, raw)
+	}
+	var rev struct {
+		Revoked int64 `json:"revoked"`
+	}
+	_ = json.Unmarshal(raw, &rev)
+	if rev.Revoked != 2 {
+		t.Fatalf("batch revoke flipped %d keys, want 2", rev.Revoked)
+	}
+
+	// Login with two of the tenant's keys so live sessions exist when the
+	// business unit is deleted (alice's key is dead — a login must fail).
+	if _, err := f.auth.Login(t.Context(), kAlice); err == nil {
+		t.Fatal("revoked key still logs in")
+	}
+	if _, err := f.auth.Login(t.Context(), kCarol); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deleting the tenant plus the protected platform tenant in one call:
+	// the business unit goes, "local" is blocked, and an unknown id is
+	// reported — none of it fatal.
+	resp, raw = f.do("POST", "/api/tenant/tenants/delete", map[string]any{"ids": []string{bu.ID, "local", "t_ghost"}})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("tenant delete = %d %s", resp.StatusCode, raw)
+	}
+	var del struct {
+		Deleted []string `json:"deleted"`
+		Blocked []string `json:"blocked"`
+		Missing []string `json:"missing"`
+	}
+	_ = json.Unmarshal(raw, &del)
+	if len(del.Deleted) != 1 || del.Deleted[0] != bu.ID || len(del.Blocked) != 1 || del.Blocked[0] != "local" || len(del.Missing) != 1 || del.Missing[0] != "t_ghost" {
+		t.Fatalf("tenant delete verdict = %+v", del)
+	}
+
+	// Every BU X key row is gone (revoked ones included); eve's key in the
+	// platform circle survives.
+	_, raw = f.do("GET", "/api/tenant/users?limit=200", nil)
+	var usersDoc struct {
+		Items []userRow `json:"items"`
+		Total int       `json:"total"`
+	}
+	_ = json.Unmarshal(raw, &usersDoc)
+	if usersDoc.Total != 1 || usersDoc.Items[0].Remark != "eve" || usersDoc.Items[0].TenantID != "local" {
+		t.Fatalf("survivors = %+v total=%d", usersDoc.Items, usersDoc.Total)
+	}
+
+	// The tenants list no longer carries the business unit.
+	_, raw = f.do("GET", "/api/tenant/tenants", nil)
+	var tenants []tenantRow
+	_ = json.Unmarshal(raw, &tenants)
+	for _, tn := range tenants {
+		if tn.ID == bu.ID {
+			t.Fatalf("deleted tenant still listed: %+v", tenants)
+		}
+	}
+
+	// Carol's session died with the tenant — revoked on the spot.
+	_, raw = f.do("GET", "/api/tenant/sessions?limit=200", nil)
+	var sessDoc struct {
+		Items []struct {
+			Remark    string `json:"remark"`
+			RevokedAt int64  `json:"revoked_at"`
+		} `json:"items"`
+	}
+	_ = json.Unmarshal(raw, &sessDoc)
+	for _, it := range sessDoc.Items {
+		if it.Remark == "carol" && it.RevokedAt == 0 {
+			t.Fatalf("carol session outlived the tenant: %+v", sessDoc.Items)
+		}
+	}
+
+	// The governance trail carries both bulk events.
+	_, raw = f.do("GET", "/api/gw/audit", nil)
+	if !strings.Contains(string(raw), "user.batch_revoked") || !strings.Contains(string(raw), "tenant.deleted") {
+		t.Fatalf("audit trail missing bulk events: %s", raw)
+	}
+
+	// Empty body is a client error.
+	resp, _ = f.do("POST", "/api/tenant/users/revoke", map[string]any{"prefixes": []string{}})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty batch = %d want 400", resp.StatusCode)
+	}
+}

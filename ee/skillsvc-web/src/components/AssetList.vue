@@ -50,19 +50,19 @@ async function del(a: any) {
 </template>
 
 <style scoped>
-.panel { background: #131826; border: 1px solid #2a3048; border-radius: 12px; padding: 16px; }
-h2 { font-size: 15px; margin-bottom: 10px; color: #c6cde6; }
+.panel { background: #fff; border: 1px solid #e4e7eb; border-radius: 10px; padding: 16px; }
+h2 { font-size: 15px; margin-bottom: 10px; color: #1f2933; }
 .btn { padding: 6px 14px; border-radius: 8px; border: none; cursor: pointer; font-size: 13px; }
-.btn.primary { background: #4f7cff; color: #fff; }
-.btn.danger { background: #c63a3a22; color: #fda4af; border: 1px solid #c63a3a55; }
+.btn.primary { background: #111; color: #fff; }
+.btn.danger { background: none; color: #c0392b; border: 1px solid #c0392b; }
 .btn.small { padding: 2px 8px; font-size: 11px; }
 .create-form { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
-input { padding: 8px 10px; border-radius: 8px; border: 1px solid #3a4160; background: #0d1220; color: #e8eaf2; font-size: 13px; }
+input { padding: 8px 10px; border-radius: 8px; border: 1px solid #cbd2d9; background: transparent; color: inherit; font-size: 13px; }
 .asset-list { list-style: none; }
 .asset-list li { padding: 10px; border-radius: 8px; cursor: pointer; margin-bottom: 4px; border: 1px solid transparent; }
-.asset-list li:hover { background: #1a2036; }
-.asset-list li.active { border-color: #4f7cff; background: #162040; }
+.asset-list li:hover { background: #eceef0; }
+.asset-list li.active { border-color: #cbd2d9; background: #e4e7eb; }
 .asset-name { font-weight: 600; font-size: 14px; }
-.asset-desc { color: #67719a; font-size: 12px; margin-top: 2px; }
-.empty { color: #67719a; font-size: 13px; padding: 16px 0; text-align: center; }
+.asset-desc { color: #616e7c; font-size: 12px; margin-top: 2px; }
+.empty { color: #616e7c; font-size: 13px; padding: 16px 0; text-align: center; }
 </style>

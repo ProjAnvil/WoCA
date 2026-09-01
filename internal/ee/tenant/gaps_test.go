@@ -47,7 +47,7 @@ func TestStoreClosedDBSurfacesErrors(t *testing.T) {
 	if _, _, err := st.IssueKey(ctx, "t", "u", "n", "member"); err == nil {
 		t.Error("IssueKey on closed DB should fail")
 	}
-	if _, _, err := st.ListKeys(ctx, "t", "", "", 200, 0); err == nil {
+	if _, _, err := st.ListKeys(ctx, "t", "", "", "", 200, 0); err == nil {
 		t.Error("ListKeys on closed DB should fail")
 	}
 	hex48 := strings.Repeat("a", keySecretLen)

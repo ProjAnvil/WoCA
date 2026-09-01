@@ -228,6 +228,19 @@ func (s *Service) RevokeKeySessions(_ context.Context, keyPrefix string) error {
 	return nil
 }
 
+// RevokeTenantSessions marks every live session of a business unit
+// revoked — the cascade when the console deletes the tenant. The rows
+// stay (the session audit reads them), pointing at a tenant that no
+// longer exists.
+func (s *Service) RevokeTenantSessions(_ context.Context, tenantID string) error {
+	_, err := s.db.Exec(`UPDATE core_sessions SET revoked_at = `+s.ph(0)+` WHERE tenant_id = `+s.ph(1)+` AND revoked_at IS NULL`,
+		nowMilli(), tenantID)
+	if err != nil {
+		return fmt.Errorf("authcore: revoke tenant sessions: %w", err)
+	}
+	return nil
+}
+
 // ListSessions returns one page of the session inventory (revoked rows
 // included, marked) for the console: q filters by remark substring
 // (case-insensitive); limit/offset page through the database. total

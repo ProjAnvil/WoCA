@@ -185,7 +185,7 @@ func TestRevokeKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keys, _, err := st.ListKeys(ctx, ten.ID, "", "", 200, 0)
+	keys, _, err := st.ListKeys(ctx, ten.ID, "", "", "", 200, 0)
 	if err != nil || len(keys) != 1 || keys[0].RevokedAt == 0 {
 		t.Fatalf("list keys = %v %v", keys, err)
 	}

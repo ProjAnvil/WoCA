@@ -147,7 +147,7 @@ onMounted(() => {
 
 <style scoped>
 .audit-card {
-  border: 1px solid var(--border, #e4e7eb);
+  border: 1px solid #e4e7eb;
   border-radius: 10px;
   padding: 12px 14px;
 }
@@ -182,7 +182,7 @@ onMounted(() => {
 }
 .audit-filters select, .audit-filters input {
   padding: 6px 8px;
-  border: 1px solid var(--border, #cbd2d9);
+  border: 1px solid #cbd2d9;
   border-radius: 6px;
   background: transparent;
   color: inherit;
@@ -209,7 +209,7 @@ onMounted(() => {
 }
 .audit-table td {
   padding: 5px 8px 5px 0;
-  border-top: 1px solid var(--border, #e4e7eb);
+  border-top: 1px solid #e4e7eb;
 }
 .audit-detail {
   font-family: ui-monospace, monospace;
@@ -217,7 +217,7 @@ onMounted(() => {
   max-width: 260px;
 }
 .btn {
-  border: 1px solid var(--border, #cbd2d9);
+  border: 1px solid #cbd2d9;
   border-radius: 6px;
   background: none;
   padding: 5px 10px;

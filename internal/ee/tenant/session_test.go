@@ -204,7 +204,7 @@ func TestSessionStoreClosedDBSurfacesErrors(t *testing.T) {
 	check("create tenant", func() error { _, err := st.CreateTenant(ctx, "x"); return err }())
 	check("create user", func() error { _, err := st.CreateUser(ctx, tenantID, "n", authz.RoleMember); return err }())
 	check("issue key", func() error { _, _, err := st.IssueKey(ctx, tenantID, userID, "k", authz.RoleMember); return err }())
-	check("list keys", func() error { _, _, err := st.ListKeys(ctx, tenantID, "", "", 200, 0); return err }())
+	check("list keys", func() error { _, _, err := st.ListKeys(ctx, tenantID, "", "", "", 200, 0); return err }())
 	check("revoke key", st.RevokeKey(ctx, "p"))
 	check("list tenants", func() error { _, err := st.ListTenants(ctx); return err }())
 	check("authenticate", func() error { _, err := NewAPIKeyProvider(st).Authenticate(ctx, "woca_a_b"); return err }())

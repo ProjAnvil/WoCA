@@ -162,7 +162,7 @@ onMounted(load)
 
 <style scoped>
 .sessions-card {
-  border: 1px solid var(--border, #e4e7eb);
+  border: 1px solid #e4e7eb;
   border-radius: 10px;
   padding: 12px 14px;
 }
@@ -191,7 +191,7 @@ onMounted(load)
   width: 100%;
   padding: 7px 10px;
   margin-bottom: 10px;
-  border: 1px solid var(--border, #cbd2d9);
+  border: 1px solid #cbd2d9;
   border-radius: 8px;
   background: transparent;
   color: inherit;
@@ -217,7 +217,7 @@ onMounted(load)
 }
 .sessions-table td {
   padding: 5px 8px 5px 0;
-  border-top: 1px solid var(--border, #e4e7eb);
+  border-top: 1px solid #e4e7eb;
 }
 .sessions-table tr.revoked td {
   opacity: 0.55;
@@ -234,7 +234,7 @@ onMounted(load)
   opacity: 0.8;
 }
 .btn {
-  border: 1px solid var(--border, #cbd2d9);
+  border: 1px solid #cbd2d9;
   border-radius: 6px;
   background: none;
   padding: 5px 10px;

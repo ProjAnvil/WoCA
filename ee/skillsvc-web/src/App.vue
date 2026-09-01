@@ -58,12 +58,14 @@ defineExpose({ refresh, select })
 </template>
 
 <style>
+/* Aligned with the console family's light monochrome tokens (the shared
+ * styles.css carries the woca-mono theme); layout stays the 3-panel grid. */
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, 'Segoe UI', 'PingFang SC', sans-serif; background: #0b0e16; color: #e8eaf2; }
-.console { max-width: 1200px; margin: 0 auto; padding: 24px; }
+body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg-page, #f5f6f7); color: #1f2933; }
+.console { max-width: 1280px; margin: 0 auto; padding: 24px; }
 .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
-h1 { font-size: 22px; }
-.subtitle { color: #97a0bd; font-size: 13px; margin-top: 4px; }
-.locale-toggle { padding: 6px 14px; border-radius: 8px; border: 1px solid #556; background: #1a1f30; color: #8fd0ff; cursor: pointer; }
+h1 { font-size: 18px; font-weight: 600; }
+.subtitle { color: #616e7c; font-size: 12px; margin-top: 4px; }
+.locale-toggle { padding: 4px 10px; border-radius: 6px; border: 1px solid #cbd2d9; background: none; color: #1f2933; cursor: pointer; font: inherit; }
 .grid { display: grid; grid-template-columns: 300px 1fr 1fr; gap: 16px; align-items: start; }
 </style>

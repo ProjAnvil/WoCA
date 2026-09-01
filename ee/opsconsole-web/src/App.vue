@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, provide, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ShieldCheck } from 'lucide-vue-next'
+import { Building2, Cable, KeyRound, LogIn, ScrollText, ShieldCheck } from 'lucide-vue-next'
 import type { OpsContext } from './inject'
-import UsersSection from './components/UsersSection.vue'
+import TenantsSection from './components/TenantsSection.vue'
+import KeysSection from './components/KeysSection.vue'
 import SessionsSection from './components/SessionsSection.vue'
 import BridgesSection from './components/BridgesSection.vue'
 import AuditSection from './components/AuditSection.vue'
+import OpsToast from './components/OpsToast.vue'
 
 const { t, locale } = useI18n()
 
@@ -75,13 +77,17 @@ async function logout() {
   authed.value = false
 }
 
+// Tenant management and key management are separate sections (the old
+// combined "tenants & keys" page mixed search, creation forms and tables
+// in one card); sessions, bridges and audit keep their own sections.
 const sections = computed(() => [
-  { id: 'users', label: t('nav.users') },
-  { id: 'sessions', label: t('nav.sessions') },
-  { id: 'bridges', label: t('nav.bridges') },
-  { id: 'audit', label: t('nav.audit') },
+  { id: 'tenants', label: t('nav.tenants'), icon: Building2 },
+  { id: 'keys', label: t('nav.keys'), icon: KeyRound },
+  { id: 'sessions', label: t('nav.sessions'), icon: LogIn },
+  { id: 'bridges', label: t('nav.bridges'), icon: Cable },
+  { id: 'audit', label: t('nav.audit'), icon: ScrollText },
 ])
-const active = ref('users')
+const active = ref('tenants')
 
 function toggleLocale() {
   const next = locale.value === 'zh-CN' ? 'en' : 'zh-CN'
@@ -138,21 +144,25 @@ onMounted(probe)
           :class="{ active: active === sec.id }"
           @click="active = sec.id"
         >
+          <component :is="sec.icon" :size="15" class="nav-icon" />
           {{ sec.label }}
         </button>
       </nav>
       <main class="content">
-        <UsersSection v-if="active === 'users'" />
+        <TenantsSection v-if="active === 'tenants'" />
+        <KeysSection v-if="active === 'keys'" />
         <SessionsSection v-if="active === 'sessions'" />
         <BridgesSection v-if="active === 'bridges'" />
         <AuditSection v-if="active === 'audit'" />
       </main>
     </div>
+
+    <OpsToast />
   </div>
 </template>
 
 <style scoped>
-.app { max-width: 880px; margin: 0 auto; padding: 24px 16px; font: 14px/1.5 system-ui, -apple-system, sans-serif; color: #1f2933; }
+.app { max-width: 1280px; margin: 0 auto; padding: 24px; font: 14px/1.5 system-ui, -apple-system, sans-serif; color: #1f2933; }
 .head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
 .head-actions { display: flex; gap: 8px; }
 .title { font-size: 18px; font-weight: 600; }
@@ -164,12 +174,15 @@ onMounted(probe)
 .wide { width: 100%; box-sizing: border-box; }
 .hint { color: #616e7c; font-size: 12px; }
 .err { color: #c0392b; font-size: 12px; }
-.primary { align-self: flex-start; background: #2563eb; color: #fff; border: 0; border-radius: 6px; padding: 7px 16px; cursor: pointer; }
+.primary { align-self: flex-start; background: #111; color: #fff; border: 0; border-radius: 6px; padding: 7px 16px; cursor: pointer; }
 .primary:disabled { opacity: 0.6; }
 .ghost { background: none; border: 1px solid #cbd2d9; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
 .body { display: flex; gap: 16px; align-items: flex-start; }
-.nav { display: flex; flex-direction: column; gap: 4px; min-width: 130px; }
-.nav-item { text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; cursor: pointer; color: #1f2933; }
-.nav-item.active { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
-.content { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+.nav { display: flex; flex-direction: column; gap: 4px; width: 200px; flex: none; }
+.nav-item { text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; cursor: pointer; color: #1f2933; display: flex; align-items: center; gap: 8px; font: inherit; font-size: 13.5px; }
+.nav-item:hover { background: #eceef0; }
+.nav-item.active { background: #e4e7eb; border-color: #cbd2d9; color: #111; font-weight: 600; }
+.nav-icon { opacity: 0.75; }
+.nav-item.active .nav-icon { opacity: 1; }
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 </style>

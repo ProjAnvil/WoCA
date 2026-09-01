@@ -35,13 +35,13 @@ async function setLabel(label: string, version: number) {
 </template>
 
 <style scoped>
-.panel { background: #131826; border: 1px solid #2a3048; border-radius: 12px; padding: 16px; }
-h2 { font-size: 15px; margin-bottom: 10px; color: #c6cde6; }
-.label-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #1a2036; }
+.panel { background: #fff; border: 1px solid #e4e7eb; border-radius: 10px; padding: 16px; }
+h2 { font-size: 15px; margin-bottom: 10px; color: #1f2933; }
+.label-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid #e4e7eb; }
 .label-name { font-weight: 700; font-size: 13px; }
-.label-name.production { color: #4ade80; }
-.label-name.canary { color: #fcd34d; }
-.label-current { color: #97a0bd; font-size: 12px; margin-left: 10px; }
-.label-none { color: #556; font-size: 12px; margin-left: 10px; }
-select { padding: 6px 10px; border-radius: 8px; border: 1px solid #3a4160; background: #0d1220; color: #e8eaf2; font-size: 13px; }
+.label-name.production { color: #047857; }
+.label-name.canary { color: #b45309; }
+.label-current { color: #a8b0b9; font-size: 12px; margin-left: 10px; }
+.label-none { color: #a8b0b9; font-size: 12px; margin-left: 10px; }
+select { padding: 6px 10px; border-radius: 8px; border: 1px solid #cbd2d9; background: transparent; color: inherit; font-size: 13px; }
 </style>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, provide, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { MessageSquare, ServerCog } from 'lucide-vue-next'
+import { Brain, Cpu, Database, MessageSquare, MessagesSquare, ServerCog, Settings2, Sparkles } from 'lucide-vue-next'
 import type { Settings } from './types'
 import type { CfgContext } from './inject'
 import ModelSection from './components/ModelSection.vue'
@@ -172,12 +172,12 @@ async function save(extra?: Record<string, unknown>) {
 }
 
 const sections = computed(() => [
-  { id: 'model', label: t('nav.model') },
-  { id: 'storage', label: t('nav.storage') },
-  { id: 'memory', label: t('nav.memory') },
-  { id: 'msgplane', label: t('nav.msgplane') },
-  { id: 'skills', label: t('nav.skills') },
-  { id: 'ops', label: t('nav.ops') },
+  { id: 'model', label: t('nav.model'), icon: Cpu },
+  { id: 'storage', label: t('nav.storage'), icon: Database },
+  { id: 'memory', label: t('nav.memory'), icon: Brain },
+  { id: 'msgplane', label: t('nav.msgplane'), icon: MessagesSquare },
+  { id: 'skills', label: t('nav.skills'), icon: Sparkles },
+  { id: 'ops', label: t('nav.ops'), icon: Settings2 },
 ])
 const active = ref('model')
 
@@ -239,6 +239,7 @@ onMounted(() => {
           :class="{ active: active === sec.id }"
           @click="active = sec.id"
         >
+          <component :is="sec.icon" :size="15" class="nav-icon" />
           {{ sec.label }}
         </button>
       </nav>
@@ -258,7 +259,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.app { max-width: 880px; margin: 0 auto; padding: 24px 16px; font: 14px/1.5 system-ui, -apple-system, sans-serif; color: #1f2933; }
+.app { max-width: 1280px; margin: 0 auto; padding: 24px; font: 14px/1.5 system-ui, -apple-system, sans-serif; color: #1f2933; }
 .head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
 .title { font-size: 18px; font-weight: 600; }
 .subtitle { color: #616e7c; font-size: 12px; margin-top: 2px; }
@@ -269,13 +270,16 @@ onMounted(() => {
 .wide { width: 100%; box-sizing: border-box; }
 .hint { color: #616e7c; font-size: 12px; }
 .err { color: #c0392b; font-size: 12px; }
-.primary { align-self: flex-start; background: #2563eb; color: #fff; border: 0; border-radius: 6px; padding: 7px 16px; cursor: pointer; }
+.primary { align-self: flex-start; background: #111; color: #fff; border: 0; border-radius: 6px; padding: 7px 16px; cursor: pointer; }
 .primary:disabled { opacity: 0.6; }
 .ghost { background: none; border: 1px solid #cbd2d9; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
 .body { display: flex; gap: 16px; align-items: flex-start; }
-.nav { display: flex; flex-direction: column; gap: 4px; min-width: 130px; }
-.nav-item { text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; cursor: pointer; color: #1f2933; }
-.nav-item.active { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
-.content { flex: 1; display: flex; flex-direction: column; gap: 14px; }
+.nav { display: flex; flex-direction: column; gap: 4px; width: 200px; flex: none; }
+.nav-item { text-align: left; background: none; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; cursor: pointer; color: #1f2933; display: flex; align-items: center; gap: 8px; font: inherit; font-size: 13.5px; }
+.nav-item:hover { background: #eceef0; }
+.nav-item.active { background: #e4e7eb; border-color: #cbd2d9; color: #111; font-weight: 600; }
+.nav-icon { opacity: 0.75; }
+.nav-item.active .nav-icon { opacity: 1; }
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
 .flash { color: #047857; font-size: 12px; }
 </style>

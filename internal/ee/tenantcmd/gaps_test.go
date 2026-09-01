@@ -101,7 +101,7 @@ func TestTenantCmdRevokeLifecycle(t *testing.T) {
 		closeDB()
 		t.Fatal(err)
 	}
-	keys, _, err := st.ListKeys(context.Background(), tid, "", "", 200, 0)
+	keys, _, err := st.ListKeys(context.Background(), tid, "", "", "", 200, 0)
 	if err != nil || len(keys) != 1 {
 		closeDB()
 		t.Fatalf("keys = %v %v", keys, err)

@@ -196,7 +196,7 @@ onMounted(load)
 </template>
 
 <style scoped>
-.sk-card { border: 1px solid var(--border, #e4e7eb); border-radius: 10px; padding: 12px 14px; }
+.sk-card { border: 1px solid #e4e7eb; border-radius: 10px; padding: 12px 14px; }
 .sk-title { font-weight: 600; margin-bottom: 6px; }
 .sk-subtitle { font-weight: 600; margin: 12px 0 6px; }
 .sk-hint { margin: 0 0 8px; font-size: 12.5px; opacity: 0.75; }
@@ -204,17 +204,17 @@ onMounted(load)
 .sk-block { margin-bottom: 8px; }
 .sk-form { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
 .sk-form input, .sk-form textarea {
-  padding: 7px 10px; border: 1px solid var(--border, #cbd2d9); border-radius: 8px;
+  padding: 7px 10px; border: 1px solid #cbd2d9; border-radius: 8px;
   background: transparent; color: inherit; font: inherit; font-size: 13px;
 }
 .sk-form textarea { font-family: ui-monospace, monospace; font-size: 12px; resize: vertical; }
 .sk-form .btn-primary { align-self: flex-start; }
 .sk-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .sk-table th { text-align: left; opacity: 0.6; font-weight: 500; padding: 4px 8px 4px 0; }
-.sk-table td { padding: 5px 8px 5px 0; border-top: 1px solid var(--border, #e4e7eb); }
+.sk-table td { padding: 5px 8px 5px 0; border-top: 1px solid #e4e7eb; }
 .sk-desc { max-width: 280px; }
 .sk-spec { font-family: ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; max-width: 300px; }
-.btn { border: 1px solid var(--border, #cbd2d9); border-radius: 6px; background: none; padding: 5px 10px; cursor: pointer; font: inherit; font-size: 12.5px; }
-.btn-primary { border-color: #2563eb; color: #2563eb; }
+.btn { border: 1px solid #cbd2d9; border-radius: 6px; background: none; padding: 5px 10px; cursor: pointer; font: inherit; font-size: 12.5px; }
+.btn-primary { border-color: #111; color: #111; }
 .btn-danger { border-color: #c0392b; color: #c0392b; }
 </style>

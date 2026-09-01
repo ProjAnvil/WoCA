@@ -372,16 +372,17 @@ func (s *Store) IssueKey(_ context.Context, tenantID, userID, name, role string)
 	return APIKey{}, "", errors.New("tenant: issue key: prefix collision")
 }
 
-// ListKeysForAll lists keys across every tenant (the console view).
-func (s *Store) ListKeysForAll(ctx context.Context, q, order string, limit, offset int) ([]APIKey, int, error) {
-	return s.listKeys(ctx, "", q, order, limit, offset)
+// ListKeysForAll lists keys across every tenant (the console view). state
+// narrows the lifecycle: "" (all), "active", "revoked".
+func (s *Store) ListKeysForAll(ctx context.Context, q, order, state string, limit, offset int) ([]APIKey, int, error) {
+	return s.listKeys(ctx, "", q, order, state, limit, offset)
 }
 
-func (s *Store) ListKeys(ctx context.Context, tenantID, q, order string, limit, offset int) ([]APIKey, int, error) {
-	return s.listKeys(ctx, tenantID, q, order, limit, offset)
+func (s *Store) ListKeys(ctx context.Context, tenantID, q, order, state string, limit, offset int) ([]APIKey, int, error) {
+	return s.listKeys(ctx, tenantID, q, order, state, limit, offset)
 }
 
-func (s *Store) listKeys(ctx context.Context, tenantID, q, order string, limit, offset int) ([]APIKey, int, error) {
+func (s *Store) listKeys(ctx context.Context, tenantID, q, order, state string, limit, offset int) ([]APIKey, int, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -393,11 +394,23 @@ func (s *Store) listKeys(ctx context.Context, tenantID, q, order string, limit, 
 	if tenantID != "" {
 		tenantWhere = ` k.tenant_id = ` + s.ph(1)
 	}
+	// The lifecycle filter: "" lists everything, "active"/"revoked" split
+	// on the revoked marker (anything else behaves as "").
+	stateWhere := ""
+	switch state {
+	case "active":
+		stateWhere = ` k.revoked_at IS NULL`
+	case "revoked":
+		stateWhere = ` k.revoked_at IS NOT NULL`
+	}
 	// q matches the remark (username), the key prefix, or the tenant
 	// name — all fuzzy. The tenant join carries the display name.
 	parts := []string{}
 	if tenantWhere != "" {
 		parts = append(parts, tenantWhere)
+	}
+	if stateWhere != "" {
+		parts = append(parts, stateWhere)
 	}
 	args := []any{}
 	if tenantID != "" {
@@ -462,6 +475,64 @@ func (s *Store) RevokeKey(_ context.Context, prefix string) error {
 		return fmt.Errorf("tenant: revoke key: %w", err)
 	}
 	return nil
+}
+
+// RevokeKeys batch-revokes keys by prefix (the console's bulk action).
+// Unknown or already-revoked prefixes are skipped silently, mirroring
+// RevokeKey's tolerance per key. Returns how many keys actually flipped.
+func (s *Store) RevokeKeys(_ context.Context, prefixes []string) (int64, error) {
+	if len(prefixes) == 0 {
+		return 0, nil
+	}
+	ins := make([]string, len(prefixes))
+	args := make([]any, 0, len(prefixes)+1)
+	args = append(args, nowMilli())
+	for i, p := range prefixes {
+		ins[i] = s.ph(i + 1)
+		args = append(args, p)
+	}
+	res, err := s.db.Exec(
+		`UPDATE api_keys SET revoked_at = `+s.ph(0)+` WHERE revoked_at IS NULL AND prefix IN (`+strings.Join(ins, ",")+`)`,
+		args...)
+	if err != nil {
+		return 0, fmt.Errorf("tenant: revoke keys: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// DeleteTenant removes a business unit for good: its key and user rows go
+// with it (the governance audit trail keeps the history — the rows do
+// not). The caller kills the tenant's live sessions first (the console
+// handler does); there is no grace window. FK order matters: api_keys
+// references users and tenants, users reference tenants.
+func (s *Store) DeleteTenant(_ context.Context, id string) (keysN, usersN int64, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, 0, fmt.Errorf("tenant: delete tenant: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM api_keys WHERE tenant_id = `+s.ph(0), id)
+	if err != nil {
+		return 0, 0, fmt.Errorf("tenant: delete tenant keys: %w", err)
+	}
+	keysN, _ = res.RowsAffected()
+	res, err = tx.Exec(`DELETE FROM users WHERE tenant_id = `+s.ph(0), id)
+	if err != nil {
+		return 0, 0, fmt.Errorf("tenant: delete tenant users: %w", err)
+	}
+	usersN, _ = res.RowsAffected()
+	res, err = tx.Exec(`DELETE FROM tenants WHERE id = `+s.ph(0), id)
+	if err != nil {
+		return 0, 0, fmt.Errorf("tenant: delete tenant: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return 0, 0, ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, fmt.Errorf("tenant: delete tenant: %w", err)
+	}
+	return keysN, usersN, nil
 }
 
 // LookupKey resolves and verifies a full credential, returning the key
