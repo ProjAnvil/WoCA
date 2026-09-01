@@ -15,9 +15,6 @@ export default {
     dark: '深色',
     language: '语言',
     langAuto: '跟随系统',
-    density: '信息密度',
-    densityComfortable: '舒适',
-    densityCompact: '紧凑',
   },
   store: {
     saved: '已保存',

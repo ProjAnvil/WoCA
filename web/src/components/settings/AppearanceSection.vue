@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Expand, Languages, Monitor, Moon, Shrink, Sun } from 'lucide-vue-next'
+import { Languages, Monitor, Moon, Sun } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '../../stores/settings'
 
@@ -54,25 +54,6 @@ const settings = useSettingsStore()
       >
         <Languages :size="16" />
         <span>English</span>
-      </button>
-    </div>
-    <div class="setting-section-title lang-title">{{ t('settings.appearance.density') }}</div>
-    <div class="theme-choice">
-      <button
-        class="theme-option"
-        :class="{ active: settings.density !== 'compact' }"
-        @click="settings.density = 'comfortable'"
-      >
-        <Expand :size="16" />
-        <span>{{ t('settings.appearance.densityComfortable') }}</span>
-      </button>
-      <button
-        class="theme-option"
-        :class="{ active: settings.density === 'compact' }"
-        @click="settings.density = 'compact'"
-      >
-        <Shrink :size="16" />
-        <span>{{ t('settings.appearance.densityCompact') }}</span>
       </button>
     </div>
   </section>

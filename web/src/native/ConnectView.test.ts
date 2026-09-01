@@ -15,6 +15,16 @@ function mountConnect(connect = vi.fn().mockResolvedValue({ state: 'ready' })) {
   }
 }
 
+// The wizard lands on the mode-choice page; form tests walk P0 -> P1 ->
+// the requested form page first.
+async function openForm(
+  wrapper: ReturnType<typeof mountConnect>['wrapper'],
+  flavor: 'private' | 'direct' = 'private',
+) {
+  await wrapper.get('[data-testid="remote-open"]').trigger('click')
+  await wrapper.get('[data-testid="tab-' + flavor + '"]').trigger('click')
+}
+
 describe('ConnectView', () => {
   beforeEach(() => {
     i18n.global.locale.value = 'en'
@@ -22,6 +32,7 @@ describe('ConnectView', () => {
 
   it('requires both an enterprise URL and API key', async () => {
     const blankUrl = mountConnect()
+    await openForm(blankUrl.wrapper)
     await blankUrl.wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
     await blankUrl.wrapper.get('form').trigger('submit')
 
@@ -29,6 +40,7 @@ describe('ConnectView', () => {
     expect(blankUrl.wrapper.get('[data-testid="connection-validation"]').text()).toContain('URL')
 
     const blankKey = mountConnect()
+    await openForm(blankKey.wrapper)
     await blankKey.wrapper.get('[data-testid="url-input"]').setValue('https://enterprise.example.com')
     await blankKey.wrapper.get('form').trigger('submit')
 
@@ -77,6 +89,7 @@ describe('ConnectView', () => {
     ['BOM inside authority port', 'https://enterprise.example.com:\ufeff8443'],
   ])('does not submit an invalid origin: %s', async (_name, origin) => {
     const { connect, wrapper } = mountConnect()
+    await openForm(wrapper)
     await wrapper.get('[data-testid="url-input"]').setValue(origin)
     await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
     await wrapper.get('form').trigger('submit')
@@ -92,6 +105,7 @@ describe('ConnectView', () => {
     ['loopback HTTP', 'http://localhost:8080', 'http://localhost:8080'],
   ])('submits a valid %s', async (_name, origin, want) => {
     const { connect, wrapper } = mountConnect()
+    await openForm(wrapper)
     await wrapper.get('[data-testid="url-input"]').setValue(origin)
     await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
     await wrapper.get('form').trigger('submit')
@@ -101,6 +115,7 @@ describe('ConnectView', () => {
 
   it('submits URL and API key only to the provided callback', async () => {
     const { connect, wrapper } = mountConnect()
+    await openForm(wrapper)
     await wrapper.get('[data-testid="url-input"]').setValue('https://enterprise.example.com')
     await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
     await wrapper.get('form').trigger('submit')
@@ -116,6 +131,7 @@ describe('ConnectView', () => {
     const localStorageSetItem = vi.spyOn(window.localStorage, 'setItem')
     const sessionStorageSetItem = vi.spyOn(window.sessionStorage, 'setItem')
     const { wrapper } = mountConnect()
+    await openForm(wrapper)
     await wrapper.get('[data-testid="url-input"]').setValue('https://enterprise.example.com')
     await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
     await wrapper.get('form').trigger('submit')
@@ -126,6 +142,7 @@ describe('ConnectView', () => {
 
   it('keeps the API key in the field after a failed connection', async () => {
     const { wrapper } = mountConnect(vi.fn().mockRejectedValue(new Error('activation failed')))
+    await openForm(wrapper)
     await wrapper.get('[data-testid="url-input"]').setValue('https://enterprise.example.com')
     await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
     await wrapper.get('form').trigger('submit')
@@ -175,13 +192,15 @@ describe('ConnectView three-entry model (design §6.6)', () => {
     expect(withEmbedded.emitted('connect-embedded')).toHaveLength(1)
   })
 
-  it('switches URL label and placeholder between the private-cloud and direct tabs', async () => {
+  it('walks P0, P1 and the private-cloud / direct form pages', async () => {
     const { wrapper } = mountConnect()
-    expect(wrapper.get('[data-testid="tab-private"]').attributes('aria-selected')).toBe('true')
+    await wrapper.get('[data-testid="remote-open"]').trigger('click')
+    await wrapper.get('[data-testid="tab-private"]').trigger('click')
     expect(wrapper.get('[data-testid="url-input"]').attributes('placeholder')).toBe('https://woca.example.com')
 
+    // Back to the remote-way page, then the direct form.
+    await wrapper.get('.gate-back-btn').trigger('click')
     await wrapper.get('[data-testid="tab-direct"]').trigger('click')
-    expect(wrapper.get('[data-testid="tab-direct"]').attributes('aria-selected')).toBe('true')
     expect(wrapper.get('[data-testid="url-input"]').attributes('placeholder')).toBe('https://bridge.example.com')
   })
 
@@ -193,6 +212,7 @@ describe('ConnectView three-entry model (design §6.6)', () => {
     vi.stubGlobal('go', { main: { App: app } })
     const connect = vi.fn().mockResolvedValue({ state: 'ready' })
     const { wrapper } = mountConnect(connect)
+    await openForm(wrapper)
     await wrapper.get('[data-testid="url-input"]').setValue('https://edge.example.com')
     await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
     await wrapper.get('form').trigger('submit')
@@ -218,6 +238,7 @@ describe('ConnectView three-entry model (design §6.6)', () => {
     vi.stubGlobal('go', { main: { App: app } })
     const connect = vi.fn().mockResolvedValue({ state: 'ready' })
     const { wrapper } = mountConnect(connect)
+    await openForm(wrapper)
     await wrapper.get('[data-testid="url-input"]').setValue('https://edge.example.com')
     await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
     await wrapper.get('form').trigger('submit')
@@ -231,6 +252,7 @@ describe('ConnectView three-entry model (design §6.6)', () => {
     vi.stubGlobal('go', { main: { App: app } })
     const connect = vi.fn().mockResolvedValue({ state: 'ready' })
     const { wrapper } = mountConnect(connect)
+    await openForm(wrapper)
     await wrapper.get('[data-testid="url-input"]').setValue('https://edge.example.com/?bridge=br_pinned')
     await wrapper.get('[data-testid="api-key-input"]').setValue('woca_test_key')
     await wrapper.get('form').trigger('submit')
@@ -382,15 +404,21 @@ describe('ConnectView embedded-bridge enrollment (three-field registration)', ()
 
   async function openEnrollForm(wrapper: ReturnType<typeof mount>) {
     await flushPromises()
+    await wrapper.get('[data-testid="remote-open"]').trigger('click')
+    // out-in transition: wait for the leaving page before the next query.
+    await flushPromises()
     await wrapper.get('[data-testid="embedded-enroll-open"]').trigger('click')
   }
 
-  it('shows the registration link on an unenrolled embedded bridge', async () => {
+  it('shows the registration link on the remote page for an unenrolled embedded bridge', async () => {
     const { wrapper } = mountEnroll()
     await flushPromises()
-    expect(wrapper.find('[data-testid="embedded-enroll-open"]').exists()).toBe(true)
+    // Landing page: the local card is the mode shape, no register/deregister.
+    expect(wrapper.find('[data-testid="embedded-enroll-open"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="embedded-signin"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="embedded-deregister-arm"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="remote-open"]').trigger('click')
+    expect(wrapper.find('[data-testid="embedded-enroll-open"]').exists()).toBe(true)
   })
 
   it('shows the enrolled badge with sign-in instead of the zero-input local entry', async () => {
@@ -400,6 +428,7 @@ describe('ConnectView embedded-bridge enrollment (three-field registration)', ()
     expect(wrapper.find('[data-testid="embedded-enroll-open"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="embedded-entry"]').text()).toContain('br_prod')
     expect(wrapper.find('[data-testid="embedded-signin"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="remote-open"]').trigger('click')
     expect(wrapper.find('[data-testid="embedded-deregister-arm"]').exists()).toBe(true)
   })
 
@@ -522,6 +551,7 @@ describe('ConnectView embedded-bridge enrollment (three-field registration)', ()
     const deregister = vi.fn(async (): Promise<EnrollResult> => ({ state: { state: 'unconfigured' }, error: '' }))
     const { wrapper } = mountEnroll({ enrolled: true, deregister })
     await flushPromises()
+    await wrapper.get('[data-testid="remote-open"]').trigger('click')
     await wrapper.get('[data-testid="embedded-deregister-arm"]').trigger('click')
     expect(wrapper.find('[data-testid="embedded-deregister-confirm"]').exists()).toBe(true)
     expect(deregister).not.toHaveBeenCalled()
@@ -530,9 +560,11 @@ describe('ConnectView embedded-bridge enrollment (three-field registration)', ()
     await flushPromises()
     expect(deregister).toHaveBeenCalledTimes(1)
 
-    // The fresh page shows the unenrolled shape again.
-    expect(wrapper.find('[data-testid="embedded-enroll-open"]').exists()).toBe(true)
+    // Back on the landing page the local card is unenrolled again; the
+    // register link reappears on the remote page.
     expect(wrapper.find('[data-testid="embedded-signin"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="remote-open"]').trigger('click')
+    expect(wrapper.find('[data-testid="embedded-enroll-open"]').exists()).toBe(true)
   })
 
   it('never writes the enrollment token or key to web storage', async () => {

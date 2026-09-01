@@ -75,7 +75,7 @@ html.theme-anim {
   --w-blue-500: #58a6ff;
   --w-blue-600: #0969da;
 
-  /* --- spacing (density switchable: compact tier shrinks the unit) ------- */
+  /* --- spacing ------------------------------------------------------------ */
   --space-unit: 4px;
   --space-1: calc(var(--space-unit) / 2);
   --space-2: calc(var(--space-unit) * 1);
@@ -227,6 +227,40 @@ html.theme-anim {
   --focus-border: rgba(27, 27, 25, 0.45);
   --brand-mark-hi: #2e2e2b;
   --brand-mark-lo: #1f1f1d;
+  /* Frosted pane: the card sits over the living wave stage — translucent
+     enough to frost it, opaque enough to keep text contrast (see §a11y). */
+  --gate-glass: rgba(255, 255, 255, 0.58);
+
+  /* --- semantic: native front door (theme-invariant ink) ------------------- *
+   * The native connect/login gate is intentionally always dark: it is the
+   * enterprise front door, set apart from the workspace UI that follows in
+   * either theme. Same ink family as the login gate's dark values, but as a
+   * separate token group so the gate never follows html.dark toggling.     */
+  --gate-ink-glow: #1c1c21;
+  --gate-ink-edge: #0c0c0e;
+  --gate-ink-card-hi: #26262b;
+  --gate-ink-card-lo: #1e1e21;
+  --gate-ink-inner-hi: rgba(255, 255, 255, 0.055);
+  --gate-ink-border: rgba(255, 255, 255, 0.08);
+  --gate-ink-border-strong: rgba(255, 255, 255, 0.14);
+  --gate-ink-field: rgba(0, 0, 0, 0.22);
+  --gate-ink-text: #ececef;
+  --gate-ink-text-2: #b4b4bc;
+  --gate-ink-muted: #7e7e88;
+  --gate-ink-faint: #55555e;
+  --gate-ink-accent: #ececef;
+  --gate-ink-accent-hover: #ffffff;
+  --gate-ink-on-accent: #141415;
+  --gate-ink-ring: rgba(236, 236, 239, 0.09);
+  --gate-ink-focus-border: rgba(236, 236, 239, 0.32);
+  --gate-ink-brand-hi: #f4f4f6;
+  --gate-ink-brand-lo: #e2e2e6;
+  --gate-ink-danger: #f85149;
+  --gate-ink-danger-soft: rgba(248, 81, 73, 0.12);
+  --gate-ink-warn: #e3b341;
+  --gate-ink-warn-soft: rgba(210, 153, 34, 0.14);
+  --gate-ink-ok: #57c973;
+  --gate-ink-glass: rgba(32, 32, 36, 0.5);
 
   /* Chat column (messages + tool cards). Widens by display size below so
      wide monitors get more room for content. */
@@ -243,12 +277,6 @@ html.theme-anim {
   :root {
     --chat-col: 1100px;
   }
-}
-
-/* Compact density tier (settings + ⌘K switch; persisted per preferences). */
-html[data-density='compact'] {
-  --space-unit: 3px;
-  --lh-chat: 24px;
 }
 
 /* ---- semantic: dark (canonical) ------------------------------------------ */
@@ -318,6 +346,7 @@ html.dark {
   --brand-mark-hi: #f4f4f6;
   --brand-mark-lo: #e2e2e6;
   --gate-noise-opacity: 0.045;
+  --gate-glass: rgba(30, 30, 33, 0.52);
 }
 
 /* Global reduced-motion waiver: streaming pulse degrades to a steady dot. */

@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { KeyRound, LockKeyhole, QrCode } from "lucide-vue-next";
 import QRCode from "qrcode";
+import InkWaveBackground from "./InkWaveBackground.vue";
 import { login, UnauthorizedError } from "../api/client";
 
 const { t } = useI18n();
@@ -70,6 +71,9 @@ async function submit() {
 
 <template>
   <div class="login-gate-overlay">
+    <!-- Living stage: monochrome WebGL wave bands chasing the cursor; the
+         CSS radial light under it is the no-WebGL degrade. -->
+    <InkWaveBackground />
     <form class="login-gate" :class="{ 'is-entering': entering }" @submit.prevent="submit">
       <div class="gate-head">
         <div class="login-gate-brand rise" :style="{ '--d': '120ms' }">
@@ -187,8 +191,8 @@ async function submit() {
   mix-blend-mode: overlay;
 }
 
-/* Sheet of paper: top-lit vertical gradient + 1px edge + inner top highlight
-   (the dark-UI glaze trick) + the shared ambient shadow. */
+/* Frosted pane over the living stage: translucent + backdrop blur, with the
+   1px edge and inner top highlight kept so the glass still reads as a pane. */
 .login-gate {
   position: relative;
   display: flex;
@@ -197,12 +201,9 @@ async function submit() {
   padding: 32px;
   border: 1px solid var(--border);
   border-radius: var(--radius-2xl);
-  background: linear-gradient(
-    180deg,
-    var(--gate-card-hi) 0%,
-    var(--panel) 38%,
-    var(--gate-card-lo) 100%
-  );
+  background: var(--gate-glass);
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
   box-shadow: inset 0 1px 0 var(--gate-inner-hi), var(--shadow-md);
 }
 

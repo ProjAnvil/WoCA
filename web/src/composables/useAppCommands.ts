@@ -125,16 +125,6 @@ export function useAppCommands() {
       keywords: 'dark light theme',
       run: () => settings.toggleDark(),
     })
-    cmds.push({
-      id: 'appearance:density',
-      group: 'appearance',
-      label: t('palette.toggleDensity'),
-      keywords: 'compact comfortable density',
-      run: () => {
-        settings.density = settings.density === 'compact' ? 'comfortable' : 'compact'
-      },
-    })
-
     if (['running', 'awaiting', 'queued'].includes(sessions.activeStatus)) {
       cmds.push({
         id: 'action:interrupt',

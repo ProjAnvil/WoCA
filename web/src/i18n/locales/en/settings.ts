@@ -15,9 +15,6 @@ export default {
     dark: 'Dark',
     language: 'Language',
     langAuto: 'System',
-    density: 'Density',
-    densityComfortable: 'Comfortable',
-    densityCompact: 'Compact',
   },
   store: {
     saved: 'Saved',

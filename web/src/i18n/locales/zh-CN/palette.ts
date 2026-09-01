@@ -10,7 +10,6 @@ export default {
   openBtw: '打开 /btw 旁路问答',
   switchMode: '切换到 {mode}',
   toggleTheme: '切换深色 / 浅色主题',
-  toggleDensity: '切换紧凑 / 舒适密度',
   interrupt: '中断当前运行',
   copyLast: '复制最后一条回复',
   copied: '已复制到剪贴板',

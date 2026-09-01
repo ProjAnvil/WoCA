@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ConnectView from './ConnectView.vue'
+import InkWaveBackground from '../components/InkWaveBackground.vue'
 import { getNativeBridge, type EnrollEmbeddedInput, type EnrollResult } from './bridge'
 import { setStreamAuth, setStreamBase, setStreamBridge } from '../api/client'
 import { hydrateNativePreferences, readPreference } from './preferences'
@@ -166,9 +167,7 @@ onMounted(() => {
   <slot v-if="state === 'ready'" />
 
   <main v-else-if="state === 'loading'" data-testid="native-loading" class="native-gate">
-    <div class="gate-orb gate-orb--indigo" aria-hidden="true"></div>
-    <div class="gate-orb gate-orb--violet" aria-hidden="true"></div>
-    <div class="gate-orb gate-orb--cyan" aria-hidden="true"></div>
+    <InkWaveBackground ink />
     <section class="gate-card gate-plain gate-center">
       <div class="gate-brand">
         <div class="gate-logo" aria-hidden="true">
@@ -206,8 +205,7 @@ onMounted(() => {
     class="native-gate"
     role="alert"
   >
-    <div class="gate-orb gate-orb--indigo" aria-hidden="true"></div>
-    <div class="gate-orb gate-orb--violet" aria-hidden="true"></div>
+    <InkWaveBackground ink />
     <section class="gate-card gate-plain">
       <div class="gate-brand">
         <div class="gate-logo" aria-hidden="true">
@@ -232,8 +230,7 @@ onMounted(() => {
   </main>
 
   <main v-else class="native-gate" role="alert">
-    <div class="gate-orb gate-orb--indigo" aria-hidden="true"></div>
-    <div class="gate-orb gate-orb--violet" aria-hidden="true"></div>
+    <InkWaveBackground ink />
     <section class="gate-card gate-plain">
       <div class="gate-brand">
         <div class="gate-logo" aria-hidden="true">

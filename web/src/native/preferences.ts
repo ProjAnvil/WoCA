@@ -14,7 +14,6 @@ export const PREFERENCE_KEYS = [
   'woca.pref.markdownPreview',
   'woca.pref.model',
   'woca.pref.permissionMode',
-  'woca.pref.density',
 ] as const
 
 export type PreferenceKey = (typeof PREFERENCE_KEYS)[number]

@@ -10,7 +10,6 @@ export default {
   openBtw: 'Open the /btw side panel',
   switchMode: 'Switch to {mode}',
   toggleTheme: 'Toggle dark / light theme',
-  toggleDensity: 'Toggle compact / comfortable density',
   interrupt: 'Interrupt the current run',
   copyLast: 'Copy the last reply',
   copied: 'Copied to clipboard',

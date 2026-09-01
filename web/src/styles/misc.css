@@ -262,10 +262,13 @@
 
 
 /* ==========================================================================
-   Native enterprise gate — shared "mission control" scene.
+   Native enterprise gate — the ink front door.
    Used by ConnectView and the gate's loading / fatal / error screens. The
    scene is intentionally always dark: it is the enterprise front door, set
-   apart from the workspace UI that follows in either theme.
+   apart from the workspace UI that follows in either theme. Same "sheet of
+   paper in a dark room" language as the web login gate (login-redesign
+   spec): radial stage light + grain, a top-lit paper card, ink controls.
+   Theme-invariant values come from the --gate-ink-* token group.
    ========================================================================== */
 
 .native-gate {
@@ -275,68 +278,62 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background:
-    radial-gradient(1100px 750px at 18% -12%, #1c2c50 0%, transparent 60%),
-    radial-gradient(900px 650px at 108% 18%, #2c1c52 0%, transparent 55%),
-    radial-gradient(700px 500px at 50% 118%, #0f2740 0%, transparent 60%),
-    linear-gradient(168deg, #0b0e16 0%, #0c111f 52%, #080b12 100%);
-  color: #e8eaf2;
+  background: radial-gradient(
+    120% 90% at 50% 42%,
+    var(--gate-ink-glow) 0%,
+    var(--w-gray-900) 46%,
+    var(--gate-ink-edge) 100%
+  );
+  color: var(--gate-ink-text);
 }
 
+/* Grain kills banding on the dark radial stage — the grayscale gradient
+   reads as material, not display artifact. */
 .native-gate::before {
   content: '';
   position: absolute;
   inset: 0;
-  background-image:
-    linear-gradient(rgba(148, 163, 216, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(148, 163, 216, 0.05) 1px, transparent 1px);
-  background-size: 44px 44px;
-  mask-image: radial-gradient(ellipse 75% 65% at 50% 42%, #000 30%, transparent 75%);
-  -webkit-mask-image: radial-gradient(ellipse 75% 65% at 50% 42%, #000 30%, transparent 75%);
-}
-
-.gate-orb {
-  position: absolute;
-  width: 460px;
-  height: 460px;
-  border-radius: 50%;
-  filter: blur(95px);
-  opacity: 0.5;
   pointer-events: none;
+  background-image: var(--gate-noise);
+  background-size: 180px 180px;
+  opacity: 0.045;
+  mix-blend-mode: overlay;
 }
 
-.gate-orb--indigo {
-  left: -140px;
-  top: -120px;
-  background: radial-gradient(circle at 35% 35%, #4f7cff 0%, #24346e 55%, transparent 75%);
-  animation: gate-drift-a 26s ease-in-out infinite alternate;
+/* --- entrance: the card develops (blur → sharp), contents surface in a
+   40ms-step stagger. Motion grammar shared with motion.css. --- */
+@keyframes gate-card-develop {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+    filter: blur(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+@keyframes gate-item-surface {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.gate-card {
+  animation: gate-card-develop 480ms var(--ease-out) both;
+}
+.native-gate .gate-rise {
+  animation: gate-item-surface 360ms var(--ease-out) both;
+  animation-delay: var(--d, 0ms);
 }
 
-.gate-orb--violet {
-  right: -160px;
-  top: 22%;
-  background: radial-gradient(circle at 60% 40%, #9d4edd 0%, #3a2470 55%, transparent 75%);
-  animation: gate-drift-b 32s ease-in-out infinite alternate;
-}
-
-.gate-orb--cyan {
-  left: 32%;
-  bottom: -220px;
-  background: radial-gradient(circle at 50% 30%, #22d3ee 0%, #104a5e 55%, transparent 75%);
-  opacity: 0.32;
-  animation: gate-drift-a 38s ease-in-out infinite alternate-reverse;
-}
-
-@keyframes gate-drift-a {
-  from { transform: translate3d(0, 0, 0) scale(1); }
-  to { transform: translate3d(70px, 46px, 0) scale(1.12); }
-}
-
-@keyframes gate-drift-b {
-  from { transform: translate3d(0, 0, 0) scale(1.06); }
-  to { transform: translate3d(-64px, 58px, 0) scale(0.96); }
-}
-
+/* --- the frosted pane: translucent over the living wave stage, with the
+   1px edge and inner highlight kept so the glass still reads as a pane --- */
 .gate-card {
   position: relative;
   width: min(452px, calc(100vw - 48px));
@@ -345,13 +342,13 @@
   box-sizing: border-box;
   padding: 34px 36px 26px;
   border-radius: 20px;
-  background: linear-gradient(180deg, rgba(23, 28, 44, 0.82), rgba(13, 17, 29, 0.78));
-  border: 1px solid rgba(148, 163, 216, 0.16);
-  backdrop-filter: blur(22px);
-  -webkit-backdrop-filter: blur(22px);
+  background: var(--gate-ink-glass);
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  border: 1px solid var(--gate-ink-border);
   box-shadow:
-    0 32px 90px rgba(2, 4, 12, 0.62),
-    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    inset 0 1px 0 var(--gate-ink-inner-hi),
+    var(--shadow-md);
 }
 
 .gate-brand {
@@ -361,15 +358,16 @@
   margin-bottom: 24px;
 }
 
+/* The brand is the ink: a glazed ink block, like a seal on the sheet. */
 .gate-logo {
   width: 42px;
   height: 42px;
   border-radius: 12px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #4f7cff 0%, #7a5cff 55%, #9d4edd 100%);
-  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.25);
-  color: #fff;
+  background: linear-gradient(180deg, var(--gate-ink-brand-hi), var(--gate-ink-brand-lo));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), var(--shadow-sm);
+  color: var(--gate-ink-on-accent);
   flex: none;
 }
 
@@ -377,7 +375,7 @@
   font-size: 14px;
   font-weight: 700;
   letter-spacing: 0.16em;
-  color: #c6cde6;
+  color: var(--gate-ink-text-2);
 }
 
 .gate-brand-tag {
@@ -387,9 +385,9 @@
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.14em;
-  color: #8fd0ff;
-  background: rgba(56, 132, 255, 0.12);
-  border: 1px solid rgba(96, 165, 250, 0.35);
+  color: var(--gate-ink-muted);
+  background: transparent;
+  border: 1px solid var(--gate-ink-border-strong);
 }
 
 .gate-card h1 {
@@ -397,14 +395,14 @@
   font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.01em;
-  color: #f2f4fb;
+  color: var(--gate-ink-text);
 }
 
 .gate-sub {
   margin: 0 0 24px;
   font-size: 13.5px;
   line-height: 1.55;
-  color: #97a0bd;
+  color: var(--gate-ink-text-2);
 }
 
 .gate-notice {
@@ -415,13 +413,28 @@
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 12.5px;
-  color: #fcd34d;
-  background: rgba(245, 158, 11, 0.09);
-  border: 1px solid rgba(245, 158, 11, 0.28);
+  color: var(--gate-ink-warn);
+  background: var(--gate-ink-warn-soft);
+  border: 1px solid color-mix(in srgb, var(--gate-ink-warn) 35%, transparent);
 }
 
 .gate-notice svg {
   flex: none;
+}
+
+/* --- section split: "continue" (saved sessions + embedded) above, "add
+   new connection" below — two intents, one visual hierarchy --- */
+.gate-section {
+  padding: 16px 0;
+  border-top: 1px solid var(--gate-ink-border);
+}
+.gate-section-title {
+  margin: 0 0 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gate-ink-faint);
 }
 
 .gate-form {
@@ -434,7 +447,7 @@
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.03em;
-  color: #8f99b8;
+  color: var(--gate-ink-muted);
 }
 
 .gate-field {
@@ -449,39 +462,38 @@
   transform: translateY(-50%);
   width: 16px;
   height: 16px;
-  color: #67719a;
+  color: var(--gate-ink-muted);
   pointer-events: none;
 }
 
+/* Recessed field against the raised sheet; focus adds light, not color. */
 .gate-field input {
   width: 100%;
   box-sizing: border-box;
   padding: 12px 14px 12px 40px;
   border-radius: 12px;
-  border: 1px solid rgba(148, 163, 216, 0.2);
-  background: rgba(8, 11, 20, 0.6);
-  color: #e8eaf2;
+  border: 1px solid var(--gate-ink-border-strong);
+  background: var(--gate-ink-field);
+  color: var(--gate-ink-text);
   font-size: 14.5px;
   font-family: var(--font-sans);
   outline: none;
   transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease,
-    background 0.15s ease;
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
 }
 
 .gate-field input::placeholder {
-  color: #4d5678;
+  color: var(--gate-ink-faint);
 }
 
 .gate-field input:hover {
-  border-color: rgba(148, 163, 216, 0.34);
+  border-color: var(--gate-ink-border-strong);
 }
 
 .gate-field input:focus {
-  border-color: #5b8cff;
-  background: rgba(10, 14, 26, 0.8);
-  box-shadow: 0 0 0 3px rgba(91, 140, 255, 0.22);
+  border-color: var(--gate-ink-focus-border);
+  box-shadow: 0 0 0 3px var(--gate-ink-ring);
 }
 
 .gate-alert {
@@ -493,11 +505,12 @@
   border-radius: 10px;
   font-size: 12.5px;
   line-height: 1.45;
-  color: #fda4af;
-  background: rgba(244, 63, 94, 0.1);
-  border: 1px solid rgba(244, 63, 94, 0.3);
+  color: var(--gate-ink-danger);
+  background: var(--gate-ink-danger-soft);
+  border: 1px solid color-mix(in srgb, var(--gate-ink-danger) 35%, transparent);
 }
 
+/* Ink submit: the accent IS the ink — a light plate on the dark stage. */
 .gate-submit {
   width: 100%;
   margin-top: 6px;
@@ -510,39 +523,37 @@
   border-radius: 12px;
   cursor: pointer;
   font-size: 15px;
-  font-weight: 650;
+  font-weight: 600;
   font-family: var(--font-sans);
-  color: #fff;
-  background: linear-gradient(135deg, #4f7cff 0%, #7a5cff 60%, #9d4edd 100%);
-  box-shadow: 0 12px 32px rgba(99, 102, 241, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  color: var(--gate-ink-on-accent);
+  background: linear-gradient(180deg, var(--gate-ink-brand-hi), var(--gate-ink-brand-lo));
+  box-shadow: var(--shadow-sm);
   transition:
-    transform 0.12s ease,
-    filter 0.12s ease,
-    box-shadow 0.12s ease;
+    transform 160ms var(--ease-out),
+    filter 160ms var(--ease-out),
+    opacity var(--dur-slow) var(--ease-in-out);
 }
 
 .gate-submit:hover:not(:disabled) {
   transform: translateY(-1px);
-  filter: brightness(1.07);
-  box-shadow: 0 16px 40px rgba(99, 102, 241, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  filter: brightness(1.04);
 }
 
 .gate-submit:active:not(:disabled) {
-  transform: translateY(0);
-  filter: brightness(0.98);
+  transform: translateY(0) scale(0.99);
 }
 
 .gate-submit:disabled {
   cursor: default;
-  opacity: 0.55;
+  opacity: 0.45;
 }
 
 .gate-spinner {
   width: 15px;
   height: 15px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
   animation: gate-spin 0.7s linear infinite;
   flex: none;
 }
@@ -558,7 +569,7 @@
   gap: 6px;
   margin-top: 18px;
   font-size: 11.5px;
-  color: #67719a;
+  color: var(--gate-ink-muted);
 }
 
 .gate-foot svg {
@@ -575,7 +586,7 @@
   margin: 8px 0;
   font-size: 13.5px;
   line-height: 1.55;
-  color: #97a0bd;
+  color: var(--gate-ink-text-2);
 }
 
 .gate-plain .gate-card code {
@@ -585,9 +596,9 @@
   border-radius: 8px;
   font-family: var(--font-mono);
   font-size: 12px;
-  color: #a5b4fc;
-  background: rgba(8, 11, 20, 0.6);
-  border: 1px solid rgba(148, 163, 216, 0.16);
+  color: var(--gate-ink-text-2);
+  background: var(--gate-ink-field);
+  border: 1px solid var(--gate-ink-border);
   word-break: break-all;
 }
 
@@ -611,25 +622,24 @@
   font-size: 14px;
   font-weight: 600;
   font-family: var(--font-sans);
-  color: #c6cde6;
-  background: rgba(148, 163, 216, 0.08);
-  border: 1px solid rgba(148, 163, 216, 0.22);
+  color: var(--gate-ink-text-2);
+  background: color-mix(in srgb, var(--gate-ink-text) 5%, transparent);
+  border: 1px solid var(--gate-ink-border-strong);
   transition:
-    background 0.12s ease,
-    border-color 0.12s ease;
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .gate-ghost:hover {
-  background: rgba(148, 163, 216, 0.16);
-  border-color: rgba(148, 163, 216, 0.4);
+  background: color-mix(in srgb, var(--gate-ink-text) 9%, transparent);
+  border-color: var(--gate-ink-focus-border);
+  color: var(--gate-ink-text);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .gate-orb {
-    animation: none;
-  }
-
-  .gate-spinner {
+  .gate-card,
+  .native-gate .gate-rise {
     animation-duration: 1.4s;
   }
 }
@@ -643,6 +653,33 @@
   justify-content: center;
   align-items: center;
   margin: 14px 0 4px;
+}
+
+/* --- wizard page transitions (login-journey spec §4) ---------------------- *
+ * Forward = rise (going deeper); back = plain fade — the asymmetry itself
+ * signals direction. out-in mode keeps exactly one page visible.          */
+.wiz-fwd-enter-active {
+  transition: opacity 300ms var(--ease-out), transform 300ms var(--ease-out);
+}
+.wiz-fwd-leave-active {
+  transition: opacity 140ms var(--ease-in-out);
+}
+.wiz-fwd-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
+.wiz-fwd-leave-to {
+  opacity: 0;
+}
+.wiz-back-enter-active {
+  transition: opacity 160ms var(--ease-in-out);
+}
+.wiz-back-leave-active {
+  transition: opacity 140ms var(--ease-in-out);
+}
+.wiz-back-enter-from,
+.wiz-back-leave-to {
+  opacity: 0;
 }
 
 /* Bridge health lamp (product design §6.3): green = synced, yellow =
