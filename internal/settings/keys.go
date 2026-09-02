@@ -158,7 +158,7 @@ func KeyHelp(key string) string {
 	case KeyClaudeMCP:
 		return "enabled ~/.claude.json MCP server names as a JSON array (connected at startup)"
 	case KeyBuiltinPlugins:
-		return "enabled built-in tool plugins as a JSON array (browser, pdf; runtime installed from Settings → 插件)"
+		return "enabled built-in tool plugins as a JSON array (browser, pdf, office; runtime installed from Settings → 插件)"
 	case KeyCheckpoint:
 		return "checkpoint backend: none | file | sqlite | postgres (default sqlite; file keeps a sqlite checkpoints.db inside checkpoint-dir)"
 	case KeyMemory:

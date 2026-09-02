@@ -1,0 +1,10 @@
+{
+  "name": "office",
+  "kind": "python",
+  "version": "0.1.0",
+  "description": "办公文档插件：在 uv 管理的独立 Python 环境中运行随 woca 二进制内嵌的 office.py（python-docx / openpyxl / python-pptx，全 MIT），支持把 Word / Excel / PowerPoint 读成 Markdown，并从结构化内容生成 docx / xlsx / pptx 文件",
+  "tools": ["OfficeRead", "DocxWrite", "XlsxWrite", "PptxWrite"],
+  "runtime": "python",
+  "scripts": ["scripts/office.py"],
+  "requirements": "requirements.lock"
+}

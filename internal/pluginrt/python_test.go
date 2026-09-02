@@ -62,6 +62,10 @@ invalid) echo 'this is not json' ;;
 fail)    echo "pdf.py: fatal" >&2; exit 4 ;;
 silent)  exit 5 ;;
 big)     head -c 1500000 /dev/zero | tr '\0' 'x' ;;
+officeread)  printf '%s\n' '{"ok":true,"file":"notes.docx","format":"docx","truncated":true,"markdown":"# Hello\n\n- alpha"}' ;;
+officedocx)   printf '%s\n' '{"ok":true,"output":"out/report.docx","blocks":3,"bytes":4321}' ;;
+officexlsx)   printf '%s\n' '{"ok":true,"output":"data.xlsx","sheets":2,"rows":9,"bytes":4321}' ;;
+officepptx)   printf '%s\n' '{"ok":true,"output":"deck.pptx","slides":4,"bytes":4321}' ;;
 esac
 exit 0
 `

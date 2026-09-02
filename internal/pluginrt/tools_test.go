@@ -424,6 +424,10 @@ func TestPythonToolsDispatch(t *testing.T) {
 	if len(tools) != 2 || tools[0].Name() != "PdfRead" || tools[1].Name() != "PdfWrite" {
 		t.Fatalf("pdf tools = %v", tools)
 	}
+	office := pythonTools(mustBuiltin(t, "office"), fakeOfficeEnv(t), "")
+	if len(office) != 4 || office[0].Name() != "OfficeRead" || office[3].Name() != "PptxWrite" {
+		t.Fatalf("office tools = %v", office)
+	}
 }
 
 func TestBrowserActionToolAPIError(t *testing.T) {
@@ -451,5 +455,224 @@ func TestPdfToolsRunFailureWithoutDiagnostics(t *testing.T) {
 	if _, err := write.Invoke(context.Background(), args); err == nil ||
 		!strings.Contains(err.Error(), "run pdf.py:") {
 		t.Fatalf("silent write failure: %v", err)
+	}
+}
+
+// fakeOfficeEnv provisions a ready office environment driven by fakeVenvPython.
+func fakeOfficeEnv(t *testing.T) *PythonRuntime {
+	t.Helper()
+	py := NewPythonRuntime(t.TempDir(), t.TempDir(), zerolog.Nop())
+	stampPythonEnv(t, py, "office", nil)
+	return py
+}
+
+// lastInterpreterArgs returns the trailing n argv lines recorded by
+// FAKE_PYTHON_ARGS_FILE (one line per argument, so spec JSON stays intact).
+func lastInterpreterArgs(t *testing.T, path string, n int) []string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("interpreter args not recorded: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) < n {
+		t.Fatalf("interpreter args = %q, want %d trailing lines", lines, n)
+	}
+	return lines[len(lines)-n:]
+}
+
+func TestOfficeReadTool(t *testing.T) {
+	py := fakeOfficeEnv(t)
+	read := toolByName(t, officeTools(py, t.TempDir()), "OfficeRead")
+	ctx := context.Background()
+
+	if _, err := read.Invoke(ctx, map[string]any{"file": ""}); err == nil ||
+		!strings.Contains(err.Error(), "file is required") {
+		t.Fatalf("missing file: %v", err)
+	}
+
+	argsFile := filepath.Join(t.TempDir(), "args")
+	t.Setenv("FAKE_PYTHON_ARGS_FILE", argsFile)
+	t.Setenv("FAKE_PYTHON_MODE", "officeread")
+	out, err := invoke(t, read, map[string]any{"file": "notes.docx", "max_chars": 800})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for _, want := range []string{"notes.docx (docx)", "# Hello", "- alpha", "(text truncated)"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+	got := lastInterpreterArgs(t, argsFile, 4)
+	want := []string{"read", "notes.docx", "--max-chars", "800"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("interpreter args = %q, want tail %q", got, want)
+		}
+	}
+
+	t.Setenv("FAKE_PYTHON_MODE", "errjson")
+	if _, err := invoke(t, read, map[string]any{"file": "notes.docx"}); err == nil ||
+		!strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error payload: %v", err)
+	}
+	t.Setenv("FAKE_PYTHON_MODE", "invalid")
+	if _, err := invoke(t, read, map[string]any{"file": "notes.docx"}); err == nil ||
+		!strings.Contains(err.Error(), "invalid JSON") {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+}
+
+func TestOfficeReadSchemaDriftDegrades(t *testing.T) {
+	// ok=true with no format/markdown fields must render an empty body.
+	py := fakeOfficeEnv(t)
+	bare := "#!/bin/sh\necho '{\"ok\":true}'\n"
+	if err := os.WriteFile(py.venvPython("office"), []byte(bare), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	read := toolByName(t, officeTools(py, t.TempDir()), "OfficeRead")
+	out, err := invoke(t, read, map[string]any{"file": "notes.docx"})
+	if err != nil {
+		t.Fatalf("schema drift: %v", err)
+	}
+	if !strings.Contains(out, "notes.docx") || strings.Contains(out, "panic") {
+		t.Fatalf("schema drift output = %q", out)
+	}
+}
+
+func TestDocxWriteTool(t *testing.T) {
+	py := fakeOfficeEnv(t)
+	write := toolByName(t, officeTools(py, t.TempDir()), "DocxWrite")
+	ctx := context.Background()
+
+	for _, bad := range []map[string]any{
+		{},
+		{"path": "r.docx"},
+		{"path": "r.docx", "blocks": []any{map[string]any{"type": "heading"}}},
+		{"path": "r.docx", "blocks": []any{map[string]any{"type": "paragraph"}}},
+		{"path": "r.docx", "blocks": []any{map[string]any{"type": "bullets"}}},
+		{"path": "r.docx", "blocks": []any{map[string]any{"type": "table", "rows": []any{[]any{"1"}}}}},
+		{"path": "r.docx", "blocks": []any{map[string]any{"type": "teleport"}}},
+	} {
+		if _, err := write.Invoke(ctx, bad); err == nil {
+			t.Fatalf("invalid docx args %v must fail", bad)
+		}
+	}
+
+	t.Setenv("FAKE_PYTHON_MODE", "officedocx")
+	argsFile := filepath.Join(t.TempDir(), "args")
+	t.Setenv("FAKE_PYTHON_ARGS_FILE", argsFile)
+	out, err := invoke(t, write, map[string]any{
+		"path":  "out/report.docx",
+		"title": "季报",
+		"blocks": []any{
+			map[string]any{"type": "heading", "text": "第一章", "level": 1},
+			map[string]any{"type": "bullets", "items": []any{"a", "b"}},
+			map[string]any{"type": "table", "header": []any{"A", "B"}, "rows": []any{[]any{"1", "2"}}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("docx write: %v", err)
+	}
+	if out != "docx written: out/report.docx (3 blocks, 4321 bytes)" {
+		t.Fatalf("docx write output = %q", out)
+	}
+	got := lastInterpreterArgs(t, argsFile, 5)
+	if got[0] != "docx-write" || got[1] != "--output" || got[2] != "out/report.docx" || got[3] != "--spec" {
+		t.Fatalf("docx-write args = %q", got)
+	}
+	spec := got[4]
+	for _, want := range []string{`"title":"季报"`, `"text":"第一章"`, `"type":"bullets"`, `"header":["A","B"]`} {
+		if !strings.Contains(spec, want) {
+			t.Fatalf("spec missing %s: %s", want, spec)
+		}
+	}
+
+	t.Setenv("FAKE_PYTHON_MODE", "errjson")
+	if _, err := invoke(t, write, map[string]any{
+		"path": "r.docx", "title": "t",
+	}); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("error payload: %v", err)
+	}
+}
+
+func TestXlsxWriteTool(t *testing.T) {
+	py := fakeOfficeEnv(t)
+	write := toolByName(t, officeTools(py, t.TempDir()), "XlsxWrite")
+	ctx := context.Background()
+
+	for _, bad := range []map[string]any{
+		{"path": "x.xlsx"},
+		{"sheets": []any{map[string]any{"rows": []any{}}}},
+		{"sheets": []any{map[string]any{"rows": []any{[]any{"a"}}}}},
+	} {
+		if _, err := write.Invoke(ctx, bad); err == nil {
+			t.Fatalf("invalid xlsx args %v must fail", bad)
+		}
+	}
+
+	t.Setenv("FAKE_PYTHON_MODE", "officexlsx")
+	argsFile := filepath.Join(t.TempDir(), "args")
+	t.Setenv("FAKE_PYTHON_ARGS_FILE", argsFile)
+	out, err := invoke(t, write, map[string]any{
+		"path":   "data.xlsx",
+		"sheets": []any{map[string]any{"name": "数据", "rows": []any{[]any{"名称", "数量"}, []any{"apple", "3"}}, "header_row": true}},
+	})
+	if err != nil {
+		t.Fatalf("xlsx write: %v", err)
+	}
+	if out != "xlsx written: data.xlsx (2 sheets, 9 rows, 4321 bytes)" {
+		t.Fatalf("xlsx write output = %q", out)
+	}
+	got := lastInterpreterArgs(t, argsFile, 5)
+	if got[0] != "xlsx-write" || got[1] != "--output" || got[2] != "data.xlsx" || got[3] != "--spec" {
+		t.Fatalf("xlsx-write args = %q", got)
+	}
+	for _, want := range []string{`"name":"数据"`, `"header_row":true`, `"3"`} {
+		if !strings.Contains(got[4], want) {
+			t.Fatalf("spec missing %s: %s", want, got[4])
+		}
+	}
+}
+
+func TestPptxWriteTool(t *testing.T) {
+	py := fakeOfficeEnv(t)
+	write := toolByName(t, officeTools(py, t.TempDir()), "PptxWrite")
+	ctx := context.Background()
+
+	for _, bad := range []map[string]any{
+		{},
+		{"path": "p.pptx"},
+		{"path": "p.pptx", "slides": []any{map[string]any{}}},
+	} {
+		if _, err := write.Invoke(ctx, bad); err == nil {
+			t.Fatalf("invalid pptx args %v must fail", bad)
+		}
+	}
+
+	t.Setenv("FAKE_PYTHON_MODE", "officepptx")
+	argsFile := filepath.Join(t.TempDir(), "args")
+	t.Setenv("FAKE_PYTHON_ARGS_FILE", argsFile)
+	out, err := invoke(t, write, map[string]any{
+		"path":  "deck.pptx",
+		"title": "Q3 Review",
+		"slides": []any{
+			map[string]any{"title": "A", "bullets": []any{map[string]any{"text": "one"}, map[string]any{"text": "two", "level": 1}}, "notes": "remember"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("pptx write: %v", err)
+	}
+	if out != "pptx written: deck.pptx (4 slides, 4321 bytes)" {
+		t.Fatalf("pptx write output = %q", out)
+	}
+	got := lastInterpreterArgs(t, argsFile, 5)
+	if got[0] != "pptx-write" || got[1] != "--output" || got[2] != "deck.pptx" || got[3] != "--spec" {
+		t.Fatalf("pptx-write args = %q", got)
+	}
+	for _, want := range []string{`"title":"Q3 Review"`, `"level":1`, `"notes":"remember"`} {
+		if !strings.Contains(got[4], want) {
+			t.Fatalf("spec missing %s: %s", want, got[4])
+		}
 	}
 }

@@ -22,7 +22,7 @@ func TestPluginsFS(t *testing.T) {
 		t.Fatalf("builtin plugin dirs missing: %v", names)
 	}
 	// The manifests the settings UI lists are embedded.
-	for _, m := range []string{"golang/browser/plugin.json", "python/pdf/plugin.json"} {
+	for _, m := range []string{"golang/browser/plugin.json", "python/pdf/plugin.json", "python/office/plugin.json"} {
 		if _, err := fs.Stat(sub, m); err != nil {
 			t.Errorf("missing %s: %v", m, err)
 		}

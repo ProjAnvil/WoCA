@@ -182,11 +182,13 @@ func browserTools(br *BrowserRuntime) []coretools.Tool {
 
 // pythonTools builds the tools of a python plugin: each runs the plugin's
 // embedded scripts through the uv-managed venv and relays the script's JSON
-// protocol. Tool surface is declared per plugin (v1: the pdf plugin).
+// protocol. Tool surface is declared per plugin (pdf, office).
 func pythonTools(b Builtin, py *PythonRuntime, workdir string) []coretools.Tool {
 	switch b.Name {
 	case "pdf":
 		return pdfTools(py, workdir)
+	case "office":
+		return officeTools(py, workdir)
 	default:
 		return nil
 	}
@@ -353,4 +355,220 @@ func pdfTools(py *PythonRuntime, workdir string) []coretools.Tool {
 		})
 
 	return []coretools.Tool{read, write}
+}
+
+// officeTools builds the office plugin's agent tools (docx/xlsx/pptx read and
+// write over the embedded office.py). Document payloads travel as a JSON spec
+// argv value — same channel pdf uses for its arguments — so the subprocess
+// stays compatible with sandboxed executors (no host-side temp files).
+func officeTools(py *PythonRuntime, workdir string) []coretools.Tool {
+	mk := func(name, desc string, fn any) coretools.Tool {
+		t, err := coretools.FromFunc(name, desc, fn)
+		if err != nil {
+			panic(err)
+		}
+		return t
+	}
+	run := func(ctx context.Context, args ...string) (map[string]any, error) {
+		stdout, stderr, err := py.Run(ctx, "office", "scripts/office.py", args, pluginWorkdir(ctx, workdir), 180*time.Second)
+		if err != nil && stdout == "" {
+			detail := strings.TrimSpace(stderr)
+			if detail == "" {
+				detail = err.Error()
+			}
+			return nil, fmt.Errorf("run office.py: %s", detail)
+		}
+		var payload map[string]any
+		if jerr := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &payload); jerr != nil {
+			return nil, fmt.Errorf("office.py returned invalid JSON: %v\nstdout: %s\nstderr: %s", jerr, tailLines(stdout, 5), tailLines(stderr, 5))
+		}
+		return payload, nil
+	}
+	payloadOrErr := func(ctx context.Context, args ...string) (map[string]any, error) {
+		payload, err := run(ctx, args...)
+		if err != nil {
+			return nil, err
+		}
+		if ok, _ := payload["ok"].(bool); !ok {
+			return nil, fmt.Errorf("%v", payload["error"])
+		}
+		return payload, nil
+	}
+	// maxSpecBytes keeps a single write inside platform argv limits (macOS
+	// caps one argument at 256KiB); larger documents should be split into
+	// multiple writes.
+	const maxSpecBytes = 200 << 10
+
+	type readArgs struct {
+		File     string `json:"file"`
+		MaxChars int    `json:"max_chars,omitempty"`
+	}
+	read := mk("OfficeRead",
+		`Read an Office document as Markdown: Word (.docx) → headings/paragraphs/bullets/tables, Excel (.xlsx) → one table per sheet, PowerPoint (.pptx) → per-slide title/bullets/notes. Macro variants (.docm/.xlsm/.pptm) are readable too. Optional max_chars cap (default 20000). Requires the office plugin.`,
+		func(ctx context.Context, a readArgs) (coretools.Result, error) {
+			if a.File == "" {
+				return coretools.Result{}, fmt.Errorf("file is required")
+			}
+			args := []string{"read", a.File}
+			if a.MaxChars > 0 {
+				args = append(args, "--max-chars", strconv.Itoa(a.MaxChars))
+			}
+			payload, err := payloadOrErr(ctx, args...)
+			if err != nil {
+				return coretools.Result{}, err
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "%s (%s)\n\n", a.File, payload["format"])
+			// Guarded assertions: schema drift in office.py must degrade to
+			// an empty render, not panic the tool goroutine.
+			text, _ := payload["markdown"].(string)
+			b.WriteString(text)
+			if trunc, _ := payload["truncated"].(bool); trunc {
+				b.WriteString("\n(text truncated)")
+			}
+			return coretools.Result{Content: b.String()}, nil
+		})
+
+	type docxBlock struct {
+		Type   string     `json:"type"` // heading | paragraph | bullets | table | pagebreak
+		Text   string     `json:"text,omitempty"`
+		Level  int        `json:"level,omitempty"` // heading: 0=Title style, 1-9
+		Items  []string   `json:"items,omitempty"` // bullets
+		Header []string   `json:"header,omitempty"`
+		Rows   [][]string `json:"rows,omitempty"` // table body
+	}
+	type docxWriteArgs struct {
+		Path   string      `json:"path"`
+		Title  string      `json:"title,omitempty"`
+		Blocks []docxBlock `json:"blocks,omitempty"`
+	}
+	docxWrite := mk("DocxWrite",
+		`Create a Word document at path from structured blocks: [{type:heading,text,level(0=title,1-9)},{type:paragraph,text},{type:bullets,items[]},{type:table,header[],rows[][]},{type:pagebreak}]. Optional document title. Overwrites existing files. Requires the office plugin.`,
+		func(ctx context.Context, a docxWriteArgs) (coretools.Result, error) {
+			if a.Path == "" {
+				return coretools.Result{}, fmt.Errorf("path is required")
+			}
+			if a.Title == "" && len(a.Blocks) == 0 {
+				return coretools.Result{}, fmt.Errorf("need a title or at least one block")
+			}
+			for i, blk := range a.Blocks {
+				switch blk.Type {
+				case "heading":
+					if blk.Text == "" {
+						return coretools.Result{}, fmt.Errorf("blocks[%d] heading needs text", i)
+					}
+				case "paragraph":
+					if blk.Text == "" {
+						return coretools.Result{}, fmt.Errorf("blocks[%d] paragraph needs text", i)
+					}
+				case "bullets":
+					if len(blk.Items) == 0 {
+						return coretools.Result{}, fmt.Errorf("blocks[%d] bullets needs items", i)
+					}
+				case "table":
+					if len(blk.Header) == 0 {
+						return coretools.Result{}, fmt.Errorf("blocks[%d] table needs header", i)
+					}
+				case "pagebreak":
+				default:
+					return coretools.Result{}, fmt.Errorf("blocks[%d] type must be heading, paragraph, bullets, table or pagebreak, got %q", i, blk.Type)
+				}
+			}
+			spec, err := json.Marshal(map[string]any{"title": a.Title, "blocks": a.Blocks})
+			if err != nil {
+				return coretools.Result{}, err
+			}
+			if len(spec) > maxSpecBytes {
+				return coretools.Result{}, fmt.Errorf("document too large (%d bytes > %d); split into multiple writes", len(spec), maxSpecBytes)
+			}
+			payload, err := payloadOrErr(ctx, "docx-write", "--output", a.Path, "--spec", string(spec))
+			if err != nil {
+				return coretools.Result{}, err
+			}
+			return coretools.Result{Content: fmt.Sprintf("docx written: %v (%v blocks, %v bytes)", payload["output"], payload["blocks"], payload["bytes"])}, nil
+		})
+
+	type xlsxSheet struct {
+		Name      string     `json:"name,omitempty"`
+		Rows      [][]string `json:"rows"`
+		HeaderRow bool       `json:"header_row,omitempty"` // bold + freeze + autofilter
+	}
+	type xlsxWriteArgs struct {
+		Path   string      `json:"path"`
+		Sheets []xlsxSheet `json:"sheets"`
+	}
+	xlsxWrite := mk("XlsxWrite",
+		`Create an Excel workbook at path with one or more sheets: [{name, rows:[["Name","Qty"],...], header_row}]. Cell strings auto-type: plain numbers become numeric, "=" prefix becomes a formula, "'" prefix forces text (keeps leading zeros). header_row bolds/freezes/filters the first row. Overwrites existing files. Requires the office plugin.`,
+		func(ctx context.Context, a xlsxWriteArgs) (coretools.Result, error) {
+			if a.Path == "" {
+				return coretools.Result{}, fmt.Errorf("path is required")
+			}
+			if len(a.Sheets) == 0 {
+				return coretools.Result{}, fmt.Errorf("at least one sheet is required")
+			}
+			rows := 0
+			for i, sh := range a.Sheets {
+				if len(sh.Rows) == 0 {
+					return coretools.Result{}, fmt.Errorf("sheets[%d] needs at least one row", i)
+				}
+				rows += len(sh.Rows)
+			}
+			spec, err := json.Marshal(map[string]any{"sheets": a.Sheets})
+			if err != nil {
+				return coretools.Result{}, err
+			}
+			if len(spec) > maxSpecBytes {
+				return coretools.Result{}, fmt.Errorf("workbook too large (%d bytes > %d); split into multiple writes", len(spec), maxSpecBytes)
+			}
+			payload, err := payloadOrErr(ctx, "xlsx-write", "--output", a.Path, "--spec", string(spec))
+			if err != nil {
+				return coretools.Result{}, err
+			}
+			return coretools.Result{Content: fmt.Sprintf("xlsx written: %v (%v sheets, %v rows, %v bytes)", payload["output"], payload["sheets"], payload["rows"], payload["bytes"])}, nil
+		})
+
+	type pptxBullet struct {
+		Text  string `json:"text"`
+		Level int    `json:"level,omitempty"` // 0-4 nesting
+	}
+	type pptxSlide struct {
+		Title   string       `json:"title"`
+		Bullets []pptxBullet `json:"bullets,omitempty"`
+		Notes   string       `json:"notes,omitempty"`
+	}
+	type pptxWriteArgs struct {
+		Path     string       `json:"path"`
+		Title    string       `json:"title,omitempty"`    // optional cover slide
+		Subtitle string       `json:"subtitle,omitempty"` // cover subtitle
+		Slides   []pptxSlide `json:"slides"`
+	}
+	pptxWrite := mk("PptxWrite",
+		`Create a PowerPoint deck at path: optional cover (title+subtitle) plus slides [{title, bullets:[{text,level 0-4}], notes}]. Overwrites existing files. Requires the office plugin.`,
+		func(ctx context.Context, a pptxWriteArgs) (coretools.Result, error) {
+			if a.Path == "" {
+				return coretools.Result{}, fmt.Errorf("path is required")
+			}
+			if a.Title == "" && len(a.Slides) == 0 {
+				return coretools.Result{}, fmt.Errorf("need a cover title or at least one slide")
+			}
+			for i, s := range a.Slides {
+				if s.Title == "" && len(s.Bullets) == 0 {
+					return coretools.Result{}, fmt.Errorf("slides[%d] needs a title or bullets", i)
+				}
+			}
+			spec, err := json.Marshal(map[string]any{"title": a.Title, "subtitle": a.Subtitle, "slides": a.Slides})
+			if err != nil {
+				return coretools.Result{}, err
+			}
+			if len(spec) > maxSpecBytes {
+				return coretools.Result{}, fmt.Errorf("deck too large (%d bytes > %d); split into multiple writes", len(spec), maxSpecBytes)
+			}
+			payload, err := payloadOrErr(ctx, "pptx-write", "--output", a.Path, "--spec", string(spec))
+			if err != nil {
+				return coretools.Result{}, err
+			}
+			return coretools.Result{Content: fmt.Sprintf("pptx written: %v (%v slides, %v bytes)", payload["output"], payload["slides"], payload["bytes"])}, nil
+		})
+
+	return []coretools.Tool{read, docxWrite, xlsxWrite, pptxWrite}
 }

@@ -140,7 +140,7 @@ type Settings struct {
 	// agent startup.
 	ClaudeMCP []string `json:"claude_mcp"`
 	// BuiltinPlugins lists the built-in capability plugins (woca-plugins/
-	// tree: browser, pdf) whose agent tools are enabled.
+	// tree: browser, pdf, office) whose agent tools are enabled.
 	BuiltinPlugins []string `json:"builtin_plugins"`
 }
 

@@ -70,12 +70,17 @@ var categoryByName = map[string]Category{
 	// Built-in capability plugins (woca-plugins/; see internal/pluginrt).
 	// Browsing pages is read-only web access; acting on them (click/fill —
 	// submits forms, changes state) is a write. PDF reads are read-only.
+	// Office reads are read-only; the three writers create files.
 	"BrowserNavigate": CatWeb,
 	"BrowserSnapshot": CatWeb,
 	"BrowserText":     CatWeb,
 	"BrowserAction":   CatWrite,
 	"PdfRead":         CatRead,
 	"PdfWrite":        CatWrite,
+	"OfficeRead":      CatRead,
+	"DocxWrite":       CatWrite,
+	"XlsxWrite":       CatWrite,
+	"PptxWrite":       CatWrite,
 }
 
 // CategoryOf returns the permission category of a tool by name. Unknown tools

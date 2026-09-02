@@ -50,22 +50,47 @@ func TestBuiltinsCatalog(t *testing.T) {
 	if pdf.Requirements == "" {
 		t.Fatal("pdf requirements not declared")
 	}
+	office, ok := byName["office"]
+	if !ok {
+		t.Fatal("office plugin missing from catalog")
+	}
+	if office.Kind != "python" || office.Runtime != "python" {
+		t.Fatalf("office manifest wrong: %+v", office)
+	}
+	wantTools := []string{"OfficeRead", "DocxWrite", "XlsxWrite", "PptxWrite"}
+	if len(office.Tools) != len(wantTools) {
+		t.Fatalf("office tools wrong: %v", office.Tools)
+	}
+	for i, want := range wantTools {
+		if office.Tools[i] != want {
+			t.Fatalf("office tools wrong: %v", office.Tools)
+		}
+	}
+	if len(office.Scripts) != 1 || office.Scripts[0] != "scripts/office.py" {
+		t.Fatalf("office scripts wrong: %v", office.Scripts)
+	}
+	if office.Requirements == "" {
+		t.Fatal("office requirements not declared")
+	}
 }
 
 func TestToolsForEnabledPlugins(t *testing.T) {
 	m := NewManager(t.TempDir(), t.TempDir(), zerolog.Nop())
-	tools := m.Tools([]string{"browser", "pdf", "ghost"})
+	tools := m.Tools([]string{"browser", "pdf", "office", "ghost"})
 	names := map[string]bool{}
 	for _, tool := range tools {
 		names[tool.Name()] = true
 	}
-	for _, want := range []string{"BrowserNavigate", "BrowserSnapshot", "BrowserText", "BrowserAction", "PdfRead", "PdfWrite"} {
+	for _, want := range []string{
+		"BrowserNavigate", "BrowserSnapshot", "BrowserText", "BrowserAction",
+		"PdfRead", "PdfWrite", "OfficeRead", "DocxWrite", "XlsxWrite", "PptxWrite",
+	} {
 		if !names[want] {
 			t.Errorf("tool %s missing (have %v)", want, names)
 		}
 	}
-	if len(tools) != 6 {
-		t.Fatalf("expected 6 tools, got %d", len(tools))
+	if len(tools) != 10 {
+		t.Fatalf("expected 10 tools, got %d", len(tools))
 	}
 }
 

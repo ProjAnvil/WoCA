@@ -409,11 +409,19 @@ func TestBuiltinDirAndPythonBuiltins(t *testing.T) {
 		t.Fatalf("browser Dir = %q", browser.Dir())
 	}
 	pys := PythonBuiltins()
-	if len(pys) != 1 || pys[0].Name != "pdf" || pys[0].Kind != "python" {
+	if len(pys) != 2 || pys[0].Name != "office" || pys[1].Name != "pdf" {
 		t.Fatalf("PythonBuiltins = %+v", pys)
+	}
+	for _, py := range pys {
+		if py.Kind != "python" {
+			t.Fatalf("python builtin %s kind = %s", py.Name, py.Kind)
+		}
 	}
 	if got := mustBuiltin(t, "pdf").Dir(); got != "python/pdf" {
 		t.Fatalf("pdf Dir = %q", got)
+	}
+	if got := mustBuiltin(t, "office").Dir(); got != "python/office" {
+		t.Fatalf("office Dir = %q", got)
 	}
 	if _, ok := ByName("does-not-exist"); ok {
 		t.Fatal("unknown name must not resolve")
