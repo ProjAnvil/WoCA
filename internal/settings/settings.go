@@ -142,6 +142,10 @@ type Settings struct {
 	// BuiltinPlugins lists the built-in capability plugins (woca-plugins/
 	// tree: browser, pdf, office) whose agent tools are enabled.
 	BuiltinPlugins []string `json:"builtin_plugins"`
+	// BuiltinSkills is an allowlist of built-in method skills (woca-plugins/
+	// skills tree). Empty means all of them; user and workspace skills of
+	// the same name shadow the built-ins regardless.
+	BuiltinSkills []string `json:"builtin_skills"`
 }
 
 // Default returns the default settings: sqlite storage under ~/.woca.
@@ -403,6 +407,9 @@ func applyPairs(out *Settings, pairs map[string]string) {
 	if v, ok := pairs["builtin_plugins"]; ok {
 		out.BuiltinPlugins = parseNameList(v)
 	}
+	if v, ok := pairs["builtin_skills"]; ok {
+		out.BuiltinSkills = parseNameList(v)
+	}
 	if v, ok := pairs["checkpoint_backend"]; ok {
 		out.CheckpointBackend = v
 	}
@@ -529,6 +536,7 @@ func (s *Store) Save(cfg Settings) error {
 	fields = append(fields, field{"claude_skills", FormatNameList(cfg.ClaudeSkills)})
 	fields = append(fields, field{"claude_mcp", FormatNameList(cfg.ClaudeMCP)})
 	fields = append(fields, field{"builtin_plugins", FormatNameList(cfg.BuiltinPlugins)})
+	fields = append(fields, field{"builtin_skills", FormatNameList(cfg.BuiltinSkills)})
 	// Message plane keys are always written explicitly (empty included) so
 	// clearing the NATS URL persists, not just setting it.
 	fields = append(fields,

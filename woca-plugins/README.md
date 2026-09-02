@@ -9,7 +9,20 @@ the agent **tools** and ship with each woca release.
 ```
 golang/<name>/   # Go plugin: implementation lives in internal/pluginrt; this tree holds plugin.json + docs
 python/<name>/   # Python plugin: embedded scripts under scripts/ + locked requirements
+skills/<name>/   # Built-in method skills (SKILL.md, no manifest): merged below every user layer
 ```
+
+## Built-in method skills (`skills/`)
+
+Markdown skills vendored from open-source collections (currently
+[obra/superpowers](https://github.com/obra/superpowers), MIT — provenance and
+adaptation policy in `skills/LICENSE.md`). They are embedded via
+`woca.SkillsFS()` and merged into the skill list at the lowest layer
+(`merge.LevelBuiltin`): operator-delivered (managed), user and workspace
+skills of the same name shadow them. The `builtin-skills` settings key is an
+allowlist (empty = all). No plugin.json — the SKILL.md frontmatter is the
+manifest; companion reference files are inlined into the SKILL.md body so
+each skill is self-contained.
 
 ## plugin.json fields
 

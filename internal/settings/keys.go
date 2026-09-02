@@ -26,6 +26,7 @@ const (
 	KeyClaudeSkills          = "claude-skills"
 	KeyClaudeMCP             = "claude-mcp"
 	KeyBuiltinPlugins        = "builtin-plugins"
+	KeyBuiltinSkills         = "builtin-skills"
 	KeyCheckpoint            = "checkpoint"
 	KeyMemory                = "memory"
 	KeyCheckpointDir         = "checkpoint-dir"
@@ -71,7 +72,7 @@ func KeyNames() []string {
 		KeyProvider, KeyModel, KeyMaxTokens, KeyTemperature, KeyThinkingBudget,
 		KeyAnthropicBaseURL, KeyOpenAIBaseURL, KeyGLMBaseURL, KeyDeepSeekBaseURL,
 		KeyAnthropicAPIKey, KeyOpenAIAPIKey, KeyGLMAPIKey, KeyDeepSeekAPIKey,
-		KeyClaudeSkills, KeyClaudeMCP, KeyBuiltinPlugins,
+		KeyClaudeSkills, KeyClaudeMCP, KeyBuiltinPlugins, KeyBuiltinSkills,
 		KeyCheckpoint, KeyMemory, KeyCheckpointDir, KeyPostgresURL,
 		KeyMemoryEngine, KeyLadyMDBPath, KeyLadyMEmbedding, KeyLadyMEmbeddingModel,
 		KeyLadyMEmbeddingBaseURL, KeyLadyMEmbeddingAPIKey, KeyLadyMLLM, KeyLadyMAutoRetain,
@@ -159,6 +160,8 @@ func KeyHelp(key string) string {
 		return "enabled ~/.claude.json MCP server names as a JSON array (connected at startup)"
 	case KeyBuiltinPlugins:
 		return "enabled built-in tool plugins as a JSON array (browser, pdf, office; runtime installed from Settings → 插件)"
+	case KeyBuiltinSkills:
+		return "allowlist of built-in method skills as a JSON array (empty = all; user/workspace skills of the same name shadow them)"
 	case KeyCheckpoint:
 		return "checkpoint backend: none | file | sqlite | postgres (default sqlite; file keeps a sqlite checkpoints.db inside checkpoint-dir)"
 	case KeyMemory:
@@ -284,6 +287,12 @@ func Apply(cfg *Settings, key, value string) error {
 			return err
 		}
 		cfg.BuiltinPlugins = list
+	case KeyBuiltinSkills:
+		list, err := ParseNameList(value)
+		if err != nil {
+			return err
+		}
+		cfg.BuiltinSkills = list
 	case KeyCheckpoint:
 		switch value {
 		case CheckpointNone, CheckpointFile, CheckpointSQLite, CheckpointPostgres:
@@ -439,6 +448,7 @@ func Describe(cfg Settings, secretSet func(string) bool, dbPath string) string {
 	fmt.Fprintf(&b, "claude-skills: %s\n", orDefault(FormatNameList(cfg.ClaudeSkills), "(none)"))
 	fmt.Fprintf(&b, "claude-mcp: %s\n", orDefault(FormatNameList(cfg.ClaudeMCP), "(none)"))
 	fmt.Fprintf(&b, "builtin-plugins: %s\n", orDefault(FormatNameList(cfg.BuiltinPlugins), "(none)"))
+	fmt.Fprintf(&b, "builtin-skills: %s\n", orDefault(FormatNameList(cfg.BuiltinSkills), "(all)"))
 	fmt.Fprintf(&b, "checkpoint: %s\n", orDefault(cfg.CheckpointBackend, CheckpointSQLite))
 	fmt.Fprintf(&b, "memory: %s\n", orDefault(cfg.MemoryBackend, MemorySQLite))
 	fmt.Fprintf(&b, "checkpoint-dir: %s\n", orDefault(cfg.CheckpointDir, "(default)"))
@@ -497,6 +507,8 @@ func KeyValue(cfg Settings, key string) string {
 		return FormatNameList(cfg.ClaudeMCP)
 	case KeyBuiltinPlugins:
 		return FormatNameList(cfg.BuiltinPlugins)
+	case KeyBuiltinSkills:
+		return FormatNameList(cfg.BuiltinSkills)
 	case KeyCheckpoint:
 		return cfg.CheckpointBackend
 	case KeyMemory:

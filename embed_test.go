@@ -27,4 +27,8 @@ func TestPluginsFS(t *testing.T) {
 			t.Errorf("missing %s: %v", m, err)
 		}
 	}
+	// The vendored method-skill set is embedded too.
+	if _, err := fs.Stat(sub, "skills/test-driven-development/SKILL.md"); err != nil {
+		t.Errorf("missing builtin skill: %v", err)
+	}
 }

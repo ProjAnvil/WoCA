@@ -43,7 +43,7 @@ func TestLoadSkillsLayered(t *testing.T) {
 	t.Cleanup(merge.ResetWorkspaceCache)
 
 	var buf bytes.Buffer
-	list := loadSkills(deep, zerolog.New(&buf))
+	list := loadSkills(deep, nil, zerolog.New(&buf))
 
 	byName := map[string]skills.Skill{}
 	for _, s := range list {
@@ -73,7 +73,7 @@ func TestLoadSkillsSameDirWocaBeatsClaude(t *testing.T) {
 	merge.ResetWorkspaceCache()
 	t.Cleanup(merge.ResetWorkspaceCache)
 
-	list := loadSkills(dir, zerolog.Nop())
+	list := loadSkills(dir, []string{"none"}, zerolog.Nop())
 	if len(list) != 1 || list[0].Body != "WOCA" {
 		t.Fatalf("same-dir .woca must beat .claude, got %+v", list)
 	}
@@ -90,7 +90,7 @@ func TestLoadSkillsNearClaudeBeatsFarWoca(t *testing.T) {
 	merge.ResetWorkspaceCache()
 	t.Cleanup(merge.ResetWorkspaceCache)
 
-	list := loadSkills(deep, zerolog.Nop())
+	list := loadSkills(deep, []string{"none"}, zerolog.Nop())
 	if len(list) != 1 || list[0].Body != "NEAR CLAUDE" {
 		t.Fatalf("near .claude must beat far .woca, got %+v", list)
 	}
@@ -222,7 +222,7 @@ func TestLoadSkills(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: commit\ndescription: commit\n---\nbody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	list := loadSkills(dir, zerolog.Nop())
+	list := loadSkills(dir, []string{"none"}, zerolog.Nop())
 	if len(list) != 1 || list[0].Name != "commit" {
 		t.Fatalf("skills = %+v", list)
 	}
@@ -483,10 +483,51 @@ func TestHomeUnsetBranches(t *testing.T) {
 	if rules := loadPermissions(t.TempDir()); len(rules.Allow) != 0 {
 		t.Fatal("permissions should be empty without home")
 	}
-	if got := loadSkills(t.TempDir(), zerolog.Nop()); len(got) != 0 {
+	if got := loadSkills(t.TempDir(), []string{"none"}, zerolog.Nop()); len(got) != 0 {
 		t.Fatal("skills should be empty without home")
 	}
 	if got := loadAgents(t.TempDir(), zerolog.Nop()); len(got) != 0 {
 		t.Fatal("agents should be empty without home")
+	}
+}
+
+func TestLoadSkillsBuiltinLayer(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	merge.ResetWorkspaceCache()
+	t.Cleanup(merge.ResetWorkspaceCache)
+
+	// Default (empty allowlist): the vendored set is present.
+	list := loadSkills(dir, nil, zerolog.Nop())
+	var tdd skills.Skill
+	found := false
+	for _, s := range list {
+		if s.Name == "test-driven-development" {
+			tdd, found = s, true
+		}
+	}
+	if !found || !strings.Contains(tdd.Body, "RED") {
+		t.Fatalf("builtin test-driven-development missing or empty: found=%v", found)
+	}
+
+	// A non-empty allowlist keeps only the named skills.
+	only := loadSkills(dir, []string{"brainstorming"}, zerolog.Nop())
+	if len(only) != 1 || only[0].Name != "brainstorming" {
+		t.Fatalf("allowlist not applied: %+v", only)
+	}
+
+	// A user skill of the same name shadows the builtin, and the conflict
+	// log records the builtin as the loser.
+	writeFileT(t, filepath.Join(home, ".woca", "skills", "test-driven-development", "SKILL.md"), "USER TDD")
+	var buf bytes.Buffer
+	list = loadSkills(dir, nil, zerolog.New(&buf))
+	for _, s := range list {
+		if s.Name == "test-driven-development" && s.Body != "USER TDD" {
+			t.Fatalf("user skill must shadow the builtin, got %q", s.Body)
+		}
+	}
+	if !strings.Contains(buf.String(), "builtin/test-driven-development") {
+		t.Fatalf("builtin loser not logged: %q", buf.String())
 	}
 }

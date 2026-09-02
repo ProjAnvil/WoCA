@@ -4,13 +4,14 @@ package skills
 
 import (
 	"context"
-
 	"fmt"
-	"github.com/projanvil/woca/internal/telemetry"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/projanvil/woca/internal/telemetry"
 )
 
 // Skill is a loaded skill: a name, a one-line description, and the markdown
@@ -67,6 +68,33 @@ func Load(root string) ([]Skill, error) {
 		}
 	}
 	walk(root)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// LoadFS loads skills from a single-level filesystem tree (the embedded
+// built-in skills): each child directory's SKILL.md becomes a skill, using
+// the directory name as the default skill name. Source carries the
+// "builtin/<name>" marker for layered-merge conflict logs (the body is fully
+// in memory, so no on-disk path is needed at invocation time).
+func LoadFS(fsys fs.FS) ([]Skill, error) {
+	var out []Skill
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return out, err
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		data, err := fs.ReadFile(fsys, e.Name()+"/SKILL.md")
+		if err != nil {
+			continue
+		}
+		sk := parseSkill(e.Name(), data)
+		sk.Source = "builtin/" + sk.Name
+		out = append(out, sk)
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }

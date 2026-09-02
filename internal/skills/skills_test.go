@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestLoadAndParse(t *testing.T) {
@@ -215,5 +216,30 @@ body`), 0o644); err != nil {
 	args := list[0].Args
 	if len(args) != 2 || args[0].Name != "target" || args[1].Description != "what to match" {
 		t.Fatalf("args = %+v", args)
+	}
+}
+
+func TestLoadFS(t *testing.T) {
+	fsys := fstest.MapFS{
+		"alpha/SKILL.md":   &fstest.MapFile{Data: []byte("---\nname: alpha\ndescription: a\n---\nALPHA BODY")},
+		"beta/SKILL.md":    &fstest.MapFile{Data: []byte("BETA BODY")}, // no frontmatter: dir name is the name
+		"README.md":        &fstest.MapFile{Data: []byte("not a skill dir")},
+		"gamma/other.txt":  &fstest.MapFile{Data: []byte("no SKILL.md here")},
+	}
+	list, err := LoadFS(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("list = %+v", list)
+	}
+	if list[0].Name != "alpha" || list[0].Description != "a" || list[0].Body != "ALPHA BODY" {
+		t.Fatalf("alpha = %+v", list[0])
+	}
+	if list[0].Source != "builtin/alpha" {
+		t.Fatalf("alpha source = %q", list[0].Source)
+	}
+	if list[1].Name != "beta" || list[1].Body != "BETA BODY" || list[1].Source != "builtin/beta" {
+		t.Fatalf("beta = %+v", list[1])
 	}
 }

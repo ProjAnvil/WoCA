@@ -107,7 +107,7 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		if c := contextx.Collect(ws); c != "" {
 			sys += "\n\n" + c
 		}
-		if list := loadSkills(ws, log); len(list) > 0 {
+		if list := loadSkills(ws, st.Load().BuiltinSkills, log); len(list) > 0 {
 			sys += "\n\n# Available skills\n\nInvoke with the Skill tool; the list is scoped to this workspace.\n" + skillManifest(list)
 		}
 		return sys
@@ -124,7 +124,7 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	} else if len(linked) > 0 {
 		log.Info().Strs("skills", linked).Msg("imported claude skills via ~/.woca/skills")
 	}
-	skillList := loadSkills(workdir, log)
+	skillList := loadSkills(workdir, st.Load().BuiltinSkills, log)
 	agentDefs := loadAgents(workdir, log)
 	// Plugins (marketplace-level units under ~/.woca/plugins) contribute
 	// namespaced skills and subagent definitions.
@@ -232,7 +232,7 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 			return hooks.NewRunner(loadHooksConfig(ws), ws, "woca", hooks.WithLogger(log))
 		},
 		Skills:             skillList,
-		SkillsFor:          func(ws string) []skills.Skill { return loadSkills(ws, log) },
+		SkillsFor:          func(ws string) []skills.Skill { return loadSkills(ws, st.Load().BuiltinSkills, log) },
 		ExtraTools:         extraTools,
 		CompactThreshold:   opts.CompactLimit,
 		Summarizer:         model,
@@ -495,7 +495,7 @@ func (ap *App) ApplyClaudeEnv(skills, mcp []string) error {
 		return err
 	}
 	// Live skill reload (mirrors BuildAgent's load + plugin merge).
-	list := loadSkills(ap.Workdir, ap.Log)
+	list := loadSkills(ap.Workdir, ap.Settings.Load().BuiltinSkills, ap.Log)
 	for _, pl := range pluginListOrEmpty() {
 		list = append(list, pl.Skills...)
 	}

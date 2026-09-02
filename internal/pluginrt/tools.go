@@ -537,9 +537,9 @@ func officeTools(py *PythonRuntime, workdir string) []coretools.Tool {
 		Notes   string       `json:"notes,omitempty"`
 	}
 	type pptxWriteArgs struct {
-		Path     string       `json:"path"`
-		Title    string       `json:"title,omitempty"`    // optional cover slide
-		Subtitle string       `json:"subtitle,omitempty"` // cover subtitle
+		Path     string      `json:"path"`
+		Title    string      `json:"title,omitempty"`    // optional cover slide
+		Subtitle string      `json:"subtitle,omitempty"` // cover subtitle
 		Slides   []pptxSlide `json:"slides"`
 	}
 	pptxWrite := mk("PptxWrite",

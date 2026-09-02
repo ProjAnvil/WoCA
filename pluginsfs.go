@@ -24,3 +24,14 @@ func PluginsFS() fs.FS {
 	}
 	return sub
 }
+
+// SkillsFS returns the embedded built-in skills tree (woca-plugins/skills):
+// markdown method skills vendored from open-source collections, merged below
+// every user-configurable layer by agentbuild.
+func SkillsFS() fs.FS {
+	sub, err := fs.Sub(plugins, "woca-plugins/skills")
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}

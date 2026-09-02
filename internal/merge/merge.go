@@ -11,7 +11,8 @@ import "sort"
 type Level int
 
 const (
-	LevelManaged   Level = -1   // operator-delivered via the config plane (lowest)
+	LevelBuiltin   Level = -2   // shipped in the binary (vendored method skills)
+	LevelManaged   Level = -1   // operator-delivered via the config plane
 	LevelUser      Level = iota // ~/.woca (user level)
 	LevelWorkspace              // workDir and its ancestors up to the git root
 	LevelFlag                   // session injection (--mcp etc.), highest
@@ -26,6 +27,8 @@ func (l Level) String() string {
 		return "workspace"
 	case LevelManaged:
 		return "managed"
+	case LevelBuiltin:
+		return "builtin"
 	default:
 		return "user"
 	}

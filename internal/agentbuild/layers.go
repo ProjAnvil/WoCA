@@ -11,6 +11,7 @@ import (
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
+	"github.com/projanvil/woca"
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/claudeenv"
 	"github.com/projanvil/woca/internal/hooks"
@@ -95,10 +96,43 @@ func managedRoot() string {
 	return filepath.Join(home, ".woca", "managed")
 }
 
-func loadSkills(workdir string, log zerolog.Logger) []skills.Skill {
+// builtinSkills loads the embedded method-skill set (woca-plugins/skills,
+// vendored from open-source collections such as obra/superpowers). allow,
+// when non-empty, keeps only the named skills (the builtin-skills settings
+// key); empty means the whole set. They enter the merge at the lowest level,
+// so operator-delivered, user and workspace skills of the same name shadow
+// them.
+func builtinSkills(allow []string) []skills.Skill {
+	list, err := skills.LoadFS(woca.SkillsFS())
+	if err != nil || len(list) == 0 {
+		return nil
+	}
+	if len(allow) > 0 {
+		keep := make(map[string]bool, len(allow))
+		for _, n := range allow {
+			keep[n] = true
+		}
+		filtered := make([]skills.Skill, 0, len(list))
+		for _, s := range list {
+			if keep[s.Name] {
+				filtered = append(filtered, s)
+			}
+		}
+		list = filtered
+	}
+	return list
+}
+
+func loadSkills(workdir string, builtinAllow []string, log zerolog.Logger) []skills.Skill {
 	var es []merge.Entry[skills.Skill]
-	// Managed layer (lowest): operator-delivered skills from the config
-	// plane, materialized by the managed-config apply.
+	// Builtin layer (lowest): method skills shipped in the binary.
+	for _, s := range builtinSkills(builtinAllow) {
+		es = append(es, merge.Entry[skills.Skill]{
+			Name: s.Name, Value: s, Level: merge.LevelBuiltin, Order: 0, Source: s.Source,
+		})
+	}
+	// Managed layer: operator-delivered skills from the config plane,
+	// materialized by the managed-config apply.
 	if root := managedRoot(); root != "" {
 		if list, err := skills.Load(filepath.Join(root, "skills")); err == nil {
 			for _, s := range list {
