@@ -225,8 +225,10 @@ instead of losing it.
 
 **Composer:** `ctrl+j` inserts a newline without submitting; `ctrl+g` opens
 the current draft in `$VISUAL` (falling back to `$EDITOR`) and replaces the
-draft with the saved file's contents on return. Both keys are remappable —
-see `/keybindings`.
+draft with the saved file's contents on return. `shift+tab` cycles the
+permission mode (default → acceptEdits → plan → readOnly →
+bypassPermissions), matching the web composer. Both ctrl+j/ctrl+g are
+remappable — see `/keybindings`.
 
 **Keybindings:** `/keybindings` shows the effective composer, session, and
 vim-mode bindings; `/keybindings open` creates (or reports the path of)

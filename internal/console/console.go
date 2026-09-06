@@ -280,6 +280,31 @@ func (c *Console) permissions(args []string) (Result, error) {
 	return Result{Output: "permission mode set to " + string(mode) + "\n"}, nil
 }
 
+// permissionModeOrder is the shift+tab cycle order shared by the TUI and web
+// composer (web/src/stores/agent.ts PERMISSION_MODE_ORDER).
+var permissionModeOrder = []config.PermissionMode{
+	config.ModeDefault,
+	config.ModeAcceptEdits,
+	config.ModePlan,
+	config.ModeReadOnly,
+	config.ModeBypass,
+}
+
+// CyclePermissionMode advances to the next mode in permissionModeOrder
+// (composer shift+tab).
+func (c *Console) CyclePermissionMode() (Result, error) {
+	cur := c.deps.Agent.Mode()
+	idx := 0
+	for i, m := range permissionModeOrder {
+		if m == cur {
+			idx = i
+			break
+		}
+	}
+	next := permissionModeOrder[(idx+1)%len(permissionModeOrder)]
+	return c.permissions([]string{string(next)})
+}
+
 func (c *Console) model(args []string) (Result, error) {
 	if len(args) == 0 {
 		if text := c.modelCatalogText(); text != "" {

@@ -374,6 +374,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.acceptCompletion(cmds[m.sel].name)
 				}
 			}
+		case "shift+tab":
+			// Cycles the permission mode (web composer parity); ignored
+			// while a completion menu is open so it never fights tab-accept.
+			if m.console != nil && !m.completionsMenuVisible() {
+				if res, err := m.console.CyclePermissionMode(); err == nil {
+					m.hint = strings.TrimSpace(res.Output)
+				} else {
+					m.hint = err.Error()
+				}
+			}
 		case "ctrl+u":
 			m.input = ""
 			m.cursor = 0

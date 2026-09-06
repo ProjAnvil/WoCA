@@ -203,7 +203,9 @@ woca --resume last      # 继续最近一次会话
 `ctrl+c`），会立即将其作为新的一轮重新发送，而不会丢失。
 
 **输入框：** `ctrl+j` 插入换行而不提交；`ctrl+g` 在 `$VISUAL`（回退到
-`$EDITOR`）中打开当前草稿，返回后用保存的文件内容替换草稿。两个按键均可
+`$EDITOR`）中打开当前草稿，返回后用保存的文件内容替换草稿。`shift+tab`
+循环切换权限模式（default → acceptEdits → plan → readOnly →
+bypassPermissions），与 web 输入框行为一致。ctrl+j/ctrl+g 均可
 重新绑定——见 `/keybindings`。
 
 **按键绑定：** `/keybindings` 显示当前生效的输入框、会话与 vim 模式按键；

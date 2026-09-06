@@ -15,6 +15,7 @@ import (
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/console"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -36,6 +37,8 @@ func ctrlKey(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlJ}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	case "delete":
 		return tea.KeyMsg{Type: tea.KeyDelete}
 	case "left":
@@ -681,5 +684,43 @@ func TestPendingPromptDefaultAndMultiQuestion(t *testing.T) {
 	m.pendingBegin()
 	if got := m.pendingPrompt(); !strings.Contains(got, "(1/2) a") {
 		t.Fatalf("multi-question prompt = %q", got)
+	}
+}
+
+// TestShiftTabCyclesPermissionMode drives the composer parity binding: each
+// press advances config.PermissionMode through the shared cycle order.
+func TestShiftTabCyclesPermissionMode(t *testing.T) {
+	m := newConsoleModel(t, messages.AI("ok"))
+	// newConsoleModel's fixture starts the agent in ModeBypass without
+	// syncing it to the console's cfg; normalize both first so the cycle
+	// below is deterministic.
+	if _, err := m.console.Execute(context.Background(), "permissions", []string{"default"}, &console.Session{}); err != nil {
+		t.Fatal(err)
+	}
+
+	m = press(m, ctrlKey("shift+tab"))
+	if got := m.console.Cfg().PermissionMode; got != config.ModeAcceptEdits {
+		t.Fatalf("mode after one shift+tab = %s, want acceptEdits", got)
+	}
+	m = press(m, ctrlKey("shift+tab"))
+	if got := m.console.Cfg().PermissionMode; got != config.ModePlan {
+		t.Fatalf("mode after two shift+tab = %s, want plan", got)
+	}
+	if !strings.Contains(m.hint, "plan") {
+		t.Fatalf("hint missing the new mode: %q", m.hint)
+	}
+}
+
+// TestShiftTabIgnoredDuringCompletionMenu leaves the mode untouched while a
+// "/" or "@" completion menu is open, matching the web composer's guard.
+func TestShiftTabIgnoredDuringCompletionMenu(t *testing.T) {
+	m := newConsoleModel(t, messages.AI("ok"))
+	if _, err := m.console.Execute(context.Background(), "permissions", []string{"default"}, &console.Session{}); err != nil {
+		t.Fatal(err)
+	}
+	m.input = "/"
+	m = press(m, ctrlKey("shift+tab"))
+	if got := m.console.Cfg().PermissionMode; got != config.ModeDefault {
+		t.Fatalf("mode changed to %s while a completion menu was open", got)
 	}
 }

@@ -67,6 +67,7 @@ func (c *Console) keybindingsCmd(args []string) (Result, error) {
 	b.WriteString("  composer\n")
 	fmt.Fprintf(&b, "    ctrl+j           %s\n", describeAction(km, "ctrl+j", keybindings.ActionComposerNewline, "insert a newline without submitting"))
 	fmt.Fprintf(&b, "    ctrl+g           %s\n", describeAction(km, "ctrl+g", keybindings.ActionComposerEditor, "open the draft in $VISUAL/$EDITOR"))
+	b.WriteString("    shift+tab        cycle the permission mode (web composer parity)\n")
 	if pathErr == nil {
 		fmt.Fprintf(&b, "    config: %s (/keybindings open to create)\n", path)
 	}

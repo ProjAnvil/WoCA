@@ -107,6 +107,27 @@ func TestPermissionsSet(t *testing.T) {
 	}
 }
 
+// TestCyclePermissionModeWraps drives shift+tab's full cycle: default →
+// acceptEdits → plan → readOnly → bypassPermissions → default.
+func TestCyclePermissionModeWraps(t *testing.T) {
+	c, cfg, _ := newTestConsole(t, nil)
+	want := []config.PermissionMode{
+		config.ModeAcceptEdits,
+		config.ModePlan,
+		config.ModeReadOnly,
+		config.ModeBypass,
+		config.ModeDefault,
+	}
+	for _, mode := range want {
+		if _, err := c.CyclePermissionMode(); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.PermissionMode != mode {
+			t.Fatalf("cfg mode = %s, want %s", cfg.PermissionMode, mode)
+		}
+	}
+}
+
 func TestModelSwitch(t *testing.T) {
 	c, cfg, _ := newTestConsole(t, func(name string) (language.ChatModel, error) {
 		return language.NewFakeChatModel(language.WithResponses(messages.AI("switched"))), nil
