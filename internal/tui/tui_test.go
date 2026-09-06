@@ -124,7 +124,7 @@ func TestSuggestions(t *testing.T) {
 	if got := suggestions("/"); len(got) != len(slashCommands) {
 		t.Fatalf("suggestions(/) = %v, want all %d", got, len(slashCommands))
 	}
-	if got := suggestions("/h"); len(got) != 1 || got[0].name != "/help" {
+	if got := suggestions("/h"); len(got) != 2 || got[0].name != "/help" || !containsCmd(got, "/hooks") {
 		t.Fatalf("suggestions(/h) = %v", got)
 	}
 	if got := suggestions("hi"); got != nil {

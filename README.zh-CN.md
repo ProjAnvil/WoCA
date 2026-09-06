@@ -194,6 +194,18 @@ woca --resume last      # 继续最近一次会话
 （`POST /api/runs/{id}/cancel`）。行式 REPL 中以 `!` 前缀执行 shell 命令，
 输出纳入对话。见[斜杠命令](#斜杠命令)。
 
+**文件上下文：** 在行首或空格后输入 `@` 可补全并附加工作区内的文件或目录；
+被引用的内容会展开进发给模型的消息，而对话记录仍展示你原始的 `@path` 文本。
+
+**输入框：** `ctrl+j` 插入换行而不提交；`ctrl+g` 在 `$VISUAL`（回退到
+`$EDITOR`）中打开当前草稿，返回后用保存的文件内容替换草稿。两个按键均可
+重新绑定——见 `/keybindings`。
+
+**按键绑定：** `/keybindings` 显示当前生效的输入框、会话与 vim 模式按键；
+`/keybindings open` 创建（或报告路径）`~/.woca/keybindings.json`，一个针对
+输入框动作（`composer:newline`、`composer:editor`）的扁平 `{"按键": "动作"}`
+覆盖文件。
+
 ### 单次执行
 
 ```bash
@@ -474,6 +486,8 @@ woca 与常见代理约定互操作：读取 `CLAUDE.md` / `AGENTS.md` 指令文
 | `/context` | 上下文窗口用量明细 |
 | `/todos`、`/tasks` | todo 列表 / 共享任务列表 |
 | `/skills`、`/mcp`、`/agents`、`/plugins` | 管理扩展 |
+| `/tools` | 列出生效的 agent 工具及其分类与权限安全级别 |
+| `/hooks` | 列出已配置的 hook 事件，未配置时明确提示 |
 | `/undo`、`/redo` | 撤销 / 重做最近一次文件编辑 |
 | `/rewind`、`/branch`、`/rename`、`/export` | 会话历史导航 |
 | `/goal …` | 自主目标循环（set/status/pause/resume/budget/clear） |
@@ -482,7 +496,7 @@ woca 与常见代理约定互操作：读取 `CLAUDE.md` / `AGENTS.md` 指令文
 | `/settings …` | 持久化设置 |
 | `/init` | 生成 `AGENTS.md` 项目指南 |
 | `/doctor` | 体检配置、凭据、存储、hooks、权限 |
-| `/theme`、`/vim`、`/keybindings` | UI 偏好 |
+| `/theme`、`/vim`、`/keybindings` | UI 偏好（`/keybindings open` 编辑覆盖配置）|
 | `/web [port\|off\|status]` | 内嵌 Web UI 控制 |
 | `/output-style` | default \| explanatory \| learning |
 

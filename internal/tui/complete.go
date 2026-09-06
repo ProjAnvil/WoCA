@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"strings"
+
+	"github.com/projanvil/woca/internal/promptref"
 )
 
 // Composer completions, mirroring the web grammar exactly (web/src/
@@ -17,6 +19,7 @@ const (
 	groupCommands = "commands"
 	groupSkills   = "skills"
 	groupAgents   = "agents"
+	groupFiles    = "files"
 )
 
 // refreshCompletions reloads the skill and subagent inventories (cheap
@@ -48,7 +51,7 @@ func atTrigger(input string) int {
 	for j := 0; j < len(rest); j++ {
 		c := rest[j]
 		isAlnum := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
-		if !isAlnum && c != '_' && c != '-' {
+		if !isAlnum && c != '_' && c != '-' && c != '.' && c != '/' {
 			return -1
 		}
 	}
@@ -66,6 +69,13 @@ func (m *Model) allSuggestions(input string) []command {
 			if strings.HasPrefix(strings.ToLower(name), prefix) {
 				out = append(out, command{name: name, desc: d.Description, group: groupAgents})
 			}
+		}
+		for _, candidate := range promptref.Candidates(input[i+1:], m.cfg.WorkDir) {
+			description := "file context"
+			if candidate.IsDir {
+				description = "directory context"
+			}
+			out = append(out, command{name: "@" + candidate.Path, desc: description, group: groupFiles})
 		}
 		return out
 	}

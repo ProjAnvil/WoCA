@@ -23,6 +23,7 @@ import (
 	"github.com/projanvil/woca/internal/slashcmds"
 	"github.com/projanvil/woca/internal/store"
 	"github.com/projanvil/woca/internal/tokens"
+	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/webgui"
 )
 
@@ -97,6 +98,9 @@ type Deps struct {
 	// PluginsRoot overrides the plugin installation root (tests); empty
 	// uses ~/.woca/plugins.
 	PluginsRoot string
+	// KeybindingsPath overrides the /keybindings config file location
+	// (tests); empty uses ~/.woca/keybindings.json.
+	KeybindingsPath string
 	// ApplyTheme switches the TUI palette live (/theme); nil disables the
 	// command with a helpful message.
 	ApplyTheme func(name string) error
@@ -199,7 +203,7 @@ func (c *Console) Execute(ctx context.Context, name string, args []string, sessi
 	case "vim":
 		return c.vimCmd(), nil
 	case "keybindings":
-		return c.keybindingsCmd(), nil
+		return c.keybindingsCmd(args)
 	case "todos":
 		return Result{Output: c.todos()}, nil
 	case "goal":
@@ -212,6 +216,10 @@ func (c *Console) Execute(ctx context.Context, name string, args []string, sessi
 		return Result{Output: c.skills()}, nil
 	case "mcp":
 		return Result{Output: c.mcp()}, nil
+	case "tools":
+		return Result{Output: c.tools()}, nil
+	case "hooks":
+		return Result{Output: c.hooks()}, nil
 	case "settings":
 		return c.settingsCmd(args)
 	case "debug-log":
@@ -434,6 +442,59 @@ func (c *Console) mcp() string {
 		for _, tool := range byServer[s] {
 			fmt.Fprintf(&b, "  %s\n", tool)
 		}
+	}
+	return b.String()
+}
+
+// tools lists every effective agent tool with its permission category and
+// whether it runs without prompting in default mode (/tools).
+func (c *Console) tools() string {
+	names := append([]string(nil), c.deps.Agent.ToolNames()...)
+	if len(names) == 0 {
+		return "no tools registered\n"
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		cat := tools.CategoryOf(name)
+		safety := "requires approval"
+		if cat.Safe() {
+			safety = "auto-allowed"
+		}
+		fmt.Fprintf(&b, "  %-20s %-6s %s\n", name, categoryLabel(cat), safety)
+	}
+	return b.String()
+}
+
+// categoryLabel renders a tools.Category for /tools output.
+func categoryLabel(cat tools.Category) string {
+	switch cat {
+	case tools.CatRead:
+		return "read"
+	case tools.CatWrite:
+		return "write"
+	case tools.CatShell:
+		return "shell"
+	case tools.CatWeb:
+		return "web"
+	case tools.CatMeta:
+		return "meta"
+	default:
+		return "?"
+	}
+}
+
+// hooks lists the configured hook events from the active hook runner, or
+// states plainly that none are configured (/hooks).
+func (c *Console) hooks() string {
+	summary := c.deps.Agent.HookSummary()
+	if len(summary) == 0 {
+		return "no hooks configured (add a \"hooks\" block to your settings.json)\n"
+	}
+	var b strings.Builder
+	b.WriteString("configured hook events:\n")
+	for _, s := range summary {
+		fmt.Fprintf(&b, "  %s\n", s)
 	}
 	return b.String()
 }

@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +32,8 @@ func ctrlKey(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlE}
 	case "ctrl+u":
 		return tea.KeyMsg{Type: tea.KeyCtrlU}
+	case "ctrl+j":
+		return tea.KeyMsg{Type: tea.KeyCtrlJ}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
 	case "delete":
@@ -198,6 +202,42 @@ func TestEditingKeys(t *testing.T) {
 	}
 }
 
+func TestCtrlJInsertsNewlineWithoutDispatching(t *testing.T) {
+	model := New(nil, nil, config.Config{})
+	model.input = "firstsecond"
+	model.cursor = len("first")
+
+	model = press(model, ctrlKey("ctrl+j"))
+	if model.input != "first\nsecond" || model.cursor != len("first\n") || model.running {
+		t.Fatalf("input=%q cursor=%d running=%v", model.input, model.cursor, model.running)
+	}
+	if got := model.renderInput(); !strings.Contains(got, "\n") {
+		t.Fatalf("multiline input was not rendered: %q", got)
+	}
+}
+
+func TestEditorResultReplacesDraftOnSuccess(t *testing.T) {
+	model := New(nil, nil, config.Config{})
+	model.input = "old draft"
+	model.cursor = len(model.input)
+
+	model.applyEditorResult(editorResult{content: "first line\nsecond line"})
+	if model.input != "first line\nsecond line" || model.cursor != len(model.input) {
+		t.Fatalf("input=%q cursor=%d", model.input, model.cursor)
+	}
+}
+
+func TestEditorResultKeepsDraftOnFailure(t *testing.T) {
+	model := New(nil, nil, config.Config{})
+	model.input = "keep me"
+	model.cursor = len(model.input)
+
+	model.applyEditorResult(editorResult{err: fmt.Errorf("editor failed")})
+	if model.input != "keep me" || model.cursor != len(model.input) || !strings.Contains(model.hint, "editor failed") {
+		t.Fatalf("input=%q cursor=%d hint=%q", model.input, model.cursor, model.hint)
+	}
+}
+
 func TestPageKeysScrollTranscript(t *testing.T) {
 	m := New(nil, nil, config.Config{})
 	var b strings.Builder
@@ -272,6 +312,19 @@ func TestUpDownClampSuggestionSelection(t *testing.T) {
 	m = press(m, ctrlKey("down"))
 	if m.sel != n-1 {
 		t.Fatalf("down clamp sel = %d, want %d", m.sel, n-1)
+	}
+}
+
+func TestAtSuggestionsIncludeWorkspacePaths(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	model := New(nil, nil, config.Config{WorkDir: workspace})
+
+	suggestions := model.allSuggestions("@doc")
+	if len(suggestions) != 1 || suggestions[0].name != "@docs/" || suggestions[0].group != groupFiles {
+		t.Fatalf("suggestions = %#v", suggestions)
 	}
 }
 

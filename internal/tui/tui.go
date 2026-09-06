@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -24,7 +25,9 @@ import (
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/console"
+	"github.com/projanvil/woca/internal/keybindings"
 	"github.com/projanvil/woca/internal/notify"
+	"github.com/projanvil/woca/internal/promptref"
 	"github.com/projanvil/woca/internal/repl"
 	"github.com/projanvil/woca/internal/runner"
 	"github.com/projanvil/woca/internal/settings"
@@ -198,10 +201,17 @@ type Model struct {
 	agentList []agents.Definition
 	// ctxInfo is the post-run context-usage snapshot for the status bar.
 	ctxInfo *agent.ContextInfo
+	// keys resolves composer key presses to actions, defaults overridden by
+	// ~/.woca/keybindings.json when present (see internal/keybindings).
+	keys keybindings.Map
 }
 
 // New creates the TUI model.
 func New(a *agent.Agent, history []messages.Message, cfg config.Config) *Model {
+	keys := keybindings.Default()
+	if path, err := keybindings.DefaultPath(); err == nil {
+		keys, _ = keybindings.Load(path)
+	}
 	return &Model{
 		agent:        a,
 		history:      history,
@@ -211,6 +221,7 @@ func New(a *agent.Agent, history []messages.Message, cfg config.Config) *Model {
 		height:       24,
 		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		reviewFolded: map[int]bool{},
+		keys:         keys,
 	}
 }
 
@@ -249,6 +260,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if handled := m.vimKey(msg); handled {
 				return m, nil
 			}
+		}
+		// Composer actions resolve through the (possibly user-overridden)
+		// keybinding map before the default, fixed key handling below.
+		switch m.keys.Action(msg.String()) {
+		case keybindings.ActionComposerNewline:
+			m.input = m.input[:m.cursor] + "\n" + m.input[m.cursor:]
+			m.cursor++
+			m.sel = 0
+			return m, nil
+		case keybindings.ActionComposerEditor:
+			if cmd := m.openEditorCmd(); cmd != nil {
+				return m, cmd
+			}
+			return m, nil
 		}
 		switch msg.String() {
 		case "ctrl+d":
@@ -412,6 +437,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.hint = ""
 			}
 		}
+	case editorResult:
+		m.applyEditorResult(msg)
 	case streamMsg:
 		m.appendStreamText(blockAssistant, string(msg))
 		m.write(string(msg))
@@ -542,6 +569,10 @@ func (m *Model) obsEnd(run string, final []messages.Message, err error) {
 // the output channel. The run is cancelable: double-esc or ctrl+c cancels
 // the context, which unwinds the graph and ends the turn.
 func (m *Model) run() tea.Cmd {
+	return m.runWithHistory(m.history)
+}
+
+func (m *Model) runWithHistory(history []messages.Message) tea.Cmd {
 	ch := make(chan tea.Msg, 512)
 	m.ch = ch
 	obsRun := m.obsBegin(m.lastPrompt)
@@ -549,7 +580,7 @@ func (m *Model) run() tea.Cmd {
 	m.cancelRun = cancel
 	go func() {
 		r := runner.New(m.agent, interruptHandler(ch), m.renderer(ch))
-		result, err := r.Run(ctx, m.history)
+		result, err := r.Run(ctx, history)
 		m.obsEnd(obsRun, result, err)
 		ch <- runDone{result: result, err: err}
 		close(ch)
@@ -960,6 +991,64 @@ func (m *Model) renderInput() string {
 	return m.input[:m.cursor] + cursorStyle.Render(m.input[m.cursor:m.cursor+1]) + m.input[m.cursor+1:]
 }
 
+// editorResult carries the outcome of a `ctrl+g` $VISUAL/$EDITOR session.
+type editorResult struct {
+	content string
+	err     error
+}
+
+// openEditorCmd opens the current draft in $VISUAL (falling back to
+// $EDITOR) via a suspended subprocess. It returns nil, setting a
+// non-destructive hint, when neither variable is set or the draft cannot be
+// staged to a temp file.
+func (m *Model) openEditorCmd() tea.Cmd {
+	editor := os.Getenv("VISUAL")
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		m.hint = "set $VISUAL or $EDITOR to edit the draft externally"
+		return nil
+	}
+	f, err := os.CreateTemp("", "woca-draft-*.md")
+	if err != nil {
+		m.hint = "ctrl+g: " + err.Error()
+		return nil
+	}
+	path := f.Name()
+	if _, err := f.WriteString(m.input); err != nil {
+		f.Close()
+		os.Remove(path)
+		m.hint = "ctrl+g: " + err.Error()
+		return nil
+	}
+	f.Close()
+	cmd := exec.Command(editor, path)
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		defer os.Remove(path)
+		if err != nil {
+			return editorResult{err: err}
+		}
+		content, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return editorResult{err: rerr}
+		}
+		return editorResult{content: strings.TrimSuffix(string(content), "\n")}
+	})
+}
+
+// applyEditorResult replaces the draft with the editor's output on success;
+// on failure the original draft is untouched and the error surfaces as a
+// hint.
+func (m *Model) applyEditorResult(r editorResult) {
+	if r.err != nil {
+		m.hint = "ctrl+g: " + r.err.Error()
+		return
+	}
+	m.input = r.content
+	m.cursor = len(m.input)
+}
+
 // vimKey handles one keystroke in vim normal mode. It reports whether the
 // key was consumed; enter and unrecognized printable keys fall through to
 // the caller's standard handling.
@@ -1107,13 +1196,46 @@ func (m *Model) handleCommand(text string) (bool, tea.Cmd) {
 
 // submit appends a user message and starts one agent run.
 func (m *Model) submit(text string) tea.Cmd {
+	runHistory, err := m.historyForPrompt(text)
+	if err != nil {
+		m.input = text
+		m.cursor = len(text)
+		m.systemLine("Error: " + err.Error() + "\n")
+		return nil
+	}
 	m.write(userStyle.Render("❯ "+text) + "\n")
 	m.appendUserBlock(text)
 	m.history = append(m.history, messages.Human(text))
 	m.running = true
 	m.lastPrompt = text
 	m.refreshCompletions()
-	return m.run()
+	return m.runWithHistory(runHistory)
+}
+
+func (m *Model) historyForRun() ([]messages.Message, error) {
+	if len(m.history) == 0 {
+		return nil, nil
+	}
+	last := len(m.history) - 1
+	if m.history[last].Role != messages.RoleHuman {
+		return append([]messages.Message(nil), m.history...), nil
+	}
+	base := append([]messages.Message(nil), m.history[:last]...)
+	return m.historyForPromptWithBase(base, m.history[last].Content)
+}
+
+func (m *Model) historyForPrompt(text string) ([]messages.Message, error) {
+	return m.historyForPromptWithBase(m.history, text)
+}
+
+func (m *Model) historyForPromptWithBase(base []messages.Message, text string) ([]messages.Message, error) {
+	expanded, err := promptref.Expand(text, m.cfg.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	history := append([]messages.Message(nil), base...)
+	history = append(history, messages.Human(expanded))
+	return history, nil
 }
 
 // dispatch routes one submitted line exactly like the line REPL classifies

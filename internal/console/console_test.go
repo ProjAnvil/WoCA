@@ -37,7 +37,7 @@ func newTestConsole(t *testing.T, factory func(name string) (language.ChatModel,
 	}
 	cfg := &config.Config{Model: "test-model", PermissionMode: config.ModeDefault, WorkDir: t.TempDir()}
 	web := webgui.New(server.Config{Logger: zerolog.Nop()})
-	return New(Deps{Agent: a, Cfg: cfg, Web: web, ModelFactory: factory, Version: "test"}), cfg, web
+	return New(Deps{Agent: a, Cfg: cfg, Web: web, ModelFactory: factory, Version: "test", KeybindingsPath: filepath.Join(t.TempDir(), "keybindings.json")}), cfg, web
 }
 
 func TestHelpListsCommands(t *testing.T) {
@@ -598,5 +598,31 @@ func TestConsoleSmallBranches(t *testing.T) {
 	// Unknown /memory subcommand under the engine.
 	if _, err := c.Execute(ctx, "memory", []string{"bogus"}, s); err == nil {
 		t.Fatal("expected memory subcommand error")
+	}
+}
+
+func TestToolsCommandListsRegisteredTool(t *testing.T) {
+	c, _, _ := newTestConsole(t, nil)
+	res, err := c.Execute(context.Background(), "tools", nil, &Session{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "Read") {
+		t.Fatalf("tools output missing Read: %q", res.Output)
+	}
+	// The default registry's Bash tool should list as shell/requires approval.
+	if !strings.Contains(res.Output, "Bash") || !strings.Contains(res.Output, "shell") {
+		t.Fatalf("tools output missing Bash's category: %q", res.Output)
+	}
+}
+
+func TestHooksCommandReportsNoneConfigured(t *testing.T) {
+	c, _, _ := newTestConsole(t, nil)
+	res, err := c.Execute(context.Background(), "hooks", nil, &Session{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "no hooks configured") {
+		t.Fatalf("hooks output = %q", res.Output)
 	}
 }

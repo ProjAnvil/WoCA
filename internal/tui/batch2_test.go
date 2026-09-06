@@ -51,6 +51,7 @@ func TestSlashMenuMergesSkills(t *testing.T) {
 // enter submits the whole line as a prompt.
 func TestAtTriggerCompletesAgents(t *testing.T) {
 	m := newConsoleModel(t, messages.AI("ok"))
+	m.cfg.WorkDir = t.TempDir()
 	m.agent.SetAgentDefinitions([]agents.Definition{{Name: "reviewer", Description: "reviews diffs"}})
 	m.refreshCompletions()
 

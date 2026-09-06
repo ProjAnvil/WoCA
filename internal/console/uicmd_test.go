@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -73,9 +74,37 @@ func TestKeybindingsCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"keybindings:", "input", "session", "vim mode", "esc"} {
+	for _, want := range []string{"keybindings:", "composer", "ctrl+j", "ctrl+g", "input", "session", "vim mode", "esc"} {
 		if !strings.Contains(res.Output, want) {
 			t.Fatalf("keybindings missing %q:\n%s", want, res.Output)
 		}
+	}
+}
+
+func TestKeybindingsCommandOpenCreatesConfig(t *testing.T) {
+	c, _, _ := newTestConsole(t, nil)
+	res, err := c.Execute(context.Background(), "keybindings", []string{"open"}, &Session{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, c.deps.KeybindingsPath) {
+		t.Fatalf("open output missing config path: %q", res.Output)
+	}
+	if _, err := os.Stat(c.deps.KeybindingsPath); err != nil {
+		t.Fatalf("open did not create the config file: %v", err)
+	}
+}
+
+func TestKeybindingsCommandReportsMalformedConfig(t *testing.T) {
+	c, _, _ := newTestConsole(t, nil)
+	if err := os.WriteFile(c.deps.KeybindingsPath, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.Execute(context.Background(), "keybindings", nil, &Session{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "using defaults") {
+		t.Fatalf("malformed config should fall back to defaults with a warning: %q", res.Output)
 	}
 }

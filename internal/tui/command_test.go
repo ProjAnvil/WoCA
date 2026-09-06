@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +140,51 @@ func TestHandleCommandInitSubmitsPrompt(t *testing.T) {
 	}
 	if !strings.Contains(joined, "❯ Please analyze this codebase") {
 		t.Fatalf("transcript missing the auto-submitted prompt:\n%s", joined)
+	}
+}
+
+func TestHistoryForRunExpandsFileReferencesWithoutChangingDisplayHistory(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "note.txt"), []byte("file context"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := New(nil, nil, config.Config{WorkDir: workspace})
+	model.history = []messages.Message{messages.Human("read @note.txt")}
+
+	runHistory, err := model.historyForRun()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := model.history[len(model.history)-1].Content; got != "read @note.txt" {
+		t.Fatalf("display history = %q, want original prompt", got)
+	}
+	if got := runHistory[len(runHistory)-1].Content; !strings.Contains(got, "file context") {
+		t.Fatalf("run history omitted referenced file: %q", got)
+	}
+}
+
+func TestInvalidFileReferenceKeepsDraftWithoutAppendingTranscript(t *testing.T) {
+	workspace := t.TempDir()
+	outside := filepath.Join(filepath.Dir(workspace), "outside.txt")
+	if err := os.WriteFile(outside, []byte("private"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(outside) })
+	model := New(nil, nil, config.Config{WorkDir: workspace})
+	model.input = "read @../outside.txt"
+	model.cursor = len(model.input)
+
+	model = press(model, key("enter"))
+	if model.input != "read @../outside.txt" || model.running {
+		t.Fatalf("draft=%q running=%v", model.input, model.running)
+	}
+	if len(model.history) != 0 {
+		t.Fatalf("invalid submission changed history=%d", len(model.history))
+	}
+	for _, block := range model.blocks {
+		if block.kind == blockUser {
+			t.Fatalf("invalid submission appended a user block: %#v", model.blocks)
+		}
 	}
 }
 

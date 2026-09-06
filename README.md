@@ -210,6 +210,21 @@ interrupt a running turn, cancel it from the web UI
 runs a shell command and feeds its output into the conversation. See
 [Slash commands](#slash-commands).
 
+**File context:** type `@` (at the start of a line or after a space) to
+complete and attach a workspace-relative file or directory; the referenced
+content is expanded into the model's message while the transcript still
+shows your original `@path` text.
+
+**Composer:** `ctrl+j` inserts a newline without submitting; `ctrl+g` opens
+the current draft in `$VISUAL` (falling back to `$EDITOR`) and replaces the
+draft with the saved file's contents on return. Both keys are remappable —
+see `/keybindings`.
+
+**Keybindings:** `/keybindings` shows the effective composer, session, and
+vim-mode bindings; `/keybindings open` creates (or reports the path of)
+`~/.woca/keybindings.json`, a flat `{"key": "action"}` override file for the
+composer actions (`composer:newline`, `composer:editor`).
+
 ### One-shot
 
 ```bash
@@ -612,6 +627,8 @@ completion):
 | `/context` | context-window usage breakdown |
 | `/todos`, `/tasks` | todo list / shared task list |
 | `/skills`, `/mcp`, `/agents`, `/plugins` | manage extensions |
+| `/tools` | list effective agent tools with category and permission safety |
+| `/hooks` | list configured hook events, or state that none are set |
 | `/undo`, `/redo` | revert / re-apply the last file edit |
 | `/rewind`, `/branch`, `/rename`, `/export` | session history navigation |
 | `/goal …` | autonomous goal loop (set/status/pause/resume/budget/clear) |
@@ -620,7 +637,7 @@ completion):
 | `/settings …` | persisted settings |
 | `/init` | generate an `AGENTS.md` project guide |
 | `/doctor` | check config, credentials, storage, hooks, permissions |
-| `/theme`, `/vim`, `/keybindings` | UI preferences |
+| `/theme`, `/vim`, `/keybindings` | UI preferences (`/keybindings open` edits overrides) |
 | `/web [port\|off\|status]` | embedded web UI control |
 | `/output-style` | default \| explanatory \| learning |
 
