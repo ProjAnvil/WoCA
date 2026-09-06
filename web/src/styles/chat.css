@@ -158,6 +158,10 @@
   white-space: nowrap;
   opacity: 0.8;
 }
+.steering-badge {
+  border-color: color-mix(in srgb, var(--accent, var(--brand)) 40%, var(--border));
+  background: var(--surface-hover);
+}
 .queue-btn {
   display: inline-flex;
   align-items: center;

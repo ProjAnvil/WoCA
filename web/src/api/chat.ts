@@ -63,6 +63,12 @@ export function cancelRun(runId: string): Promise<void> {
   return request(`/api/runs/${runId}/cancel`, { method: 'POST' }, i18n.global.t('api.cancelFailed'))
 }
 
+/** Steers an active run: appends text to the current turn's live input,
+ * attached after its next tool round (Codex-style mid-turn steering). */
+export function queueRunInput(runId: string, text: string): Promise<{ ok: boolean; queued: number }> {
+  return postJSON(`/api/runs/${runId}/input`, { text })
+}
+
 // --- runtime agent controls (permission mode / thinking / quota) ---
 
 /** Live agent state for the chat-input toolbar. */

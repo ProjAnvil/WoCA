@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Bot, Paperclip, Send, Sparkles, Square } from 'lucide-vue-next'
 import QueueBadge from './QueueBadge.vue'
+import SteeringBadge from './SteeringBadge.vue'
 import AttachmentTray from './AttachmentTray.vue'
 import ComposerChips from './ComposerChips.vue'
 import { useSessionStore } from '../../stores/sessions'
@@ -132,7 +133,14 @@ function send() {
   const comments = workspaceStore.takeComments()
   closeAc()
   if (busy.value) {
-    enqueue(text, atts, comments)
+    // A run actually in flight can be steered immediately (Codex parity);
+    // attachments/inline comments still need the queue-and-flush path since
+    // steering only carries plain text.
+    if (store.activeStatus === 'running' && atts.length === 0 && comments.length === 0) {
+      store.steer(text)
+    } else {
+      enqueue(text, atts, comments)
+    }
     return
   }
   void store.send(text, atts, comments)
@@ -149,6 +157,11 @@ defineExpose({ fillPrompt })
 
 <template>
   <div class="chat-input">
+    <SteeringBadge
+      v-if="store.activePendingSteers.length"
+      :count="store.activePendingSteers.length"
+      :text="store.activePendingSteers[store.activePendingSteers.length - 1]"
+    />
     <QueueBadge v-if="queued" :text="queued.text" @edit="editQueued" @cancel="cancelQueued" />
 
     <ComposerChips />
@@ -206,8 +219,8 @@ defineExpose({ fillPrompt })
         <button
           v-if="busy"
           class="send-btn stop"
-          :title="t('chat.stop')"
-          :aria-label="t('chat.stop')"
+          :title="store.activePendingSteers.length ? t('chat.stopAndResend') : t('chat.stop')"
+          :aria-label="store.activePendingSteers.length ? t('chat.stopAndResend') : t('chat.stop')"
           @click="store.cancel()"
         >
           <Square :size="14" />
@@ -217,8 +230,8 @@ defineExpose({ fillPrompt })
         class="send-btn"
         :class="{ 'queue-send': busy }"
         :disabled="!canSend"
-        :title="busy ? t('chat.sendQueued') : t('chat.send')"
-        :aria-label="busy ? t('chat.sendQueued') : t('chat.send')"
+        :title="busy ? (store.activeStatus === 'running' ? t('chat.sendSteer') : t('chat.sendQueued')) : t('chat.send')"
+        :aria-label="busy ? (store.activeStatus === 'running' ? t('chat.sendSteer') : t('chat.sendQueued')) : t('chat.send')"
         @click="send"
       >
         <Send :size="16" />

@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// Batch-0 interaction plumbing: run interruption (double-esc / ctrl+c), the
-// parked next-message slot, and decision-box draft preservation.
+// Batch-0 interaction plumbing: run interruption (double-esc / ctrl+c),
+// mid-turn steering, and decision-box draft preservation.
 
 // escDoubleWindow is the maximum gap between two esc presses that counts as
 // an interrupt (the web UI uses the same threshold).
@@ -15,32 +15,36 @@ const escDoubleWindow = 300 * time.Millisecond
 // ctrlCExitWindow is the window in which a second idle ctrl+c exits.
 const ctrlCExitWindow = 800 * time.Millisecond
 
-// queuedMsg is one parked prompt typed while a run is in flight.
-type queuedMsg struct {
-	text string
-}
-
 // interrupt aborts the in-flight run (double-esc or ctrl+c while running).
-// The canceled run still delivers its runDone, which renders the interrupt
-// marker and flushes any parked message.
+// A pending steer marks itself for immediate resubmission (Codex parity):
+// the canceled run still delivers its runDone, which then dispatches the
+// merged pending steers as a fresh turn instead of just showing the
+// interrupt marker.
 func (m *Model) interrupt() {
 	if !m.running || m.cancelRun == nil {
 		return
+	}
+	if len(m.pendingSteers) > 0 {
+		m.resubmitSteersAfterInterrupt = true
 	}
 	m.interrupting = true
 	m.write(dimStyle.Render("⏹ interrupting…") + "\n")
 	m.cancelRun()
 }
 
-// park stores the current input line as the next message, delivered when the
-// run goes idle. Single slot, last-write-wins (web parity); ↑ on an empty
-// line takes it back for editing.
-func (m *Model) park() {
+// steer sends the current input line as mid-turn guidance for the active run
+// (Codex parity): it is queued into the agent's live input immediately
+// instead of waiting for the run to go idle, and recorded so an interrupt
+// can resubmit it as a fresh turn if the model never reaches it.
+func (m *Model) steer() {
 	text := strings.TrimSpace(m.input)
 	if text == "" {
 		return
 	}
-	m.queued = &queuedMsg{text: text}
+	if m.agent != nil {
+		m.agent.QueueInput(text)
+	}
+	m.pendingSteers = append(m.pendingSteers, text)
 	m.input = ""
 	m.cursor = 0
 	m.sel = 0

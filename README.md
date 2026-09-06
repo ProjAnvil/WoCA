@@ -84,8 +84,10 @@ every conversation is persisted as a resumable transcript.
 - **Auto-compaction** with a CJK-aware token estimator: old tool results are
   snipped and large ones micro-compacted before the head is summarized; a
   circuit breaker disables it after repeated failures (`/compact` resets).
-- **Mid-turn queued input**: submit a message while a run is in flight and
-  it is attached after the next tool round — nothing is lost.
+- **Mid-turn steering** (Codex parity): submit a message while a run is in
+  flight in the TUI or web UI and it is queued into the live run immediately
+  instead of waiting for the turn to finish; interrupting a run with a
+  pending steer resubmits it as a fresh turn right away instead of losing it.
 - **Thinking / reasoning support**: reasoning effort levels and streamed
   reasoning content, rendered as collapsible blocks in the web UI.
 
@@ -214,6 +216,12 @@ runs a shell command and feeds its output into the conversation. See
 complete and attach a workspace-relative file or directory; the referenced
 content is expanded into the model's message while the transcript still
 shows your original `@path` text.
+
+**Steering:** typing while a turn runs and pressing `enter` sends it into the
+live run immediately instead of waiting for the turn to finish (Codex
+parity); the footer shows "steering (N): ...". Interrupting (`esc-esc` or
+`ctrl+c`) with a pending steer resubmits it as a fresh turn right away
+instead of losing it.
 
 **Composer:** `ctrl+j` inserts a newline without submitting; `ctrl+g` opens
 the current draft in `$VISUAL` (falling back to `$EDITOR`) and replaces the

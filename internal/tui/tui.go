@@ -153,10 +153,14 @@ type Model struct {
 	lastCtrlC time.Time
 	// hint is a transient footer message (cleared by the next keypress).
 	hint string
-	// queued parks one message typed while a run is in flight — single
-	// slot, last-write-wins, flushed automatically the moment the run goes
-	// idle (web useMessageQueue parity).
-	queued *queuedMsg
+	// pendingSteers holds text submitted via enter while a run is in
+	// flight: each line is queued into the agent's live input immediately
+	// (Codex-style steering) instead of waiting for the run to finish.
+	pendingSteers []string
+	// resubmitSteersAfterInterrupt marks that pendingSteers should be
+	// merged and resubmitted as a fresh turn once the in-flight run's
+	// cancellation lands (interrupt-with-pending-steers, Codex parity).
+	resubmitSteersAfterInterrupt bool
 	// draftHeld/draft preserve the composer line and cursor while a
 	// decision box owns the keyboard.
 	draftHeld bool
@@ -332,14 +336,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.openSessions()
 			return m, nil
 		case "up":
-			// An empty line recalls the parked next message for editing
-			// before falling through to history navigation.
-			if m.input == "" && m.queued != nil {
-				m.input = m.queued.text
-				m.cursor = len(m.input)
-				m.queued = nil
-				return m, nil
-			}
 			if cmds := m.allSuggestions(m.input); len(cmds) > 0 {
 				if m.sel >= len(cmds) {
 					m.sel = len(cmds) - 1
@@ -391,10 +387,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor++
 			}
 		case "enter":
-			// While a turn runs, enter parks the line as the next message
-			// instead of swallowing it.
+			// While a turn runs, enter steers it immediately instead of
+			// waiting for the run to finish (Codex parity).
 			if m.running {
-				m.park()
+				m.steer()
 				return m, nil
 			}
 			// In a completion menu (commands, skills, or @agents), Enter
@@ -499,11 +495,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancelRun = nil
 		wasInterrupted := m.interrupting
 		m.interrupting = false
+		resubmit := m.resubmitSteersAfterInterrupt && len(m.pendingSteers) > 0
+		m.resubmitSteersAfterInterrupt = false
 		m.flush()
 		m.ch = nil
 		if msg.err != nil {
 			if wasInterrupted || errors.Is(msg.err, context.Canceled) {
-				m.systemLine(dimStyle.Render("⏹ interrupted by user") + "\n")
+				if resubmit {
+					m.systemLine(dimStyle.Render("⏹ interrupted — sending queued input now") + "\n")
+				} else {
+					m.systemLine(dimStyle.Render("⏹ interrupted by user") + "\n")
+				}
 			} else {
 				m.systemLine("Error: " + msg.err.Error() + "\n")
 				notify.Attention(os.Stdout, "woca: run failed")
@@ -517,13 +519,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshCompletions()
 		m.refreshContext()
-		// The parked next message flushes the moment the run goes idle —
-		// after a natural completion or an interrupt alike (web parity).
-		if q := m.queued; q != nil {
-			m.queued = nil
-			m.remember(q.text)
-			return m, m.dispatch(q.text)
+		// A run canceled with steers still pending resubmits them as a fresh
+		// turn immediately (Codex parity) instead of losing them.
+		if resubmit {
+			merged := strings.Join(m.pendingSteers, "\n")
+			m.pendingSteers = nil
+			m.remember(merged)
+			return m, m.dispatch(merged)
 		}
+		m.pendingSteers = nil
 		// Goal continuation scheduling (Codex's idle detection): after a run
 		// finishes and the session is idle, an active goal keeps looping.
 		if msg.err == nil {
@@ -925,13 +929,14 @@ func (m *Model) View() string {
 		b.WriteString(boxStyle.Render(title + "\n" + body + hint))
 		b.WriteString("\n")
 	}
-	if m.queued != nil {
-		b.WriteString(dimStyle.Render("⏳ next: "+summarize(m.queued.text)) + dimStyle.Render(" · ↑ to edit") + "\n")
+	if n := len(m.pendingSteers); n > 0 {
+		label := fmt.Sprintf("◆ steering (%d): %s", n, summarize(m.pendingSteers[n-1]))
+		b.WriteString(dimStyle.Render(label) + dimStyle.Render(" · esc-esc sends now") + "\n")
 	}
 	content := promptStyle.Render("❯ ") + m.renderInput()
 	hints := "! bash · / commands & skills · @ agents · pgup/pgdn scroll"
 	if m.running {
-		hints = "esc-esc interrupt · enter queue next message · pgup/pgdn scroll"
+		hints = "esc-esc interrupt & send now · enter steers this turn · pgup/pgdn scroll"
 	}
 	if m.hint != "" {
 		hints = m.hint

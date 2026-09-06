@@ -17,6 +17,9 @@ export interface StreamDeps {
   error: Ref<Record<string, string>>
   queuePosition: Ref<Record<string, number>>
   runId: Ref<Record<string, string>>
+  // Text steered into the active run's live input (see sessions.ts steer());
+  // cleared once the run reaches a terminal state.
+  pendingSteers: Ref<Record<string, string[]>>
   streamingId: Ref<Record<string, string | null>>
   reasoningId: Ref<Record<string, string | null>>
   goalNoteId: Ref<Record<string, string | null>>
@@ -46,6 +49,7 @@ export function createRunStreams(deps: StreamDeps) {
     error,
     queuePosition,
     runId,
+    pendingSteers,
     streamingId,
     reasoningId,
     goalNoteId,
@@ -220,6 +224,7 @@ export function createRunStreams(deps: StreamDeps) {
           interrupt.value[sid] = null
           status.value[sid] = 'done'
           delete queuePosition.value[sid]
+          pendingSteers.value[sid] = []
           afterDone?.()
           // The terminal SSE event fires just before the server persists the
           // final transcript, so let the save land before re-reading it.
@@ -233,6 +238,7 @@ export function createRunStreams(deps: StreamDeps) {
           error.value[sid] = msg
           status.value[sid] = 'error'
           delete queuePosition.value[sid]
+          pendingSteers.value[sid] = []
         },
       }, controller.signal)
     } catch (e) {

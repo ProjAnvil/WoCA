@@ -52,6 +52,11 @@ export const useSessionStore = defineStore('sessions', () => {
   const error = ref<Record<string, string>>({})
   const runId = ref<Record<string, string>>({})
   const interrupt = ref<Record<string, Interrupt | null>>({})
+  // Text submitted via send() while a run is active: queued into the live
+  // run's input immediately (Codex-style steering) rather than waiting for
+  // it to finish. Cleared on completion; resubmitted as a fresh turn if the
+  // run is canceled before it lands (see cancel()).
+  const pendingSteers = ref<Record<string, string[]>>({})
   const streamingId = ref<Record<string, string | null>>({})
   // The reasoning (thinking) item currently streaming for a session.
   const reasoningId = ref<Record<string, string | null>>({})
@@ -91,6 +96,7 @@ export const useSessionStore = defineStore('sessions', () => {
     error,
     queuePosition,
     runId,
+    pendingSteers,
     streamingId,
     reasoningId,
     goalNoteId,
@@ -109,6 +115,7 @@ export const useSessionStore = defineStore('sessions', () => {
   const activeError = computed(() => error.value[activeId.value] ?? '')
   const activeInterrupt = computed(() => interrupt.value[activeId.value] ?? null)
   const activeGoal = computed(() => goal.value[activeId.value] ?? null)
+  const activePendingSteers = computed(() => pendingSteers.value[activeId.value] ?? [])
 
   // Sessions grouped by workspace (list is newest-first, so groups are too).
   // The key is the workspace path when known, falling back to its name.
@@ -534,6 +541,10 @@ export const useSessionStore = defineStore('sessions', () => {
     closeReasoning(sid)
     closeGoalNote(sid)
     interrupt.value[sid] = null
+    // A run canceled with steers still pending resubmits them as a fresh
+    // turn immediately (Codex parity) instead of losing them.
+    const steers = pendingSteers.value[sid]
+    pendingSteers.value[sid] = []
     if (!rid) {
       status.value[sid] = 'done'
       return
@@ -544,12 +555,30 @@ export const useSessionStore = defineStore('sessions', () => {
     api.cancelRun(rid).then(
       () => {
         status.value[sid] = 'done'
+        if (steers && steers.length) void send(steers.join('\n'))
       },
       (e) => {
         error.value[sid] = toErrorMessage(e)
         status.value[sid] = 'error'
       },
     )
+  }
+
+  // steer feeds text into the active run's live input immediately (Codex-
+  // style mid-turn steering) instead of waiting for it to finish. Silently a
+  // no-op without a live run — the composer only calls this while busy with
+  // status 'running'.
+  function steer(text: string) {
+    const sid = activeId.value
+    const rid = runId.value[sid]
+    const prompt = text.trim()
+    if (!prompt || !sid || !rid) return
+    const arr = pendingSteers.value[sid] ?? []
+    arr.push(prompt)
+    pendingSteers.value[sid] = arr
+    void api.queueRunInput(rid, prompt).catch((e) => {
+      error.value[sid] = toErrorMessage(e)
+    })
   }
 
   return {
@@ -561,6 +590,7 @@ export const useSessionStore = defineStore('sessions', () => {
     activeError,
     activeInterrupt,
     activeGoal,
+    activePendingSteers,
     goal,
     goalRunning,
     goalPanelOpen,
@@ -587,6 +617,7 @@ export const useSessionStore = defineStore('sessions', () => {
     continueGoalLoop,
     answerInterrupt,
     cancel,
+    steer,
     setDemo,
     seed,
     triggerInterrupt,

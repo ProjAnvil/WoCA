@@ -103,59 +103,93 @@ func TestInterruptedRunRendersMarkerNotError(t *testing.T) {
 	}
 }
 
-// TestQueuedMessageFlushesWhenIdle parks a message during a run and checks
-// the runDone flush: the parked line is dispatched as the next turn (a
-// console command stays local; a prompt starts a run).
-func TestQueuedMessageFlushesWhenIdle(t *testing.T) {
-	// A parked console command runs locally on flush.
+// TestEnterWhileRunningSteersImmediately verifies enter-while-running feeds
+// the agent's live input queue right away instead of waiting for the run to
+// go idle (Codex parity): the composer clears, the steer reaches
+// agent.QueueInput synchronously, and a natural completion only clears the
+// display — it must not start a second run.
+func TestEnterWhileRunningSteersImmediately(t *testing.T) {
 	m := newConsoleModel(t, messages.AI("ok"))
 	m.running = true
 	m.ch = make(chan tea.Msg, 1)
-	m.queued = &queuedMsg{text: "/todos"}
-	mm, _ := m.Update(runDone{result: []messages.Message{messages.AI("done")}})
-	m = mm.(*Model)
-	m.flush()
-	if !strings.Contains(strings.Join(m.lines, "\n"), "no todos") {
-		t.Fatalf("queued command was not flushed:\n%s", strings.Join(m.lines, "\n"))
+	m.input = "focus on the failing test"
+	m = press(m, key("enter"))
+	if m.input != "" {
+		t.Fatalf("steering must clear the composer, got %q", m.input)
 	}
-	if m.running {
-		t.Fatal("a local command flush must leave the session idle")
+	if len(m.pendingSteers) != 1 || m.pendingSteers[0] != "focus on the failing test" {
+		t.Fatalf("pendingSteers = %v", m.pendingSteers)
+	}
+	if got := m.agent.QueuedInputCount(); got != 1 {
+		t.Fatalf("agent queued input count = %d, want 1 (steered immediately)", got)
 	}
 
-	// A parked prompt starts the next agent run.
-	p := newConsoleModel(t, messages.AI("ok"))
-	p.running = true
-	p.ch = make(chan tea.Msg, 1)
-	p.queued = &queuedMsg{text: "follow-up"}
-	mm2, _ := p.Update(runDone{result: []messages.Message{messages.AI("done")}})
-	p = mm2.(*Model)
-	if !p.running {
-		t.Fatal("the parked prompt must start a run on flush")
+	mm, _ := m.Update(runDone{result: []messages.Message{messages.AI("done")}})
+	m = mm.(*Model)
+	if m.running {
+		t.Fatal("a natural completion with a delivered steer must leave the session idle")
 	}
-	if len(p.history) == 0 || p.history[len(p.history)-1].Content != "follow-up" {
-		t.Fatalf("history missing the flushed prompt: %+v", p.history)
-	}
-	p = drainUntilDone(t, p, p.ch)
-	p.flush()
-	if !strings.Contains(strings.Join(p.lines, "\n"), "❯ follow-up") {
-		t.Fatalf("transcript missing the flushed prompt echo:\n%s", strings.Join(p.lines, "\n"))
+	if len(m.pendingSteers) != 0 {
+		t.Fatalf("pendingSteers must clear on completion, got %v", m.pendingSteers)
 	}
 }
 
-// TestQueueIsLastWriteWins parks two messages in a row; the slot keeps only
-// the newest (web useMessageQueue parity).
-func TestQueueIsLastWriteWins(t *testing.T) {
+// TestPendingSteersAccumulateInOrder types multiple lines while running;
+// each is queued immediately (no last-write-wins) and the footer reflects
+// the latest.
+func TestPendingSteersAccumulateInOrder(t *testing.T) {
 	m := New(nil, nil, config.Config{})
 	m.running = true
 	m.input = "first"
 	m = press(m, key("enter"))
 	m.input = "second"
 	m = press(m, key("enter"))
-	if m.queued == nil || m.queued.text != "second" {
-		t.Fatalf("queue must keep the newest message: %+v", m.queued)
+	if want := []string{"first", "second"}; len(m.pendingSteers) != 2 || m.pendingSteers[0] != want[0] || m.pendingSteers[1] != want[1] {
+		t.Fatalf("pendingSteers = %v, want %v", m.pendingSteers, want)
 	}
-	if v := m.View(); !strings.Contains(v, "next: second") {
-		t.Fatalf("view missing the queue chip:\n%s", v)
+	if v := m.View(); !strings.Contains(v, "steering (2): second") {
+		t.Fatalf("view missing the steering chip:\n%s", v)
+	}
+}
+
+// TestInterruptResubmitsPendingSteersAsFreshTurn interrupts a run that has a
+// pending steer and checks the canceled run's runDone dispatches the merged
+// steer as a brand-new turn instead of leaving it stranded (Codex parity).
+func TestInterruptResubmitsPendingSteersAsFreshTurn(t *testing.T) {
+	m := newConsoleModel(t, messages.AI("ok"))
+	m.running = true
+	m.ch = make(chan tea.Msg, 1)
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m.cancelRun = cancel
+
+	m.input = "actually check the tests first"
+	m = press(m, key("enter"))
+	if len(m.pendingSteers) != 1 {
+		t.Fatalf("pendingSteers = %v, want 1 entry", m.pendingSteers)
+	}
+
+	m = press(m, key("esc"))
+	m = press(m, key("esc"))
+	if !m.resubmitSteersAfterInterrupt {
+		t.Fatal("interrupting with a pending steer must arm the resubmit")
+	}
+
+	mm, _ := m.Update(runDone{err: context.Canceled})
+	m = mm.(*Model)
+	if m.resubmitSteersAfterInterrupt || len(m.pendingSteers) != 0 {
+		t.Fatalf("resubmit flag/pendingSteers must clear, got flag=%v pending=%v", m.resubmitSteersAfterInterrupt, m.pendingSteers)
+	}
+	if !m.running {
+		t.Fatal("the interrupted run must immediately restart with the pending steer")
+	}
+	if len(m.history) == 0 || m.history[len(m.history)-1].Content != "actually check the tests first" {
+		t.Fatalf("history missing the resubmitted steer: %+v", m.history)
+	}
+	m = drainUntilDone(t, m, m.ch)
+	m.flush()
+	if !strings.Contains(strings.Join(m.lines, "\n"), "interrupted") {
+		t.Fatalf("transcript missing the interrupt marker:\n%s", strings.Join(m.lines, "\n"))
 	}
 }
 

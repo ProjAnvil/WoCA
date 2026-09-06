@@ -5,6 +5,7 @@ const api = vi.hoisted(() => ({
   createRun: vi.fn(),
   streamRun: vi.fn(),
   cancelRun: vi.fn(),
+  queueRunInput: vi.fn(),
 }))
 
 vi.mock('../api/client', () => ({
@@ -20,6 +21,7 @@ interface AttachedStream {
   handlers: {
     onReasoning?: (text: string) => void
     onGoalNote?: (text: string) => void
+    onRunStarted?: () => void
   }
 }
 
@@ -44,6 +46,7 @@ describe('session stream cancellation ownership', () => {
       queue_position: 0,
     })
     api.cancelRun.mockReset().mockResolvedValue(undefined)
+    api.queueRunInput.mockReset().mockResolvedValue({ ok: true, queued: 1 })
     api.streamRun.mockReset().mockImplementation((_runID, handlers, signal?: AbortSignal) => {
       streams.push({ signal, handlers })
       return new Promise<void>((resolve) => {
@@ -96,5 +99,59 @@ describe('session stream cancellation ownership', () => {
     await vi.waitFor(() => expect(store.activeStatus).toBe('done'))
     expect(store.activeError).toBe('')
     expect(api.cancelRun).toHaveBeenCalledWith('run-1')
+  })
+})
+
+describe('mid-turn steering (Codex parity)', () => {
+  let streams: AttachedStream[]
+
+  beforeEach(() => {
+    streams = []
+    let runCount = 0
+    api.createRun.mockReset().mockImplementation(() => {
+      runCount += 1
+      return Promise.resolve({ run_id: `run-${runCount}`, state: 'running', queue_position: 0 })
+    })
+    api.cancelRun.mockReset().mockResolvedValue(undefined)
+    api.queueRunInput.mockReset().mockResolvedValue({ ok: true, queued: 1 })
+    api.streamRun.mockReset().mockImplementation((_runID, handlers, signal?: AbortSignal) => {
+      streams.push({ signal, handlers })
+      return new Promise<void>((resolve) => {
+        signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+  })
+
+  it('steer() queues text into the live run without waiting for it to finish', async () => {
+    const store = seedStore()
+    const sending = store.send('first')
+    await vi.waitFor(() => expect(streams).toHaveLength(1))
+    streams[0].handlers.onRunStarted?.()
+
+    store.steer('actually focus on the failing test')
+
+    expect(api.queueRunInput).toHaveBeenCalledWith('run-1', 'actually focus on the failing test')
+    expect(store.activePendingSteers).toEqual(['actually focus on the failing test'])
+    // Steering must not start a second run.
+    expect(api.createRun).toHaveBeenCalledTimes(1)
+
+    store.cancel()
+    await sending
+  })
+
+  it('cancel() resubmits pending steers as a brand-new turn', async () => {
+    const store = seedStore()
+    const sending = store.send('first')
+    await vi.waitFor(() => expect(streams).toHaveLength(1))
+    streams[0].handlers.onRunStarted?.()
+
+    store.steer('use this steering input')
+    store.cancel()
+    await sending
+
+    await vi.waitFor(() => expect(streams).toHaveLength(2))
+    expect(api.createRun).toHaveBeenCalledTimes(2)
+    expect(api.createRun.mock.calls[1][1]).toBe('use this steering input')
+    expect(store.activePendingSteers).toEqual([])
   })
 })

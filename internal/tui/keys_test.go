@@ -179,7 +179,7 @@ func TestEditingKeys(t *testing.T) {
 	}
 
 	// Editing keys keep working while a run is in flight: the composer stays
-	// live and enter parks the next message instead of swallowing it.
+	// live and enter steers the run immediately instead of swallowing it.
 	r := New(nil, nil, config.Config{})
 	r.running = true
 	r.input = "abc"
@@ -192,13 +192,14 @@ func TestEditingKeys(t *testing.T) {
 	}
 	r.input = "next message"
 	r = press(r, key("enter"))
-	if r.queued == nil || r.queued.text != "next message" || r.input != "" {
-		t.Fatalf("enter during a run must park the message: queued=%+v input=%q", r.queued, r.input)
+	if len(r.pendingSteers) != 1 || r.pendingSteers[0] != "next message" || r.input != "" {
+		t.Fatalf("enter during a run must steer immediately: pendingSteers=%+v input=%q", r.pendingSteers, r.input)
 	}
-	// ↑ on an empty line takes the parked message back for editing.
+	// A steer is already committed, so ↑ on an empty line with no history
+	// leaves it in place rather than recalling it for editing.
 	r = press(r, ctrlKey("up"))
-	if r.queued != nil || r.input != "next message" {
-		t.Fatalf("up must recall the parked message: queued=%+v input=%q", r.queued, r.input)
+	if len(r.pendingSteers) != 1 || r.input != "" {
+		t.Fatalf("up must not retract a committed steer: pendingSteers=%+v input=%q", r.pendingSteers, r.input)
 	}
 }
 
@@ -397,16 +398,15 @@ func TestEnterKeyFlow(t *testing.T) {
 		}
 	}
 
-	// Enter while running parks the line as the next message (no command
-	// is produced).
+	// Enter while running steers immediately (no command is produced).
 	r := New(nil, nil, config.Config{})
 	r.running = true
 	r.input = "queued"
 	if _, c := r.Update(key("enter")); c != nil {
 		t.Fatal("enter during a run must not produce a command")
 	}
-	if r.queued == nil || r.queued.text != "queued" || r.input != "" {
-		t.Fatalf("park: queued=%+v input=%q", r.queued, r.input)
+	if len(r.pendingSteers) != 1 || r.pendingSteers[0] != "queued" || r.input != "" {
+		t.Fatalf("steer: pendingSteers=%+v input=%q", r.pendingSteers, r.input)
 	}
 }
 
