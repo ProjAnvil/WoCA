@@ -13,15 +13,33 @@ import (
 	"io/fs"
 )
 
-// dist embeds the SPA built into web/dist. Run `npm run build` in web/ (or
-// `make web`) before compiling so the directory exists.
+// dist embeds the SPA built into web/dist. Run `bun run build` in web/ (or
+// `make web`) before compiling so the directory holds a real build; when it
+// does not (fresh clone), DistFS falls back to the stub page instead.
 //
 //go:embed all:dist
 var dist embed.FS
 
-// DistFS returns the embedded frontend filesystem rooted at web/dist.
+// stub embeds the placeholder page served when web/dist holds no real
+// build, so a bare `go build` still yields a working binary.
+//
+//go:embed all:stub
+var stub embed.FS
+
+// DistFS returns the embedded frontend filesystem rooted at web/dist, or
+// the stub page when dist contains no real build (no index.html, or an
+// index.html without built assets).
 func DistFS() fs.FS {
-	sub, err := fs.Sub(dist, "dist")
+	if _, err := fs.Stat(dist, "dist/index.html"); err == nil {
+		if assets, _ := fs.Glob(dist, "dist/assets/*"); len(assets) > 0 {
+			sub, err := fs.Sub(dist, "dist")
+			if err != nil {
+				panic(err)
+			}
+			return sub
+		}
+	}
+	sub, err := fs.Sub(stub, "stub")
 	if err != nil {
 		panic(err)
 	}
