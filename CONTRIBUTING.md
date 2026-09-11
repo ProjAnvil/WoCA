@@ -6,14 +6,16 @@ of building, testing, and submitting changes.
 ## Prerequisites
 
 - Go ≥ 1.26
-- Node.js ≥ 20 (only for web frontend work)
+- [bun](https://bun.sh/) (only for web frontend work — the `web` and
+  `ee-web` Makefile targets run `bun install && bun run build`; Node.js is
+  not required)
 - A model provider API key (Anthropic-compatible or OpenAI-compatible), or a
   local gateway
 
 ## Build & test
 
 ```bash
-make build          # go build ./...
+make build          # build ./cmd/woca to build/woca
 make test           # go test ./...
 make web            # build the web frontend into web/dist (embedded via go:embed)
 make serve          # build web + binary, then run `woca serve`

@@ -44,6 +44,7 @@ every conversation is persisted as a resumable transcript.
 - [Permissions](#permissions)
 - [Architecture](#architecture)
 - [Editions & repository layout](#editions--repository-layout)
+  - [The bridge (private-cloud form)](#the-bridge-private-cloud-form)
 - [Configuration](#configuration)
 - [Sessions, memory & undo](#sessions-memory--undo)
 - [Multi-agent](#multi-agent)
