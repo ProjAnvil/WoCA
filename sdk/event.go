@@ -3,8 +3,8 @@
 // skills, MCP, permissions) and streams its progress as typed events.
 //
 // Interrupt resume-value convention: a custom OnInterrupt handler returns
-// "y" or "n" for permission and plan_approval interrupts, and
-// agent.AskUserAnswer (answers in question order) for ask_user interrupts.
+// "y" or "n" for permission and plan_approval interrupts, and AskUserAnswer
+// (one answer per question, in question order) for ask_user interrupts.
 // The SDK keeps resume values thin and does not wrap these types further.
 package sdk
 

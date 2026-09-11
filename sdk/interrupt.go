@@ -30,13 +30,24 @@ type PlanInterrupt struct {
 	Plan string
 }
 
+// AskUserAnswer is the resume value for an ask_user interrupt: one answer
+// per question, in question order.
+type AskUserAnswer struct{ Answers []string }
+
 // interruptHandler returns the runner handler: the caller's OnInterrupt when
 // set, else the headless default matching the CLI's non-interactive posture
 // (deny permissions, empty answers, reject plans).
 func (o Options) interruptHandler() runner.InterruptHandler {
 	return func(value any) (any, error) {
 		if o.OnInterrupt != nil {
-			return o.OnInterrupt(interruptFrom(value))
+			v, err := o.OnInterrupt(interruptFrom(value))
+			if err != nil {
+				return nil, err
+			}
+			if ans, ok := v.(AskUserAnswer); ok {
+				return agent.AskUserAnswer{Answers: ans.Answers}, nil
+			}
+			return v, nil
 		}
 		switch value.(type) {
 		case agent.PermissionRequest:

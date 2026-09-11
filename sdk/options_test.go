@@ -28,12 +28,16 @@ func TestBuildOptionsTranslatesFields(t *testing.T) {
 		AllowCommands: []string{"git"}, DenyCommands: []string{"rm -rf"},
 		DB: "none", MaxTurns: 3,
 	}
-	if bo.Prompt != want.Prompt || bo.Model != want.Model || bo.Mode != want.Mode ||
+	if bo.Prompt != want.Prompt || bo.Model != want.Model || bo.Provider != want.Provider ||
+		bo.APIKey != want.APIKey || bo.BaseURL != want.BaseURL || bo.MaxTokens != want.MaxTokens ||
+		bo.Mode != want.Mode ||
 		bo.DB != want.DB || bo.MaxTurns != want.MaxTurns || bo.LogLevel != want.LogLevel ||
 		bo.Workdir != want.Workdir || bo.ExtraPrompt != want.ExtraPrompt ||
 		bo.FallbackModel != want.FallbackModel || bo.CheckpointDir != want.CheckpointDir ||
 		bo.Temperature != want.Temperature || bo.ThinkingBudget != want.ThinkingBudget ||
-		len(bo.MCPServers) != 1 || len(bo.AllowCommands) != 1 || len(bo.DenyCommands) != 1 {
+		len(bo.MCPServers) != 1 || bo.MCPServers[0] != "s=cmd" ||
+		len(bo.AllowCommands) != 1 || bo.AllowCommands[0] != "git" ||
+		len(bo.DenyCommands) != 1 || bo.DenyCommands[0] != "rm -rf" {
 		t.Fatalf("translation mismatch: %+v", bo)
 	}
 }
@@ -74,5 +78,25 @@ func TestCustomInterruptHandlerWins(t *testing.T) {
 	_, err := o.interruptHandler()(agent.PermissionRequest{ToolName: "Bash"})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCustomInterruptHandlerTranslatesAskUserAnswer(t *testing.T) {
+	o := Options{OnInterrupt: func(i Interrupt) (any, error) {
+		if i.Kind != "ask_user" {
+			t.Fatalf("unexpected interrupt: %+v", i)
+		}
+		return AskUserAnswer{Answers: []string{"a", "b"}}, nil
+	}}
+	v, err := o.interruptHandler()(agent.AskUserRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans, ok := v.(agent.AskUserAnswer)
+	if !ok {
+		t.Fatalf("expected agent.AskUserAnswer, got %#v", v)
+	}
+	if len(ans.Answers) != 2 || ans.Answers[0] != "a" || ans.Answers[1] != "b" {
+		t.Fatalf("answers mismatch: %#v", ans)
 	}
 }
