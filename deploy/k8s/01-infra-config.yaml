@@ -1,8 +1,9 @@
 # Infrastructure configuration (design §12.2): the service/infrastructure
 # layer — endpoints, ports, OTel — lives in ConfigMap/Secret and changes via
 # GitOps/Helm with releases. Tenant/business configuration (model
-# allowlists, quotas, flags) lives in tenant-svc and must never appear
-# here.
+# allowlists, quotas, flags) lives in the config plane (woca-config) and
+# reaches the roles as the delivered nacos config pack — it must never
+# appear here.
 apiVersion: v1
 kind: ConfigMap
 metadata:

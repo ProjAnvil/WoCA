@@ -23,7 +23,9 @@ spec:
       containers:
         - name: woca-server
           image: woca-server:local
-          args: ["serve", "--addr", "0.0.0.0:8080", "--auth", "apikey", "--no-browser"]
+          # Empty host on --addr: nacosrt autodetects the pod IP for the
+          # registry advertise (a literal 0.0.0.0 would be registered as-is).
+          args: ["serve", "--addr", ":8080", "--auth", "apikey", "--no-browser"]
           ports: [{name: http, containerPort: 8080}]
           env:
             - name: WOCA_SERVICE_NAME

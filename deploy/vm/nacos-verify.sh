@@ -40,7 +40,9 @@ echo "== build woca-server"
 go build -o "$DIR/woca-server" ./cmd/woca-server
 
 echo "== fail-closed: no WOCA_NACOS_URL means no process"
-if WOCA_DB="sqlite:$DIR/woca-fail.db" "$DIR/woca-server" serve \
+# Scrub the operator shell's WOCA_NACOS_URL so an exported value can't
+# turn this step into a false pass/fail.
+if env -u WOCA_NACOS_URL WOCA_DB="sqlite:$DIR/woca-fail.db" "$DIR/woca-server" serve \
     --addr 127.0.0.1:18098 --no-browser >"$DIR/fail.log" 2>&1; then
     echo "FAIL: woca-server started without WOCA_NACOS_URL" >&2
     exit 1
