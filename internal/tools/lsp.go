@@ -341,7 +341,7 @@ func lspLanguageID(path string) string {
 // (WOCA_LSP_SERVER still resolves the command).
 func lspTool(d *Dir, pool *lspPool) coretools.Tool {
 	desc := `Get language-server diagnostics (errors, warnings) for one file via LSP. Configure the server with the WOCA_LSP_SERVER environment variable (e.g. "gopls" or "typescript-language-server --stdio"). Use before claiming code compiles or when hunting a compile error.`
-	t, err := coretools.FromFunc("LSP", desc,
+	t := MustTool(coretools.FromFunc("LSP", desc,
 		func(ctx context.Context, a struct {
 			Path string `json:"path"`
 		}) (coretools.Result, error) {
@@ -361,10 +361,7 @@ func lspTool(d *Dir, pool *lspPool) coretools.Tool {
 				return coretools.Result{Content: "Error: " + err.Error()}, nil
 			}
 			return coretools.Result{Content: out}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 

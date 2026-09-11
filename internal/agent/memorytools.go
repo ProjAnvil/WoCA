@@ -8,6 +8,7 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/memory"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // memoryTools builds the memory-facing tool set. Subagents get the read-only
@@ -33,7 +34,7 @@ func (a *Agent) memoryTools() []coretools.Tool {
 
 	var out []coretools.Tool
 
-	recall, err := coretools.FromFunc("recall_memory",
+	recall := tools.MustTool(coretools.FromFunc("recall_memory",
 		"Retrieve relevant long-term memories (facts, decisions, insights, predictions, playbooks).\n\n"+
 			"Call BEFORE answering when prior context, past decisions, or how-to knowledge may be relevant. "+
 			"One line per hit, or \"(no hits)\".",
@@ -47,13 +48,10 @@ func (a *Agent) memoryTools() []coretools.Tool {
 				return coretools.Result{}, err
 			}
 			return coretools.Result{Content: formatMemoryHits(hits)}, nil
-		})
-	if err != nil {
-		panic(err) // static schema reflection; unreachable unless the args struct is invalid
-	}
+		}))
 	out = append(out, recall)
 
-	search, err := coretools.FromFunc("search_code",
+	search := tools.MustTool(coretools.FromFunc("search_code",
 		"Search indexed source symbols/files. Use for 'how does X work in the codebase' "+
 			"against previously indexed source (index_code). \"(no hits)\" usually means the root was "+
 			"never indexed — call index_code first. Prefer Grep for literal searches of the live tree.",
@@ -67,14 +65,11 @@ func (a *Agent) memoryTools() []coretools.Tool {
 				return coretools.Result{}, err
 			}
 			return coretools.Result{Content: formatMemoryHits(hits)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	out = append(out, search)
 
 	if !readonly {
-		remember, err := coretools.FromFunc("remember_fact",
+		remember := tools.MustTool(coretools.FromFunc("remember_fact",
 			"Persist a durable fact worth recalling later (user preference, key decision, verified answer). "+
 				"Do NOT store ephemeral/transactional state.\n\n"+
 				"Subject to the attention gate: if the result says 'dropped by the attention gate', "+
@@ -92,13 +87,10 @@ func (a *Agent) memoryTools() []coretools.Tool {
 					return coretools.Result{Content: "dropped by the attention gate (duplicate or noise)"}, nil
 				}
 				return coretools.Result{Content: fmt.Sprintf("stored id=%s", id)}, nil
-			})
-		if err != nil {
-			panic(err)
-		}
+			}))
 		out = append(out, remember)
 
-		index, err := coretools.FromFunc("index_code",
+		index := tools.MustTool(coretools.FromFunc("index_code",
 			"Index a source root into memory (tree-sitter symbols + cross-refs) so search_code can find them. "+
 				"force=true reindexes unchanged files too. Incremental by default.",
 			func(ctx context.Context, in indexArgs) (coretools.Result, error) {
@@ -115,10 +107,7 @@ func (a *Agent) memoryTools() []coretools.Tool {
 					return coretools.Result{}, err
 				}
 				return coretools.Result{Content: report}, nil
-			})
-		if err != nil {
-			panic(err)
-		}
+			}))
 		out = append(out, index)
 	}
 	return out

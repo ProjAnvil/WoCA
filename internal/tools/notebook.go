@@ -20,7 +20,7 @@ type notebookEditArgs struct {
 }
 
 func notebookEditTool(d *Dir, fh *FileHistory) coretools.Tool {
-	t, err := coretools.FromFunc("NotebookEdit", notebookEditDescription,
+	t := MustTool(coretools.FromFunc("NotebookEdit", notebookEditDescription,
 		func(ctx context.Context, a notebookEditArgs) (coretools.Result, error) {
 			path := resolvePath(d.For(ctx), a.NotebookPath)
 			data, err := os.ReadFile(path)
@@ -66,10 +66,7 @@ func notebookEditTool(d *Dir, fh *FileHistory) coretools.Tool {
 			}
 			fh.Record(ctx, path, data, out)
 			return coretools.Result{Content: fmt.Sprintf("Edited cell %d in %s", idx, a.NotebookPath)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 

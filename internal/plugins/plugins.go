@@ -142,7 +142,7 @@ func Install(src, root string) (string, error) {
 		cmd := exec.Command("git", "clone", "--depth", "1", src, dst)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			_ = os.RemoveAll(dst)
-			return "", fmt.Errorf("plugins: git clone: %v: %s", err, strings.TrimSpace(string(out)))
+			return "", fmt.Errorf("plugins: git clone: %w: %s", err, strings.TrimSpace(string(out)))
 		}
 		if err := os.RemoveAll(filepath.Join(dst, ".git")); err != nil {
 			return "", err

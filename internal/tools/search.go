@@ -22,7 +22,7 @@ type listDirArgs struct {
 }
 
 func listDirTool(d *Dir) coretools.Tool {
-	t, err := coretools.FromFunc("ListDir", listDirDescription,
+	t := MustTool(coretools.FromFunc("ListDir", listDirDescription,
 		func(ctx context.Context, a listDirArgs) (coretools.Result, error) {
 			dir := resolvePath(d.For(ctx), a.Path)
 			entries, err := os.ReadDir(dir)
@@ -39,10 +39,7 @@ func listDirTool(d *Dir) coretools.Tool {
 				b.WriteString("\n")
 			}
 			return coretools.Result{Content: b.String()}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 
@@ -54,7 +51,7 @@ type globArgs struct {
 }
 
 func globTool(d *Dir) coretools.Tool {
-	t, err := coretools.FromFunc("Glob", globDescription,
+	t := MustTool(coretools.FromFunc("Glob", globDescription,
 		func(ctx context.Context, a globArgs) (coretools.Result, error) {
 			base := resolvePath(d.For(ctx), a.Path)
 			matches, err := walkMatches(base, a.Pattern, nil)
@@ -62,10 +59,7 @@ func globTool(d *Dir) coretools.Tool {
 				return coretools.Result{}, err
 			}
 			return coretools.Result{Content: formatMatches(matches, "No files matched")}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 
@@ -78,7 +72,7 @@ type grepArgs struct {
 }
 
 func grepTool(d *Dir) coretools.Tool {
-	t, err := coretools.FromFunc("Grep", grepDescription,
+	t := MustTool(coretools.FromFunc("Grep", grepDescription,
 		func(ctx context.Context, a grepArgs) (coretools.Result, error) {
 			re, err := regexp.Compile(a.Pattern)
 			if err != nil {
@@ -125,10 +119,7 @@ func grepTool(d *Dir) coretools.Tool {
 				fmt.Fprintf(&b, "... (truncated at %d matches)\n", maxSearchResults)
 			}
 			return coretools.Result{Content: b.String()}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 

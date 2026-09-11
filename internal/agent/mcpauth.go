@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // McpAuth tool: starts the OAuth flow for a configured MCP HTTP server so its
@@ -22,7 +24,7 @@ func (a *Agent) mcpAuthTool() []coretools.Tool {
 	if a.mcpAuth == nil {
 		return nil
 	}
-	t, err := coretools.FromFunc("McpAuth", mcpAuthDescription,
+	t := tools.MustTool(coretools.FromFunc("McpAuth", mcpAuthDescription,
 		func(ctx context.Context, args mcpAuthArgs) (coretools.Result, error) {
 			if args.Server == "" {
 				return coretools.Result{Content: "Error: server name is required"}, nil
@@ -31,9 +33,6 @@ func (a *Agent) mcpAuthTool() []coretools.Tool {
 				return coretools.Result{Content: "Error: " + err.Error()}, nil
 			}
 			return coretools.Result{Content: fmt.Sprintf("Authorized MCP server %s. Its tools authenticate on the next connection (restart woca if it was already connected).", args.Server)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return []coretools.Tool{t}
 }

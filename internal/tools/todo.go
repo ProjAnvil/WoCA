@@ -90,7 +90,7 @@ type todoWriteArgs struct {
 }
 
 func todoWriteTool(store *TodoStore) coretools.Tool {
-	t, err := coretools.FromFunc("TodoWrite", todoWriteDescription,
+	t := MustTool(coretools.FromFunc("TodoWrite", todoWriteDescription,
 		func(ctx context.Context, a todoWriteArgs) (coretools.Result, error) {
 			if a.Merge {
 				store.Merge(a.Todos)
@@ -98,9 +98,6 @@ func todoWriteTool(store *TodoStore) coretools.Tool {
 				store.Set(a.Todos)
 			}
 			return coretools.Result{Content: formatTodos(store.Get())}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/bus"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // Agent teams: a teammate is a persistent named agent session with its own
@@ -481,7 +482,7 @@ func teamTaskPrompt(rec TaskRecord) string {
 
 // teamTools builds the lead's team-management tools.
 func (a *Agent) teamTools() []coretools.Tool {
-	spawn, err := coretools.FromFunc("TeamSpawn",
+	spawn := tools.MustTool(coretools.FromFunc("TeamSpawn",
 		`Spawn a named teammate: a persistent agent session with its own context that joins your team. Teammates share the task list (TaskCreate/TaskUpdate become team-scoped with claim ownership) and coordinate via SendMessage; they self-claim pending tasks with completed dependencies and idle out when there is no work. Cost scales with teammate count — spawn 2-5 for genuinely parallel work, not for sequential tasks (use the Task tool for those).`,
 		func(ctx context.Context, args struct {
 			Name         string `json:"name"`
@@ -505,11 +506,8 @@ func (a *Agent) teamTools() []coretools.Tool {
 			}
 			return coretools.Result{Content: fmt.Sprintf(
 				"Spawned teammate %s. Your task tools are now team-scoped; coordinate via SendMessage and check TeamStatus. Tell %s what to do (it also self-claims from the shared list).", args.Name, args.Name)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
-	status, err := coretools.FromFunc("TeamStatus",
+		}))
+	status := tools.MustTool(coretools.FromFunc("TeamStatus",
 		`Show the agent team: teammates (status, turns), the shared task list with owners, and unread messages addressed to you (reading acknowledges them).`,
 		func(ctx context.Context, _ struct{}) (coretools.Result, error) {
 			team := a.currentTeam()
@@ -517,11 +515,8 @@ func (a *Agent) teamTools() []coretools.Tool {
 				return coretools.Result{Content: "No team spawned yet (use TeamSpawn)."}, nil
 			}
 			return coretools.Result{Content: team.Status()}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
-	stop, err := coretools.FromFunc("TeamStop",
+		}))
+	stop := tools.MustTool(coretools.FromFunc("TeamStop",
 		`Stop a teammate by name (sends a shutdown message, then terminates). Use TeamStatus to see members.`,
 		func(ctx context.Context, args struct {
 			Name   string `json:"name"`
@@ -535,9 +530,6 @@ func (a *Agent) teamTools() []coretools.Tool {
 				return coretools.Result{}, err
 			}
 			return coretools.Result{Content: fmt.Sprintf("Stopping teammate %s.", args.Name)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return []coretools.Tool{spawn, status, stop}
 }

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // ScheduleCron: the model can schedule prompts that fire on a cron schedule
@@ -265,7 +267,7 @@ type scheduleCronArgs struct {
 
 // scheduleCronTool builds the ScheduleCron tool.
 func (a *Agent) scheduleCronTool() []coretools.Tool {
-	t, err := coretools.FromFunc("ScheduleCron", scheduleCronDescription,
+	t := tools.MustTool(coretools.FromFunc("ScheduleCron", scheduleCronDescription,
 		func(ctx context.Context, args scheduleCronArgs) (coretools.Result, error) {
 			if args.DeleteID != "" {
 				if a.deleteCron(args.DeleteID) {
@@ -293,10 +295,7 @@ func (a *Agent) scheduleCronTool() []coretools.Tool {
 			}
 			a.startCron()
 			return coretools.Result{Content: fmt.Sprintf("Scheduled %s (%s). It will fire as a <scheduled-task> notification when due. Session-only; delete with delete_id=%s.", id, args.Cron, id)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return []coretools.Tool{t}
 }
 

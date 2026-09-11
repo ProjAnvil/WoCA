@@ -24,7 +24,7 @@ type readArgs struct {
 }
 
 func readTool(d *Dir, x executor.Executor) coretools.Tool {
-	t, err := coretools.FromFunc("Read", readDescription,
+	t := MustTool(coretools.FromFunc("Read", readDescription,
 		func(ctx context.Context, a readArgs) (coretools.Result, error) {
 			path := resolvePath(d.For(ctx), a.FilePath)
 			if IsImagePath(a.FilePath) {
@@ -66,10 +66,7 @@ func readTool(d *Dir, x executor.Executor) coretools.Tool {
 				fmt.Fprintf(&b, "... (truncated; %d lines total)\n", len(lines))
 			}
 			return coretools.Result{Content: b.String()}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 
@@ -81,7 +78,7 @@ type writeArgs struct {
 }
 
 func writeTool(d *Dir, fh *FileHistory, x executor.Executor) coretools.Tool {
-	t, err := coretools.FromFunc("Write", writeDescription,
+	t := MustTool(coretools.FromFunc("Write", writeDescription,
 		func(ctx context.Context, a writeArgs) (coretools.Result, error) {
 			path := resolvePath(d.For(ctx), a.FilePath)
 			before, _ := x.ReadFile(ctx, path) // nil when absent: creation
@@ -93,10 +90,7 @@ func writeTool(d *Dir, fh *FileHistory, x executor.Executor) coretools.Tool {
 			}
 			fh.Record(ctx, path, before, []byte(a.Content))
 			return coretools.Result{Content: fmt.Sprintf("Wrote %d bytes to %s", len(a.Content), a.FilePath)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 
@@ -110,7 +104,7 @@ type editArgs struct {
 }
 
 func editTool(d *Dir, fh *FileHistory, x executor.Executor) coretools.Tool {
-	t, err := coretools.FromFunc("Edit", editDescription,
+	t := MustTool(coretools.FromFunc("Edit", editDescription,
 		func(ctx context.Context, a editArgs) (coretools.Result, error) {
 			path := resolvePath(d.For(ctx), a.FilePath)
 			data, err := x.ReadFile(ctx, path)
@@ -135,10 +129,7 @@ func editTool(d *Dir, fh *FileHistory, x executor.Executor) coretools.Tool {
 				note = fmt.Sprintf("%d occurrences", count)
 			}
 			return coretools.Result{Content: fmt.Sprintf("Edited %s (%s)", a.FilePath, note)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 

@@ -32,16 +32,13 @@ type askUserQuestionArgs struct {
 // actual execution is intercepted by the agent's interaction gate (which
 // pauses the graph via interrupt), so the FromFunc body here is a fallback.
 func AskUserQuestionTool() coretools.Tool {
-	t, err := coretools.FromFunc("AskUserQuestion", askUserQuestionDescription,
+	t := MustTool(coretools.FromFunc("AskUserQuestion", askUserQuestionDescription,
 		func(ctx context.Context, a askUserQuestionArgs) (coretools.Result, error) {
 			if len(a.Questions) == 0 {
 				return coretools.Result{}, fmt.Errorf("at least one question is required")
 			}
 			return coretools.Result{Content: "AskUserQuestion is handled by the harness."}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 
@@ -52,13 +49,10 @@ type enterPlanModeArgs struct{}
 // EnterPlanModeTool is registered so the model can request plan mode. The
 // agent's interaction gate intercepts it and toggles plan mode.
 func EnterPlanModeTool() coretools.Tool {
-	t, err := coretools.FromFunc("EnterPlanMode", enterPlanModeDescription,
+	t := MustTool(coretools.FromFunc("EnterPlanMode", enterPlanModeDescription,
 		func(ctx context.Context, a enterPlanModeArgs) (coretools.Result, error) {
 			return coretools.Result{Content: "EnterPlanMode is handled by the harness."}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 
@@ -72,13 +66,10 @@ type exitPlanModeArgs struct {
 // agent's interaction gate intercepts it, surfaces the plan, and on approval
 // exits plan mode.
 func ExitPlanModeTool() coretools.Tool {
-	t, err := coretools.FromFunc("ExitPlanMode", exitPlanModeDescription,
+	t := MustTool(coretools.FromFunc("ExitPlanMode", exitPlanModeDescription,
 		func(ctx context.Context, a exitPlanModeArgs) (coretools.Result, error) {
 			return coretools.Result{Content: "ExitPlanMode is handled by the harness."}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 

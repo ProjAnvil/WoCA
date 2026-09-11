@@ -89,7 +89,7 @@ func ProcessImage(path string) (ImagePayload, error) {
 	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
-		return ImagePayload{}, fmt.Errorf("not a decodable image (%v)", err)
+		return ImagePayload{}, fmt.Errorf("not a decodable image (%w)", err)
 	}
 	mime, ok := mimeByFormat[format]
 	if !ok {

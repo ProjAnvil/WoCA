@@ -15,6 +15,7 @@ import (
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/skills"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // TaskStatus is the lifecycle state of a background task.
@@ -196,18 +197,9 @@ type taskStopArgs struct {
 // taskTools builds the Task / TaskOutput / TaskStop tools, wired to the agent's
 // subagent runner and task manager.
 func (a *Agent) taskTools() []coretools.Tool {
-	task, err := coretools.FromFunc("Task", taskDescription, a.runTask)
-	if err != nil {
-		panic(err)
-	}
-	taskOutput, err := coretools.FromFunc("TaskOutput", taskOutputDescription, a.taskOutput)
-	if err != nil {
-		panic(err)
-	}
-	taskStop, err := coretools.FromFunc("TaskStop", taskStopDescription, a.taskStop)
-	if err != nil {
-		panic(err)
-	}
+	task := tools.MustTool(coretools.FromFunc("Task", taskDescription, a.runTask))
+	taskOutput := tools.MustTool(coretools.FromFunc("TaskOutput", taskOutputDescription, a.taskOutput))
+	taskStop := tools.MustTool(coretools.FromFunc("TaskStop", taskStopDescription, a.taskStop))
 	return []coretools.Tool{task, taskOutput, taskStop}
 }
 
@@ -392,17 +384,14 @@ func (a *Agent) skillTool() []coretools.Tool {
 		return nil
 	}
 	desc := "Execute a skill by name, expanding it into instructions to follow. The system prompt lists the skills available in the current workspace."
-	t, err := coretools.FromFunc("Skill", desc,
+	t := tools.MustTool(coretools.FromFunc("Skill", desc,
 		func(ctx context.Context, args skillArgs) (coretools.Result, error) {
 			s, ok := skills.Find(a.skillsFor(ctx), args.Skill)
 			if !ok {
 				return coretools.Result{}, fmt.Errorf("unknown skill %q", args.Skill)
 			}
 			return coretools.Result{Content: skills.Expand(s, args.Args)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return []coretools.Tool{t}
 }
 
@@ -421,22 +410,10 @@ func skillList(list []skills.Skill) string {
 
 // taskListTools exposes TaskCreate/Get/Update/List over the task list.
 func (a *Agent) taskListTools() []coretools.Tool {
-	create, err := coretools.FromFunc("TaskCreate", "Create a task in the task list.", a.taskCreate)
-	if err != nil {
-		panic(err)
-	}
-	get, err := coretools.FromFunc("TaskGet", "Get a task by id.", a.taskGet)
-	if err != nil {
-		panic(err)
-	}
-	update, err := coretools.FromFunc("TaskUpdate", "Update a task's status, subject, or description.", a.taskUpdate)
-	if err != nil {
-		panic(err)
-	}
-	list, err := coretools.FromFunc("TaskList", "List all tasks in the task list.", a.runTaskList)
-	if err != nil {
-		panic(err)
-	}
+	create := tools.MustTool(coretools.FromFunc("TaskCreate", "Create a task in the task list.", a.taskCreate))
+	get := tools.MustTool(coretools.FromFunc("TaskGet", "Get a task by id.", a.taskGet))
+	update := tools.MustTool(coretools.FromFunc("TaskUpdate", "Update a task's status, subject, or description.", a.taskUpdate))
+	list := tools.MustTool(coretools.FromFunc("TaskList", "List all tasks in the task list.", a.runTaskList))
 	return []coretools.Tool{create, get, update, list}
 }
 
@@ -532,10 +509,7 @@ func (a *Agent) sendMessageTool() []coretools.Tool {
 	if a.bus == nil {
 		return nil
 	}
-	t, err := coretools.FromFunc("SendMessage", "Send a message to another agent/recipient. In a team, recipients are teammate names or \"lead\"; messages are pushed (an idle teammate wakes to process them).", a.sendMessage)
-	if err != nil {
-		panic(err)
-	}
+	t := tools.MustTool(coretools.FromFunc("SendMessage", "Send a message to another agent/recipient. In a team, recipients are teammate names or \"lead\"; messages are pushed (an idle teammate wakes to process them).", a.sendMessage))
 	return []coretools.Tool{t}
 }
 

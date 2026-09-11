@@ -323,7 +323,7 @@ func (b *BrowserRuntime) spawn(ctx context.Context, cfg pinchConfig) (executor.P
 			_ = proc.Kill()
 			return nil, ctx.Err()
 		case err := <-exitErr:
-			return nil, fmt.Errorf("pinchtab exited during startup: %v\n%s", err, b.logTail())
+			return nil, fmt.Errorf("pinchtab exited during startup: %w\n%s", err, b.logTail())
 		default:
 		}
 		if err := c.health(ctx); err == nil {

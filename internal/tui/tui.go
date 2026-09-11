@@ -587,19 +587,9 @@ func (m *Model) run() tea.Cmd {
 }
 
 func (m *Model) runWithHistory(history []messages.Message) tea.Cmd {
-	ch := make(chan tea.Msg, 512)
-	m.ch = ch
-	obsRun := m.obsBegin(m.lastPrompt)
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelRun = cancel
-	go func() {
-		r := runner.New(m.agent, interruptHandler(ch), m.renderer(ch))
-		result, err := r.Run(ctx, history)
-		m.obsEnd(obsRun, result, err)
-		ch <- runDone{result: result, err: err}
-		close(ch)
-	}()
-	return readCmd(ch)
+	return m.startStreamGoroutine(m.lastPrompt, func(r *runner.Runner, ctx context.Context) ([]messages.Message, error) {
+		return r.Run(ctx, history)
+	})
 }
 
 // runGoal starts the goal loop in a goroutine; its steps render exactly like
@@ -607,14 +597,22 @@ func (m *Model) runWithHistory(history []messages.Message) tea.Cmd {
 // Double-esc interrupts the in-flight cycle; the loop then stays idle until
 // /goal resume.
 func (m *Model) runGoal() tea.Cmd {
+	return m.startStreamGoroutine("(goal loop)", func(r *runner.Runner, ctx context.Context) ([]messages.Message, error) {
+		return r.RunGoal(ctx, m.history)
+	})
+}
+
+// startStreamGoroutine wires a cancelable agent run (obs begin/end, output
+// channel, runDone) around runFn; used by both plain runs and the goal loop.
+func (m *Model) startStreamGoroutine(obsLabel string, runFn func(r *runner.Runner, ctx context.Context) ([]messages.Message, error)) tea.Cmd {
 	ch := make(chan tea.Msg, 512)
 	m.ch = ch
-	obsRun := m.obsBegin("(goal loop)")
+	obsRun := m.obsBegin(obsLabel)
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelRun = cancel
 	go func() {
 		r := runner.New(m.agent, interruptHandler(ch), m.renderer(ch))
-		result, err := r.RunGoal(ctx, m.history)
+		result, err := runFn(r, ctx)
 		m.obsEnd(obsRun, result, err)
 		ch <- runDone{result: result, err: err}
 		close(ch)

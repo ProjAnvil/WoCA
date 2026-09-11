@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // Worktree isolation: EnterWorktree creates a git worktree under
@@ -33,7 +35,7 @@ type exitWorktreeArgs struct {
 }
 
 func (a *Agent) worktreeTools() []coretools.Tool {
-	enter, err := coretools.FromFunc("EnterWorktree", worktreeDescription,
+	enter := tools.MustTool(coretools.FromFunc("EnterWorktree", worktreeDescription,
 		func(ctx context.Context, args enterWorktreeArgs) (coretools.Result, error) {
 			name := strings.Map(sanitizeWorktreeRune, args.Name)
 			if name == "" {
@@ -62,11 +64,8 @@ func (a *Agent) worktreeTools() []coretools.Tool {
 			}
 			d.Enter(ctx, wtDir)
 			return coretools.Result{Content: fmt.Sprintf("Entered worktree %s (%s). All tools now operate there.", name, wtDir)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
-	exit, err := coretools.FromFunc("ExitWorktree", exitWorktreeDescription,
+		}))
+	exit := tools.MustTool(coretools.FromFunc("ExitWorktree", exitWorktreeDescription,
 		func(ctx context.Context, args exitWorktreeArgs) (coretools.Result, error) {
 			d := a.registry.Dir()
 			base := d.BaseFor(ctx)
@@ -84,10 +83,7 @@ func (a *Agent) worktreeTools() []coretools.Tool {
 				return coretools.Result{Content: fmt.Sprintf("Left the worktree, but removal failed: %v\n%s", err, strings.TrimSpace(string(out)))}, nil
 			}
 			return coretools.Result{Content: "Left and removed the worktree; tools operate on " + base + " again."}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return []coretools.Tool{enter, exit}
 }
 

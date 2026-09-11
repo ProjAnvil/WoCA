@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // The goal model tools — a restricted view of the goal state machine,
@@ -33,7 +35,7 @@ type updateGoalArgs struct {
 
 // goalTools builds the GetGoal and UpdateGoal tools.
 func (a *Agent) goalTools() []coretools.Tool {
-	getTool, err := coretools.FromFunc("GetGoal", getGoalDescription,
+	getTool := tools.MustTool(coretools.FromFunc("GetGoal", getGoalDescription,
 		func(_ context.Context, _ struct{}) (coretools.Result, error) {
 			g := a.Goal()
 			if g == nil {
@@ -44,11 +46,8 @@ func (a *Agent) goalTools() []coretools.Tool {
 				return coretools.Result{Content: "Error: " + err.Error()}, nil
 			}
 			return coretools.Result{Content: string(data)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
-	updateTool, err := coretools.FromFunc("UpdateGoal", updateGoalDescription,
+		}))
+	updateTool := tools.MustTool(coretools.FromFunc("UpdateGoal", updateGoalDescription,
 		func(_ context.Context, args updateGoalArgs) (coretools.Result, error) {
 			if a.Goal() == nil {
 				return coretools.Result{Content: "Error: no active goal"}, nil
@@ -79,9 +78,6 @@ func (a *Agent) goalTools() []coretools.Tool {
 				return coretools.Result{Content: fmt.Sprintf("Goal marked blocked: %s. Finish the current tool calls; the loop will stop and wait for the user.", reason)}, nil
 			}
 			return coretools.Result{Content: "Error: unknown action (use progress | claim_complete | blocked)"}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return []coretools.Tool{getTool, updateTool}
 }

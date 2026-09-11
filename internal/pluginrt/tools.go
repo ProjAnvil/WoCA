@@ -213,7 +213,7 @@ func pdfTools(py *PythonRuntime, workdir string) []coretools.Tool {
 		}
 		var payload map[string]any
 		if jerr := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &payload); jerr != nil {
-			return nil, fmt.Errorf("pdf.py returned invalid JSON: %v\nstdout: %s\nstderr: %s", jerr, tailLines(stdout, 5), tailLines(stderr, 5))
+			return nil, fmt.Errorf("pdf.py returned invalid JSON: %w\nstdout: %s\nstderr: %s", jerr, tailLines(stdout, 5), tailLines(stderr, 5))
 		}
 		return payload, nil
 	}
@@ -380,7 +380,7 @@ func officeTools(py *PythonRuntime, workdir string) []coretools.Tool {
 		}
 		var payload map[string]any
 		if jerr := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &payload); jerr != nil {
-			return nil, fmt.Errorf("office.py returned invalid JSON: %v\nstdout: %s\nstderr: %s", jerr, tailLines(stdout, 5), tailLines(stderr, 5))
+			return nil, fmt.Errorf("office.py returned invalid JSON: %w\nstdout: %s\nstderr: %s", jerr, tailLines(stdout, 5), tailLines(stderr, 5))
 		}
 		return payload, nil
 	}

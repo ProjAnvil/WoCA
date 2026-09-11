@@ -82,7 +82,7 @@ type webFetchArgs struct {
 }
 
 func webFetchTool() coretools.Tool {
-	t, err := coretools.FromFunc("WebFetch", webFetchDescription,
+	t := MustTool(coretools.FromFunc("WebFetch", webFetchDescription,
 		func(ctx context.Context, a webFetchArgs) (coretools.Result, error) {
 			html, err := fetchHTTP(ctx, a.URL)
 			if err != nil {
@@ -93,10 +93,7 @@ func webFetchTool() coretools.Tool {
 				text = "(empty page)"
 			}
 			return coretools.Result{Content: text}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 
@@ -107,7 +104,7 @@ type webSearchArgs struct {
 }
 
 func webSearchTool() coretools.Tool {
-	t, err := coretools.FromFunc("WebSearch", webSearchDescription,
+	t := MustTool(coretools.FromFunc("WebSearch", webSearchDescription,
 		func(ctx context.Context, a webSearchArgs) (coretools.Result, error) {
 			q := url.Values{}
 			q.Set("q", a.Query)
@@ -120,10 +117,7 @@ func webSearchTool() coretools.Tool {
 				out = "No results found."
 			}
 			return coretools.Result{Content: out}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 
@@ -171,7 +165,7 @@ type SearchBackend func(ctx context.Context, query string) (string, error)
 // WebSearchToolWithBackend builds a WebSearch tool backed by a custom search
 // backend (used to override the default DuckDuckGo backend with a real API).
 func WebSearchToolWithBackend(backend SearchBackend) coretools.Tool {
-	t, err := coretools.FromFunc("WebSearch", webSearchDescription,
+	t := MustTool(coretools.FromFunc("WebSearch", webSearchDescription,
 		func(ctx context.Context, a webSearchArgs) (coretools.Result, error) {
 			out, err := backend(ctx, a.Query)
 			if err != nil {
@@ -181,9 +175,6 @@ func WebSearchToolWithBackend(backend SearchBackend) coretools.Tool {
 				out = "No results found."
 			}
 			return coretools.Result{Content: out}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }

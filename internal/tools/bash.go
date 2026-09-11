@@ -23,7 +23,7 @@ type bashArgs struct {
 }
 
 func bashTool(d *Dir, bg *BackgroundShells, x executor.Executor) coretools.Tool {
-	t, err := coretools.FromFunc("Bash", bashDescription,
+	t := MustTool(coretools.FromFunc("Bash", bashDescription,
 		func(ctx context.Context, a bashArgs) (coretools.Result, error) {
 			baseWorkdir := d.For(ctx)
 			wd := a.Workdir
@@ -78,9 +78,6 @@ func bashTool(d *Dir, bg *BackgroundShells, x executor.Executor) coretools.Tool 
 				out = "(no output)"
 			}
 			return coretools.Result{Content: out}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }

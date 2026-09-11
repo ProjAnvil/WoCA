@@ -86,24 +86,9 @@ func (r *Run) ID() string { return r.id }
 // (nothing to persist), which lets callers hook post-run cleanup (session
 // gate release) to a single point.
 func (r *Run) start(history []messages.Message, onDone func([]messages.Message)) {
-	go func() {
-		final, err := runner.New(r.a, r.handleInterrupt, r.render).WithThreadID(r.thread).Run(r.ctx, history)
-		if err != nil {
-			if r.ctx.Err() != nil {
-				r.finish("done", map[string]any{"cancelled": true})
-			} else {
-				r.finish("error", map[string]any{"message": err.Error()})
-			}
-			if onDone != nil {
-				onDone(nil)
-			}
-			return
-		}
-		r.finish("done", map[string]any{"cancelled": false})
-		if onDone != nil {
-			onDone(final)
-		}
-	}()
+	r.startWith(func() ([]messages.Message, error) {
+		return runner.New(r.a, r.handleInterrupt, r.render).WithThreadID(r.thread).Run(r.ctx, history)
+	}, onDone)
 }
 
 // startGoal launches the goal loop (assess → execute → evaluate cycles) as a
@@ -111,8 +96,16 @@ func (r *Run) start(history []messages.Message, onDone func([]messages.Message))
 // "goal" events pushed by the server on every goal-state change. onDone
 // fires exactly once on every exit path; final is nil on error or cancel.
 func (r *Run) startGoal(history []messages.Message, onDone func([]messages.Message)) {
+	r.startWith(func() ([]messages.Message, error) {
+		return runner.New(r.a, r.handleInterrupt, r.render).WithThreadID(r.thread).RunGoal(r.ctx, history)
+	}, onDone)
+}
+
+// startWith runs runFn in a goroutine and routes its result through the
+// shared finish/onDone path used by both start and startGoal.
+func (r *Run) startWith(runFn func() ([]messages.Message, error), onDone func([]messages.Message)) {
 	go func() {
-		final, err := runner.New(r.a, r.handleInterrupt, r.render).WithThreadID(r.thread).RunGoal(r.ctx, history)
+		final, err := runFn()
 		if err != nil {
 			if r.ctx.Err() != nil {
 				r.finish("done", map[string]any{"cancelled": true})

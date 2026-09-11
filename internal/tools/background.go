@@ -244,7 +244,7 @@ func (sh *backgroundShell) notification() string {
 
 // bashOutputTool polls a background shell's output.
 func bashOutputTool(bg *BackgroundShells) coretools.Tool {
-	t, err := coretools.FromFunc("BashOutput",
+	t := MustTool(coretools.FromFunc("BashOutput",
 		"Get the current output and status of a background shell started with Bash run_in_background. Returns the accumulated stdout/stderr, whether it is still running, and its exit code once finished. Poll repeatedly for long-running commands.",
 		func(ctx context.Context, a struct {
 			ShellID string `json:"shell_id"`
@@ -268,16 +268,13 @@ func bashOutputTool(bg *BackgroundShells) coretools.Tool {
 				}
 			}
 			return coretools.Result{Content: b.String()}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 
 // killShellTool terminates a background shell.
 func killShellTool(bg *BackgroundShells) coretools.Tool {
-	t, err := coretools.FromFunc("KillShell",
+	t := MustTool(coretools.FromFunc("KillShell",
 		"Terminate a background shell started with Bash run_in_background. Use when a background command is no longer needed or is misbehaving.",
 		func(ctx context.Context, a struct {
 			ShellID string `json:"shell_id"`
@@ -290,10 +287,7 @@ func killShellTool(bg *BackgroundShells) coretools.Tool {
 				return coretools.Result{Content: fmt.Sprintf("kill signal sent to shell %s (%s)", st.ID, st.Command)}, nil
 			}
 			return coretools.Result{Content: fmt.Sprintf("shell %s already finished (exit code %d)", st.ID, st.ExitCode)}, nil
-		})
-	if err != nil {
-		panic(err)
-	}
+		}))
 	return t
 }
 
