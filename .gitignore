@@ -31,3 +31,19 @@ ee/opsconsole-web/node_modules/
 jobs/
 __pycache__/
 *.pyc
+
+# macOS
+.DS_Store
+
+# Build artifacts that must never be committed
+web/dist/
+ee/configsvc-web/dist/
+ee/opsconsole-web/dist/
+ee/skillsvc-web/dist/
+internal/ee/configsvc/spa/
+internal/ee/opsui/spa/
+internal/ee/skillsvc/spa/
+native-client/native-client
+
+# Local deploy environment (use .env.example)
+deploy/selfhosted/.env
