@@ -33,7 +33,7 @@ scrape_configs:
     dns_sd_configs:
       - names: ["woca-worker"]
         type: A
-        port: 9091
+        port: 9092
         refresh_interval: 15s
 
   # The collector re-exports OTLP metrics (including GenAI spans-derived

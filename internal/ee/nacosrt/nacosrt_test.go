@@ -197,7 +197,7 @@ func TestClientListenDetectsChange(t *testing.T) {
 func TestRuntimeStartFailClosed(t *testing.T) {
 	// Unreachable registry: Start must fail (the fail-closed contract).
 	rt, err := New(Config{
-		Server: "http://127.0.0.1:1", Service: "woca-worker", Advertise: "127.0.0.1:9091",
+		Server: "http://127.0.0.1:1", Service: "woca-worker", Advertise: "127.0.0.1:9092",
 	}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestRuntimeStartFailClosed(t *testing.T) {
 	defer srv.Close()
 	st := openTestStore(t)
 	rt2, err := New(Config{
-		Server: srv.URL, Service: "woca-worker", Advertise: "127.0.0.1:9091",
+		Server: srv.URL, Service: "woca-worker", Advertise: "127.0.0.1:9092",
 		St: st,
 	}, zerolog.Nop())
 	if err != nil {
@@ -232,7 +232,7 @@ func TestRuntimeDeliversAndApplies(t *testing.T) {
 	st := openTestStore(t)
 	applied := make(chan string, 4)
 	rt, err := New(Config{
-		Server: srv.URL, Service: "woca-worker", Advertise: "127.0.0.1:9091",
+		Server: srv.URL, Service: "woca-worker", Advertise: "127.0.0.1:9092",
 		St:       st,
 		Identity: settingswatch.Identity{ServiceID: "worker-test", Role: "worker"},
 		OnChange: func() { applied <- st.Load().Model },

@@ -40,7 +40,7 @@ traces appearing.
 | artifact | endpoints | notes |
 |---|---|---|
 | `woca-server` | `/healthz`, `/metrics` on the business port | probes answer from the moment the port binds, before the agent finishes building; nginx blocks `/metrics` on the public entry (Prometheus scrapes inside the network) |
-| `woca-worker` | `/healthz`, `/metrics` on `--obs-addr` (default `:9091`, `off` disables) | dedicated probe port — the worker has no business HTTP surface |
+| `woca-worker` | `/healthz`, `/metrics` on `--obs-addr` (default `:9092`, `off` disables) | dedicated probe port — the worker has no business HTTP surface |
 
 Metrics produced by `internal/ee/obs`:
 
@@ -61,7 +61,7 @@ the OTLP endpoint with `gen_ai.*` attributes (OTel GenAI semconv) plus
 | `WOCA_SERVICE_NAME` | `service.name` resource attribute | binary name |
 | `WOCA_OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector (`http://…:4318`), or a `nacos://…` registry reference (`woca-obs.otlp`) resolved at startup | unset = no OTLP push (metrics still scrape) |
 | `WOCA_OTEL_EXPORTER_OTLP_INSECURE` | `false` to use TLS | insecure (in-cluster default) |
-| `WOCA_OBS_ADDR` (worker) | probe listener | `:9091`, `off` disables |
+| `WOCA_OBS_ADDR` (worker) | probe listener | `:9092`, `off` disables |
 | `WOCA_GRAFANA_URL` | ops-console link surfaced via `/api/health` → SPA | unset = hidden |
 
 Tenant/business configuration (model allowlists, quotas, flags) never rides

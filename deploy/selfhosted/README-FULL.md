@@ -192,7 +192,7 @@ The full stack mirrors the microservices architecture (design §5.3):
   the overlay). Cross-segment forwarded traffic is dropped by the
   `firewall` one-shot in Docker's DOCKER-USER chain.
 - **Health & self-healing**: every long-running service declares a Docker
-  healthcheck (`/healthz` on woca-server:8080 and woca-worker:9091, NATS
+  healthcheck (`/healthz` on woca-server:8080 and woca-worker:9092, NATS
   monitor, pg_isready) plus `restart: unless-stopped`.
 - **Addressing**: service DNS names only; the gateway is the sole
   host-facing entry (:8080 business, :9082 skills SPA, :9083 discovery,

@@ -27,7 +27,7 @@
 # Roles (§5.1 artifact matrix):
 #   - woca-server  ×2  L1+L2 modular-monolith role (auth, routing, sessions,
 #                      skill-svc; also executes in-process runs)
-#   - woca-worker  ×2  L3 execution role (claims queued runs; probe port 9091)
+#   - woca-worker  ×2  L3 execution role (claims queued runs; probe port 9092)
 #   - woca-tenant  ×1  admin toolbox (`docker exec` for tenant/key commands)
 #   - gateway      ×1  nginx: TLS-less edge proxy, the only published ports
 #                      (incl. :3000 = the Langfuse ops UI, reverse-proxied
@@ -520,7 +520,7 @@ services:
     environment: &woca-worker-env
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_NACOS_URL: "http://nacos:8848"
-      WOCA_OBS_ADDR: ":9091"
+      WOCA_OBS_ADDR: ":9092"
       # Telemetry (§12.2 env layer): the trace bridge via the registry,
       # same as the servers — the worker is where runs execute, so this
       # is where LLM/session spans originate.
@@ -535,7 +535,7 @@ services:
       - woca-sessions:/var/lib/woca/sessions
       - woca-crypto:/var/lib/woca/home
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9091/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9092/healthz || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 12

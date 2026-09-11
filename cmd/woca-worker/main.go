@@ -4,7 +4,7 @@
 // against the same database; neither links the interactive surfaces.
 //
 // Server governance baseline (design §12.3): /healthz + /metrics on a
-// dedicated probe port (default :9091, --obs-addr), OTLP export when
+// dedicated probe port (default :9092, --obs-addr), OTLP export when
 // WOCA_OTEL_EXPORTER_OTLP_ENDPOINT is set, and run-lifecycle metrics
 // (claims, finishes, duration).
 package main
@@ -216,7 +216,7 @@ func defaultObsAddr() string {
 	if v := os.Getenv(obsAddrEnv); v != "" {
 		return v
 	}
-	return ":9091"
+	return ":9092"
 }
 
 // serveProbes binds the /healthz + /metrics listener through webfx — the
