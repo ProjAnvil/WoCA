@@ -9,7 +9,8 @@ metadata:
   name: woca-infra
   namespace: woca
 data:
-  # Addressing is cluster DNS (§12.1): zero registry coupling in code.
+  # Addressing is cluster DNS (§12.1) for infrastructure endpoints; role
+  # registration/config delivery goes through nacos (see 00-nacos.yaml).
   WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector.woca.svc:4318
 ---
 # Placeholder secret: replace the DSN with your managed-PostgreSQL instance

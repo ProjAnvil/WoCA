@@ -1,0 +1,100 @@
+# Nacos registry (design §12.1): every full-stack role fail-closed
+# requires WOCA_NACOS_URL — no registry, no process (internal/ee/nacosrt).
+#
+# This is a dev-grade standalone instance (single replica, embedded
+# Derby). Production must point WOCA_NACOS_URL at an external nacos
+# cluster instead of running this one, and should enable nacos auth —
+# the woca roles authenticate via WOCA_DISCOVERY_USERNAME /
+# WOCA_DISCOVERY_PASSWORD when the registry answers 403 (anonymous v1
+# APIs otherwise).
+#
+# The woca client speaks the nacos v1 HTTP API only, so port 8848 is
+# the whole contract; the nacos 2.x gRPC ports (9848/9849) are unused.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nacos
+  namespace: woca
+spec:
+  serviceName: nacos
+  replicas: 1
+  selector: {matchLabels: {app: nacos}}
+  template:
+    metadata:
+      labels: {app: nacos}
+    spec:
+      containers:
+        - name: nacos
+          image: nacos/nacos-server:v2.5.1
+          ports: [{name: http, containerPort: 8848}]
+          env:
+            - name: MODE
+              value: standalone
+            - name: NACOS_AUTH_ENABLE
+              value: "false"
+            - name: JVM_XMS
+              value: 512m
+            - name: JVM_XMX
+              value: 512m
+          readinessProbe:
+            # The exact endpoint nacosrt.Client.Ping requires.
+            httpGet: {path: /nacos/v1/console/health/readiness, port: http}
+            periodSeconds: 5
+            failureThreshold: 24
+          livenessProbe:
+            httpGet: {path: /nacos/v1/console/health/readiness, port: http}
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 250m, memory: 1Gi}
+            limits: {memory: 2Gi}
+          volumeMounts:
+            - {name: data, mountPath: /home/nacos/data}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: {requests: {storage: 1Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nacos
+  namespace: woca
+spec:
+  selector: {app: nacos}
+  ports: [{name: http, port: 8848, targetPort: http}]
+---
+# nacos-init (the compose stack's nacos-init, ported): roles refuse to
+# start against a registry that has never delivered a config pack
+# (nacosrt.Runtime.Start treats a missing woca-config.pack as "stack
+# never initialized"), so this Job publishes the empty pack first. Wait
+# for its completion before applying 20/21:
+#   kubectl -n woca wait --for=condition=complete job/nacos-init --timeout=120s
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nacos-init
+  namespace: woca
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: publish
+          image: curlimages/curl:8.10.1
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              curl -sf -X POST "http://nacos:8848/nacos/v1/cs/configs" \
+                --data-urlencode "dataId=woca-config.pack" \
+                --data-urlencode "group=DEFAULT_GROUP" \
+                --data-urlencode 'content={"version":1,"generation":"","settings":{}}'
+              i=0
+              until curl -sf "http://nacos:8848/nacos/v1/cs/configs?dataId=woca-config.pack&group=DEFAULT_GROUP" | grep -q '"version":1'; do
+                i=$((i+1)); [ $i -gt 30 ] && { echo "nacos read-back of woca-config.pack never settled"; exit 1; }
+                sleep 1
+              done
+              echo "published woca-config.pack"

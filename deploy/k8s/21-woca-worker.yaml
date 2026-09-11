@@ -1,6 +1,11 @@
 # woca-worker (L3 execution role, design §5.3): claims runs from the shared
 # ledger; scales on queue depth (KEDA over the runs table is the target
 # scaler — the CPU HPA below is the always-available fallback).
+# Registry: fail-closed on nacos — WOCA_NACOS_URL below is mandatory, and
+# the nacos-init Job (00-nacos.yaml) must have published the initial config
+# pack before this Deployment rolls out, or the pods crashloop on startup.
+# The probe/metrics listener doubles as the nacos advertise port; WOCA_OBS_ADDR
+# is pinned to the worker's default (:9092) so the manifest tracks the binary.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,18 +19,20 @@ spec:
       labels: {app: woca-worker}
       annotations:
         metrics.woca.dev/scrape: "true"
-        metrics.woca.dev/port: "9091"
+        metrics.woca.dev/port: "9092"
         metrics.woca.dev/job: woca-worker
     spec:
       containers:
         - name: woca-worker
           image: woca-worker:local
-          ports: [{name: metrics, containerPort: 9091}]
+          ports: [{name: metrics, containerPort: 9092}]
           env:
             - name: WOCA_SERVICE_NAME
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: WOCA_NACOS_URL
+              value: "http://nacos:8848"
             - name: WOCA_OBS_ADDR
-              value: ":9091"
+              value: ":9092"
             - name: WOCA_DB
               valueFrom: {secretKeyRef: {name: woca-secrets, key: WOCA_DB}}
             - name: WOCA_OTEL_EXPORTER_OTLP_ENDPOINT
@@ -48,7 +55,7 @@ metadata:
   namespace: woca
 spec:
   selector: {app: woca-worker}
-  ports: [{name: metrics, port: 9091, targetPort: metrics}]
+  ports: [{name: metrics, port: 9092, targetPort: metrics}]
 ---
 # KEDA ScaledObject sketch (queue-depth autoscaling, design §12): point the
 # query at your PostgreSQL metrics exporter exposing pending runs:
