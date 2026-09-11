@@ -462,7 +462,14 @@ func (s *Server) ServeStarted(ctx context.Context, srv *http.Server, serveErr <-
 		s.admission.stop()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			// The grace window elapsed with a connection still stuck
+			// (e.g. accepted but idle pre-request). Cancellation is a
+			// clean stop, not a serve failure: force-close and report nil.
+			s.log.Debug().Err(err).Msg("graceful shutdown timed out; force-closing")
+			_ = srv.Close()
+		}
+		return nil
 	}
 }
 
