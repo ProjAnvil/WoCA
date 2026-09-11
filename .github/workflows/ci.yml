@@ -14,6 +14,14 @@ jobs:
         with:
           go-version: "1.26"
 
+      # The enterprise console SPAs are gitignored, so the embedded spa
+      # dirs only contain a .gitkeep here; build the real consoles before
+      # compiling (tests assert on the embedded SPA content).
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Build enterprise console SPAs
+        run: make ee-web
+
       - name: Check gofmt
         run: test -z "$(gofmt -l .)"
 

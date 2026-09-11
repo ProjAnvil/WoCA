@@ -27,5 +27,16 @@ func Root() fs.FS {
 }
 
 // Handler serves SPA assets and falls back to index.html for client-side
-// routes (the shared webfx SPA contract).
-func Handler() http.Handler { return webfx.SPA(Root()) }
+// routes (the shared webfx SPA contract). When the SPA was not built
+// (fresh clone, no `make ee-web`), it answers 503 with a placeholder
+// instead of panicking on the missing index.html.
+func Handler() http.Handler {
+	if _, err := fs.Stat(spaFS, "spa/index.html"); err != nil {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("ops console not built; run make ee-web"))
+		})
+	}
+	return webfx.SPA(Root())
+}

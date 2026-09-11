@@ -192,11 +192,22 @@ func (s *Service) Handler() http.Handler {
 	r.Handle("GET /api/mcp", s.requireScope(authz.ScopeSettingsRead, s.handleListManagedMCP))
 	r.Handle("PUT /api/mcp", s.requireScope(authz.ScopeSettingsWrite, s.handlePutManagedMCP))
 	r.Handle("DELETE /api/mcp/{name}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteManagedMCP))
-	spaRoot, err := fs.Sub(spaFS, "spa")
-	if err != nil {
-		panic(err)
+	// Console SPA: when it was not built (fresh clone, no `make ee-web`),
+	// serve a 503 placeholder instead of panicking on the missing
+	// index.html inside webfx.SPA.
+	if _, err := fs.Stat(spaFS, "spa/index.html"); err != nil {
+		r.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("config console not built; run make ee-web"))
+		}))
+	} else {
+		spaRoot, err := fs.Sub(spaFS, "spa")
+		if err != nil {
+			panic(err)
+		}
+		r.Handle("/", webfx.SPA(spaRoot))
 	}
-	r.Handle("/", webfx.SPA(spaRoot))
 
 	// The config plane keeps the /gw/config pull (v1.5 拓扑拆分) plus the
 	// model catalog bridges pull on demand (§16: presets are config-plane

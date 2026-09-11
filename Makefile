@@ -3,23 +3,30 @@
 # Default: build the web frontend, then the binary (frontend is embedded).
 all: web build
 
-# Build the web frontend into web/dist (required before the Go build embeds it).
+# Build the web frontend into web/dist (required before the Go build embeds
+# it; without it the embedded stub page is served instead). web/dist is
+# gitignored; the .gitkeep keeps go:embed compilable on a fresh clone.
 web:
 	cd web && bun install && bun run build
+	touch web/dist/.gitkeep
 
 # Build the enterprise console SPAs and sync their dist into the go:embed
-# directories (required before building the server roles — the embedded
-# consoles are committed, so this must run whenever ee/*-web changes).
+# directories (required before building the server roles to ship the real
+# consoles; without it they serve a "console not built" placeholder). The
+# spa dirs are gitignored — CI must run this target before go build/test.
 ee-web:
 	cd ee/configsvc-web && bun install && bun run build
 	rm -rf internal/ee/configsvc/spa && mkdir -p internal/ee/configsvc/spa
 	cp -R ee/configsvc-web/dist/ internal/ee/configsvc/spa/
+	touch internal/ee/configsvc/spa/.gitkeep
 	cd ee/opsconsole-web && bun install && bun run build
 	rm -rf internal/ee/opsui/spa && mkdir -p internal/ee/opsui/spa
 	cp -R ee/opsconsole-web/dist/ internal/ee/opsui/spa/
+	touch internal/ee/opsui/spa/.gitkeep
 	cd ee/skillsvc-web && bun install && bun run build
 	rm -rf internal/ee/skillsvc/spa && mkdir -p internal/ee/skillsvc/spa
 	cp -R ee/skillsvc-web/dist/ internal/ee/skillsvc/spa/
+	touch internal/ee/skillsvc/spa/.gitkeep
 
 build:
 	go build -o build/woca ./cmd/woca
