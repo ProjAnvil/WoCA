@@ -576,7 +576,36 @@ func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace 
 	// executes here or on a worker; the worker's finish clears the row
 	// (ClearIfRun is compare-and-clear, so it only lifts its own run).
 	s.markSessionState(sid, wocadb.SessionRunning, run.id)
+	// The stub is never registered, so no cancel endpoint or onFinish hook
+	// releases runCtx: without a watcher each dispatched run's WithCancel
+	// child stays registered on rootCtx until shutdown.
+	go s.cancelQueuedRunAtTerminal(runCtx, runCancel, run.id)
 	return run, sid, 0, nil
+}
+
+// cancelQueuedRunAtTerminal releases a queue-dispatched run's context once
+// its ledger row leaves the queued/running states. The row is the only
+// terminal signal for an unregistered run; the watch polls at the SSE tail
+// cadence and ends with runCtx itself (server shutdown or this cancel).
+func (s *Server) cancelQueuedRunAtTerminal(ctx context.Context, cancel context.CancelFunc, runID string) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(ledgerEventPoll):
+		}
+		row, ok, err := s.ledger.Row(ctx, runID)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			continue // transient ledger failure: retry next tick
+		}
+		if !ok || (row.Status != runstate.StatusQueued && row.Status != runstate.StatusRunning) {
+			cancel()
+			return
+		}
+	}
 }
 
 // startCommandRun creates a run that completes immediately with a fixed

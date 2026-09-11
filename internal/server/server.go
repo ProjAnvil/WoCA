@@ -464,6 +464,7 @@ func (s *Server) ServeStarted(ctx context.Context, srv *http.Server, serveErr <-
 	}
 	select {
 	case err := <-serveErr:
+		s.rootCancel() // server lifecycle over: queue-dispatched run contexts end too
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
