@@ -64,9 +64,9 @@ type Event struct {
 	Result  *Result
 }
 
-// MessageFrom converts an internal transcript message to the public shape.
+// messageFrom converts an internal transcript message to the public shape.
 // Role is normalized to the stream-json wire values ("assistant" / "user").
-func MessageFrom(m messages.Message) *Message {
+func messageFrom(m messages.Message) *Message {
 	role := string(m.Role)
 	switch m.Role {
 	case messages.RoleAI:
@@ -81,9 +81,9 @@ func MessageFrom(m messages.Message) *Message {
 	return msg
 }
 
-// ResultEvent builds the terminal event from a finished run, mirroring
+// resultEvent builds the terminal event from a finished run, mirroring
 // sdkout.Writer.Final (usage, cost estimate, last AI text, error marking).
-func ResultEvent(transcript []messages.Message, u agent.UsageTotals, model string, numTurns int, runErr error) Event {
+func resultEvent(transcript []messages.Message, u agent.UsageTotals, model string, numTurns int, runErr error) Event {
 	r := &Result{Usage: Usage{
 		Requests:         u.Requests,
 		InputTokens:      u.InputTokens,
@@ -104,13 +104,13 @@ func ResultEvent(transcript []messages.Message, u agent.UsageTotals, model strin
 		r.ErrorText = runErr.Error()
 	} else {
 		r.Subtype = "success"
-		r.Text = LastAIText(transcript)
+		r.Text = lastAIText(transcript)
 	}
 	return Event{Type: EventResult, Result: r}
 }
 
-// LastAIText returns the content of the last non-empty assistant message.
-func LastAIText(transcript []messages.Message) string {
+// lastAIText returns the content of the last non-empty assistant message.
+func lastAIText(transcript []messages.Message) string {
 	for i := len(transcript) - 1; i >= 0; i-- {
 		if transcript[i].Role == messages.RoleAI && transcript[i].Content != "" {
 			return transcript[i].Content
@@ -119,8 +119,9 @@ func LastAIText(transcript []messages.Message) string {
 	return ""
 }
 
-// WireJSON serializes the event in the flattened stream-json shape, byte
-// compatible with sdkout (the format eval/woca_agent.py parses).
+// WireJSON serializes the event in the flattened stream-json shape,
+// semantically compatible with sdkout's stream-json lines (same keys and
+// values; key order may differ) — the format eval/woca_agent.py parses.
 func (e Event) WireJSON() ([]byte, error) {
 	wire := map[string]any{"type": string(e.Type)}
 	if e.Message != nil {

@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestMessageFromAssistantWithToolCalls(t *testing.T) {
 			{ID: "tc1", Name: "Bash", Args: map[string]any{"command": "ls"}},
 		},
 	}
-	got := MessageFrom(m)
+	got := messageFrom(m)
 	if got == nil || got.Role != "assistant" || got.Content != "thinking" {
 		t.Fatalf("unexpected message: %+v", got)
 	}
@@ -44,7 +45,7 @@ func TestWireParityWithSdkout(t *testing.T) {
 	usage := agent.UsageTotals{Requests: 1, InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
 	w.Final(transcript, usage, "unknown-model", 1, nil)
 
-	ev := ResultEvent(transcript, agent.UsageTotals{
+	ev := resultEvent(transcript, agent.UsageTotals{
 		Requests: 1, InputTokens: 10, OutputTokens: 5, TotalTokens: 15,
 	}, "unknown-model", 1, nil)
 	wire, err := ev.WireJSON()
@@ -72,5 +73,56 @@ func TestWireParityWithSdkout(t *testing.T) {
 		if string(g1) != string(g2) {
 			t.Fatalf("key %q differs: sdkout=%s sdk=%s", k, g1, g2)
 		}
+	}
+}
+
+// TestWireParityWithSdkoutError locks the error-path wire format: subtype,
+// is_error and error must match sdkout's result envelope key for key.
+func TestWireParityWithSdkoutError(t *testing.T) {
+	var buf strings.Builder
+	w, err := sdkout.New(sdkout.FormatJSON, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := []messages.Message{
+		{Role: messages.RoleSystem, Content: "sys"},
+		{Role: messages.RoleHuman, Content: "hi"},
+		{Role: messages.RoleAI, Content: "hello"},
+	}
+	usage := agent.UsageTotals{Requests: 1, InputTokens: 10, OutputTokens: 5, TotalTokens: 15}
+	runErr := errors.New("boom")
+	w.Final(transcript, usage, "unknown-model", 1, runErr)
+
+	ev := resultEvent(transcript, agent.UsageTotals{
+		Requests: 1, InputTokens: 10, OutputTokens: 5, TotalTokens: 15,
+	}, "unknown-model", 1, runErr)
+	wire, err := ev.WireJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var fromSdkout, fromSDK map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &fromSdkout); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(wire, &fromSDK); err != nil {
+		t.Fatal(err)
+	}
+	if len(fromSdkout) != len(fromSDK) {
+		t.Fatalf("key count differs: sdkout=%v sdk=%v", fromSdkout, fromSDK)
+	}
+	for k, v := range fromSdkout {
+		got, ok := fromSDK[k]
+		if !ok {
+			t.Fatalf("sdk wire missing key %q (sdkout=%v)", k, v)
+		}
+		g1, _ := json.Marshal(v)
+		g2, _ := json.Marshal(got)
+		if string(g1) != string(g2) {
+			t.Fatalf("key %q differs: sdkout=%s sdk=%s", k, g1, g2)
+		}
+	}
+	if fromSDK["subtype"] != "error" || fromSDK["is_error"] != true || fromSDK["error"] != "boom" {
+		t.Fatalf("error fields mismatch: %v", fromSDK)
 	}
 }
