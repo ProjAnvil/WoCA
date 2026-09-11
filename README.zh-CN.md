@@ -41,6 +41,8 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
 - [供应商与模型](#供应商与模型)
 - [权限](#权限)
 - [架构](#架构)
+  - [版本与仓库布局](#版本与仓库布局)
+  - [Bridge（私有云形态）](#bridge私有云形态)
 - [配置](#配置)
 - [会话、记忆与撤销](#会话记忆与撤销)
 - [多代理](#多代理)
@@ -109,7 +111,8 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
 - **Skills**（`SKILL.md` + YAML frontmatter）、**自定义子代理**
   （`.woca/agents/*.md`）、**hooks**（12 组事件、匹配器、退出码语义）、
   **MCP** 客户端（stdio + streamable HTTP，工具 / 资源 / prompts / 通知 /
-  OAuth）、**能力插件**（托管浏览器自动化与 PDF 工具链）—— 见
+  OAuth）、**能力插件**（托管浏览器自动化、PDF 工具链与 Office 文档支
+  持）—— 见
   [扩展 woca](#扩展-woca)。
 - **分层配置**：skills、agents、MCP 服务器与指令文件均按 flag > 工作区
   `.woca/` > 用户 `~/.woca/` 解析。
@@ -130,19 +133,21 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
 **从源码构建（当前推荐）：**
 
 ```bash
-git clone https://github.com/ProjAnvil/WoCA.git
+git clone https://github.com/projanvil/woca.git
 cd woca
 make            # 构建 web 前端 + 二进制，输出 build/woca
 ```
 
-**`go install`（仅 CLI，不含内嵌 Web UI）：**
+**使用 `go install`：**
 
 ```bash
 go install github.com/projanvil/woca/cmd/woca@latest
 ```
 
-Web UI 在编译期经 `go:embed` 内嵌；改动 `web/` 下任何内容后需先执行
-`make web` 再 `go build`。
+Web UI 在编译期经 `go:embed` 内嵌，`web/dist` 是构建产物（不纳入 git
+跟踪）。裸 `go build` / `go install` 仍可编译，但二进制只会提供占位页
+（"woca web UI not built"），直到你执行一次 `make web`（或 `make`）构
+建前端 —— 此后每次改动 `web/` 下内容都需重新执行。
 
 **Make 目标：**
 
@@ -190,7 +195,8 @@ woca                    # 终端下为 bubbletea TUI；否则为行式 REPL
 woca --resume last      # 继续最近一次会话
 ```
 
-审批提示用 `y`/`n` 回答，`pgup`/`pgdown` 滚动；中断运行请从 Web UI 取消
+审批提示用 `y`/`n` 回答，`pgup`/`pgdown` 滚动；中断正在进行的轮次：
+TUI 中连按两次 `esc`（`esc-esc`）或 `ctrl+c`，或从 Web UI 取消
 （`POST /api/runs/{id}/cancel`）。行式 REPL 中以 `!` 前缀执行 shell 命令，
 输出纳入对话。见[斜杠命令](#斜杠命令)。
 
@@ -263,28 +269,185 @@ reasoning-effort 映射走同一路由。
 
 ```
 cmd/woca                 cobra CLI：flags、config、REPL、单次执行、serve
+
+# 代理核心
 internal/agent           编码代理图（langchain-golang/langgraph 运行时）：
                          门控、plan 模式、流式执行、恢复、压缩、团队、目标
+internal/agentbuild      所有运行代理的入口共享的组装根
+internal/runner          流式运行循环 + 中断处理 + 渲染
 internal/tools           工具集 + 注册表 + 权限分类
 internal/permissions     权限模式、规则、只读分类器
-internal/model           供应商路由：重试、fallback
-internal/runner          流式运行循环 + 中断处理 + 渲染
-internal/console         TUI / REPL / web 共享的斜杠命令
-internal/tui             bubbletea 终端 UI
-internal/server          web 服务器：会话、运行、SSE、设置 API
-internal/session         JSONL transcript 持久化
+internal/model           供应商路由：重试、fallback、调用
 internal/compact         自动压缩 / 摘要
 internal/tokens          CJK 感知 token 估算器
+internal/prompt          系统提示词组装
+internal/promptref       @path 提示引用展开
+internal/contextx        供提示词使用的运行时上下文（git 状态等）
+internal/diffutil        Web UI Changes 视图的小型 unified diff
+internal/cost            会话成本估算
+internal/quota           供应商额度 / 用量显示
+
+# 交互面
+internal/tui             bubbletea 终端 UI
+internal/repl            行式 REPL 输入解析与编辑
+internal/console         TUI / REPL / web 共享的斜杠命令
+internal/slashcmds       内置斜杠命令表（共享且无 import 环）
+internal/keybindings     用户可覆盖的 TUI 动作映射
+internal/servefront      服务器角色前端：serve（Web UI 服务器）与
+                         web（后台守护进程）
+internal/webd            Web GUI 后台守护进程（pidfile、start/stop）
+internal/webgui          按需 Web UI 服务（/web 命令）
+internal/webfx           web 框架：net/http 之上 gin/fiber 风格的 API
+internal/sdkout          机器可读的无头输出（json / stream-json）
+
+# Web 与 API 管线
+internal/server          web 服务器：会话、运行、SSE、设置 API
+internal/gateway         所有部署共享的 L1 边缘中间件
+internal/searchapi       通用 JSON web 搜索 API 客户端
+internal/fsb             工作区文件浏览器（jailed，os.OpenRoot）
+
+# 存储与状态
+internal/session         JSONL transcript 持久化
+internal/settings        设置数据库 + 加密 secrets
+internal/wocadb          设置数据库打开器（sqlite / postgres）
+internal/store           命名空间 + key 的 JSON 文档存储
+internal/memory          ladyM 记忆引擎适配器
+internal/runstate        外置运行账本（runs + 事件流）
+internal/runws           run 级工作区载体
+internal/merge           分层配置合并
+
+# 平台与运维
+internal/bus             进程内消息总线（SendMessage）
+internal/obslog          harness 可观测日志（按大小轮转 JSONL）
+internal/settingswatch   管理面写入向各角色的传播
+internal/telemetry       可观测性接缝（Phase 2）
+internal/logging         zerolog 封装
+internal/notify          终端通知
+internal/oauth           OAuth 2.0 设备授权许可客户端
+internal/config          面向用户的配置
+internal/claudeenv       ~/.claude skills/MCP 导入
+internal/cpserde         checkpoint 负载序列化
+internal/platform/       共享平台原语（authn、authz、httpx、
+                         machineid …）
 internal/skills          SKILL.md 加载器（分层：flag > 工作区 > 用户）
 internal/agents          子代理定义（.woca/agents/*.md）
 internal/hooks           hook 运行器（12 组事件）
 internal/mcp             MCP 客户端（stdio + streamable HTTP、OAuth）
 internal/plugins         市场插件（skills/agents 捆绑包）
-internal/pluginrt        能力插件运行时（browser、pdf）
-internal/settings        设置数据库 + 加密 secrets
-internal/quota           供应商额度 / 用量显示
-internal/merge           分层配置合并
+internal/pluginrt        能力插件运行时（browser、pdf、office）
 ```
+
+### 版本与仓库布局
+
+woca 以同一仓库构建的**两个版本**交付：
+
+- **个人版** —— `woca` 二进制：CLI/TUI/REPL 加本地 `woca serve` Web
+  UI，零外部依赖（sqlite、一切进程内）。个人用户安装的就是它。
+- **企业版** —— 由同一核心加企业树组装的服务器角色：多租户认证（API
+  key、native-client DPoP 会话）、基于 NATS 消息面的队列派发、独立配
+  置服务、可观测性（OTel/Prometheus/Grafana）与 registry DSN 发现。
+  共七个角色二进制，均无交互界面：
+
+  - `woca-server` —— 模块化单体 API 面：业务 API 加 console 管理权
+    威；自身不提供页面
+  - `woca-worker` —— 从共享 runstate 账本认领运行并经代理执行（探针
+    端口默认 `:9092`）
+  - `woca-config` —— 独立的设置管理面；唯一的配置写入口，附带自己的
+    console SPA
+  - `woca-tenant` —— 租户 / 用户 / API key 管理 CLI（附带个人版→企
+    业版记忆迁移工具）
+  - `woca-bridge` —— 面向用户机器的私有云执行面（组织凭据登录；自身
+    不携带密钥管理）
+  - `woca-edge` —— 无状态边缘接入点；控制面唯一的公开组件
+  - `woca-ops` —— 租户运维 console（组织凭据由它签发），外加
+    `/skillsvc/` 下的 skill 资产 console
+
+  与 registry 耦合的角色（`woca-server`、`woca-worker`、
+  `woca-config`、`woca-edge`）对 nacos registry **fail-closed**：它们
+  要求 `WOCA_NACOS_URL`，缺失时拒绝启动，因此最小企业部署需包含一个
+  nacos registry（开发级 standalone 清单见
+  `deploy/k8s/00-nacos.yaml`；端到端验证见
+  `deploy/vm/nacos-verify.sh`）。
+
+交付轴与版本轴正交：目前两个版本均为**自托管**（见
+`deploy/selfhosted/`、`deploy/k8s/`、`deploy/vm/`）；托管云形态是同一
+份企业代码的未来打包方式，而非第三个版本。
+
+```
+internal/        核心，两个版本共享（agent、tools、server、fsb …）
+internal/ee/     仅企业版：msgplane、tenant、configsvc、worker、obs、
+                 discovery、nacosrt、nativeauth、dpop、authcore、
+                 consoleauth、tenantcmd、memcmd、skillsvc（skill 资产
+                 API；其 console SPA 是 woca-ops 上的 skillsvcui）、
+                 opsconsole/opsui（租户运维 console API + SPA）、
+                 bridge（私有云 bridge 服务）、entrygw（私有核心机器
+                 registry）、edgegw（无状态边缘接入点）、edition
+                 （woca-server 的组装根）
+internal/platform/machineid  共享机器身份（enrollment token、Ed25519
+                 身份、不透明访问令牌）
+web/             共享 Web UI（个人版 + 企业版 web 面）
+ee/              企业版 web console（configsvc-web、opsconsole-web、
+                 skillsvc-web）
+deploy/selfhosted/  企业版 docker-compose 栈（数据面 + 完整栈）
+deploy/k8s/         Kubernetes 清单（server + worker、nacos registry、
+                    可观测性管线）
+deploy/vm/          registry fail-closed 验证（nacos-verify.sh）
+deploy/micro/       按角色的分发包（二进制 + start/stop 脚本）
+deploy/collector/   通往 Langfuse / 可观测栈的 OTLP trace 桥
+deploy/observability/  OTel Collector + Prometheus + Jaeger + Grafana 栈
+deploy/terraform/   全栈的 AWS 可用区优先部署
+cmd/woca         个人版入口（全功能）
+cmd/woca-*       企业版角色入口（无交互界面）
+```
+
+### Bridge（私有云形态）
+
+`woca-bridge` 是产品化的私有云执行面：同样的 serve 面加上产品身份模
+型 —— 组织凭据由私有核心上的租户运维 console 签发（bridge 自身不携
+带密钥管理；未登记的 bridge 仅保留 loopback 信任），URL+key 登录配
+cookie 会话（吊销从运维 console 经配置生成级联下发），工作区文件浏
+览器（`/api/fs/*`，以 `os.OpenRoot` 关进沙箱），以及 fail-closed 绑
+定检查（未认证的非 loopback 绑定拒绝启动）。已登记的 bridge 只会看
+到一个控制面对端 —— 无状态边缘接入点（`cmd/woca-edge`、
+`internal/ee/edgegw`；无数据库、无文件，每次机器令牌校验都回源服务
+面）。其后私有核心一分为二：registry 路由
+（`/gw/enroll|renew|heartbeat|resolve|bridges`，挂载在 woca-server 的
+`WOCA_GW_ADDR` 监听器上）与配置拉取（woca-config 上的
+`/gw/config`）。一次性 enrollment token 换得本地 Ed25519 身份加短
+TTL 不透明访问令牌；拉取的设置安装为受管覆盖层（锁定，
+`/api/settings` 中的 `managed_fields`），控制面故障时 bridge 继续运
+行，状态页显示 STALE 标记。同一出站通道还承载 NAT 穿透数据面：客户
+端流量停靠在边缘，直到 bridge 的隧道取走并用自己的 handler 栈应答
+（SSE 流原样透传、flush 保留），因此任意位置的 web 都能指挥藏在
+NAT 之后、零入站端口的 bridge。loopback bridge 保留零登录的个人体
+验；个人版 `woca` 二进制不链接其中任何部分。
+
+完整的私有云阶段随之交付：TLS 直接终结（`WOCA_TLS_CERT/KEY`）、长轮
+询配置通道（pull 之上的 push 语义）、worker 主导的登记（指纹审批
+—— 无需粘贴 token）、bridge 的只读运维视图（HTTP + SPA 的实时会话
++ 审计；用户凭据是租户运维 console 签发的组织 key —— bridge 自身不
+携带密钥管理）、全局健康灯与 Markdown 诊断导出、登录页 QR 配对，以
+及 native client 的内嵌 bridge（捆绑二进制、零登录 loopback 配置、
+带 TOFU 锁定与 OS 钥匙串密钥存储的组织 key 登录）、三入口连接页
+（内嵌 / 经边缘的私有云（可选择目标 bridge）/ 直连 bridge —— 底层
+同一套 profile 机制）、bridge 本地的云接入设置（设置数据库中的
+`edge.*` key、SPKI TOFU 锁定、带来源标签的环境变量覆盖，页面位于
+设置 → 云接入），以及两个开发 compose 组（微服务孪生加带
+`public`/`internal` 网络分层、bridge 作为独立容器的边缘 compose 组
+—— 部署手册见 `deploy/selfhosted/BRIDGE.md`）。
+
+边界是被强制执行的，而非口头约定：个人版二进制从不链接
+`internal/ee`（其依赖基线固定在 `ci/deps-personal.txt`），企业树从
+不链接交互前端，核心包只能通过接缝触及企业能力 ——
+`server.MsgPlane`、`server.NativeAuth`、`servefront.Edition` 与
+`wocadb.DSNResolver`。`make check-editions` 守护全部三个方向。
+
+> **布局变更（2026-08-22）。** 企业包移入 `internal/ee/`（import 路
+> 径相应变更 —— 例如 `internal/msgplane` → `internal/ee/msgplane`；
+> 企业版 web console 移到 `ee/`）；`deploy/enterprise/` 现为
+> `deploy/selfhosted/`。个人版二进制不再附带 `tenant` 与 `memory` 子
+> 命令（请使用 `woca-tenant`），`woca serve --auth apikey` 现在需要
+> `woca-server` 二进制 —— 多租户认证是企业版能力。
 
 ### 代理图
 
@@ -465,6 +628,8 @@ JSON/SSE、`Mcp-Session-Id`）两种传输；OAuth 保护的服务器用 `woca m
 - **browser** —— 托管浏览器自动化（导航、点击、表单、截图），用于 web
   测试与调研
 - **pdf** —— 沙箱化 Python 环境，用于 PDF 生成与处理
+- **office** —— 在同一沙箱化 Python 环境中读写 Office 文档（Word
+  `.docx`、Excel `.xlsx`、PowerPoint `.pptx`）
 
 在设置面板（`/plugins`）浏览与安装，运行时按 pin 下载并校验 SHA-256。
 
