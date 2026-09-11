@@ -1,6 +1,6 @@
 package agent
 
-// gaps2_test.go targets the remaining uncovered branches across the package:
+// This file targets the remaining uncovered branches across the package:
 // constructor fallbacks, interrupt-envelope edge cases, memory prefetch
 // paths, team spawn races, goal-graph resume/pause paths and tool-panic
 // recovery in the speculative executor. Deterministic throughout: every

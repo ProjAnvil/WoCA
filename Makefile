@@ -51,12 +51,12 @@ race:
 	go test -race ./...
 
 web-test:
-	cd web && bun run test
+	cd web && bun install --frozen-lockfile && bun run test
 
 ee-web-test:
-	cd ee/configsvc-web && bun run test
-	cd ee/opsconsole-web && bun run test
-	cd ee/skillsvc-web && bun run test
+	cd ee/configsvc-web && bun install --frozen-lockfile && bun run test
+	cd ee/opsconsole-web && bun install --frozen-lockfile && bun run test
+	cd ee/skillsvc-web && bun install --frozen-lockfile && bun run test
 
 test-ui: web-test ee-web-test
 
@@ -362,7 +362,6 @@ check-server-artifacts: build-server
 # entry points) imports internal/ee at all — enterprise capabilities reach
 # the core only through the seams (server.MsgPlane, server.NativeAuth,
 # servefront.Edition, wocadb.DSNResolver).
-.PHONY: check-editions
 check-editions: build build-server
 	@if go list -deps ./cmd/woca | grep -q 'woca/internal/ee/'; then \
 		echo "personal binary links the enterprise tree (internal/ee)"; exit 1; \

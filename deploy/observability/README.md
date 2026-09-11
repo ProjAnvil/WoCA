@@ -65,7 +65,8 @@ the OTLP endpoint with `gen_ai.*` attributes (OTel GenAI semconv) plus
 | `WOCA_GRAFANA_URL` | ops-console link surfaced via `/api/health` → SPA | unset = hidden |
 
 Tenant/business configuration (model allowlists, quotas, flags) never rides
-this layer — it belongs to tenant-svc (§12.2 separation).
+this layer — it belongs to the config plane (woca-config, published to
+nacos as the config pack; §12.2 separation).
 
 ## Run it (compose)
 
