@@ -262,7 +262,7 @@ func newConfigCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer st.Close()
+			defer func() { _ = st.Close() }()
 			fmt.Print(settings.Describe(st.Load(), st.HasSecret, st.Path()))
 			return nil
 		},
@@ -276,7 +276,7 @@ func newConfigCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer st.Close()
+			defer func() { _ = st.Close() }()
 			key := args[0]
 			if name, ok := settings.SecretFor(key); ok {
 				if st.HasSecret(name) {
@@ -300,7 +300,7 @@ func newConfigCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer st.Close()
+			defer func() { _ = st.Close() }()
 			key, value := args[0], args[1]
 			if name, ok := settings.SecretFor(key); ok {
 				if err := st.SetSecret(name, value); err != nil {

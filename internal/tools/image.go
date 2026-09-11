@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+
 	// Decode-only registrations for the formats the Read tool attaches.
 	_ "image/gif"
 	_ "image/png"

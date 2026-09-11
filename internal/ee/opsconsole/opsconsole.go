@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/projanvil/woca/internal/platform/httpx"
 	"net/http"
 	"os"
 	"strconv"
@@ -35,6 +34,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/gateway"
 	"github.com/projanvil/woca/internal/platform/authz"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/wocadb"
 	"github.com/rs/zerolog"
@@ -239,7 +239,7 @@ func (s *Service) handleTenantStats(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "unavailable"})
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	byID := map[string]*tenantStats{}
 	order := []string{}
 	for rows.Next() {
@@ -257,7 +257,7 @@ func (s *Service) handleTenantStats(w http.ResponseWriter, _ *http.Request) {
 		WHERE c.revoked_at IS NULL AND c.expires_at > `+phI(s.db, 0)+`
 		GROUP BY c.tenant_id`, wocadb.Now())
 	if err == nil {
-		defer srows.Close()
+		defer func() { _ = srows.Close() }()
 		for srows.Next() {
 			var tid string
 			var n int64

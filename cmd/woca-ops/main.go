@@ -74,7 +74,7 @@ func main() {
 		log.Fatal().Err(err).Msg("woca-ops: observability setup failed")
 	}
 	defer func() { _ = obsInst.Shutdown(context.WithoutCancel(context.Background())) }()
-	obsInst.Install(context.Background())
+	_ = obsInst.Install(context.Background())
 
 	router := webfx.New(webfx.Options{Logger: log, Addr: addr, Grace: 3 * time.Second})
 	router.UseDefaults()

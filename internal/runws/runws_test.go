@@ -24,6 +24,7 @@ func TestEmptyIsNoOp(t *testing.T) {
 }
 
 func TestNilContext(t *testing.T) {
+	//nolint:staticcheck // SA1012: intentionally verifying nil-context tolerance
 	if ws, ok := From(nil); ok || ws != "" {
 		t.Fatalf("From(nil) = %q, %v; want \"\", false", ws, ok)
 	}

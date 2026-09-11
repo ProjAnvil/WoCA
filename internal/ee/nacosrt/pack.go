@@ -68,7 +68,7 @@ func ExportPack(ctx context.Context, st *settings.Store, db *wocadb.DB) (*Pack, 
 	for rows.Next() {
 		var r SkillRow
 		if err := rows.Scan(&r.Name, &r.Description, &r.Body); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return nil, fmt.Errorf("nacosrt: export skills: %w", err)
 		}
 		p.Skills = append(p.Skills, r)
@@ -83,7 +83,7 @@ func ExportPack(ctx context.Context, st *settings.Store, db *wocadb.DB) (*Pack, 
 	for mrows.Next() {
 		var r MCPRow
 		if err := mrows.Scan(&r.Name, &r.Spec); err != nil {
-			mrows.Close()
+			_ = mrows.Close()
 			return nil, fmt.Errorf("nacosrt: export mcp: %w", err)
 		}
 		p.MCP = append(p.MCP, r)
@@ -101,7 +101,7 @@ func ExportPack(ctx context.Context, st *settings.Store, db *wocadb.DB) (*Pack, 
 	for grows.Next() {
 		var k, v string
 		if err := grows.Scan(&k, &v); err != nil {
-			grows.Close()
+			_ = grows.Close()
 			return nil, fmt.Errorf("nacosrt: export gateway: %w", err)
 		}
 		gw[k] = v

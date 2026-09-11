@@ -206,7 +206,7 @@ func (e *Edge) coreAuthPOST(ctx context.Context, path string, body any, out any)
 	if err != nil {
 		return 0, fmt.Errorf("edge: core auth %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<10)).Decode(out); err != nil && resp.StatusCode == http.StatusOK {
 		return resp.StatusCode, err
 	}

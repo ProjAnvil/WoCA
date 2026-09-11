@@ -118,7 +118,7 @@ func fetchVerified(ctx context.Context, url, wantSHA, dest string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
@@ -165,7 +165,7 @@ func extractArchiveMembers(archive, destDir string, want map[string]bool) error 
 	if err != nil {
 		return err
 	}
-	defer fh.Close()
+	defer func() { _ = fh.Close() }()
 	gz, err := gzip.NewReader(fh)
 	if err != nil {
 		return fmt.Errorf("gunzip %s: %w", archive, err)
@@ -200,7 +200,7 @@ func extractZipMembers(archive, destDir string, want map[string]bool) error {
 	if err != nil {
 		return fmt.Errorf("open zip %s: %w", archive, err)
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 	found := map[string]bool{}
 	for _, f := range zr.File {
 		if f.FileInfo().IsDir() {
@@ -215,7 +215,7 @@ func extractZipMembers(archive, destDir string, want map[string]bool) error {
 			return err
 		}
 		err = writeMember(rc, filepath.Join(destDir, base))
-		rc.Close()
+		_ = rc.Close()
 		if err != nil {
 			return err
 		}

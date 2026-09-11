@@ -1175,7 +1175,7 @@ func (a *Agent) modelNode() lggraph.NodeFunc {
 		if err != nil {
 			return nil, err
 		}
-		defer stream.Close()
+		defer func() { _ = stream.Close() }()
 
 		var full messages.Message
 		var specIDs []string

@@ -32,7 +32,7 @@ func TestExportImportRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.Remember(nil, "/w", "cli roundtrip fact", nil, "test"); err != nil {
+	if _, err := eng.Remember(t.Context(), "/w", "cli roundtrip fact", nil, "test"); err != nil {
 		t.Fatal(err)
 	}
 	_ = eng.Close()

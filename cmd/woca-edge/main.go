@@ -51,7 +51,7 @@ func main() {
 				return fmt.Errorf("observability: %w", err)
 			}
 			defer func() { _ = obsInst.Shutdown(context.WithoutCancel(cmd.Context())) }()
-			obsInst.Install(cmd.Context())
+			_ = obsInst.Install(cmd.Context())
 			if serviceURL == "" {
 				return fmt.Errorf("the service plane is required (set --service-url or WOCA_SERVICE_URL)")
 			}

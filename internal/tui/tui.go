@@ -41,7 +41,6 @@ var (
 	boldDimStyle = lipgloss.NewStyle().Bold(true).Faint(true)
 	promptStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6")) // ❯ cyan
 	userStyle    = lipgloss.NewStyle().Bold(true)
-	errStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	boxStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("8"))
 	addStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green +line
 	delStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red -line
@@ -1030,15 +1029,15 @@ func (m *Model) openEditorCmd() tea.Cmd {
 	}
 	path := f.Name()
 	if _, err := f.WriteString(m.input); err != nil {
-		f.Close()
-		os.Remove(path)
+		_ = f.Close()
+		_ = os.Remove(path)
 		m.hint = "ctrl+g: " + err.Error()
 		return nil
 	}
-	f.Close()
+	_ = f.Close()
 	cmd := exec.Command(editor, path)
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		defer os.Remove(path)
+		defer func() { _ = os.Remove(path) }()
 		if err != nil {
 			return editorResult{err: err}
 		}

@@ -32,7 +32,7 @@ func TestTenantCmdLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tenants, _ := st.ListTenants(nil)
+	tenants, _ := st.ListTenants(t.Context())
 	closeDB()
 	if len(tenants) == 0 {
 		t.Fatal("no tenants after create")

@@ -36,7 +36,7 @@ func TestEstimateText(t *testing.T) {
 func TestEstimateMessages(t *testing.T) {
 	msgs := []messages.Message{
 		messages.Human("hello world"),
-		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+		{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
 			{Name: "Bash", Args: map[string]any{"command": "ls -la"}},
 		}},
 	}
@@ -161,7 +161,7 @@ func TestEstimateUsageScalingClampedHigh(t *testing.T) {
 func TestEstimateUsageScalingPartialFactor(t *testing.T) {
 	raw := Estimate(scalingHistory(false, 0))
 	got := Estimate(scalingHistory(true, raw+5))
-	if want := int(math.Ceil(float64(raw + 5))); got != want {
+	if want := raw + 5; got != want {
 		t.Fatalf("Estimate with partial factor = %d, want %d (raw %d)", got, want, raw)
 	}
 }

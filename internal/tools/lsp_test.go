@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 )
 
@@ -15,7 +14,6 @@ import (
 type fakeTransport struct {
 	responses map[string]any
 	notified  []string
-	nextID    atomic.Int64
 }
 
 func (f *fakeTransport) Call(ctx context.Context, method string, params, result any) error {

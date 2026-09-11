@@ -235,7 +235,7 @@ func (g *GatewayClient) Enroll(ctx context.Context, enrollmentToken string) erro
 	if err != nil {
 		return fmt.Errorf("bridge: enroll: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("bridge: enroll: gateway returned %d", resp.StatusCode)
 	}
@@ -304,7 +304,7 @@ func (g *GatewayClient) RequestEnrollment(ctx context.Context, onFingerprint fun
 		Fingerprint string `json:"fingerprint"`
 	}
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&out)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted || out.Fingerprint == "" {
 		return fmt.Errorf("bridge: enrollment request: gateway returned %d", resp.StatusCode)
 	}
@@ -329,10 +329,10 @@ func (g *GatewayClient) RequestEnrollment(ctx context.Context, onFingerprint fun
 				EnrollmentToken string `json:"enrollment_token"`
 			}
 			_ = json.NewDecoder(io.LimitReader(resp2.Body, 4<<10)).Decode(&approved)
-			resp2.Body.Close()
+			_ = resp2.Body.Close()
 			return g.Enroll(ctx, approved.EnrollmentToken)
 		}
-		resp2.Body.Close()
+		_ = resp2.Body.Close()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -402,7 +402,7 @@ func (g *GatewayClient) pull(ctx context.Context, wait time.Duration) (*ConfigPa
 		g.markStale(err)
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	switch {
 	case resp.StatusCode == http.StatusNotModified:
 		g.mu.Lock()
@@ -449,7 +449,7 @@ func (g *GatewayClient) Heartbeat(ctx context.Context, status json.RawMessage) e
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("bridge: heartbeat: gateway returned %d", resp.StatusCode)
 	}
@@ -541,7 +541,7 @@ func (g *GatewayClient) FetchModels(ctx context.Context) ([]FetchedPreset, error
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrCoreUnreachable, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("bridge: fetch models: status %d", resp.StatusCode)
 	}
@@ -629,7 +629,7 @@ func (g *GatewayClient) authPOST(ctx context.Context, path string, body any, out
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s", ErrCoreUnreachable, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		// Decode the failure body too: the enumerated code is the client
 		// contract (revoked) and must survive the hop.
@@ -653,7 +653,7 @@ func (g *GatewayClient) Renew(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("bridge: renew: gateway returned %d", resp.StatusCode)
 	}
@@ -936,7 +936,7 @@ func applyManaged(st *settings.Store, kv map[string]string) error {
 	set("memory-backend", func(v string) { cfg.MemoryBackend = v })
 	set("memory-engine", func(v string) { cfg.MemoryEngine = v })
 	set("model-whitelist", func(v string) { cfg.ModelWhitelist = v })
-	set("max-tokens", func(v string) { fmt.Sscanf(v, "%d", &cfg.MaxTokens) })
+	set("max-tokens", func(v string) { _, _ = fmt.Sscanf(v, "%d", &cfg.MaxTokens) })
 	// Private-cloud storage/memory wiring (§3 storage domain): the split
 	// postgres coordinates and the remote ladyM endpoint ride the overlay;
 	// the passwords ride the encrypted secret store. Without them a

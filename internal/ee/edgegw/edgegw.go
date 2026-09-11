@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/projanvil/woca/internal/platform/httpx"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -32,6 +31,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/projanvil/woca/internal/ee/entrygw"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/platform/machineid"
 	"github.com/projanvil/woca/internal/webfx"
 )
@@ -323,7 +323,7 @@ func (e *Edge) coreBridges(ctx context.Context) ([]entrygw.BridgeInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("edge: bridges: service plane returned %d", resp.StatusCode)
 	}
@@ -720,7 +720,7 @@ func (e *Edge) resolveToken(ctx context.Context, token string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("edge: resolve: service plane returned %d", resp.StatusCode)
 	}

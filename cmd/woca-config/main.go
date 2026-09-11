@@ -49,7 +49,7 @@ func main() {
 				return fmt.Errorf("observability: %w", err)
 			}
 			defer func() { _ = obsInst.Shutdown(context.WithoutCancel(cmd.Context())) }()
-			obsInst.Install(cmd.Context())
+			_ = obsInst.Install(cmd.Context())
 
 			target, _ := cmd.Flags().GetString("db")
 			if target == "" {
@@ -62,7 +62,7 @@ func main() {
 			if err != nil {
 				return fmt.Errorf("settings store: %w", err)
 			}
-			defer st.Close()
+			defer func() { _ = st.Close() }()
 			ts, err := tenant.NewStore(st.DB())
 			if err != nil {
 				return fmt.Errorf("tenant store: %w", err)
@@ -112,7 +112,7 @@ func main() {
 	root.Flags().StringVar(&obsAddr, "obs-addr", defaultObsAddr(), "healthz/metrics listener address, or \"off\" (env WOCA_OBS_ADDR)")
 	root.Flags().String("db", "", "shared settings database: sqlite path, postgres:// DSN (env WOCA_DB)")
 	if env := os.Getenv("WOCA_CONFIG_ADDR"); env != "" {
-		root.Flags().Set("addr", env)
+		_ = root.Flags().Set("addr", env)
 	}
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

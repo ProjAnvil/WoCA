@@ -62,17 +62,6 @@ func (f *fakePinch) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (f *fakePinch) saw(path string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, p := range f.paths {
-		if p == path {
-			return true
-		}
-	}
-	return false
-}
-
 func (f *fakePinch) lastQuery(path string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

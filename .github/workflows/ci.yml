@@ -28,6 +28,12 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          # Pin to the version .golangci.yml was verified with (v2 schema).
+          version: v2.12.2
+
       - name: SSE event contract drift check
         run: ci/check-sse-contract.sh
 

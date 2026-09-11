@@ -135,11 +135,11 @@ func Build(in BuildInput) (*LadyM, error) {
 	cfg.EmbeddingBaseURL = baseURL
 	cfg.EmbeddingAPIKeyEnv = embedKeyEnv
 	if key != "" {
-		os.Setenv(embedKeyEnv, key)
+		_ = os.Setenv(embedKeyEnv, key)
 	} else {
 		// A rebuild without a key must not inherit a stale key left in the
 		// process env by an earlier Build.
-		os.Unsetenv(embedKeyEnv)
+		_ = os.Unsetenv(embedKeyEnv)
 	}
 	// The LLM is injected per-op below (host model), never resolved by
 	// ladyM's own provider factories.

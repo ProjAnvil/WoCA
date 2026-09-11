@@ -166,7 +166,7 @@ func (s *Store) ListAssets(ctx context.Context) ([]Asset, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Asset
 	for rows.Next() {
 		var a Asset
@@ -234,7 +234,7 @@ func (s *Store) ListVersions(ctx context.Context, assetID string) ([]Version, er
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Version
 	for rows.Next() {
 		var v Version
@@ -296,7 +296,7 @@ func (s *Store) Labels(ctx context.Context, assetID string) (map[string]Version,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	// Collect (label, version) pairs, then fetch each version's body.
 	type lv struct {
 		label   string

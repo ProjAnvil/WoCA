@@ -436,16 +436,6 @@ func authedGet(t *testing.T, url, token string) map[string]any {
 	return out
 }
 
-func authedStatus(t *testing.T, url, token string) int {
-	t.Helper()
-	resp, err := getBearer(url, token)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	return resp.StatusCode
-}
-
 func authedList(t *testing.T, url, token string) []map[string]any {
 	t.Helper()
 	resp, err := getBearer(url, token)

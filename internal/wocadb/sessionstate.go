@@ -86,7 +86,7 @@ func (d *DB) SessionStates() ([]SessionState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("wocadb: list session_state: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []SessionState
 	for rows.Next() {
 		var st SessionState

@@ -164,14 +164,14 @@ func (s *Service) List(path string) (Listing, error) {
 	if err != nil {
 		return Listing{}, err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	// OpenRoot rejects symlink escapes at open time; both escape and
 	// non-existence surface as ErrForbidden to avoid leaking paths.
 	dirf, err := root.Open(dotIfEmpty(rel))
 	if err != nil {
 		return Listing{}, ErrForbidden
 	}
-	defer dirf.Close()
+	defer func() { _ = dirf.Close() }()
 	entries, err := dirf.ReadDir(-1)
 	if err != nil {
 		return Listing{}, ErrForbidden
@@ -216,7 +216,7 @@ func (s *Service) Mkdir(parent, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	if st, err := root.Stat(dotIfEmpty(rel)); err != nil || !st.IsDir() {
 		return "", ErrNotDir
 	}
@@ -241,7 +241,7 @@ func (s *Service) Validate(path string) (exists, isDir, isWritable bool) {
 	if err != nil {
 		return false, false, false
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	st, err := root.Stat(dotIfEmpty(rel))
 	if err != nil {
 		return false, false, false
@@ -296,12 +296,12 @@ func (s *Service) signature(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	dirf, err := root.Open(dotIfEmpty(rel))
 	if err != nil {
 		return ""
 	}
-	defer dirf.Close()
+	defer func() { _ = dirf.Close() }()
 	entries, err := dirf.ReadDir(-1)
 	if err != nil {
 		return ""

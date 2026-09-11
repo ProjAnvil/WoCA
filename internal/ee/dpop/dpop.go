@@ -6,6 +6,7 @@
 package dpop
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -70,10 +71,25 @@ type proofClaims struct {
 	ATH string `json:"ath,omitempty"`
 }
 
+// jwkCoords returns the base64url-encoded P-256 affine coordinates of pub as
+// the fixed 32-octet big-endian values RFC 7518 §6.2.1.2 requires.
+func jwkCoords(pub ecdsa.PublicKey) (string, string, error) {
+	raw, err := pub.Bytes() // uncompressed point: 0x04 || X || Y
+	if err != nil {
+		return "", "", fmt.Errorf("dpop: encode public key: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw[1:33]),
+		base64.RawURLEncoding.EncodeToString(raw[33:65]), nil
+}
+
 // Sign produces a compact DPoP proof JWT for input, signed with priv.
 func Sign(priv *ecdsa.PrivateKey, input ProofInput) (string, error) {
 	if priv.Curve != elliptic.P256() {
 		return "", fmt.Errorf("dpop: sign: key must be P-256")
+	}
+	jx, jy, err := jwkCoords(priv.PublicKey)
+	if err != nil {
+		return "", err
 	}
 	header := proofHeader{
 		Typ: proofTyp,
@@ -81,8 +97,8 @@ func Sign(priv *ecdsa.PrivateKey, input ProofInput) (string, error) {
 		JWK: jwk{
 			Kty: "EC",
 			Crv: "P-256",
-			X:   base64.RawURLEncoding.EncodeToString(priv.PublicKey.X.Bytes()),
-			Y:   base64.RawURLEncoding.EncodeToString(priv.PublicKey.Y.Bytes()),
+			X:   jx,
+			Y:   jy,
 		},
 	}
 	claims := proofClaims{
@@ -117,9 +133,11 @@ func Thumbprint(pub ecdsa.PublicKey) (string, error) {
 	if pub.Curve != elliptic.P256() {
 		return "", fmt.Errorf("dpop: thumbprint: key must be P-256")
 	}
-	canonical := `{"crv":"P-256","kty":"EC","x":"` +
-		base64.RawURLEncoding.EncodeToString(pub.X.Bytes()) +
-		`","y":"` + base64.RawURLEncoding.EncodeToString(pub.Y.Bytes()) + `"}`
+	jx, jy, err := jwkCoords(pub)
+	if err != nil {
+		return "", err
+	}
+	canonical := `{"crv":"P-256","kty":"EC","x":"` + jx + `","y":"` + jy + `"}`
 	sum := sha256.Sum256([]byte(canonical))
 	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
@@ -180,7 +198,16 @@ func (v *Verifier) Verify(proof string, req Request, accessToken, pinnedThumbpri
 	}
 	xBig := newBig(x)
 	yBig := newBig(y)
-	if !elliptic.P256().IsOnCurve(xBig, yBig) {
+	if xBig.BitLen() > 256 || yBig.BitLen() > 256 {
+		return ErrInvalidProof
+	}
+	// On-curve validation via crypto/ecdh (elliptic.IsOnCurve is deprecated):
+	// NewPublicKey rejects points that are not on P-256.
+	var raw [65]byte
+	raw[0] = 0x04 // uncompressed point: 0x04 || X || Y
+	xBig.FillBytes(raw[1:33])
+	yBig.FillBytes(raw[33:65])
+	if _, err := ecdh.P256().NewPublicKey(raw[:]); err != nil {
 		return ErrInvalidProof
 	}
 	pub := ecdsa.PublicKey{Curve: elliptic.P256(), X: xBig, Y: yBig}

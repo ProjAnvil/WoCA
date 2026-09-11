@@ -299,7 +299,7 @@ func (l *Ledger) ReapExpired(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("runstate: reap: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var ids []string
 	for rows.Next() {
 		var id string
@@ -362,7 +362,7 @@ func (l *Ledger) Replay(ctx context.Context, runID string, sinceSeq int64, limit
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Event
 	for rows.Next() {
 		var ev Event

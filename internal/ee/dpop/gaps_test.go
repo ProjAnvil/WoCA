@@ -28,14 +28,18 @@ func signSegments(t *testing.T, key testKey, headJSON, payloadSeg string) string
 // realHeaderJSON returns the proof header JSON carrying key's public JWK.
 func realHeaderJSON(t *testing.T, key testKey) string {
 	t.Helper()
+	jx, jy, err := jwkCoords(key.priv.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	head := proofHeader{
 		Typ: proofTyp,
 		Alg: proofAlg,
 		JWK: jwk{
 			Kty: "EC",
 			Crv: "P-256",
-			X:   base64.RawURLEncoding.EncodeToString(key.priv.PublicKey.X.Bytes()),
-			Y:   base64.RawURLEncoding.EncodeToString(key.priv.PublicKey.Y.Bytes()),
+			X:   jx,
+			Y:   jy,
 		},
 	}
 	b, err := json.Marshal(head)

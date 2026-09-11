@@ -57,6 +57,7 @@ func TestWSCacheSetReplacesExistingKey(t *testing.T) {
 }
 
 func TestMemoryScopeFromNilContext(t *testing.T) {
+	//nolint:staticcheck // SA1012: intentionally verifying nil-context tolerance
 	if s := memoryScopeFrom(nil); s != nil {
 		t.Fatalf("memoryScopeFrom(nil) = %v, want nil", s)
 	}

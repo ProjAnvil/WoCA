@@ -55,7 +55,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	defer run.unsubscribe(sub)
 	if gap {
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventResync, `{"reason":"history_gap"}`)
-		flusher.Flush()
+		_ = flusher.Flush()
 	}
 
 	// Revocation closing: open streams revalidate their credential, so
@@ -73,7 +73,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-reauth:
 			if err := s.streamReauth(cred); err != nil {
 				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventAuthRevoked, `{"code":"`+authn.CodeOf(err)+`"}`)
-				flusher.Flush()
+				_ = flusher.Flush()
 				return
 			}
 		case ev := <-sub.ch:
@@ -84,7 +84,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Type, data); err != nil {
 				return
 			}
-			flusher.Flush()
+			_ = flusher.Flush()
 			if ev.Type == EventDone || ev.Type == EventError {
 				return
 			}

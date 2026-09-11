@@ -164,12 +164,8 @@ func TestToolUseSummaryGeneratedAsync(t *testing.T) {
 		!strings.Contains(prompt, "checking the config") {
 		t.Fatalf("summarizer prompt missing tool/intent info:\n%s", prompt)
 	}
-	// The summary is UI-only: it never enters the transcript.
-	for _, m := range out {
-		if strings.Contains(m.Content, "Read config.json") && m.Role == messages.RoleAI && m.Content == "Read config.json" {
-			// the final AI is "finished the task"; any other exact match means leakage
-		}
-	}
+	// The summary is UI-only: it never enters the transcript as the final AI
+	// message (the final AI is "finished the task").
 	if last := out[len(out)-1]; last.Content != "finished the task" {
 		t.Fatalf("final message = %+v", last)
 	}

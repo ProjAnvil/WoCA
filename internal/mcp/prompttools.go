@@ -39,7 +39,7 @@ func (c *Client) AsPromptTools(serverName string) []coretools.Tool {
 		"Get an MCP prompt by name from server "+serverName,
 		schema.Object(map[string]schema.Schema{
 			"name":      schema.String("prompt name"),
-			"arguments": schema.Schema{"type": "object", "description": "prompt arguments"},
+			"arguments": {"type": "object", "description": "prompt arguments"},
 		}, "name"),
 		func(ctx context.Context, input map[string]any) (coretools.Result, error) {
 			name, _ := input["name"].(string)

@@ -220,7 +220,7 @@ func TestEnrollmentAndBridgeInventory(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("revoke bridge = %d", resp.StatusCode)
 	}
-	resp, raw = f.do("GET", "/api/gw/bridges", nil)
+	_, raw = f.do("GET", "/api/gw/bridges", nil)
 	if strings.Contains(string(raw), bridgeID) {
 		t.Fatalf("revoked bridge still listed: %s", raw)
 	}

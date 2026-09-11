@@ -64,7 +64,7 @@ func BeginDeviceFlow(ctx context.Context, cfg Config) (*DeviceAuthResponse, erro
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("oauth: device endpoint returned %d: %s", resp.StatusCode, body)
@@ -130,7 +130,7 @@ func pollOnce(ctx context.Context, client *http.Client, cfg Config, deviceCode s
 	if err != nil {
 		return nil, false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 
 	var tok Token

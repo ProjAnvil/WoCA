@@ -85,7 +85,6 @@ func applyThemeStyles(t Theme) {
 	boldDimStyle = lipgloss.NewStyle().Bold(true).Faint(true)
 	promptStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.Prompt))
 	userStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(t.User))
-	errStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	boxStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color(t.Border))
 	addStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	delStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))

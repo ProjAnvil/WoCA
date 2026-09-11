@@ -116,7 +116,7 @@ func (s *Sandbox) do(ctx context.Context, method, path string, body, out any) er
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("sandbox: %s %s: http %d", method, path, resp.StatusCode)
 	}

@@ -45,6 +45,7 @@ func TestWithRunWorkspaceEmptyNoop(t *testing.T) {
 	if ws, ok := RunWorkspaceFromContext(WithRunWorkspace(ctx, "")); ok {
 		t.Fatalf("empty workspace must not store a value, got %q", ws)
 	}
+	//nolint:staticcheck // SA1012: intentionally verifying nil-context tolerance
 	if ws, ok := RunWorkspaceFromContext(nil); ok {
 		t.Fatalf("nil ctx must report no value, got %q", ws)
 	}

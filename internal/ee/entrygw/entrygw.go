@@ -18,12 +18,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/projanvil/woca/internal/platform/httpx"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/platform/machineid"
 	"github.com/projanvil/woca/internal/wocadb"
 )
@@ -268,7 +268,7 @@ func (s *Store) PendingRequests(_ context.Context) ([]PendingRequest, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []PendingRequest
 	for rows.Next() {
 		var p PendingRequest
@@ -339,7 +339,7 @@ func (s *Store) Settings(_ context.Context) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := map[string]string{}
 	for rows.Next() {
 		var k, v string
@@ -406,7 +406,7 @@ func (s *Store) ListBridges(_ context.Context) ([]BridgeInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	now := time.Now().UnixMilli()
 	var out []BridgeInfo
 	for rows.Next() {
@@ -475,7 +475,7 @@ func (s *Store) AuditEvents(_ context.Context, f AuditFilter, limit, offset int)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []GwAuditRow
 	for rows.Next() {
 		var r GwAuditRow
@@ -505,7 +505,7 @@ func (s *Store) AuditEventNames() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []string
 	for rows.Next() {
 		var e string

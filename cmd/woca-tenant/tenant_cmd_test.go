@@ -46,7 +46,7 @@ func TestTenantIssueAndListKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tenants, err := st.ListTenants(nil)
+	tenants, err := st.ListTenants(t.Context())
 	if err != nil || len(tenants) == 0 {
 		closeDB()
 		t.Fatalf("tenants = %v err=%v", tenants, err)

@@ -91,10 +91,8 @@ func backtrack(trace []map[int]int, a, b []string) []Op {
 		if d > 0 {
 			if x == prevX {
 				rev = append(rev, move{'+', b[y-1]})
-				y--
 			} else {
 				rev = append(rev, move{'-', a[x-1]})
-				x--
 			}
 		}
 		x, y = prevX, prevY

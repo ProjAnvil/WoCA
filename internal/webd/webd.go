@@ -220,7 +220,7 @@ func (m *Manager) defaultWaitReady(addr string, alive func() bool) error {
 		}
 		resp, err := client.Get(url)
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}
@@ -291,7 +291,7 @@ func defaultSpawn(argv []string, logFile string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdout = f
 	cmd.Stderr = f

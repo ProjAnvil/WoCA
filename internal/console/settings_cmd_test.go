@@ -3,11 +3,12 @@ package console
 import (
 	"context"
 	"errors"
-	"github.com/projanvil/woca/internal/settings"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/projanvil/woca/internal/settings"
 )
 
 // rebuildCounter records RebuildMemory/RebuildModel invocations; memErr makes

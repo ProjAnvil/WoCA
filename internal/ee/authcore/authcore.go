@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/projanvil/woca/internal/platform/httpx"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/platform/authz"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/wocadb"
 	"github.com/rs/zerolog"
@@ -287,7 +287,7 @@ func (s *Service) ListSessions(_ context.Context, q, order string, limit, offset
 	if err != nil {
 		return nil, 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []Session{}
 	for rows.Next() {
 		var sess Session

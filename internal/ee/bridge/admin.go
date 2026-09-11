@@ -72,7 +72,7 @@ func (a *Audit) List(ctx context.Context, limit int) ([]AuditEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []AuditEvent
 	for rows.Next() {
 		var e AuditEvent

@@ -2,9 +2,10 @@ package console
 
 import (
 	"context"
-	"github.com/projanvil/woca/internal/agent"
 	"strings"
 	"testing"
+
+	"github.com/projanvil/woca/internal/agent"
 )
 
 func TestGoalCommandLifecycle(t *testing.T) {

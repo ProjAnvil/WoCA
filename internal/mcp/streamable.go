@@ -121,7 +121,7 @@ func (t *httpTransport) roundTrip(ctx context.Context, id int64, req []byte) (rp
 	if err != nil {
 		return rpcResponse{}, fmt.Errorf("mcp: streamable http: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
 		t.setSession(sid)
@@ -160,7 +160,7 @@ func (t *httpTransport) send(req []byte) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
 }
@@ -190,7 +190,7 @@ func (t *httpTransport) listen(ctx context.Context) error {
 		}
 		return fmt.Errorf("mcp: streamable http listen: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {

@@ -95,7 +95,7 @@ func RunOAuth(ctx context.Context, flow OAuthFlow) error {
 	if err != nil {
 		return fmt.Errorf("mcp oauth: callback listener: %w", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	callbackURL := "http://" + ln.Addr().String() + "/callback"
 
 	codeCh := make(chan string, 1)
@@ -183,7 +183,7 @@ func fetchJSON(client *http.Client, url string, out any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("%s: %s", url, resp.Status)
 	}
@@ -212,7 +212,7 @@ func dynamicRegister(ctx context.Context, client *http.Client, registrationEndpo
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return "", fmt.Errorf("%s: %s", registrationEndpoint, resp.Status)
@@ -238,7 +238,7 @@ func exchangeCode(client *http.Client, tokenEndpoint, clientID, code, redirectUR
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("%s: %s: %s", tokenEndpoint, resp.Status, strings.TrimSpace(string(body)))

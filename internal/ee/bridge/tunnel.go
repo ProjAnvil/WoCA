@@ -155,22 +155,22 @@ func (t *TunnelClient) worker(ctx context.Context) {
 		case http.StatusOK:
 			var payload tunnelPayload
 			err = json.NewDecoder(io.LimitReader(resp.Body, (64<<20)+1)).Decode(&payload)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if err != nil {
 				continue
 			}
 			t.served.Add(1)
 			go t.execute(ctx, payload)
 		case http.StatusNoContent:
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		case http.StatusUnauthorized:
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			// Token expired mid-cycle: the gateway channel renews; pause.
 			if !sleepCtx(ctx, tunnelAuthPause) {
 				return
 			}
 		default:
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if !sleepCtx(ctx, tunnelBackoff) {
 				return
 			}
@@ -269,8 +269,8 @@ func (t *TunnelClient) execute(ctx context.Context, payload tunnelPayload) {
 		_ = pr.CloseWithError(err)
 		return
 	}
-	io.Copy(io.Discard, resp.Body) // drain so the connection reuses cleanly
-	resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body) // drain so the connection reuses cleanly
+	_ = resp.Body.Close()
 	_ = pr.CloseWithError(errors.New("bridge: tunnel respond complete"))
 }
 

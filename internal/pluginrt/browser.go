@@ -183,7 +183,7 @@ func pickPort() string {
 	if err != nil {
 		return "9867"
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	return fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port)
 }
 
@@ -386,7 +386,7 @@ func (c *pinchClient) do(ctx context.Context, method, path string, body any, out
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return err

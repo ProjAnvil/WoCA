@@ -32,7 +32,6 @@ type flakyModel struct {
 	mu      sync.Mutex
 	scripts []streamScript
 	calls   int
-	name    string
 }
 
 func (m *flakyModel) streamCalls() int {

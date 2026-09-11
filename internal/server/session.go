@@ -136,10 +136,6 @@ func (s *sessionStore) reconcileOnStartup() {
 	}
 }
 
-func (s *sessionStore) path(id string) string {
-	return filepath.Join(s.dir, id+".jsonl")
-}
-
 // key is the blobstore key of a session transcript (identical filename to
 // the legacy layout).
 func (s *sessionStore) key(id string) string {

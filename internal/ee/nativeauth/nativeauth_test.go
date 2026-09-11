@@ -100,9 +100,13 @@ func newNativeAuthFixture(t *testing.T) *nativeAuthFixture {
 
 func (f *nativeAuthFixture) publicJWK() []byte {
 	f.t.Helper()
+	raw, err := f.dpopKey.PublicKey.Bytes() // uncompressed point: 0x04 || X || Y
+	if err != nil {
+		f.t.Fatal(err)
+	}
 	return []byte(fmt.Sprintf(`{"kty":"EC","crv":"P-256","x":"%s","y":"%s"}`,
-		base64.RawURLEncoding.EncodeToString(f.dpopKey.PublicKey.X.Bytes()),
-		base64.RawURLEncoding.EncodeToString(f.dpopKey.PublicKey.Y.Bytes())))
+		base64.RawURLEncoding.EncodeToString(raw[1:33]),
+		base64.RawURLEncoding.EncodeToString(raw[33:65])))
 }
 
 func (f *nativeAuthFixture) activate(apiKey string, jwk []byte) *httptest.ResponseRecorder {

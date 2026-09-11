@@ -55,7 +55,7 @@ func (d *DB) ListModelPresets() ([]ModelPreset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("wocadb: list model_presets: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []ModelPreset
 	for rows.Next() {
 		var p ModelPreset

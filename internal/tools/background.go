@@ -167,12 +167,10 @@ func (b *BackgroundShells) Status(id string) (BackgroundShellStatus, bool) {
 // List returns snapshots of every shell this manager started, oldest first.
 func (b *BackgroundShells) List() []BackgroundShellStatus {
 	b.mu.Lock()
-	ids := make([]string, 0, len(b.shells))
 	shells := make([]*backgroundShell, 0, len(b.shells))
 	for i := 1; i <= b.next; i++ {
 		id := strconv.Itoa(i)
 		if sh, ok := b.shells[id]; ok {
-			ids = append(ids, id)
 			shells = append(shells, sh)
 		}
 	}

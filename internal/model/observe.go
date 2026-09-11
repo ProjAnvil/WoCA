@@ -129,7 +129,7 @@ func setUsage(sp *telemetry.Builder, resp messages.Message) {
 		sp = sp.Set(telemetry.AttrUsageInputTokens, u.InputTokens)
 	}
 	if u.OutputTokens > 0 {
-		sp = sp.Set(telemetry.AttrUsageOutputTokens, u.OutputTokens)
+		sp.Set(telemetry.AttrUsageOutputTokens, u.OutputTokens)
 	}
 }
 

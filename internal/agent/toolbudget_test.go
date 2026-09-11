@@ -16,10 +16,6 @@ import (
 	"github.com/projanvil/woca/internal/tools"
 )
 
-func bigResult(id, seed string, n int) messages.Message {
-	return messages.Tool(id, strings.Repeat(seed, n/len(seed)+1)[:n])
-}
-
 func contentLen(msgs []messages.Message) int {
 	n := 0
 	for _, m := range msgs {

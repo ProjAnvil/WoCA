@@ -168,7 +168,7 @@ func TestSinkRecordsGenAISpans(t *testing.T) {
 	}
 	got := map[string]string{}
 	for _, kv := range sp.Attributes() {
-		got[string(kv.Key)] = kv.Value.Emit()
+		got[string(kv.Key)] = kv.Value.String()
 	}
 	for _, want := range []string{"gen_ai.request.model", "gen_ai.usage.input_tokens", "tenant_id", "run_id"} {
 		if _, ok := got[want]; !ok {

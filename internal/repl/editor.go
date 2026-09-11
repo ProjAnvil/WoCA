@@ -49,7 +49,7 @@ func (e *Editor) readTerminal(fd interface{ Fd() uintptr }) (string, error) {
 	if err != nil {
 		return e.readPlain()
 	}
-	defer term.Restore(int(fd.Fd()), oldState)
+	defer func() { _ = term.Restore(int(fd.Fd()), oldState) }()
 
 	var buf []rune
 	read := func() (byte, error) {

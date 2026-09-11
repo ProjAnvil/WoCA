@@ -11,8 +11,6 @@ import (
 	"github.com/projanvil/woca/internal/platform/executor"
 )
 
-const maxReadLines = 2000
-
 const readDescription = `Read a UTF-8 text file and return its content with line numbers. Use offset/limit to read a slice. Truncates very large files with a note.
 
 Reading an image file (png/jpg/jpeg/gif/webp) attaches it to the tool result as an image block the model can see — use it for screenshots, diagrams, and photos; do not read images as text.`

@@ -13,7 +13,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/projanvil/woca/internal/platform/httpx"
 	"net/http"
 	"os"
 	"strings"
@@ -21,6 +20,7 @@ import (
 	"time"
 
 	"github.com/projanvil/woca/internal/platform/authz"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/platform/tenancy"
 )
 

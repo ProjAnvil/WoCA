@@ -3,6 +3,11 @@ package console
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/woca/internal/agent"
@@ -13,16 +18,11 @@ import (
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/store"
 	"github.com/projanvil/woca/internal/tools"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
 )
 
 type fakeEngine struct {
 	remembered []string
 	forgotten  []string
-	droppedIDs int
 }
 
 func (f *fakeEngine) Recall(ctx context.Context, q, ws string, k int) ([]memory.Hit, error) {

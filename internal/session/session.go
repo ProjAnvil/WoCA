@@ -126,7 +126,7 @@ func SaveState(path string, s State) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	return json.NewEncoder(f).Encode(s)
 }
@@ -141,7 +141,7 @@ func LoadState(path string) (State, error) {
 		}
 		return State{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var s State
 	if err := json.NewDecoder(f).Decode(&s); err != nil {

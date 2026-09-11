@@ -396,12 +396,6 @@ type stubModel struct {
 	invoke  string
 }
 
-func (m *stubModel) streamCalls() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.calls
-}
-
 func (m *stubModel) Invoke(ctx context.Context, input []messages.Message, opts ...runnables.Option) (messages.Message, error) {
 	if m.invoke == "" {
 		return messages.AI("summary of the conversation"), nil
@@ -549,7 +543,6 @@ func TestRunnerConsumesToolUseSummaries(t *testing.T) {
 
 // slowSummaryModel delays its Invoke to model an in-flight summary.
 type slowSummaryModel struct {
-	mu    sync.Mutex
 	delay time.Duration
 }
 
@@ -630,7 +623,7 @@ func TestDefaultRendererToolSteps(t *testing.T) {
 	r(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"tools": map[string]any{}}})
 	r(lggraph.StreamChunk{Mode: lggraph.StreamUpdates, Payload: map[string]any{"model": map[string]any{
 		"messages": []messages.Message{
-			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{Name: "Read", Args: map[string]any{"file_path": "a.go"}}}},
+			{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{Name: "Read", Args: map[string]any{"file_path": "a.go"}}}},
 			messages.Tool("1", "file body"),
 		},
 	}}})

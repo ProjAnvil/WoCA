@@ -280,7 +280,7 @@ func (s *Store) ListTenants(_ context.Context) ([]Tenant, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tenant: list: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Tenant
 	for rows.Next() {
 		var t Tenant
@@ -446,7 +446,7 @@ func (s *Store) listKeys(ctx context.Context, tenantID, q, order, state string, 
 	if err != nil {
 		return nil, 0, fmt.Errorf("tenant: list keys: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []APIKey
 	for rows.Next() {
 		var k APIKey
@@ -511,7 +511,7 @@ func (s *Store) DeleteTenant(_ context.Context, id string) (keysN, usersN int64,
 	if err != nil {
 		return 0, 0, fmt.Errorf("tenant: delete tenant: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	res, err := tx.Exec(`DELETE FROM api_keys WHERE tenant_id = `+s.ph(0), id)
 	if err != nil {
 		return 0, 0, fmt.Errorf("tenant: delete tenant keys: %w", err)

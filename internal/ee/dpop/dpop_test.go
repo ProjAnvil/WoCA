@@ -156,8 +156,6 @@ func TestThumbprintIsStableAndBase64URL(t *testing.T) {
 	}
 }
 
-type notP256 struct{}
-
 func TestNonP256KeysRejected(t *testing.T) {
 	// P-384 key: every P-256-pinned entry point must reject it.
 	priv384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
@@ -197,15 +195,6 @@ func signTamperedHeader(t *testing.T, key testKey, headerJSON, htm, htu, token s
 		t.Fatal(err)
 	}
 	return si + "." + base64.RawURLEncoding.EncodeToString(sig)
-}
-
-func mustSign(t *testing.T, key testKey, htm, htu, token string, at time.Time, jti string) string {
-	t.Helper()
-	p, err := Sign(key.priv, ProofInput{HTM: htm, HTU: htu, AccessToken: token, IAT: at, JTI: jti})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return p
 }
 
 func TestEqualHTUNormalization(t *testing.T) {

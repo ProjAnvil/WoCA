@@ -75,7 +75,7 @@ func newWorkerRoot() *cobra.Command {
 				return fmt.Errorf("observability: %w", err)
 			}
 			defer func() { _ = obsInst.Shutdown(context.WithoutCancel(cmd.Context())) }()
-			obsInst.Install(cmd.Context())
+			_ = obsInst.Install(cmd.Context())
 			telemetry.SetDefault(telemetry.NewMultiSink(
 				telemetry.NewLocalSink(log), obsInst.Sink()))
 
@@ -94,7 +94,7 @@ func newWorkerRoot() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			ledger, err := runstate.New(db)
 			if err != nil {
 				return fmt.Errorf("run ledger: %w", err)
@@ -113,7 +113,7 @@ func newWorkerRoot() *cobra.Command {
 			}()
 
 			bus := eventbus.NewLocalWithRetention(1024)
-			defer bus.Close()
+			defer func() { _ = bus.Close() }()
 
 			// Message plane (design §5.4): the same live settings resolver
 			// the gateways use, so a console plane switch re-configures the

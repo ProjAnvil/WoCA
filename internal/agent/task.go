@@ -205,7 +205,7 @@ func (a *Agent) taskTools() []coretools.Tool {
 
 func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, error) {
 	if args.Description == "" && args.Prompt == "" {
-		return coretools.Result{}, fmt.Errorf("Task requires a description or prompt")
+		return coretools.Result{}, fmt.Errorf("task requires a description or prompt")
 	}
 	prompt := args.Prompt
 	if prompt == "" {

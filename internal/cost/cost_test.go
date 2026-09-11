@@ -82,7 +82,7 @@ func TestFormatUSD(t *testing.T) {
 	if got := FormatUSD(1.5); got != "$1.50" {
 		t.Errorf("normal = %q", got)
 	}
-	if !strings.HasPrefix(FormatUSD(-0.0), "$") {
+	if got := FormatUSD(0.0); !strings.HasPrefix(got, "$") {
 		t.Error("format should always start with $")
 	}
 }

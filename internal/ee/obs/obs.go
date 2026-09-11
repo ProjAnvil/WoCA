@@ -158,6 +158,9 @@ func Setup(ctx context.Context, cfg Config) (*Obs, error) {
 	// Metrics: Prometheus exposition (always) + OTLP push (when configured).
 	prom, err := otelprom.New(
 		otelprom.WithRegisterer(o.reg),
+		//nolint:staticcheck // SA1019: no TranslationStrategy reproduces "unit
+		// suffixes but no _total" — WithoutSuffixes also drops unit suffixes
+		// (e.g. woca_worker_run_duration_seconds), WithSuffixes adds _total.
 		otelprom.WithoutCounterSuffixes(),
 	)
 	if err != nil {

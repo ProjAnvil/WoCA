@@ -39,7 +39,7 @@ func New() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer eng.Close()
+			defer func() { _ = eng.Close() }()
 
 			w := os.Stdout
 			if outPath != "" {
@@ -47,7 +47,7 @@ func New() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				defer f.Close()
+				defer func() { _ = f.Close() }()
 				w = f
 			}
 			n, err := memory.ExportEngine(cmd.Context(), eng, workspaces, w)
@@ -77,13 +77,13 @@ func New() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer eng.Close()
+			defer func() { _ = eng.Close() }()
 
 			f, err := os.Open(args[0])
 			if err != nil {
 				return err
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			imported, dropped, err := memory.ImportInto(cmd.Context(), eng, f, target)
 			if err != nil {
 				return err

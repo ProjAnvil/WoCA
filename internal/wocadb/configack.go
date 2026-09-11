@@ -44,7 +44,7 @@ func (d *DB) ConfigAcks() ([]ConfigAck, error) {
 	if err != nil {
 		return nil, fmt.Errorf("wocadb: list config_acks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []ConfigAck
 	for rows.Next() {
 		var a ConfigAck

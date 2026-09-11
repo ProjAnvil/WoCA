@@ -2,6 +2,11 @@ package console
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/woca/internal/agent"
@@ -10,10 +15,6 @@ import (
 	"github.com/projanvil/woca/internal/store"
 	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/wocadb"
-	"path/filepath"
-	"strings"
-	"sync"
-	"testing"
 )
 
 // fakeMemEngine is an in-memory memory.Engine for /memory command tests.

@@ -135,7 +135,7 @@ func (s *Service) managedSkillsPayload() ([]ManagedSkill, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configsvc: managed skills read: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []ManagedSkill
 	for rows.Next() {
 		var sk ManagedSkill
@@ -155,7 +155,7 @@ func (s *Service) managedMCPPayload() ([]ManagedMCP, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configsvc: managed mcp read: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []ManagedMCP
 	for rows.Next() {
 		var m ManagedMCP

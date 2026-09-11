@@ -191,12 +191,12 @@ func TestHTTPSurface(t *testing.T) {
 	}
 
 	// Unknown key: uniform 401, no oracle.
-	resp, doc = post("/gw/auth/login", `{"api_key":"woca_000000000000_0000000000000000000000000000000000000000000000000"}`)
+	resp, _ = post("/gw/auth/login", `{"api_key":"woca_000000000000_0000000000000000000000000000000000000000000000000"}`)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("bad login = %d", resp.StatusCode)
 	}
 
-	resp, doc = post("/gw/auth/logout", `{"token":"`+token+`"}`)
+	resp, _ = post("/gw/auth/logout", `{"token":"`+token+`"}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("logout = %d", resp.StatusCode)
 	}

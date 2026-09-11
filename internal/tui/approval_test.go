@@ -88,8 +88,7 @@ func TestPendingPermissionDenyViaN(t *testing.T) {
 
 func TestPendingPermissionDenyViaEsc(t *testing.T) {
 	m, answerCh := newPendingModel(t, agent.PermissionRequest{ToolName: "Bash", Reason: "x"})
-	model, _ := m.Update(key("esc"))
-	m = model.(*Model)
+	m.Update(key("esc"))
 	if ans := <-answerCh; ans != "n" {
 		t.Fatalf("answer = %v, want n", ans)
 	}
@@ -129,8 +128,7 @@ func TestPendingAskUserQuestion(t *testing.T) {
 		model, _ := m.Update(key(r))
 		m = model.(*Model)
 	}
-	model, _ := m.Update(key("enter"))
-	m = model.(*Model)
+	m.Update(key("enter"))
 	ans := <-answerCh
 	aa, ok := ans.(agent.AskUserAnswer)
 	if !ok || len(aa.Answers) != 1 || aa.Answers[0] != "opt2" {

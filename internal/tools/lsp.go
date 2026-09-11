@@ -150,7 +150,7 @@ func (t *stdioTransport) readLoop() {
 			continue
 		}
 		if strings.HasPrefix(strings.ToLower(line), "content-length:") {
-			fmt.Sscanf(line, "Content-Length: %d", &contentLength)
+			_, _ = fmt.Sscanf(line, "Content-Length: %d", &contentLength)
 		}
 	}
 }

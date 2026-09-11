@@ -379,11 +379,6 @@ func startHTTPServer(t *testing.T, h http.HandlerFunc) string {
 // end: run one produces a persisted interrupt checkpoint (a Write permission
 // request denied non-interactively), run two resumes it and approves.
 
-func quoteJSONString(s string) string {
-	b, _ := json.Marshal(s)
-	return string(b)
-}
-
 func fakeOpenAICustomToolFlow(t *testing.T, tool string, args string, final string) string {
 	t.Helper()
 	var calls int32

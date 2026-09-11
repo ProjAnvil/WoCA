@@ -347,10 +347,6 @@ func (r *Runner) PostSampling(ctx context.Context, response string) error {
 // Configured summarizes which events have hooks configured (for /doctor):
 // one "Event(count)" entry per configured event, in canonical order.
 func (r *Runner) Configured() []string {
-	type pair struct {
-		name  string
-		count int
-	}
 	entries := []struct {
 		name string
 		list []Entry

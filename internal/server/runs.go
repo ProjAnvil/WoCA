@@ -689,7 +689,7 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 		if err != nil {
 			// The stream dies loudly; the client's resync path reloads.
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventResync, `{"reason":"ledger_unavailable"}`)
-			flusher.Flush()
+			_ = flusher.Flush() // best-effort: a dead client surfaces on the next write or ctx.Done
 			return true
 		}
 		done := false
@@ -701,7 +701,7 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 			}
 		}
 		if len(events) > 0 {
-			flusher.Flush()
+			_ = flusher.Flush() // best-effort: a dead client surfaces on the next write or ctx.Done
 		}
 		if done {
 			return true
@@ -710,7 +710,7 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 			// The row ended without a mirrored terminal event (mirror gap):
 			// tell the client to resync rather than hang.
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventResync, `{"reason":"terminal_without_event"}`)
-			flusher.Flush()
+			_ = flusher.Flush() // best-effort: a dead client surfaces on the next write or ctx.Done
 			return true
 		}
 		select {
@@ -721,7 +721,7 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 			row, ok, err = s.ledger.Row(ctx, runID)
 			if err != nil || !ok {
 				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventResync, `{"reason":"ledger_unavailable"}`)
-				flusher.Flush()
+				_ = flusher.Flush() // best-effort: a dead client surfaces on the next write or ctx.Done
 				return true
 			}
 			terminal = row.Status != runstate.StatusQueued && row.Status != runstate.StatusRunning

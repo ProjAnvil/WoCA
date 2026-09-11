@@ -240,7 +240,7 @@ func (s *Server) handleGlobalEvents(w http.ResponseWriter, r *http.Request) {
 	for _, st := range rows {
 		writeSSE(w, s.sessionStateEvent(st.SessionID, st.Status, st.RunID))
 	}
-	flusher.Flush()
+	_ = flusher.Flush()
 
 	ctx := r.Context()
 	for {
@@ -250,7 +250,7 @@ func (s *Server) handleGlobalEvents(w http.ResponseWriter, r *http.Request) {
 				return // bus closed; never write a zero-value event
 			}
 			writeSSE(w, ev)
-			flusher.Flush()
+			_ = flusher.Flush()
 		case <-ctx.Done():
 			return
 		}

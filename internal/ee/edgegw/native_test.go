@@ -51,9 +51,13 @@ func newNativeDevice(t *testing.T, core *fakeCore, edgeURL string) *nativeDevice
 
 func (d *nativeDevice) publicJWK() []byte {
 	d.t.Helper()
+	raw, err := d.dpopKey.PublicKey.Bytes() // uncompressed point: 0x04 || X || Y
+	if err != nil {
+		d.t.Fatal(err)
+	}
 	return []byte(fmt.Sprintf(`{"kty":"EC","crv":"P-256","x":"%s","y":"%s"}`,
-		base64.RawURLEncoding.EncodeToString(d.dpopKey.PublicKey.X.Bytes()),
-		base64.RawURLEncoding.EncodeToString(d.dpopKey.PublicKey.Y.Bytes())))
+		base64.RawURLEncoding.EncodeToString(raw[1:33]),
+		base64.RawURLEncoding.EncodeToString(raw[33:65])))
 }
 
 // activate exchanges the key at the edge and remembers the session.

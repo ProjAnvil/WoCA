@@ -114,7 +114,7 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	budget := -1
+	var budget int
 	switch {
 	case req.Budget != nil:
 		budget = *req.Budget

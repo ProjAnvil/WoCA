@@ -234,7 +234,7 @@ func TestAnswerDanglingToolCalls(t *testing.T) {
 	}
 	dangling := []messages.Message{
 		messages.Human("<goal-cycle 1>"),
-		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{call("1"), call("2")}},
+		{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{call("1"), call("2")}},
 	}
 	out := answerDanglingToolCalls(dangling)
 	if len(out) != len(dangling)+2 {

@@ -32,9 +32,8 @@ func TestAgentAccessorSweep(t *testing.T) {
 	if a.RunningTaskCount() != 0 {
 		t.Fatal("tasks on fresh agent")
 	}
-	if _, _ = a.LSPStats(); true {
-		// LSPStats on a bare registry returns (0,0) or (0,N) — either is fine.
-	}
+	// LSPStats on a bare registry returns (0,0) or (0,N) — either is fine.
+	_, _ = a.LSPStats()
 
 	// Permission mode transitions.
 	a.SetMode(config.ModeReadOnly)

@@ -348,7 +348,7 @@ func (s *Store) Load() Settings {
 	if err != nil {
 		return out
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	pairs := map[string]string{}
 	for rows.Next() {
 		var k, v string
@@ -680,7 +680,7 @@ func (s *Store) SecretNames() []string {
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []string
 	for rows.Next() {
 		var n string
