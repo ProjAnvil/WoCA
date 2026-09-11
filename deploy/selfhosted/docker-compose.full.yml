@@ -467,13 +467,15 @@ services:
       nacos-init: { condition: service_completed_successfully }
       woca-pg-primary: { condition: service_healthy }
     networks:
-      - woca-app
-      - woca-data
+      woca-app:
+      woca-data:
       # Infra leg (the compose 5-leg → 3 fold): NATS dispatch
       # notifications, nacos registry/pack delivery, ladyM, and the
       # woca-collector trace bridge all live on the infra zone now —
-      # one interface, no cross-zone forwarding.
-      - woca-infra
+      # one interface, no cross-zone forwarding. The role alias feeds
+      # Prometheus DNS-SD (job woca-server): every replica answers to it.
+      woca-infra:
+        aliases: ["woca-server"]
 
   woca-server-2:
     <<: *woca-server
@@ -549,10 +551,12 @@ services:
       # The nacos entries must exist before the role resolves its DSN.
       nacos-init: { condition: service_completed_successfully }
     networks:
-      - woca-app
-      - woca-data
-      # Infra leg: see the servers' note above.
-      - woca-infra
+      woca-app:
+      woca-data:
+      # Infra leg: see the servers' note above. The role alias feeds
+      # Prometheus DNS-SD (job woca-worker).
+      woca-infra:
+        aliases: ["woca-worker"]
 
   woca-worker-2:
     <<: *woca-worker

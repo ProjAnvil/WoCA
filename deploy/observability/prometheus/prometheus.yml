@@ -18,7 +18,7 @@ alerting:
 scrape_configs:
   # woca-server instances expose /metrics on the business port (8080).
   # DNS service discovery over the role alias (every server container
-  # carries it on the woca-obs network), so scaling the role adds targets
+  # carries it on the woca-infra network), so scaling the role adds targets
   # without touching this file; in Kubernetes replace with
   # kubernetes_sd_configs (see deploy/k8s/README.md).
   - job_name: woca-server
@@ -29,6 +29,8 @@ scrape_configs:
         refresh_interval: 15s
 
   # woca-worker instances expose /healthz + /metrics on the probe port.
+  # DNS-SD over the role alias on woca-infra, same discipline as the
+  # woca-server job above.
   - job_name: woca-worker
     dns_sd_configs:
       - names: ["woca-worker"]

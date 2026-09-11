@@ -165,9 +165,8 @@ func Thumbprint(pub ecdsa.PublicKey) (string, error) {
 	if pub.Curve != elliptic.P256() {
 		return "", errors.New("devicekey: thumbprint: key must be P-256")
 	}
-	canonical := `{"crv":"P-256","kty":"EC","x":"` +
-		base64.RawURLEncoding.EncodeToString(pub.X.Bytes()) +
-		`","y":"` + base64.RawURLEncoding.EncodeToString(pub.Y.Bytes()) + `"}`
+	canonical := `{"crv":"P-256","kty":"EC","x":"` + jwkCoord(pub.X) +
+		`","y":"` + jwkCoord(pub.Y) + `"}`
 	sum := sha256.Sum256([]byte(canonical))
 	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
@@ -180,9 +179,17 @@ func PublicJWK(pub ecdsa.PublicKey) ([]byte, error) {
 	return json.Marshal(map[string]string{
 		"kty": "EC",
 		"crv": "P-256",
-		"x":   base64.RawURLEncoding.EncodeToString(pub.X.Bytes()),
-		"y":   base64.RawURLEncoding.EncodeToString(pub.Y.Bytes()),
+		"x":   jwkCoord(pub.X),
+		"y":   jwkCoord(pub.Y),
 	})
+}
+
+// jwkCoord renders a P-256 coordinate as a fixed 32-octet base64url string
+// (RFC 7518 §6.2.1.2). big.Int.Bytes drops leading zeros — about 1% of keys
+// have a short coordinate, and the unpadded form is a non-compliant JWK
+// whose thumbprint differs from any verifier that re-derives coordinates.
+func jwkCoord(b *big.Int) string {
+	return base64.RawURLEncoding.EncodeToString(b.FillBytes(make([]byte, 32)))
 }
 
 func randomToken(nbytes int) string {

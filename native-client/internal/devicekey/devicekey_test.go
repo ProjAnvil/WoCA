@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
+	"encoding/base64"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/projanvil/woca/internal/ee/dpop"
 )
 
 func TestLoadOrCreatePersistsStableMaterial(t *testing.T) {
@@ -104,8 +109,64 @@ func TestThumbprintMatchesVerifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tp) < 40 {
-		t.Fatalf("thumbprint = %q", tp)
+	jwkJSON, err := PublicJWK(m.DPoPKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The verifier side (server) hashes the client's JWK string fields; the
+	// pinned thumbprint must equal what that side computes.
+	vtp, err := dpop.ParseJWKThumbprint(jwkJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tp != vtp {
+		t.Fatalf("thumbprint %q != verifier thumbprint %q", tp, vtp)
 	}
 	var _ *ecdsa.PrivateKey = m.DPoPKey
+}
+
+// P-256 coordinates must be fixed-width 32 octets (RFC 7518 §6.2.1.2): a
+// coordinate with a leading zero byte must keep it, or the JWK — and its
+// RFC 7638 thumbprint — diverges from any compliant verifier.
+func TestJWKCoordPadsTo32Octets(t *testing.T) {
+	short := big.NewInt(1) // worst case: 31 leading zero octets
+	got := jwkCoord(short)
+	raw, err := base64.RawURLEncoding.DecodeString(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 32 {
+		t.Fatalf("jwkCoord(1) = %d octets, want 32", len(raw))
+	}
+	if raw[31] != 1 || !bytes.Equal(raw[:31], make([]byte, 31)) {
+		t.Fatalf("jwkCoord(1) = %x, want 31 zero octets then 0x01", raw)
+	}
+
+	// A key whose X coordinate genuinely starts with 0x00 must still
+	// thumbprint consistently between Thumbprint and the verifier path.
+	for i := 0; i < 2000; i++ {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(key.X.Bytes()) < 32 || len(key.Y.Bytes()) < 32 {
+			tp, err := Thumbprint(key.PublicKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			jwkJSON, err := PublicJWK(key.PublicKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			vtp, err := dpop.ParseJWKThumbprint(jwkJSON)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tp != vtp {
+				t.Fatalf("short-coordinate key: thumbprint %q != verifier %q", tp, vtp)
+			}
+			return
+		}
+	}
+	t.Fatal("no short-coordinate key found in 2000 tries (want ~1% hit rate)")
 }
