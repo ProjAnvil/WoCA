@@ -140,7 +140,7 @@ func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sid := r.PathValue("id")
-	msgs := s.sessions.load(sid)
+	msgs := s.sessions.load(r.Context(), sid)
 	keep := req.Keep
 	if req.DropLastTurn {
 		// Roll the conversation back to before the final user turn: keep
@@ -160,7 +160,7 @@ func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 		keep = len(msgs)
 	}
 	ws := s.sessions.workspaceOf(sid)
-	if err := s.sessions.save(sid, msgs[:keep], ws); err != nil {
+	if err := s.sessions.save(r.Context(), sid, msgs[:keep], ws); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

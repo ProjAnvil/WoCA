@@ -28,7 +28,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	// sessions from the persisted index, so an unpersisted session — and with
 	// it a freshly added workspace group — would vanish on page refresh.
 	// Before, the session first materialized when its initial run completed.
-	_ = s.sessions.save(id, nil, ws)
+	_ = s.sessions.save(r.Context(), id, nil, ws)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id":     id,
 		"workspace":      ws,
@@ -59,7 +59,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	msgs := s.sessions.load(id)
+	msgs := s.sessions.load(r.Context(), id)
 	if msgs == nil {
 		msgs = []messages.Message{}
 	}
@@ -86,7 +86,7 @@ func expandHomePath(p string) string {
 // the session to be gone.
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	s.sessions.delete(id)
+	s.sessions.delete(r.Context(), id)
 	s.forgetSessionState(id)
 	s.log.Info().Str("session", id).Msg("session deleted")
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})

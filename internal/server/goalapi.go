@@ -222,10 +222,12 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 		}
 		run.emit(Event{Type: "run_started", Data: map[string]any{}})
 		s.markSessionState(sessionID, wocadb.SessionRunning, id)
-		history := s.sessions.load(sessionID)
+		history := s.sessions.load(run.ctx, sessionID)
 		run.startGoal(history, func(final []messages.Message) {
 			if final != nil {
-				_ = s.sessions.save(sessionID, stripSystem(final), workspace)
+				// Completion persistence must survive run cancellation:
+				// keep the ctx values, drop the cancellation.
+				_ = s.sessions.save(context.WithoutCancel(run.ctx), sessionID, stripSystem(final), workspace)
 				if g := a.Goal(); g != nil {
 					s.log.Info().Str("run", id).Str("session", sessionID).
 						Str("status", string(g.Status)).Msg("goal run ended")

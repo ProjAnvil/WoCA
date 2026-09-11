@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/rs/zerolog"
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/platform/blobstore"
@@ -37,6 +39,10 @@ type sessionStore struct {
 	// carries the construction error).
 	blobs    blobstore.Store
 	blobsErr error
+	// log receives debug-level persistence-failure reports (delete is
+	// best-effort by contract); defaults to a no-op logger until the
+	// owning Server wires its own in.
+	log zerolog.Logger
 
 	// mu guards mem, tombstones and index ONLY — no file I/O under it.
 	mu         sync.Mutex
@@ -55,6 +61,7 @@ func newSessionStore(dir string) *sessionStore {
 		mem:        map[string][]messages.Message{},
 		tombstones: map[string]bool{},
 		index:      map[string]sessionMeta{},
+		log:        zerolog.Nop(),
 	}
 	if dir != "" {
 		// Transcripts live behind the blobstore seam (Phase 2 T5): the
@@ -87,6 +94,7 @@ func (s *sessionStore) reconcileOnStartup() {
 	if s.blobs == nil {
 		return
 	}
+	// Startup reconcile is not tied to any request: background context.
 	keys, err := s.blobs.List(context.Background(), "")
 	if err != nil {
 		return
@@ -143,7 +151,7 @@ func (s *sessionStore) indexPath() string {
 }
 
 // load returns a session transcript from memory or disk (nil if absent).
-func (s *sessionStore) load(id string) []messages.Message {
+func (s *sessionStore) load(ctx context.Context, id string) []messages.Message {
 	s.mu.Lock()
 	if msgs, ok := s.mem[id]; ok {
 		s.mu.Unlock()
@@ -153,7 +161,7 @@ func (s *sessionStore) load(id string) []messages.Message {
 	if s.dir == "" {
 		return nil
 	}
-	msgs, err := session.LoadBlob(context.Background(), s.blobs, s.key(id)) // blob read outside the lock
+	msgs, err := session.LoadBlob(ctx, s.blobs, s.key(id)) // blob read outside the lock
 	if err != nil {
 		return nil
 	}
@@ -166,7 +174,7 @@ func (s *sessionStore) load(id string) []messages.Message {
 // save persists a session transcript to memory and (if enabled) disk. When
 // workspace is non-empty it is recorded in the metadata index for grouping.
 // Saves for deleted sessions are dropped (see tombstones).
-func (s *sessionStore) save(id string, msgs []messages.Message, workspace string) error {
+func (s *sessionStore) save(ctx context.Context, id string, msgs []messages.Message, workspace string) error {
 	s.mu.Lock()
 	if s.tombstones[id] {
 		s.mu.Unlock()
@@ -180,7 +188,7 @@ func (s *sessionStore) save(id string, msgs []messages.Message, workspace string
 	if s.blobs == nil {
 		return s.blobsErr
 	}
-	if err := session.SaveBlob(context.Background(), s.blobs, s.key(id), msgs); err != nil {
+	if err := session.SaveBlob(ctx, s.blobs, s.key(id), msgs); err != nil {
 		return err
 	}
 	if workspace != "" {
@@ -268,7 +276,7 @@ func (s *sessionStore) flushIndex() {
 // delete removes a session: the in-memory transcript, the .jsonl file, the
 // goal sidecar and the index entry. The tombstone keeps a run still in flight
 // from resurrecting the transcript via its completion save.
-func (s *sessionStore) delete(id string) {
+func (s *sessionStore) delete(ctx context.Context, id string) {
 	s.mu.Lock()
 	delete(s.mem, id)
 	delete(s.index, id)
@@ -277,8 +285,15 @@ func (s *sessionStore) delete(id string) {
 	if s.dir == "" {
 		return
 	}
-	_ = s.blobs.Delete(context.Background(), s.key(id))
-	_ = os.Remove(s.goalPath(id))
+	// Best-effort cleanup by contract (deleting an unknown id still
+	// succeeds), but failures must not vanish silently. Not-found is the
+	// success path for unknown ids, not a failure.
+	if err := s.blobs.Delete(ctx, s.key(id)); err != nil && !errors.Is(err, blobstore.ErrNotFound) {
+		s.log.Debug().Err(err).Str("session", id).Msg("transcript blob delete failed")
+	}
+	if err := os.Remove(s.goalPath(id)); err != nil && !os.IsNotExist(err) {
+		s.log.Debug().Err(err).Str("session", id).Msg("goal sidecar remove failed")
+	}
 	s.flushIndex()
 }
 

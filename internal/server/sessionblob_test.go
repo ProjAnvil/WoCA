@@ -70,17 +70,17 @@ func TestSessionStoreUsesBlobstoreSeam(t *testing.T) {
 	s.dir = t.TempDir()
 
 	msgs := []messages.Message{messages.Human("hello"), messages.AI("world")}
-	if err := s.save("sess-1", msgs, ""); err != nil {
+	if err := s.save(context.Background(), "sess-1", msgs, ""); err != nil {
 		t.Fatal(err)
 	}
 	if b, ok := blobs.data["sess-1.jsonl"]; !ok || len(b) == 0 {
 		t.Fatalf("transcript blob missing: %v", blobs.data)
 	}
-	got := s.load("sess-1")
+	got := s.load(context.Background(), "sess-1")
 	if len(got) != 2 || got[0].Content != "hello" {
 		t.Fatalf("load = %+v", got)
 	}
-	s.delete("sess-1")
+	s.delete(context.Background(), "sess-1")
 	if _, ok := blobs.data["sess-1.jsonl"]; ok {
 		t.Fatal("transcript blob survived remove")
 	}
@@ -96,7 +96,7 @@ func TestLegacyTranscriptsLoadThroughBlobstore(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newSessionStore(dir)
-	got := s.load("legacy")
+	got := s.load(context.Background(), "legacy")
 	if len(got) != 1 || got[0].Content != "old world" {
 		t.Fatalf("legacy transcript = %+v", got)
 	}

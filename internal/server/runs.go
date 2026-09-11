@@ -421,7 +421,7 @@ func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, st
 	if sid == "" {
 		sid = newSessionID()
 	}
-	history := s.sessions.load(sid)
+	history := s.sessions.load(run.ctx, sid)
 	return run, sid, workspace, history
 }
 
@@ -491,10 +491,12 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 		}
 		run.emit(Event{Type: "run_started", Data: map[string]any{}})
 		s.markSessionState(sid, wocadb.SessionRunning, run.id)
-		history := s.sessions.load(sid)
+		history := s.sessions.load(run.ctx, sid)
 		run.start(append(history, human), func(final []messages.Message) {
 			if final != nil {
-				_ = s.sessions.save(sid, stripSystem(final), workspace)
+				// Completion persistence must survive run cancellation:
+				// keep the ctx values, drop the cancellation.
+				_ = s.sessions.save(context.WithoutCancel(run.ctx), sid, stripSystem(final), workspace)
 				s.logObsRunEnd(sid, run.id, workspace, final)
 			}
 			// Correctness core: the session gate is released only after
@@ -524,7 +526,11 @@ func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace 
 	if workspace == "" {
 		workspace = s.workdir
 	}
-	run := newRun(newRunID(), s.agent, context.Background(), func() {})
+	// The queued run's context derives from the server lifecycle (rootCtx),
+	// not the triggering request: a dispatched run must outlive its HTTP
+	// request but still end at server shutdown.
+	runCtx, runCancel := context.WithCancel(s.rootCtx)
+	run := newRun(newRunID(), s.agent, runCtx, runCancel)
 	thread := agent.NewThreadID()
 	run.mu.Lock()
 	run.thread = thread
@@ -543,10 +549,11 @@ func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace 
 	}
 	blob, err := runstate.EncodeSnapshot(snap)
 	if err != nil {
+		runCancel()
 		return nil, sid, 0, err
 	}
 	s.log.Info().Str("run", run.id).Str("session", sid).Msg("run dispatched to queue")
-	if err := s.ledger.Enqueue(context.Background(), runstate.Run{
+	if err := s.ledger.Enqueue(runCtx, runstate.Run{
 		RunID:          run.id,
 		SessionID:      sid,
 		ThreadID:       thread,
@@ -554,6 +561,7 @@ func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace 
 	}); err != nil {
 		// The session constraint is the cross-instance admission gate; the
 		// run-id collision is a process-wide outage signal.
+		runCancel()
 		if errors.Is(err, runstate.ErrActiveRun) {
 			return nil, sid, -1, errQueueFull
 		}
@@ -582,7 +590,7 @@ func (s *Server) startCommandRun(sessionID string, human messages.Message, works
 		run.emit(Event{Type: "delta", Data: map[string]any{"text": output + "\n"}})
 		run.finish("done", map[string]any{"cancelled": false})
 		final := append(append([]messages.Message(nil), history...), human, messages.AI(output))
-		_ = s.sessions.save(sid, stripSystem(final), workspace)
+		_ = s.sessions.save(context.WithoutCancel(run.ctx), sid, stripSystem(final), workspace)
 	}()
 	return run, sid
 }

@@ -19,7 +19,7 @@ func (s *Server) handleSessionContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	history := s.sessions.load(id)
+	history := s.sessions.load(r.Context(), id)
 	ws := s.sessions.workspaceOf(id)
 	if ws == "" {
 		ws = s.workdir

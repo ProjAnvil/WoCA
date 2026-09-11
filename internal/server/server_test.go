@@ -189,10 +189,10 @@ func TestSessionStoreRoundTrip(t *testing.T) {
 		{Role: messages.RoleTool, ToolCallID: "1", Content: "tool result"},
 		messages.AI("done"),
 	}
-	if err := st.save("s1", msgs, ""); err != nil {
+	if err := st.save(context.Background(), "s1", msgs, ""); err != nil {
 		t.Fatal(err)
 	}
-	got := st.load("s1")
+	got := st.load(context.Background(), "s1")
 	if len(got) != len(msgs) {
 		t.Fatalf("len = %d, want %d", len(got), len(msgs))
 	}
@@ -241,7 +241,7 @@ func TestSessionDelete(t *testing.T) {
 	}
 
 	// A run completing after its session was deleted must not resurrect it.
-	if err := st.save(sessionID, []messages.Message{messages.Human("again")}, ""); err != nil {
+	if err := st.save(context.Background(), sessionID, []messages.Message{messages.Human("again")}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, sessionID+".jsonl")); !os.IsNotExist(err) {
@@ -523,7 +523,7 @@ func TestSessionListGroupsByWorkspace(t *testing.T) {
 	st := newSessionStore(dir)
 	st.defaultWorkspace = "/tmp/current-project"
 	// New session explicitly tagged with another workspace.
-	if err := st.save("tagged", []messages.Message{messages.Human("new")}, "/tmp/other-project"); err != nil {
+	if err := st.save(context.Background(), "tagged", []messages.Message{messages.Human("new")}, "/tmp/other-project"); err != nil {
 		t.Fatal(err)
 	}
 

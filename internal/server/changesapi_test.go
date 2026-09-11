@@ -144,7 +144,7 @@ func TestWorkspaceUndoEndpoint(t *testing.T) {
 func TestTruncateSessionEndpoint(t *testing.T) {
 	s, ws := newChangesServer(t)
 	sid := "trunc-test"
-	if err := s.sessions.save(sid, []messages.Message{
+	if err := s.sessions.save(context.Background(), sid, []messages.Message{
 		messages.Human("one"), messages.AI("two"), messages.Human("three"), messages.AI("four"),
 	}, ws); err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestTruncateSessionEndpoint(t *testing.T) {
 	if out.Kept != 2 {
 		t.Fatalf("kept = %d", out.Kept)
 	}
-	msgs := s.sessions.load(sid)
+	msgs := s.sessions.load(context.Background(), sid)
 	if len(msgs) != 2 || msgs[0].Content != "one" || msgs[1].Content != "two" {
 		t.Fatalf("truncated transcript = %v", msgs)
 	}

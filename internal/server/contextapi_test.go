@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -31,7 +32,7 @@ func TestSessionContextEndpoint(t *testing.T) {
 	// A session with a small transcript (the workspace groups it in the index,
 	// which is also where workspaceOf resolves the breakdown's workspace).
 	sid := "ctx-test"
-	if err := s.sessions.save(sid, []messages.Message{
+	if err := s.sessions.save(context.Background(), sid, []messages.Message{
 		messages.Human("hello there"),
 		messages.AI("hi!"),
 	}, t.TempDir()); err != nil {

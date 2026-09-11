@@ -221,6 +221,12 @@ type Server struct {
 	// goal (so a clear can delete the right file).
 	goalMu    sync.Mutex
 	goalOwner string
+
+	// rootCtx is the server lifecycle context: contexts that must outlive
+	// their triggering request but die with the server (e.g. dispatched
+	// queue runs) derive from it. rootCancel fires in shutdown.
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
 }
 
 var (
@@ -240,6 +246,7 @@ func New(cfg Config) *Server {
 	}
 	store := newSessionStore(cfg.SessionDir)
 	store.defaultWorkspace = defaultWorkspace
+	store.log = cfg.Logger
 	stateDB := cfg.RunStateDB
 	if stateDB == nil && cfg.Settings != nil {
 		stateDB = cfg.Settings.DB()
@@ -256,6 +263,7 @@ func New(cfg Config) *Server {
 	if authorizer == nil {
 		authorizer = authz.NewLocal()
 	}
+	rootCtx, rootCancel := context.WithCancel(context.Background())
 	s := &Server{
 		agent:          cfg.Agent,
 		static:         cfg.Static,
@@ -295,6 +303,8 @@ func New(cfg Config) *Server {
 		applyClaudeEnv: cfg.ApplyClaudeEnv,
 		plugins:        cfg.Plugins,
 		installPlugin:  cfg.InstallPlugin,
+		rootCtx:        rootCtx,
+		rootCancel:     rootCancel,
 	}
 	if cfg.Agent != nil {
 		// Goal persistence: every live goal change mirrors to the owning
@@ -460,6 +470,7 @@ func (s *Server) ServeStarted(ctx context.Context, srv *http.Server, serveErr <-
 		return err
 	case <-ctx.Done():
 		s.admission.stop()
+		s.rootCancel() // server lifecycle over: queue-dispatched run contexts end too
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {

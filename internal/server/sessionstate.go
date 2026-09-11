@@ -176,21 +176,28 @@ func (s *Server) markSessionState(sessionID, status, runID string) {
 		UpdatedAt: wocadb.Now(),
 	})
 	// The local bus never fails; a dropped event on a slow client is
-	// recovered by the seeded snapshot on reconnect, as before.
-	_, _ = s.hub.Publish(context.Background(), sessionStateTopic, s.sessionStateEvent(sessionID, status, runID))
+	// recovered by the seeded snapshot on reconnect, as before. Still, log
+	// a failure instead of swallowing it silently.
+	if _, err := s.hub.Publish(context.Background(), sessionStateTopic, s.sessionStateEvent(sessionID, status, runID)); err != nil {
+		s.log.Debug().Err(err).Str("session", sessionID).Msg("session-state publish failed")
+	}
 }
 
 // clearSessionState removes the state row when it still belongs to runID.
 func (s *Server) clearSessionState(sessionID, runID string) {
 	if s.state.ClearIfRun(sessionID, runID) {
-		_, _ = s.hub.Publish(context.Background(), sessionStateTopic, s.sessionStateEvent(sessionID, "", runID))
+		if _, err := s.hub.Publish(context.Background(), sessionStateTopic, s.sessionStateEvent(sessionID, "", runID)); err != nil {
+			s.log.Debug().Err(err).Str("session", sessionID).Msg("session-state publish failed")
+		}
 	}
 }
 
 // forgetSessionState drops the row unconditionally (session deleted).
 func (s *Server) forgetSessionState(sessionID string) {
 	s.state.Delete(sessionID)
-	_, _ = s.hub.Publish(context.Background(), sessionStateTopic, s.sessionStateEvent(sessionID, "", ""))
+	if _, err := s.hub.Publish(context.Background(), sessionStateTopic, s.sessionStateEvent(sessionID, "", "")); err != nil {
+		s.log.Debug().Err(err).Str("session", sessionID).Msg("session-state publish failed")
+	}
 }
 
 func (s *Server) sessionStateEvent(sessionID, status, runID string) Event {
