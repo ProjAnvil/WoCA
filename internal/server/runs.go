@@ -327,7 +327,7 @@ func (s *Server) handleBtwRun(w http.ResponseWriter, r *http.Request) {
 	s.auditEvent(r, "run_btw", r.PathValue("id"))
 	human := messages.Human(req.Prompt)
 	run, sid, _, history := s.newRegisteredRun(r.PathValue("id"), req.Workspace)
-	run.emit(Event{Type: "run_started", Data: map[string]any{}})
+	run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
 	run.start(append(history, human), func(final []messages.Message) {
 		// Deliberately not persisted: /btw never enters the transcript.
 		_ = final
@@ -447,14 +447,14 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 		obs.Log("info", "run_start", map[string]any{"session": sid, "run": run.id})
 	}
 	w, pos, ok := s.admission.enter(sid, func(p int) {
-		run.emit(Event{Type: "queue_position", Data: map[string]any{"position": p}})
+		run.emit(Event{Type: EventQueuePosition, Data: map[string]any{"position": p}})
 	})
 	if !ok {
-		run.finish("error", map[string]any{"message": "session run queue is full"})
+		run.finish(EventError, map[string]any{"message": "session run queue is full"})
 		return nil, sid, -1, errQueueFull
 	}
 	if pos > 0 {
-		run.emit(Event{Type: "run_queued", Data: map[string]any{"position": pos}})
+		run.emit(Event{Type: EventRunQueued, Data: map[string]any{"position": pos}})
 	}
 	// Session run-state tracking: mark on start, flip on interrupt parking,
 	// clear on the terminal event. clearSessionState is compare-and-clear, so
@@ -465,7 +465,7 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 	go func() {
 		if w != nil && !s.admission.wait(run.ctx, sid, w) {
 			// Cancelled while queued (cancelRun cancelled run.ctx) or shutdown.
-			run.finish("done", map[string]any{"cancelled": true})
+			run.finish(EventDone, map[string]any{"cancelled": true})
 			return
 		}
 		// Externalized run state (Phase 2): the database row is created when
@@ -483,13 +483,13 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 				RunID: run.id, SessionID: sid, ThreadID: thread,
 			}, s.workerID, runLeaseDuration); err != nil {
 				s.log.Warn().Str("run", run.id).Str("session", sid).Err(err).Msg("run rejected by the run ledger")
-				run.finish("error", map[string]any{"message": "session is running on another instance"})
+				run.finish(EventError, map[string]any{"message": "session is running on another instance"})
 				s.admission.release(sid)
 				return
 			}
 			s.trackRunLease(run, sid)
 		}
-		run.emit(Event{Type: "run_started", Data: map[string]any{}})
+		run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
 		s.markSessionState(sid, wocadb.SessionRunning, run.id)
 		history := s.sessions.load(run.ctx, sid)
 		run.start(append(history, human), func(final []messages.Message) {
@@ -587,8 +587,8 @@ func (s *Server) startCommandRun(sessionID string, human messages.Message, works
 	s.log.Info().Str("run", run.id).Str("session", sid).Str("command", human.Content).Msg("command run")
 	go func() {
 		defer run.cancel()
-		run.emit(Event{Type: "delta", Data: map[string]any{"text": output + "\n"}})
-		run.finish("done", map[string]any{"cancelled": false})
+		run.emit(Event{Type: EventDelta, Data: map[string]any{"text": output + "\n"}})
+		run.finish(EventDone, map[string]any{"cancelled": false})
 		final := append(append([]messages.Message(nil), history...), human, messages.AI(output))
 		_ = s.sessions.save(context.WithoutCancel(run.ctx), sid, stripSystem(final), workspace)
 	}()
@@ -688,7 +688,7 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 		events, err := s.ledger.Replay(ctx, runID, sinceSeq, 500)
 		if err != nil {
 			// The stream dies loudly; the client's resync path reloads.
-			fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"ledger_unavailable"}`)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventResync, `{"reason":"ledger_unavailable"}`)
 			flusher.Flush()
 			return true
 		}
@@ -696,7 +696,7 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 		for _, ev := range events {
 			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Kind, ev.Payload)
 			sinceSeq = ev.Seq
-			if ev.Kind == "done" || ev.Kind == "error" {
+			if ev.Kind == EventDone || ev.Kind == EventError {
 				done = true
 			}
 		}
@@ -709,7 +709,7 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 		if terminal {
 			// The row ended without a mirrored terminal event (mirror gap):
 			// tell the client to resync rather than hang.
-			fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"terminal_without_event"}`)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventResync, `{"reason":"terminal_without_event"}`)
 			flusher.Flush()
 			return true
 		}
@@ -720,7 +720,7 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 			// Re-check the row so a terminal transition ends the stream.
 			row, ok, err = s.ledger.Row(ctx, runID)
 			if err != nil || !ok {
-				fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"ledger_unavailable"}`)
+				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventResync, `{"reason":"ledger_unavailable"}`)
 				flusher.Flush()
 				return true
 			}

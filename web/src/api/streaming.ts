@@ -5,7 +5,20 @@ import { useAuthStore } from '../stores/auth'
 import i18n from '../i18n'
 import { getNativeBridge } from '../native/bridge'
 import { nativeRequestCancellation } from '../native/requestCancellation'
-import type { Goal } from '../types'
+import type {
+  AuthRevokedPayload,
+  DonePayload,
+  ErrorPayload,
+  GoalPayload,
+  InterruptPayload,
+  QueuePositionPayload,
+  ResyncPayload,
+  SSEEventType,
+  SessionStatePayload,
+  TextPayload,
+  ToolCallPayload,
+  ToolResultPayload,
+} from './events'
 import { streamTarget } from './transport'
 
 export interface StreamHandlers {
@@ -13,12 +26,12 @@ export interface StreamHandlers {
   onReasoning?: (text: string) => void
   /** Goal-loop narration (cycle banners, per-cycle chatter) — not an answer. */
   onGoalNote?: (text: string) => void
-  onToolCall: (tc: { id: string; name: string; args: Record<string, unknown> }) => void
-  onToolResult: (tr: { tool_call_id: string; content: string }) => void
-  onInterrupt: (ev: { kind: string; payload: unknown }) => void
+  onToolCall: (tc: ToolCallPayload) => void
+  onToolResult: (tr: ToolResultPayload) => void
+  onInterrupt: (ev: InterruptPayload) => void
   /** An interrupt was answered (also replayed) — clear any pending card. */
   onInterruptResolved?: () => void
-  onGoal?: (ev: { goal: Goal | null; running: boolean }) => void
+  onGoal?: (ev: GoalPayload) => void
   onRunQueued?: (position: number) => void
   onQueuePosition?: (position: number) => void
   onRunStarted?: () => void
@@ -31,11 +44,15 @@ export interface StreamHandlers {
 /*
  * run-events protocol (SSE): the server emits delta (answer text), reasoning
  * (thinking text), tool_call, tool_result, interrupt (permission/ask/plan
- * prompts), goal (goal-chip snapshot), run_queued / queue_position /
- * run_started (per-session admission gate), resync (the replay window can't
- * cover the gap — refetch a full snapshot) and the terminal done (carries
- * cancelled) / error (carries message) pair. Every event carries an id: line
- * with its per-run seq for Last-Event-ID resume.
+ * prompts), timeout (parked-interrupt TTL — the terminal done follows), goal
+ * (goal-chip snapshot), run_queued / queue_position / run_started
+ * (per-session admission gate), resync (the replay window can't cover the
+ * gap — refetch a full snapshot), auth_revoked (credential revoked
+ * mid-stream) and the terminal done (carries cancelled) / error (carries
+ * message) pair. Event names and payload shapes are the contract in
+ * ./events.ts (mirrored from internal/server/ssevents.go; CI drift check).
+ * Every event carries an id: line with its per-run seq for Last-Event-ID
+ * resume.
  */
 export function streamRun(
   runId: string,
@@ -89,34 +106,38 @@ export function streamRun(
         } catch {
           return
         }
-        switch (ev.event) {
+        switch (ev.event as SSEEventType) {
           case 'delta':
-            handlers.onDelta((data as { text?: string }).text ?? '')
+            handlers.onDelta((data as TextPayload).text ?? '')
             break
           case 'reasoning':
-            handlers.onReasoning?.((data as { text?: string }).text ?? '')
+            handlers.onReasoning?.((data as TextPayload).text ?? '')
             break
           case 'goal_note':
-            handlers.onGoalNote?.((data as { text?: string }).text ?? '')
+            handlers.onGoalNote?.((data as TextPayload).text ?? '')
             break
           case 'tool_call':
-            handlers.onToolCall(data as { id: string; name: string; args: Record<string, unknown> })
+            handlers.onToolCall(data as ToolCallPayload)
             break
           case 'tool_result':
-            handlers.onToolResult(data as { tool_call_id: string; content: string })
+            handlers.onToolResult(data as ToolResultPayload)
             break
           case 'interrupt':
-            handlers.onInterrupt(data as { kind: string; payload: unknown })
+            handlers.onInterrupt(data as InterruptPayload)
             break
           case 'interrupt_resolved':
             handlers.onInterruptResolved?.()
             break
+          case 'timeout':
+            // Parked-interrupt TTL fired; the server cancels the run and the
+            // terminal done event closes the stream — nothing to render.
+            break
           case 'goal':
-            handlers.onGoal?.(data as { goal: Goal | null; running: boolean })
+            handlers.onGoal?.(data as GoalPayload)
             break
           case 'run_queued':
           case 'queue_position': {
-            const pos = (data as { position?: number }).position ?? 0
+            const pos = (data as QueuePositionPayload).position ?? 0
             if (ev.event === 'run_queued') handlers.onRunQueued?.(pos)
             else handlers.onQueuePosition?.(pos)
             break
@@ -125,25 +146,25 @@ export function streamRun(
             handlers.onRunStarted?.()
             break
           case 'resync':
-            handlers.onResync?.((data as { reason?: string }).reason ?? 'unknown')
+            handlers.onResync?.((data as ResyncPayload).reason ?? 'unknown')
             break
           case 'auth_revoked': {
             // Revocation closed the stream: surface the enumerated code
             // through the error channel; the next API probe raises the
             // login gate with the revoked message.
             terminal = true
-            const code = (data as { code?: string }).code ?? 'unauthorized'
+            const code = (data as AuthRevokedPayload).code ?? 'unauthorized'
             handlers.onError(code === 'revoked' ? i18n.global.t('api.revoked') : i18n.global.t('api.streamConnectFailed', { status: 401 }))
             useAuthStore().raise()
             break
           }
           case 'done':
             terminal = true
-            handlers.onDone((data as { cancelled?: boolean }).cancelled ?? false)
+            handlers.onDone((data as DonePayload).cancelled ?? false)
             break
           case 'error':
             terminal = true
-            handlers.onError((data as { message?: string }).message ?? i18n.global.t('api.unknownError'))
+            handlers.onError((data as ErrorPayload).message ?? i18n.global.t('api.unknownError'))
             break
         }
       },
@@ -210,7 +231,7 @@ export interface EventStream {
 }
 
 export function streamEvents(
-  onSessionState: (ev: { session_id: string; status: string; run_id?: string }) => void,
+  onSessionState: (ev: SessionStatePayload) => void,
 ): EventStream {
   const handleMessage = (data: string) => {
     try {

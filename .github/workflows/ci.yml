@@ -28,6 +28,9 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: SSE event contract drift check
+        run: ci/check-sse-contract.sh
+
       - name: Test
         run: go test ./...
 

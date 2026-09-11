@@ -54,7 +54,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer run.unsubscribe(sub)
 	if gap {
-		fmt.Fprintf(w, "event: resync\ndata: %s\n\n", `{"reason":"history_gap"}`)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventResync, `{"reason":"history_gap"}`)
 		flusher.Flush()
 	}
 
@@ -72,7 +72,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-reauth:
 			if err := s.streamReauth(cred); err != nil {
-				fmt.Fprintf(w, "event: auth_revoked\ndata: %s\n\n", `{"code":"`+authn.CodeOf(err)+`"}`)
+				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", EventAuthRevoked, `{"code":"`+authn.CodeOf(err)+`"}`)
 				flusher.Flush()
 				return
 			}
@@ -85,7 +85,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
-			if ev.Type == "done" || ev.Type == "error" {
+			if ev.Type == EventDone || ev.Type == EventError {
 				return
 			}
 		case <-ctx.Done():

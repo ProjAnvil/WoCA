@@ -201,7 +201,7 @@ func (s *Server) forgetSessionState(sessionID string) {
 }
 
 func (s *Server) sessionStateEvent(sessionID, status, runID string) Event {
-	return Event{Type: "session_state", Data: map[string]any{
+	return Event{Type: EventSessionState, Data: map[string]any{
 		"session_id": sessionID,
 		"status":     status, // "" = idle (row gone)
 		"run_id":     runID,

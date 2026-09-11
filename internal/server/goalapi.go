@@ -192,7 +192,7 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 		obs.Log("info", "goal_run_start", map[string]any{})
 	}
 	emitGoal := func(g *agent.Goal) {
-		run.emit(Event{Type: "goal", Data: map[string]any{"goal": g, "running": a.GoalRunning()}})
+		run.emit(Event{Type: EventGoal, Data: map[string]any{"goal": g, "running": a.GoalRunning()}})
 	}
 	unsub := a.SubscribeGoal(emitGoal)
 	emitGoal(a.Goal())
@@ -205,22 +205,22 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 	run.onResume = func() { s.markSessionState(sessionID, wocadb.SessionRunning, id) }
 
 	w, pos, ok := s.admission.enter(sessionID, func(p int) {
-		run.emit(Event{Type: "queue_position", Data: map[string]any{"position": p}})
+		run.emit(Event{Type: EventQueuePosition, Data: map[string]any{"position": p}})
 	})
 	if !ok {
-		run.finish("error", map[string]any{"message": "session run queue is full"})
+		run.finish(EventError, map[string]any{"message": "session run queue is full"})
 		return nil, errQueueFull
 	}
 	if pos > 0 {
-		run.emit(Event{Type: "run_queued", Data: map[string]any{"position": pos}})
+		run.emit(Event{Type: EventRunQueued, Data: map[string]any{"position": pos}})
 	}
 	go func() {
 		if w != nil && !s.admission.wait(run.ctx, sessionID, w) {
 			// Cancelled while queued (cancelRun cancelled run.ctx) or shutdown.
-			run.finish("done", map[string]any{"cancelled": true})
+			run.finish(EventDone, map[string]any{"cancelled": true})
 			return
 		}
-		run.emit(Event{Type: "run_started", Data: map[string]any{}})
+		run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
 		s.markSessionState(sessionID, wocadb.SessionRunning, id)
 		history := s.sessions.load(run.ctx, sessionID)
 		run.startGoal(history, func(final []messages.Message) {

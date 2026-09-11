@@ -108,16 +108,16 @@ func (r *Run) startWith(runFn func() ([]messages.Message, error), onDone func([]
 		final, err := runFn()
 		if err != nil {
 			if r.ctx.Err() != nil {
-				r.finish("done", map[string]any{"cancelled": true})
+				r.finish(EventDone, map[string]any{"cancelled": true})
 			} else {
-				r.finish("error", map[string]any{"message": err.Error()})
+				r.finish(EventError, map[string]any{"message": err.Error()})
 			}
 			if onDone != nil {
 				onDone(nil)
 			}
 			return
 		}
-		r.finish("done", map[string]any{"cancelled": false})
+		r.finish(EventDone, map[string]any{"cancelled": false})
 		if onDone != nil {
 			onDone(final)
 		}
@@ -133,23 +133,23 @@ func (r *Run) render(chunk lggraph.StreamChunk) {
 		switch v := chunk.Payload.(type) {
 		case string:
 			if v != "" {
-				r.emit(Event{Type: "delta", Data: map[string]any{"text": v}})
+				r.emit(Event{Type: EventDelta, Data: map[string]any{"text": v}})
 			}
 		case agent.ReasoningDelta:
 			if v.Text != "" {
-				r.emit(Event{Type: "reasoning", Data: map[string]any{"text": v.Text}})
+				r.emit(Event{Type: EventReasoning, Data: map[string]any{"text": v.Text}})
 			}
 		case agent.GoalNote:
 			// Goal-loop narration (banners, per-cycle chatter) streams as its
 			// own event type so the chat never mistakes it for the answer.
 			if v.Text != "" {
-				r.emit(Event{Type: "goal_note", Data: map[string]any{"text": v.Text}})
+				r.emit(Event{Type: EventGoalNote, Data: map[string]any{"text": v.Text}})
 			}
 		case agent.GoalFinalReply:
 			// The goal run's single unified reply — the one goal text that
 			// reaches the chat as an answer.
 			if v.Text != "" {
-				r.emit(Event{Type: "delta", Data: map[string]any{"text": v.Text}})
+				r.emit(Event{Type: EventDelta, Data: map[string]any{"text": v.Text}})
 			}
 		case agent.GoalDelta:
 			// Messages produced inside a goal execute cycle stream through
@@ -172,16 +172,16 @@ func (r *Run) renderMessage(m messages.Message) {
 	switch m.Role {
 	case messages.RoleAI:
 		for _, tc := range m.ToolCalls {
-			r.emit(Event{Type: "tool_call", Data: map[string]any{
-				"id":   tc.ID,
-				"name": tc.Name,
-				"args": tc.Args,
+			r.emit(Event{Type: EventToolCall, Data: toolCallPayload{
+				ID:   tc.ID,
+				Name: tc.Name,
+				Args: tc.Args,
 			}})
 		}
 	case messages.RoleTool:
-		r.emit(Event{Type: "tool_result", Data: map[string]any{
-			"tool_call_id": m.ToolCallID,
-			"content":      m.Content,
+		r.emit(Event{Type: EventToolResult, Data: toolResultPayload{
+			ToolCallID: m.ToolCallID,
+			Content:    m.Content,
 		}})
 	}
 }
@@ -215,13 +215,13 @@ func (r *Run) park(kind string, payload any) (any, error) {
 	r.pending = &interruptState{kind: kind, payload: payload, reply: reply}
 	r.mu.Unlock()
 
-	r.emit(Event{Type: "interrupt", Data: map[string]any{"kind": kind, "payload": payload}})
+	r.emit(Event{Type: EventInterrupt, Data: interruptPayload{Kind: kind, Payload: payload}})
 	if r.onPark != nil {
 		r.onPark()
 	}
 
 	timer := time.AfterFunc(parkedRunTTL, func() {
-		r.emit(Event{Type: "timeout", Data: map[string]any{"kind": kind, "reason": "parked_ttl"}})
+		r.emit(Event{Type: EventTimeout, Data: map[string]any{"kind": kind, "reason": "parked_ttl"}})
 		r.cancelRun()
 	})
 	defer timer.Stop()
@@ -271,7 +271,7 @@ func (r *Run) answer(body []byte) error {
 	// The resolution is part of the event history: a client replaying the
 	// stream (page refresh, /api/events-driven reattach) must not resurrect
 	// the interrupt card this answer just satisfied.
-	r.emit(Event{Type: "interrupt_resolved", Data: map[string]any{"kind": p.kind}})
+	r.emit(Event{Type: EventInterruptResolved, Data: map[string]any{"kind": p.kind}})
 	if r.onResume != nil {
 		r.onResume()
 	}
