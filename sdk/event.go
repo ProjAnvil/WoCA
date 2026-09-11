@@ -1,6 +1,11 @@
 // Package sdk is the public, in-process Go SDK for the woca agent harness:
 // one Query call assembles the same agent the CLI runs (model, tools, hooks,
 // skills, MCP, permissions) and streams its progress as typed events.
+//
+// Interrupt resume-value convention: a custom OnInterrupt handler returns
+// "y" or "n" for permission and plan_approval interrupts, and
+// agent.AskUserAnswer (answers in question order) for ask_user interrupts.
+// The SDK keeps resume values thin and does not wrap these types further.
 package sdk
 
 import (
