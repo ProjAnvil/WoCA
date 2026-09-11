@@ -115,9 +115,6 @@ func (s *Session) run(ctx context.Context, o Options, prompt string) {
 
 	history := []messages.Message{messages.Human(prompt)}
 	result, runErr := r.Run(ctx, history)
-	if endErr := a.RunSessionEnd(context.WithoutCancel(ctx), "oneshot"); endErr != nil && runErr == nil {
-		runErr = endErr
-	}
 
 	// Turn count mirrors the CLI's stripSystem(result) + tool-message count:
 	// drop leading system messages, then count RoleTool and add one.
@@ -131,7 +128,16 @@ func (s *Session) run(ctx context.Context, o Options, prompt string) {
 			turns++
 		}
 	}
-	s.send(ctx, resultEvent(result, a.Usage(), s.ap.Cfg.Model, turns, runErr))
+	// The result envelope is built from the run error alone, before the
+	// session-end hook runs — matching the CLI ordering (cmd/woca/main.go
+	// run, the opts.Prompt branch), where sdkout.Final sees the run error and
+	// RunSessionEnd only affects the process exit code afterwards. The SDK
+	// has no exit code, so a session-end failure is logged, never folded into
+	// the result.
+	s.sendFinal(resultEvent(result, a.Usage(), s.ap.Cfg.Model, turns, runErr))
+	if endErr := a.RunSessionEnd(context.WithoutCancel(ctx), "oneshot"); endErr != nil {
+		s.ap.Log.Error().Err(endErr).Msg("session-end hook failed")
+	}
 }
 
 // send delivers an event unless the run was cancelled.
@@ -139,5 +145,14 @@ func (s *Session) send(ctx context.Context, ev Event) {
 	select {
 	case s.events <- ev:
 	case <-ctx.Done():
+	}
+}
+
+// sendFinal delivers the terminal result event even after cancellation,
+// dropping it only when the events buffer is already full.
+func (s *Session) sendFinal(ev Event) {
+	select {
+	case s.events <- ev:
+	default:
 	}
 }

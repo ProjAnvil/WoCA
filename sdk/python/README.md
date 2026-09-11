@@ -46,7 +46,7 @@ SIGTERM to the child process and awaits its exit, so no orphan woca process is l
 | `api_key` | `--api-key` | Provider API key |
 | `base_url` | `--base-url` | Provider base URL |
 | `workdir` | `--workdir` (+ child `cwd`) | Working directory for the agent |
-| `system_prompt` | `--system-prompt` | Override system prompt |
+| `system_prompt` | `--system-prompt` | Appended to the system prompt |
 | `permission_mode` | `--permission-mode` | `default` \| `acceptEdits` \| `bypassPermissions` \| `readOnly` \| `plan` |
 | `max_turns` | `--max-turns` | Max agent loop turns |
 | `max_tokens` | `--max-tokens` | Max output tokens per request |

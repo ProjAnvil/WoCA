@@ -84,6 +84,7 @@ async def query(prompt: str, options: Optional[WocaOptions] = None) -> AsyncIter
         stderr=None,  # inherit: human diagnostics stay visible
         cwd=o.workdir,
         env={**os.environ},
+        limit=16 * 1024 * 1024,  # default 64KiB line cap chokes on large tool output
     )
     assert proc.stdout is not None
     saw_result = False

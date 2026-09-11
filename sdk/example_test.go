@@ -22,7 +22,10 @@ func ExampleQuery() {
 		case sdk.EventAssistant:
 			fmt.Println("assistant:", ev.Message.Content)
 		case sdk.EventResult:
-			fmt.Println("done:", ev.Result.Subtype, "cost:", ev.Result.CostUSD)
+			if ev.Result.CostUSD != nil {
+				fmt.Println("cost:", *ev.Result.CostUSD)
+			}
+			fmt.Println("done:", ev.Result.Subtype)
 		}
 	}
 }

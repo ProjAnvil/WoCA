@@ -48,7 +48,7 @@ q.cancel();
 | `apiKey` | `--api-key` | Provider API key |
 | `baseUrl` | `--base-url` | Provider base URL |
 | `workdir` | `--workdir` (+ child `cwd`) | Working directory for the agent |
-| `systemPrompt` | `--system-prompt` | Override system prompt |
+| `systemPrompt` | `--system-prompt` | Appended to the system prompt |
 | `permissionMode` | `--permission-mode` | `default` \| `acceptEdits` \| `bypassPermissions` \| `readOnly` \| `plan` |
 | `maxTurns` | `--max-turns` | Max agent loop turns |
 | `maxTokens` | `--max-tokens` | Max output tokens per request |

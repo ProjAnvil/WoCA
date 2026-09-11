@@ -23,7 +23,7 @@ type EventType string
 const (
 	EventAssistant EventType = "assistant" // model message (text and/or tool calls)
 	EventUser      EventType = "user"      // tool result message
-	EventResult    EventType = "result"    // terminal envelope, always the last event
+	EventResult    EventType = "result"    // terminal envelope, always the last event (best-effort under cancellation: delivered whenever the events buffer has capacity)
 )
 
 // ToolCall is one model-requested tool invocation.

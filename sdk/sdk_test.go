@@ -92,3 +92,36 @@ func TestQueryStreamsAndFinishes(t *testing.T) {
 	// (internal/agent/stream.go folds chunk usage only). Tracked as a known
 	// dependency-layer gap, so no numeric usage assertion here.
 }
+
+// TestCloseTwice verifies Close is idempotent: a second call must neither
+// panic nor hang after the run has finished and been closed once.
+func TestCloseTwice(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	srv := fakeAnthropic(t)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	s, err := Query(ctx, "say hi",
+		WithProvider("anthropic"),
+		WithModel("claude-sonnet-4-5"),
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithDB("none"),
+		WithWorkdir(t.TempDir()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range s.Events() {
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

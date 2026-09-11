@@ -58,6 +58,21 @@ def test_nonzero_exit_raises():
         del os.environ["FAKE_WOCA_FAIL"]
 
 
+def test_parses_line_over_64kib():
+    os.environ["FAKE_WOCA_BIG"] = "1"
+    try:
+        async def main():
+            return [ev async for ev in query("hi", WocaOptions(path_to_woca=FAKE))]
+
+        events = run(main())
+        assert events[0]["type"] == "assistant"
+        assert len(events[0]["message"]["content"]) == 200_000
+        assert events[-1]["type"] == "result"
+        assert events[-1]["subtype"] == "success"
+    finally:
+        del os.environ["FAKE_WOCA_BIG"]
+
+
 def test_early_exit_terminates_process(monkeypatch):
     os.environ["FAKE_WOCA_HANG"] = "1"
     captured = {}

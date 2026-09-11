@@ -27,13 +27,17 @@ for ev := range s.Events() {
 	case sdk.EventAssistant:
 		fmt.Println("assistant:", ev.Message.Content)
 	case sdk.EventResult:
-		fmt.Println("done:", ev.Result.Subtype, "cost:", ev.Result.CostUSD)
+		if ev.Result.CostUSD != nil {
+			fmt.Println("cost:", *ev.Result.CostUSD)
+		}
+		fmt.Println("done:", ev.Result.Subtype)
 	}
 }
 ```
 
 The event stream ends with exactly one `EventResult`, then closes. Drain
 `Events()` (or call `Close`) so the run goroutine does not leak.
+`Result.CostUSD` is a `*float64`; nil means the model has no pricing data.
 
 ## Options
 
@@ -91,7 +95,10 @@ releases everything. It is safe to call twice.
 `Event.WireJSON()` serializes an event into the flattened stream-json shape
 emitted by `woca -p --output-format stream-json` — same keys and values (key
 order may differ), so one parser handles both the CLI subprocess output and
-the in-process SDK. This is the format `eval/woca_agent.py` consumes.
+the in-process SDK. This is the format `eval/woca_agent.py` consumes. One
+caveat: `Message.Role` is normalized to `"assistant"` / `"user"` in SDK
+events, while CLI stream-json message lines carry the raw langchain-golang
+values (`"ai"` / `"tool"`); only the result envelope is fully identical.
 
 ## Known limitations
 
