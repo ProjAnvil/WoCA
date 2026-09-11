@@ -79,11 +79,11 @@ clean:
 # deps-baseline and review the diff in the commit).
 deps-baseline:
 	@mkdir -p ci
-	go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca | sort -u > ci/deps-personal.txt
+	go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca | LC_ALL=C sort -u > ci/deps-personal.txt
 
 check-deps: build
 	@mkdir -p build
-	@go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca | sort -u > build/deps-personal.actual
+	@go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca | LC_ALL=C sort -u > build/deps-personal.actual
 	@diff -u ci/deps-personal.txt build/deps-personal.actual && echo "personal-edition deps match baseline"
 
 # Enterprise-only native client commands. These remain independent of the

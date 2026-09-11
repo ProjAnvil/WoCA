@@ -24,7 +24,13 @@ github.com/charmbracelet/x/term
 github.com/clipperhouse/displaywidth
 github.com/clipperhouse/stringish
 github.com/clipperhouse/uax29/v2/graphemes
+github.com/dlclark/regexp2/v2
+github.com/dlclark/regexp2/v2/helpers
+github.com/dlclark/regexp2/v2/syntax
 github.com/dustin/go-humanize
+github.com/go-ego/gse
+github.com/go-ego/gse/hmm
+github.com/go-ego/gse/types
 github.com/google/uuid
 github.com/jackc/pgpassfile
 github.com/jackc/pgservicefile
@@ -91,6 +97,7 @@ github.com/projanvil/langchain-golang/langgraph/store
 github.com/projanvil/langchain-golang/langgraph/types
 github.com/projanvil/langchain-golang/modelprofiles
 github.com/projanvil/langchain-golang/partners/anthropic
+github.com/projanvil/langchain-golang/partners/internal/providerutil
 github.com/projanvil/langchain-golang/partners/ollama
 github.com/projanvil/langchain-golang/partners/openai
 github.com/projanvil/woca
@@ -103,12 +110,14 @@ github.com/projanvil/woca/internal/claudeenv
 github.com/projanvil/woca/internal/compact
 github.com/projanvil/woca/internal/config
 github.com/projanvil/woca/internal/console
-github.com/projanvil/woca/internal/context
+github.com/projanvil/woca/internal/contextx
 github.com/projanvil/woca/internal/cost
 github.com/projanvil/woca/internal/cpserde
+github.com/projanvil/woca/internal/diffutil
 github.com/projanvil/woca/internal/fsb
 github.com/projanvil/woca/internal/gateway
 github.com/projanvil/woca/internal/hooks
+github.com/projanvil/woca/internal/keybindings
 github.com/projanvil/woca/internal/logging
 github.com/projanvil/woca/internal/mcp
 github.com/projanvil/woca/internal/memory
@@ -128,6 +137,7 @@ github.com/projanvil/woca/internal/platform/tenancy
 github.com/projanvil/woca/internal/pluginrt
 github.com/projanvil/woca/internal/plugins
 github.com/projanvil/woca/internal/prompt
+github.com/projanvil/woca/internal/promptref
 github.com/projanvil/woca/internal/quota
 github.com/projanvil/woca/internal/repl
 github.com/projanvil/woca/internal/runner
@@ -148,6 +158,7 @@ github.com/projanvil/woca/internal/tokens
 github.com/projanvil/woca/internal/tools
 github.com/projanvil/woca/internal/tui
 github.com/projanvil/woca/internal/webd
+github.com/projanvil/woca/internal/webfx
 github.com/projanvil/woca/internal/webgui
 github.com/projanvil/woca/internal/wocadb
 github.com/projanvil/woca/web
@@ -157,6 +168,9 @@ github.com/rs/zerolog
 github.com/rs/zerolog/internal/json
 github.com/spf13/cobra
 github.com/spf13/pflag
+github.com/tiktoken-go/tokenizer
+github.com/tiktoken-go/tokenizer/codec
+github.com/vcaesar/cedar
 github.com/x448/float16
 github.com/xo/terminfo
 golang.org/x/crypto/blake2b
