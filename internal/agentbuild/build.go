@@ -21,7 +21,7 @@ import (
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/claudeenv"
 	"github.com/projanvil/woca/internal/config"
-	contextx "github.com/projanvil/woca/internal/context"
+	contextx "github.com/projanvil/woca/internal/contextx"
 	"github.com/projanvil/woca/internal/hooks"
 	"github.com/projanvil/woca/internal/mcp"
 	"github.com/projanvil/woca/internal/obslog"
