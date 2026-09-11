@@ -1,4 +1,4 @@
-.PHONY: all build build-personal test vet fmt run clean lint race check tui serve web ee-web install deps-baseline check-deps native-test native-build native-dev ent-up ent-down ent-ps ent-logs eval-binary
+.PHONY: all build build-personal test race web-test ee-web-test test-ui vet fmt run clean lint check check-sse tui serve web ee-web install deps-baseline check-deps native-test native-build native-dev ent-up ent-down ent-ps ent-logs eval-binary
 
 # Default: build the web frontend, then the binary (frontend is embedded).
 all: web build
@@ -33,9 +33,9 @@ build:
 
 # Personal edition: the single `woca` binary (CLI/TUI/REPL + serve) with all
 # platform interfaces bound to their local implementations. This is the only
-# artifact distributed to individual users; microservice-role binaries
-# (woca-gateway/-scheduler/-worker/...) get their own cmd/ entries and
-# targets in Phase 3 (see the microservices design doc §5.1).
+# artifact distributed to individual users; the microservice-role binaries
+# (woca-gateway/-scheduler/-worker/...) live under cmd/ and are built by the
+# build-server / dist-* targets below.
 build-personal: web build
 
 # Cross-compile the static linux/amd64 binary that the Harbor agent adapter
@@ -50,6 +50,16 @@ test:
 race:
 	go test -race ./...
 
+web-test:
+	cd web && bun run test
+
+ee-web-test:
+	cd ee/configsvc-web && bun run test
+	cd ee/opsconsole-web && bun run test
+	cd ee/skillsvc-web && bun run test
+
+test-ui: web-test ee-web-test
+
 vet:
 	go vet ./...
 
@@ -59,7 +69,15 @@ lint:
 fmt:
 	gofmt -w .
 
-check: fmt vet test
+# SSE event contract drift check (same gate as CI).
+check-sse:
+	ci/check-sse-contract.sh
+
+# Matches CI's Go + UI jobs: format, vet, lint, unit tests, frontend tests,
+# and the hygiene gates. CI additionally runs `race` and the Postgres-backed
+# tests (service-gated; skipped here unless WOCA_TEST_PG_DSN/WOCA_PG_TEST_DSN
+# are set), plus native-test on a macOS runner.
+check: fmt vet lint test web-test ee-web-test check-sse check-deps check-server-artifacts check-editions
 
 run:
 	go run ./cmd/woca
@@ -135,7 +153,7 @@ ent-down:
 ENT_FULL_COMPOSE = docker compose -f deploy/selfhosted/docker-compose.full.yml -f deploy/observability/docker-compose.observability.yml
 ENT_OBS_SVCS = otel-collector jaeger prometheus alertmanager grafana
 
-.PHONY: ent-full-up ent-full-down
+.PHONY: ent-full-up ent-full-down ent-obs-up ent-obs-down ent-obs-logs
 ent-full-up:
 	# up -d (not restart): the overlay changes app env/networks, and only
 	# up recreates containers whose merged configuration drifted.
@@ -185,7 +203,7 @@ ent-logs:
 # design, so the two are drop-in replacements.
 DEV_COMPOSE = docker compose -f deploy/selfhosted/docker-compose.dev.yml
 
-.PHONY: dev-up dev-down dev-ps dev-logs
+.PHONY: dev-up dev-down dev-ps dev-logs dev-bridge dev-langfuse
 dev-up:
 	# --build: dev runs the current source (the committed :local images
 	# may predate the working tree).

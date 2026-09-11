@@ -7,6 +7,25 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # The wocadb lgcp test (internal/wocadb/rls_lgcp_test.go) rewrites
+          # "://woca:woca-enterprise-dev@" and "/woca?" in the DSN verbatim,
+          # so the service must provision exactly this user/password/database.
+          POSTGRES_USER: woca
+          POSTGRES_PASSWORD: woca-enterprise-dev
+          POSTGRES_DB: woca
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U woca" --health-interval 5s --health-retries 10
+    env:
+      # Both PG-gated suites create and drop their own databases/roles on the
+      # target instance; the DSNs only need to reach any database as a
+      # superuser (rls_pg_test.go rewrites user/db per test).
+      WOCA_TEST_PG_DSN: postgres://woca:woca-enterprise-dev@localhost:5432/woca?sslmode=disable
+      WOCA_PG_TEST_DSN: postgres://woca:woca-enterprise-dev@localhost:5432/woca?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
@@ -45,3 +64,27 @@ jobs:
 
       - name: Edition boundaries and dependency hygiene
         run: make check-deps check-server-artifacts check-editions
+
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: web tests
+        run: cd web && bun install --frozen-lockfile && bun run test
+      - name: ee console tests
+        run: |
+          for d in ee/configsvc-web ee/opsconsole-web ee/skillsvc-web; do
+            (cd "$d" && bun install --frozen-lockfile && bun run test) || exit 1
+          done
+
+  native:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      # The whole module is pure Go for test purposes (wails build only needs
+      # cgo/webkit at app build time); `go test ./...` passes on macOS as-is.
+      - run: cd native-client && go test ./...
