@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -206,14 +207,23 @@ func TestExportImport(t *testing.T) {
 
 func TestSpaFallback(t *testing.T) {
 	f := newFixture(t)
+	// Fresh clones ship only spa/.gitkeep: the handler then serves the 503
+	// placeholder (see configsvc.go), so the SPA assertions follow whichever
+	// posture this checkout is in.
+	_, statErr := fs.Stat(spaFS, "spa/index.html")
+	spaBuilt := statErr == nil
+	wantSpa := http.StatusOK
+	if !spaBuilt {
+		wantSpa = http.StatusServiceUnavailable
+	}
 	for _, path := range []string{"/", "/msgplane"} {
 		resp, err := http.Get(f.srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("%s = %d want 200 (SPA)", path, resp.StatusCode)
+		if resp.StatusCode != wantSpa {
+			t.Fatalf("%s = %d want %d (spaBuilt=%v)", path, resp.StatusCode, wantSpa, spaBuilt)
 		}
 	}
 	// API paths authenticate before routing: an anonymous miss is 401,

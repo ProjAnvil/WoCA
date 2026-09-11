@@ -196,7 +196,13 @@ func (s *Service) Handler() http.Handler {
 	// serve a 503 placeholder instead of panicking on the missing
 	// index.html inside webfx.SPA.
 	if _, err := fs.Stat(spaFS, "spa/index.html"); err != nil {
-		r.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		r.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			// Match webfx.SPA's contract: /api/ never falls back to the
+			// placeholder — an unknown API path is a plain 404.
+			if strings.HasPrefix(req.URL.Path, "/api/") {
+				http.NotFound(w, req)
+				return
+			}
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte("config console not built; run make ee-web"))
