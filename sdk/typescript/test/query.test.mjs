@@ -26,14 +26,35 @@ test("maps options to CLI flags", async () => {
 });
 
 test("non-zero exit without result rejects", async () => {
-  const q = query({ prompt: "hi", options: { pathToWoca: fake } });
   process.env.FAKE_WOCA_FAIL = "1";
-  await assert.rejects(async () => { for await (const _ of q) {} }, /exit code 1/);
-  delete process.env.FAKE_WOCA_FAIL;
+  try {
+    const q = query({ prompt: "hi", options: { pathToWoca: fake } });
+    await assert.rejects(async () => { for await (const _ of q) {} }, /exit code 1/);
+  } finally {
+    delete process.env.FAKE_WOCA_FAIL;
+  }
 });
 
 test("cancel terminates the process", async () => {
   const q = query({ prompt: "hi", options: { pathToWoca: fake } });
   q.cancel();
+  await assert.rejects(q.result, /cancelled/);
+});
+
+test("breaking out of iteration terminates the process", async () => {
+  process.env.FAKE_WOCA_HANG = "1";
+  try {
+    const q = query({ prompt: "hi", options: { pathToWoca: fake } });
+    for await (const ev of q) break;
+    await assert.rejects(q.result, /cancelled/);
+  } finally {
+    delete process.env.FAKE_WOCA_HANG;
+  }
+});
+
+test("pre-aborted signal rejects without spawning", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const q = query({ prompt: "hi", options: { pathToWoca: fake, signal: controller.signal } });
   await assert.rejects(q.result, /cancelled/);
 });

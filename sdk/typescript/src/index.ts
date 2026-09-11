@@ -60,7 +60,7 @@ export interface WocaQuery extends AsyncIterable<WocaEvent> {
 
 export function query(args: { prompt: string; options?: WocaOptions }): WocaQuery {
   const o = args.options ?? {};
-  let cancelled = false;
+  let cancelled = o.signal?.aborted ?? false;
   let resultEv: WocaResult | undefined;
   let lines: ReturnType<typeof createInterface> | undefined;
 
@@ -77,6 +77,14 @@ export function query(args: { prompt: string; options?: WocaOptions }): WocaQuer
   // synchronously after query() before the child environment is captured.
   const ready = new Promise<ChildProcess>((resolve, reject) => {
     setImmediate(() => {
+      if (cancelled) {
+        // Never spawn: cancelled before the tick ran (early cancel() or an
+        // AbortSignal that was already aborted when passed in).
+        const err = new Error("woca query cancelled");
+        reject(err);
+        rejectResult(err);
+        return;
+      }
       let child: ChildProcess;
       try {
         child = spawn(resolveBinary(o), buildArgs(args.prompt, o), {
@@ -96,7 +104,6 @@ export function query(args: { prompt: string; options?: WocaOptions }): WocaQuer
         if (resultEv) return resolveResult(resultEv);
         rejectResult(new Error(`woca exited with exit code ${code} and no result event`));
       });
-      if (cancelled) child.kill("SIGTERM");
       resolve(child);
     });
   });
@@ -105,20 +112,30 @@ export function query(args: { prompt: string; options?: WocaOptions }): WocaQuer
 
   const cancel = () => {
     cancelled = true;
+    // kill() on an already-exited process returns false without throwing,
+    // and ready may have rejected (never spawned) — either way, no throw.
     ready.then((child) => child.kill("SIGTERM"), () => {});
   };
-  o.signal?.addEventListener("abort", cancel, { once: true });
+  if (o.signal && !o.signal.aborted) {
+    o.signal.addEventListener("abort", cancel, { once: true });
+  }
 
   async function* iterate(): AsyncGenerator<WocaEvent> {
-    await ready;
-    for await (const line of lines!) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const ev = JSON.parse(trimmed) as WocaEvent;
-      if (ev.type === "result") resultEv = ev;
-      yield ev;
+    try {
+      await ready;
+      for await (const line of lines!) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const ev = JSON.parse(trimmed) as WocaEvent;
+        if (ev.type === "result") resultEv = ev;
+        yield ev;
+      }
+      await result;
+    } finally {
+      // Consumer broke out early (or a malformed line threw): make sure the
+      // child process is not left running with a full stdout pipe.
+      cancel();
     }
-    await result;
   }
 
   return { [Symbol.asyncIterator]: () => iterate(), cancel, result };
