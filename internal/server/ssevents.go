@@ -26,17 +26,20 @@ const (
 	EventSessionState      = "session_state"
 )
 
-// toolCallPayload is the data of a tool_call event.
+// toolCallPayload is the data of a tool_call event. Fields are declared in
+// JSON-key alphabetical order so encoding/json emits the same key order the
+// previous map[string]any payload did (maps marshal with sorted keys).
 type toolCallPayload struct {
+	Args map[string]any `json:"args"`
 	ID   string         `json:"id"`
 	Name string         `json:"name"`
-	Args map[string]any `json:"args"`
 }
 
-// toolResultPayload is the data of a tool_result event.
+// toolResultPayload is the data of a tool_result event. Fields are declared
+// in JSON-key alphabetical order for the same byte-identity reason.
 type toolResultPayload struct {
-	ToolCallID string `json:"tool_call_id"`
 	Content    string `json:"content"`
+	ToolCallID string `json:"tool_call_id"`
 }
 
 // interruptPayload is the data of an interrupt event; Payload is the
