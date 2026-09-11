@@ -121,7 +121,7 @@ every conversation is persisted as a resumable transcript.
   (`.woca/agents/*.md`), **hooks** (12 event groups, matchers, exit-code
   semantics), **MCP** client (stdio + streamable HTTP, tools, resources,
   prompts, notifications, OAuth), and **capability plugins** (managed
-  browser automation and PDF tooling) — see
+  browser automation, PDF tooling, and Office document support) — see
   [Extending woca](#extending-woca).
 - **Layered configuration**: flags > workspace `.woca/` > user `~/.woca/`
   for skills, agents, MCP servers, and instruction files.
@@ -143,19 +143,22 @@ every conversation is persisted as a resumable transcript.
 **From source (recommended for now):**
 
 ```bash
-git clone https://github.com/ProjAnvil/WoCA.git
+git clone https://github.com/projanvil/woca.git
 cd woca
 make            # build web frontend + binary into build/woca
 ```
 
-**With `go install` (CLI only, without the embedded web UI):**
+**With `go install`:**
 
 ```bash
 go install github.com/projanvil/woca/cmd/woca@latest
 ```
 
-The web UI is embedded at compile time via `go:embed`; run `make web` before
-`go build` if you change anything under `web/`.
+The web UI is embedded at compile time via `go:embed`, and `web/dist` is a
+build artifact (not tracked in git). A bare `go build` / `go install`
+still compiles, but the binary serves a placeholder page ("woca web UI not
+built") until you run `make web` (or plain `make`) once to build the
+frontend — run it again whenever you change anything under `web/`.
 
 **Make targets:**
 
@@ -207,10 +210,10 @@ woca --resume last      # continue your most recent session
 ```
 
 Answer approval prompts with `y`/`n` and scroll with `pgup`/`pgdown`. To
-interrupt a running turn, cancel it from the web UI
-(`POST /api/runs/{id}/cancel`). In the line REPL, a line starting with `!`
-runs a shell command and feeds its output into the conversation. See
-[Slash commands](#slash-commands).
+interrupt a running turn, press `esc` twice (`esc-esc`) or `ctrl+c` in the
+TUI, or cancel it from the web UI (`POST /api/runs/{id}/cancel`). In the
+line REPL, a line starting with `!` runs a shell command and feeds its
+output into the conversation. See [Slash commands](#slash-commands).
 
 **File context:** type `@` (at the start of a line or after a space) to
 complete and attach a workspace-relative file or directory; the referenced
@@ -286,28 +289,76 @@ instead of prompting.
 
 ```
 cmd/woca                 cobra CLI: flags, config, REPL, one-shot, serve
+
+# agent core
 internal/agent           the coding-agent graph (langchain-golang/langgraph
                          runtime): gate, plan mode, streaming execution,
                          recovery, compaction, teams, goals
+internal/agentbuild      composition root shared by every entry point that
+                         runs the agent
+internal/runner          streaming run loop + interrupt handling + rendering
 internal/tools           tool set + registry + permission categories
 internal/permissions     permission modes, rules, read-only classifier
 internal/model           provider router: retry, fallback, invocation
-internal/runner          streaming run loop + interrupt handling + rendering
-internal/console         slash commands shared by TUI, REPL, and web
-internal/tui             bubbletea terminal UI
-internal/server          web server: sessions, runs, SSE, settings API
-internal/session         JSONL transcript persistence
 internal/compact         auto-compaction / summarization
 internal/tokens          CJK-aware token estimator
+internal/prompt          system-prompt assembly
+internal/promptref       @path prompt-reference expansion
+internal/contextx        runtime context (git status, etc.) for the prompt
+internal/diffutil        small unified diffs for the web UI's Changes view
+internal/cost            session cost estimation
+internal/quota           provider quota/usage display
+
+# surfaces
+internal/tui             bubbletea terminal UI
+internal/repl            line-REPL input parsing and editing
+internal/console         slash commands shared by TUI, REPL, and web
+internal/slashcmds       builtin slash-command table (shared without an
+                         import cycle)
+internal/keybindings     user-overridable TUI action map
+internal/servefront      server-role frontends: serve (web UI server) and
+                         web (background daemon)
+internal/webd            web-GUI background daemon (pidfile, start/stop)
+internal/webgui          on-demand web UI service (the /web command)
+internal/webfx           web framework: gin/fiber-shaped API on net/http
+internal/sdkout          machine-readable headless output (json /
+                         stream-json)
+
+# web & API plumbing
+internal/server          web server: sessions, runs, SSE, settings API
+internal/gateway         L1 edge middlewares shared by every deployment
+internal/searchapi       generic JSON web-search API client
+internal/fsb             workspace folder browser (jailed, os.OpenRoot)
+
+# storage & state
+internal/session         JSONL transcript persistence
+internal/settings        settings database + encrypted secrets
+internal/wocadb          settings database opener (sqlite / postgres)
+internal/store           namespace+key JSON document store
+internal/memory          ladyM memory-engine adapter
+internal/runstate        externalized run ledger (runs + event streams)
+internal/runws           run-scoped workspace carrier
+internal/merge           layered configuration merge
+
+# platform & operations
+internal/bus             in-process message bus (SendMessage)
+internal/obslog          harness observability log (size-rotated JSONL)
+internal/settingswatch   management-plane write propagation to roles
+internal/telemetry       observability seam (Phase 2)
+internal/logging         zerolog wrapper
+internal/notify          terminal notifications
+internal/oauth           OAuth 2.0 device-authorization-grant client
+internal/config          user-facing configuration
+internal/claudeenv       ~/.claude skills/MCP import
+internal/cpserde         checkpoint payload serialization
+internal/platform/       shared platform primitives (authn, authz, httpx,
+                         machineid, …)
 internal/skills          SKILL.md loader (layered: flag > workspace > user)
 internal/agents          subagent definitions (.woca/agents/*.md)
 internal/hooks           hook runner (12 event groups)
 internal/mcp             MCP client (stdio + streamable HTTP, OAuth)
 internal/plugins         marketplace plugins (skills/agents bundles)
-internal/pluginrt        capability-plugin runtimes (browser, pdf)
-internal/settings        settings database + encrypted secrets
-internal/quota           provider quota/usage display
-internal/merge           layered configuration merge
+internal/pluginrt        capability-plugin runtimes (browser, pdf, office)
 ```
 
 ### Editions & repository layout
@@ -317,12 +368,34 @@ woca ships as **two editions** built from one repository:
 - **Personal edition** — the `woca` binary: CLI/TUI/REPL plus the local
   `woca serve` web UI, zero external dependencies (sqlite, in-process
   everything). This is what individual users install.
-- **Enterprise edition** — the server roles (`woca-server`, `woca-worker`,
-  `woca-config`, `woca-tenant`) assembled from the same core plus the
-  enterprise tree: multi-tenant auth (API keys, native-client DPoP
-  sessions), queue dispatch with the NATS message plane, the standalone
-  config service, observability (OTel/Prometheus/Grafana), and registry
-  DSN discovery.
+- **Enterprise edition** — the server roles assembled from the same core
+  plus the enterprise tree: multi-tenant auth (API keys, native-client
+  DPoP sessions), queue dispatch with the NATS message plane, the
+  standalone config service, observability (OTel/Prometheus/Grafana), and
+  registry DSN discovery. Seven role binaries, none with interactive
+  surfaces:
+
+  - `woca-server` — the modular-monolith API surface: business API plus
+    the console management authority; no pages of its own
+  - `woca-worker` — claims runs from the shared runstate ledger and
+    executes them through the agent (probe port `:9092` by default)
+  - `woca-config` — the standalone settings management plane; the sole
+    configuration write surface, plus its own console SPA
+  - `woca-tenant` — tenant/user/API-key administration CLI (plus the
+    personal→enterprise memory migration tool)
+  - `woca-bridge` — the private-cloud execution plane for user machines
+    (organization-credential login; carries no key management itself)
+  - `woca-edge` — the stateless edge access point; the control plane's
+    only public component
+  - `woca-ops` — the tenant ops console (it issues organization
+    credentials), plus the skill-asset console under `/skillsvc/`
+
+  The registry-coupled roles (`woca-server`, `woca-worker`, `woca-config`,
+  `woca-edge`) are **fail-closed** on the nacos registry: they require
+  `WOCA_NACOS_URL` and refuse to start without it, so a minimal
+  enterprise deployment includes a nacos registry (dev-grade standalone
+  manifest in `deploy/k8s/00-nacos.yaml`; end-to-end proof in
+  `deploy/vm/nacos-verify.sh`).
 
 The delivery axis is orthogonal to the edition axis: today both editions
 are **self-hosted** (see `deploy/selfhosted/`, `deploy/k8s/`,
@@ -332,18 +405,27 @@ enterprise code, not a third edition.
 ```
 internal/        core, shared by both editions (agent, tools, server, fsb, …)
 internal/ee/     enterprise-only: msgplane, tenant, configsvc, worker, obs,
-                 discovery, nativeauth, dpop, tenantcmd, memcmd, skillsvc
-                 (skill-asset API; its console SPA is skillsvcui on woca-ops),
-                 bridge (the private-cloud bridge service), entrygw (the
-                 private-core machine registry), edgegw (the stateless edge
-                 access point), edition (woca-server's composition root)
+                 discovery, nacosrt, nativeauth, dpop, authcore, consoleauth,
+                 tenantcmd, memcmd, skillsvc (skill-asset API; its console
+                 SPA is skillsvcui on woca-ops), opsconsole/opsui (tenant ops
+                 console API + SPA), bridge (the private-cloud bridge
+                 service), entrygw (the private-core machine registry),
+                 edgegw (the stateless edge access point), edition
+                 (woca-server's composition root)
 internal/platform/machineid  shared machine identity (enrollment tokens,
                  Ed25519 identities, opaque access tokens)
 web/             shared web UI (personal + enterprise web surface)
 ee/              enterprise web consoles (configsvc-web, opsconsole-web,
                  skillsvc-web)
 deploy/selfhosted/  enterprise docker-compose stack (data plane + full)
-deploy/k8s/         Kubernetes manifests     deploy/vm/  registry verify
+deploy/k8s/         Kubernetes manifests (server + worker, nacos registry,
+                    observability pipeline)
+deploy/vm/          registry fail-closed verification (nacos-verify.sh)
+deploy/micro/       per-role distribution packages (binary + start/stop
+                    scripts)
+deploy/collector/   OTLP trace bridge into Langfuse / the observability stack
+deploy/observability/  OTel Collector + Prometheus + Jaeger + Grafana stack
+deploy/terraform/   AWS zone-first deployment of the full stack
 cmd/woca         personal entry (everything)
 cmd/woca-*       enterprise role entries (no interactive surfaces)
 ```
@@ -353,13 +435,13 @@ cmd/woca-*       enterprise role entries (no interactive surfaces)
 `woca-bridge` is the productized private-cloud execution plane: the same
 serve surface plus the product identity model — organization credentials
 issued by the tenant ops console on the private core (the bridge itself
-carries no key management, v1.7; an unenrolled bridge keeps loopback
+carries no key management; an unenrolled bridge keeps loopback
 trust only), URL+key login with cookie sessions (revocation cascades
 from the ops console through the config generation), the
 workspace folder browser (`/api/fs/*`, jailed with `os.OpenRoot`), and a
 fail-closed bind check (an unauthenticated non-loopback bind refuses to
 start). Registered bridges see exactly one control-plane peer — the
-stateless edge access point (`cmd/woca-edge`, `internal/ee/edgegw`; R7:
+stateless edge access point (`cmd/woca-edge`, `internal/ee/edgegw`;
 no database, no files, every machine-token check calls home to the
 service plane). Behind it the private core splits in two: the registry
 routes (`/gw/enroll|renew|heartbeat|resolve|bridges`, mounted on
@@ -369,7 +451,7 @@ Ed25519 identity plus short-TTL opaque access tokens; pulled settings
 install as the managed overlay (locked, `managed_fields` in
 `/api/settings`), and a control-plane outage keeps the bridge running
 with a STALE flag on the status page. The same outbound channel carries
-scenario four's data plane: client traffic parks at the edge until the
+the NAT-traversal data plane: client traffic parks at the edge until the
 bridge's tunnel picks it up and answers against its own handler stack
 (SSE streams pass with flushes intact), so any-place web commands a
 NAT-hidden bridge with zero inbound ports. Loopback bridges keep the
@@ -381,7 +463,7 @@ The full private-cloud stage ships with it: TLS direct termination
 pull), worker-led enrollment (fingerprint approval — no token pasting),
 the bridge's read-only operations view (live sessions + audit over HTTP +
 SPA; user credentials are organization keys issued by the tenant ops
-console — the bridge itself carries no key management, v1.7), a global
+console — the bridge itself carries no key management), a global
 health lamp and Markdown diagnostics export, QR pairing on the login
 page, and the native client's embedded bridge (bundled binary, zero-login
 loopback profile, org-key login with TOFU pinning and OS-keychain key
@@ -391,7 +473,7 @@ with target-bridge selection / direct bridge — one profile mechanism
 underneath), the bridge-local cloud-access settings (`edge.*` keys in the
 settings database, SPKI TOFU pin, env override with source labels, page
 at Settings → Cloud access), and the two dev compose groups (the
-microservices twin plus the §6.3 edge group with `public`/`internal`
+microservices twin plus the edge compose group with `public`/`internal`
 network layering and the bridge as an independent container — see
 `deploy/selfhosted/BRIDGE.md` for the deployment runbook).
 
@@ -606,6 +688,8 @@ Managed, versioned tool bundles installed on demand into
   screenshots) for web testing and research
 - **pdf** — a sandboxed Python environment for PDF generation and
   processing
+- **office** — read and write Office documents (Word `.docx`, Excel
+  `.xlsx`, PowerPoint `.pptx`) in the same sandboxed Python environment
 
 Browse and install from the settings panel (`/plugins`), which provisions
 the pinned runtime and verifies SHA-256 checksums.

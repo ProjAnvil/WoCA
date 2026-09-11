@@ -1,7 +1,9 @@
 // woca-config is the standalone settings management plane (design §16):
 // the sole configuration write surface for server deployments, serving the
-// settings API (read/write/export/import) and the embedded ops console
-// SPA. Deployed behind the gateway's admin port. The console signs in
+// settings API (read/write/export/import) and its own console SPA (built
+// from ee/configsvc-web; the tenant ops console SPA is internal/ee/opsui,
+// served by woca-ops). Deployed behind the gateway's admin port. The
+// console signs in
 // with a username/password when WOCA_CONSOLE_USER/WOCA_CONSOLE_PASSWORD
 // are set at startup; unset credentials leave it open (the operator
 // declared the network the boundary).
