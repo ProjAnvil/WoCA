@@ -623,35 +623,40 @@ func TestRespondIsBridgeScoped(t *testing.T) {
 	a2 := enroll(t, core)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// One parked request on bridge 1: hold it via a manual poll.
-	req1, _ := http.NewRequestWithContext(ctx, http.MethodGet, edge.URL+"/tunnel/poll?wait=1s", nil)
-	req1.Header.Set("Authorization", "Bearer "+a1)
-	// Park a client request first (no poller for bridge 2 needed).
-	served := make(chan struct{})
-	holder := echoBridge("br_holder")
-	_ = holder
+	// Routing counts live bridges only and /api/* client traffic needs a
+	// session: beat bridge 1 in (bridge 2 stays silent so auto-route picks
+	// bridge 1) and park an authenticated client request on its queue.
+	beatOnce(t, core, a1)
+	tok := userKey(t, edge, core, "scoped-user")
 	parked := make(chan *http.Response, 1)
 	go func() {
-		resp, err := http.Get(edge.URL + "/api/who")
-		if err == nil {
+		req, _ := http.NewRequest(http.MethodGet, edge.URL+"/api/who", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		if resp, err := http.DefaultClient.Do(req); err == nil {
 			parked <- resp
 		}
-		close(served)
 	}()
-	resp1, err := http.DefaultClient.Do(req1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Poll until the parked request reaches bridge 1's poller — a single
+	// fixed-window poll that skips on a miss silently drops every assertion
+	// below; a deadline loop fails loudly instead. (The edge rejects waits
+	// under a second, so each attempt long-polls for 1s.)
 	var payload struct {
 		ID string `json:"id"`
 	}
-	if resp1.StatusCode == http.StatusOK {
-		_ = json.NewDecoder(resp1.Body).Decode(&payload)
-	}
-	resp1.Body.Close()
-	if payload.ID == "" {
-		t.Skip("no parked request arrived at the poller in time")
-	}
+	waitFor(t, 2*time.Second, func() bool {
+		preq, _ := http.NewRequestWithContext(ctx, http.MethodGet, edge.URL+"/tunnel/poll?wait=1s", nil)
+		preq.Header.Set("Authorization", "Bearer "+a1)
+		presp, err := http.DefaultClient.Do(preq)
+		if err != nil {
+			return false
+		}
+		defer presp.Body.Close()
+		if presp.StatusCode != http.StatusOK {
+			return false
+		}
+		_ = json.NewDecoder(presp.Body).Decode(&payload)
+		return payload.ID != ""
+	})
 
 	// Bridge 2 tries to respond to bridge 1's request: 410, never a relay.
 	body := strings.NewReader("hijack")
@@ -666,8 +671,22 @@ func TestRespondIsBridgeScoped(t *testing.T) {
 	if hijack.StatusCode != http.StatusGone {
 		t.Fatalf("cross-bridge respond = %d, want 410", hijack.StatusCode)
 	}
-	// The legitimate bridge still completes the relay.
-	runTunnel(ctx, t, core, edge.URL, a1, echoBridge("br_ok"))
+	// The legitimate bridge still completes the relay — directly: the
+	// manual poll above already consumed the pickup, so no tunnel client
+	// could receive this request again; the edge only cares that the
+	// respond carries bridge 1's token and the parked request's id.
+	lreq, _ := http.NewRequestWithContext(ctx, http.MethodPost, edge.URL+"/tunnel/respond/"+payload.ID,
+		strings.NewReader(`{"bridge":"br_ok"}`))
+	lreq.Header.Set("Authorization", "Bearer "+a1)
+	lreq.Header.Set("X-Woca-Status", "200")
+	relay, err := http.DefaultClient.Do(lreq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay.Body.Close()
+	if relay.StatusCode != http.StatusOK {
+		t.Fatalf("legitimate respond = %d, want 200", relay.StatusCode)
+	}
 	select {
 	case resp := <-parked:
 		var who map[string]string

@@ -31,6 +31,10 @@ func newTestManager(t *testing.T) (*Manager, func()) {
 	// the suite fast.
 	m.Kill = func(pid int) error { return syscall.Kill(pid, syscall.SIGKILL) }
 	m.WaitReady = nil // the fake sleep daemon serves nothing; skip the guard
+	// The fake daemon binds nothing, so the lsof orphan sweep must not see
+	// real listeners either — otherwise whatever happens to hold the port on
+	// the dev machine (or the default addr) fails or kills the wrong thing.
+	m.PortOwner = func(addr string) (int, bool) { return 0, false }
 	m.Spawn = func(argv []string, logFile string) (int, error) {
 		// Sanity: the harness always asks to run the serve subcommand with a
 		// loopback addr and the no-browser flag.
@@ -58,11 +62,12 @@ func TestStartStatusStopRestart(t *testing.T) {
 		t.Fatalf("status when idle = %+v", rec)
 	}
 
-	rec, started, err := m.Start("127.0.0.1:3990")
+	addr1 := freeAddr(t)
+	rec, started, err := m.Start(addr1)
 	if err != nil || !started {
 		t.Fatalf("start = %+v %v %v", rec, started, err)
 	}
-	if rec.Addr != "127.0.0.1:3990" || rec.PID == 0 {
+	if rec.Addr != addr1 || rec.PID == 0 {
 		t.Fatalf("record = %+v", rec)
 	}
 	if got := m.Status(); got == nil || got.PID != rec.PID {
@@ -75,7 +80,7 @@ func TestStartStatusStopRestart(t *testing.T) {
 	}
 
 	// Second start is a no-op returning the same record.
-	rec2, started2, err := m.Start("127.0.0.1:3990")
+	rec2, started2, err := m.Start(addr1)
 	if err != nil || started2 || rec2.PID != rec.PID {
 		t.Fatalf("second start = %+v %v %v", rec2, started2, err)
 	}
@@ -102,8 +107,9 @@ func TestStartStatusStopRestart(t *testing.T) {
 	}
 
 	// Restart works from both states.
-	rec3, err := m.Restart("127.0.0.1:3991")
-	if err != nil || rec3.PID == 0 || rec3.Addr != "127.0.0.1:3991" {
+	addr2 := freeAddr(t)
+	rec3, err := m.Restart(addr2)
+	if err != nil || rec3.PID == 0 || rec3.Addr != addr2 {
 		t.Fatalf("restart = %+v %v", rec3, err)
 	}
 	if _, err := m.Restart(""); err != nil {
@@ -124,7 +130,7 @@ func TestStalePidfileTreatedAsStopped(t *testing.T) {
 		t.Fatalf("stale record reported running: %+v", rec)
 	}
 	// Start overwrites the stale file.
-	rec, started, err := m.Start("127.0.0.1:3992")
+	rec, started, err := m.Start(freeAddr(t))
 	if err != nil || !started {
 		t.Fatalf("start over stale = %+v %v %v", rec, started, err)
 	}
@@ -293,4 +299,17 @@ func TestDefaultSpawnAndStopEdge(t *testing.T) {
 // newTCPTarget binds a loopback listener for port-owner resolution tests.
 func newTCPTarget() (net.Listener, error) {
 	return net.Listen("tcp", "127.0.0.1:0")
+}
+
+// freeAddr returns a loopback address on a port the OS just confirmed free,
+// so tests never collide with a real listener the way the old hardcoded
+// 399x ports did.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := newTCPTarget()
+	if err != nil {
+		t.Fatalf("no free loopback port: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().String()
 }
