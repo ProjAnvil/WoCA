@@ -103,11 +103,11 @@ func main() {
 		// the public entry is woca-edge, never this listener, and the edge
 		// forwards /gw/* machine routes exclusively — the console is never
 		// exposed through it.
-			Start: func(ctx context.Context, obsserve servefront.Observability, st *settings.Store, log zerolog.Logger) {
-				addr := os.Getenv("WOCA_GW_ADDR")
-				if addr == "" || st == nil {
-					return
-				}
+		Start: func(ctx context.Context, obsserve servefront.Observability, st *settings.Store, log zerolog.Logger) {
+			addr := os.Getenv("WOCA_GW_ADDR")
+			if addr == "" || st == nil {
+				return
+			}
 			gwStore, err := entrygw.NewStore(st.DB())
 			if err != nil {
 				log.Error().Err(err).Msg("woca-server: gateway registry store failed")
@@ -151,7 +151,9 @@ func main() {
 			// The same observability identity as the business listener:
 			// request spans attributed to the service's registry name,
 			// and the healthz/metrics plane on this internal listener.
-			if hm, ok := obsserve.(interface{ HTTPMiddleware() func(http.Handler) http.Handler }); ok {
+			if hm, ok := obsserve.(interface {
+				HTTPMiddleware() func(http.Handler) http.Handler
+			}); ok {
 				router.Use(hm.HTTPMiddleware())
 			}
 			if obsserve != nil {

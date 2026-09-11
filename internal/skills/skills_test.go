@@ -221,10 +221,10 @@ body`), 0o644); err != nil {
 
 func TestLoadFS(t *testing.T) {
 	fsys := fstest.MapFS{
-		"alpha/SKILL.md":   &fstest.MapFile{Data: []byte("---\nname: alpha\ndescription: a\n---\nALPHA BODY")},
-		"beta/SKILL.md":    &fstest.MapFile{Data: []byte("BETA BODY")}, // no frontmatter: dir name is the name
-		"README.md":        &fstest.MapFile{Data: []byte("not a skill dir")},
-		"gamma/other.txt":  &fstest.MapFile{Data: []byte("no SKILL.md here")},
+		"alpha/SKILL.md":  &fstest.MapFile{Data: []byte("---\nname: alpha\ndescription: a\n---\nALPHA BODY")},
+		"beta/SKILL.md":   &fstest.MapFile{Data: []byte("BETA BODY")}, // no frontmatter: dir name is the name
+		"README.md":       &fstest.MapFile{Data: []byte("not a skill dir")},
+		"gamma/other.txt": &fstest.MapFile{Data: []byte("no SKILL.md here")},
 	}
 	list, err := LoadFS(fsys)
 	if err != nil {

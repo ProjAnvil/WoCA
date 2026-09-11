@@ -147,8 +147,8 @@ func TestSPAFallback(t *testing.T) {
 		{"GET", "/", 200, "<html>shell</html>"},
 		{"GET", "/app.js", 200, "console.log(1)"},
 		{"GET", "/settings/memory", 200, "<html>shell</html>"}, // client-side route
-		{"GET", "/api/whatever", 404, ""},                       // SPA never answers API paths
-		{"POST", "/", 404, ""},                                  // non-GET/HEAD (original semantics: NotFound)
+		{"GET", "/api/whatever", 404, ""},                      // SPA never answers API paths
+		{"POST", "/", 404, ""},                                 // non-GET/HEAD (original semantics: NotFound)
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
 		rec := httptest.NewRecorder()

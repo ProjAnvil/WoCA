@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	"github.com/projanvil/woca/internal/platform/authn"
-	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/platform/authz"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/platform/tenancy"
 )
 
