@@ -20,6 +20,7 @@ import (
 
 	"github.com/projanvil/woca/internal/ee/authcore"
 	"github.com/projanvil/woca/internal/ee/entrygw"
+	"github.com/projanvil/woca/internal/ee/skillsvc"
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/platform/machineid"
 	"github.com/projanvil/woca/internal/settings"
@@ -651,5 +652,119 @@ func TestBatchRevokeAndTenantDelete(t *testing.T) {
 	resp, _ = f.do("POST", "/api/tenant/users/revoke", map[string]any{"prefixes": []string{}})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("empty batch = %d want 400", resp.StatusCode)
+	}
+}
+
+// TestSkillsMount: AttachSkills mounts the skill-asset platform's API
+// (design §6.4) inside the console gate — an open console serves the full
+// lifecycle; a credentialed console gates it behind the session cookie,
+// same posture as every other console route.
+func TestSkillsMount(t *testing.T) {
+	f := newFixture(t)
+
+	// The fixture server was built before the attach: the route table
+	// proves the mount is what installs the surface.
+	resp, _ := f.do("GET", "/api/skills", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("before attach = %d want 404", resp.StatusCode)
+	}
+
+	sk, err := skillsvc.NewStore(f.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.svc.AttachSkills(sk)
+	srv := httptest.NewServer(f.svc.Handler())
+	t.Cleanup(srv.Close)
+	do := func(method, path string, body any) (*http.Response, []byte) {
+		var rdr *bytes.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			rdr = bytes.NewReader(b)
+		} else {
+			rdr = bytes.NewReader(nil)
+		}
+		req, _ := http.NewRequest(method, srv.URL+path, rdr)
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		raw, _ := io.ReadAll(r.Body)
+		return r, raw
+	}
+
+	resp, raw := do("POST", "/api/skills", map[string]string{"name": "deploy-skill", "description": "deploys"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create = %d %s", resp.StatusCode, raw)
+	}
+	var asset struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(raw, &asset)
+	if asset.ID == "" {
+		t.Fatalf("create body = %s", raw)
+	}
+	resp, raw = do("POST", "/api/skills/"+asset.ID+"/versions", map[string]string{"body": "# v1"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("publish = %d %s", resp.StatusCode, raw)
+	}
+	resp, raw = do("PUT", "/api/skills/"+asset.ID+"/labels/production", map[string]int64{"version": 1})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("label = %d %s", resp.StatusCode, raw)
+	}
+	_, raw = do("GET", "/api/skills/"+asset.ID+"/labels", nil)
+	if !strings.Contains(string(raw), "# v1") {
+		t.Fatalf("labels = %s", raw)
+	}
+}
+
+// TestSkillsMountGated: with console credentials configured, the skill API
+// requires the console session — the same gate as the ops console routes.
+func TestSkillsMountGated(t *testing.T) {
+	t.Setenv("WOCA_CONSOLE_USER", "admin")
+	t.Setenv("WOCA_CONSOLE_PASSWORD", "s3cret")
+	f := newFixture(t)
+	sk, err := skillsvc.NewStore(f.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.svc.AttachSkills(sk)
+	srv := httptest.NewServer(f.svc.Handler())
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/api/skills")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no session = %d want 401", resp.StatusCode)
+	}
+
+	login, _ := json.Marshal(map[string]string{"username": "admin", "password": "s3cret"})
+	resp, err = http.Post(srv.URL+"/api/console/login", "application/json", bytes.NewReader(login))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var session *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "woca_console_session" && c.Value != "" {
+			session = c
+		}
+	}
+	resp.Body.Close()
+	if session == nil {
+		t.Fatal("no session cookie issued")
+	}
+	req, _ := http.NewRequest("GET", srv.URL+"/api/skills", nil)
+	req.AddCookie(session)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("with session = %d want 200", resp.StatusCode)
 	}
 }

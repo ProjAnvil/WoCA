@@ -42,7 +42,7 @@ ee/opsconsole-web/dist/
 ee/skillsvc-web/dist/
 internal/ee/configsvc/spa/
 internal/ee/opsui/spa/
-internal/ee/skillsvc/spa/
+internal/ee/skillsvcui/spa/
 native-client/native-client
 
 # Local deploy environment (use .env.example)

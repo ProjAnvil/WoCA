@@ -3,6 +3,10 @@
 // Every publish creates a new version; a label points at a version;
 // rollback is re-pointing the label. The store rides wocadb (sqlite for
 // personal/tests, PG + tenant_id + RLS for the enterprise deployment).
+//
+// The HTTP API (NewHandler) mounts on woca-server's management listener
+// inside the ops console's credential gate (opsconsole.AttachSkills); the
+// console SPA is internal/ee/skillsvcui, served by the woca-ops facade.
 package skillsvc
 
 import (

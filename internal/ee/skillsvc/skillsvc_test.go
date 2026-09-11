@@ -2,10 +2,7 @@ package skillsvc
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/projanvil/woca/internal/wocadb"
@@ -260,19 +257,5 @@ func TestLabelsMapComplete(t *testing.T) {
 	}
 	if labels["canary"].Body != "stable" {
 		t.Fatalf("canary after overwrite = %+v", labels["canary"])
-	}
-}
-
-// The embedded SPA serves its index.html.
-func TestSpaHandlerServesIndex(t *testing.T) {
-	h := SpaHandler()
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("SPA index = %d", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "app") {
-		t.Fatal("SPA index has no mount point")
 	}
 }

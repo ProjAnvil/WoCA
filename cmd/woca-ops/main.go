@@ -15,6 +15,11 @@
 // a plain URL or a nacos:// / consul:// reference resolved through the
 // same channel as every other service address. The console never
 // self-registers.
+//
+// Both assemblies also serve the skill-asset console (design §6.4) under
+// /skillsvc/ (internal/ee/skillsvcui); its /api/skills calls ride the same
+// channel as the ops console's API — proxied to woca-server in the proxy
+// assembly, in-process over the shared database in the direct one.
 package main
 
 import (
@@ -33,6 +38,8 @@ import (
 	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/ee/opsconsole"
 	"github.com/projanvil/woca/internal/ee/opsui"
+	"github.com/projanvil/woca/internal/ee/skillsvc"
+	"github.com/projanvil/woca/internal/ee/skillsvcui"
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/settings"
@@ -114,9 +121,18 @@ func proxyAssembly(log zerolog.Logger, raw string) http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/", proxy)
+	mux.Handle("/skillsvc/", skillsSPA())
 	mux.Handle("/", opsui.Handler())
 	log.Info().Str("upstream", resolved).Msg("woca-ops: console facade up (SPA + proxy to woca-server)")
 	return mux
+}
+
+// skillsSPA serves the skill-asset console (internal/ee/skillsvcui) under
+// /skillsvc/; its API calls (/api/skills) ride the same channel as the ops
+// console's — proxied to woca-server in the proxy assembly, in-process in
+// the direct one.
+func skillsSPA() http.Handler {
+	return http.StripPrefix("/skillsvc/", skillsvcui.Handler())
 }
 
 // directAssembly is the single-box dev form: the authoritative opsconsole
@@ -138,8 +154,15 @@ func directAssembly(log zerolog.Logger, dsn string) http.Handler {
 	if err != nil {
 		log.Fatal().Err(err).Msg("woca-ops: core auth service failed")
 	}
+	skillStore, err := skillsvc.NewStore(st.DB())
+	if err != nil {
+		log.Fatal().Err(err).Msg("woca-ops: skill asset store failed")
+	}
+	console := opsconsole.New(st, gwStore, auth, tenantStore, log)
+	console.AttachSkills(skillStore)
 	mux := http.NewServeMux()
-	mux.Handle("/api/", opsconsole.New(st, gwStore, auth, tenantStore, log).Handler())
+	mux.Handle("/api/", console.Handler())
+	mux.Handle("/skillsvc/", skillsSPA())
 	mux.Handle("/", opsui.Handler())
 	log.Info().Msg("woca-ops: console up (direct over the shared database; no woca-server hop)")
 	return mux

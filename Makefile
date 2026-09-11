@@ -24,9 +24,9 @@ ee-web:
 	cp -R ee/opsconsole-web/dist/ internal/ee/opsui/spa/
 	touch internal/ee/opsui/spa/.gitkeep
 	cd ee/skillsvc-web && bun install && bun run build
-	rm -rf internal/ee/skillsvc/spa && mkdir -p internal/ee/skillsvc/spa
-	cp -R ee/skillsvc-web/dist/ internal/ee/skillsvc/spa/
-	touch internal/ee/skillsvc/spa/.gitkeep
+	rm -rf internal/ee/skillsvcui/spa && mkdir -p internal/ee/skillsvcui/spa
+	cp -R ee/skillsvc-web/dist/ internal/ee/skillsvcui/spa/
+	touch internal/ee/skillsvcui/spa/.gitkeep
 
 build:
 	go build -o build/woca ./cmd/woca
@@ -329,7 +329,7 @@ check-server-artifacts: build-server
 			echo "$$a links interactive surfaces"; exit 1; \
 		fi; \
 	done
-	@for p in woca/web internal/ee/opsui internal/ee/configsvc internal/ee/skillsvc; do \
+	@for p in woca/web internal/ee/opsui internal/ee/configsvc internal/ee/skillsvcui; do \
 		if go list -deps ./cmd/woca-server | grep -q "projanvil/woca/$$p$$"; then \
 			echo "woca-server links a web/frontend package ($$p): it must stay pageless"; exit 1; \
 		fi; \

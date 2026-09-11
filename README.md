@@ -332,7 +332,8 @@ enterprise code, not a third edition.
 ```
 internal/        core, shared by both editions (agent, tools, server, fsb, …)
 internal/ee/     enterprise-only: msgplane, tenant, configsvc, worker, obs,
-                 discovery, nativeauth, dpop, tenantcmd, memcmd, skillsvc,
+                 discovery, nativeauth, dpop, tenantcmd, memcmd, skillsvc
+                 (skill-asset API; its console SPA is skillsvcui on woca-ops),
                  bridge (the private-cloud bridge service), entrygw (the
                  private-core machine registry), edgegw (the stateless edge
                  access point), edition (woca-server's composition root)

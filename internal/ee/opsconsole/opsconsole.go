@@ -31,6 +31,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/consoleauth"
 	"github.com/projanvil/woca/internal/ee/entrygw"
 	"github.com/projanvil/woca/internal/ee/nacosrt"
+	"github.com/projanvil/woca/internal/ee/skillsvc"
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/gateway"
 	"github.com/projanvil/woca/internal/platform/authz"
@@ -50,8 +51,16 @@ type Service struct {
 	db        *wocadb.DB
 	log       zerolog.Logger
 	console   *consoleauth.Gate
+	skills    *skillsvc.Store   // skill-asset platform (nil = not mounted)
 	publisher nacosrt.Publisher // full-stack delivery (nil = direct dev console)
 }
+
+// AttachSkills mounts the skill-asset platform's API (design §6.4) inside
+// the console gate: the same session and per-route scope posture as the
+// console's own routes. The console SPA for it lives on the woca-ops
+// facade (internal/ee/skillsvcui) — this package carries no web pages.
+// Call before Handler.
+func (s *Service) AttachSkills(sk *skillsvc.Store) { s.skills = sk }
 
 // AttachPublisher wires the full-stack delivery channel: gateway-policy
 // writes publish the config pack to nacos (the sole source of truth).
@@ -120,6 +129,16 @@ func (s *Service) Handler() http.Handler {
 	// Gateway policy: the edge SPKI pin embedded in enrollment tokens.
 	mux.Handle("GET /api/gw/settings", s.requireScope(authz.ScopeSettingsRead, s.handleGetGatewaySettings))
 	mux.Handle("PUT /api/gw/settings", s.requireScope(authz.ScopeSettingsWrite, s.handlePutGatewaySettings))
+	// Skill-asset platform (design §6.4): assets, immutable versions, and
+	// the production/canary labels. Reads take the read scope, every
+	// mutation the write scope (GET patterns are the more specific match).
+	if s.skills != nil {
+		skills := skillsvc.NewHandler(s.skills)
+		mux.Handle("GET /api/skills", s.requireScope(authz.ScopeSettingsRead, skills.ServeHTTP))
+		mux.Handle("GET /api/skills/", s.requireScope(authz.ScopeSettingsRead, skills.ServeHTTP))
+		mux.Handle("/api/skills", s.requireScope(authz.ScopeSettingsWrite, skills.ServeHTTP))
+		mux.Handle("/api/skills/", s.requireScope(authz.ScopeSettingsWrite, skills.ServeHTTP))
+	}
 
 	top := http.NewServeMux()
 	// The login route must be reachable before a session exists, so it

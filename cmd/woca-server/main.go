@@ -33,6 +33,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/nativeauth"
 	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/ee/opsconsole"
+	"github.com/projanvil/woca/internal/ee/skillsvc"
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/servefront"
 	"github.com/projanvil/woca/internal/settings"
@@ -140,6 +141,16 @@ func main() {
 			// same tenant tables the public /api/native/* surface uses.
 			gwMux.Handle("/gw/native/", nativeauth.MachineHandler(nativeauth.New(tenantStore, tenant.NewAPIKeyProvider(tenantStore))))
 			console := opsconsole.New(st, gwStore, auth, tenantStore, log)
+			// The skill-asset platform (design §6.4): its API rides the
+			// console gate alongside the other management routes; its
+			// console SPA is served by the woca-ops facade (skillsvcui),
+			// keeping this listener pageless.
+			skillStore, err := skillsvc.NewStore(st.DB())
+			if err != nil {
+				log.Error().Err(err).Msg("woca-server: skill asset store failed")
+				return
+			}
+			console.AttachSkills(skillStore)
 			// Gateway-policy writes ride the config pack in the
 			// full-stack posture (nil = the direct dev console, which
 			// shares the database with its servers).

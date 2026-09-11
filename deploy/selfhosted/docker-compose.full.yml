@@ -386,6 +386,9 @@ services:
     depends_on:
       woca-server-1: { condition: service_started }
       woca-server-2: { condition: service_started }
+      # :8082 proxies the skill console to the ops facade — nginx resolves
+      # upstream names once at config load, so it must exist first.
+      woca-ops: { condition: service_started }
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:80/api/health || exit 1"]
       interval: 10s
