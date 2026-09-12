@@ -71,20 +71,51 @@ func subagentPendingPermission(ctx context.Context, sub *Agent, thread string) (
 	return req, ok
 }
 
+// graphCarrierKey reports whether key is one of the named unexported
+// context-carrier types in the pinned langgraph-golang fork's graph package,
+// matched by type identity via reflection (the module is pinned; the tests
+// fail loudly if this stops matching).
+func graphCarrierKey(key any, names ...string) bool {
+	t := reflect.TypeOf(key)
+	if t == nil || t.PkgPath() != "github.com/projanvil/langchain-golang/langgraph/graph" {
+		return false
+	}
+	for _, name := range names {
+		if t.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
 // detachStreamCtx hides the fork's stream emitter from a nested graph run.
 // The emitter travels via an unexported context key, so a foreground
 // subagent invoked with the tool goroutine's ctx would otherwise emit its
 // chunks — including its RAW pause interrupts — into the parent run's
 // stream, ahead of the wrapped SubagentInterrupt the relay raises; the
 // harness surfaces the first interrupt chunk it sees, so the leak would
-// defeat the relay. The key is matched by type identity via reflection (the
-// module is pinned; the relay tests fail loudly if this stops matching).
+// defeat the relay.
 type detachStreamCtx struct{ context.Context }
 
 func (d detachStreamCtx) Value(key any) any {
-	if t := reflect.TypeOf(key); t != nil &&
-		t.Name() == "streamEmitterKey" &&
-		t.PkgPath() == "github.com/projanvil/langchain-golang/langgraph/graph" {
+	if graphCarrierKey(key, "streamEmitterKey") {
+		return nil
+	}
+	return d.Context.Value(key)
+}
+
+// detachRunMetaCtx hides the fork's execution-meta carrier from a background
+// subagent run. The run loop publishes its checkpoint position under
+// executionMetaKey as a *checkpoint.Config it keeps mutating in place
+// between supersteps (persist's `*currentCfg = cfg`), and a nested run's
+// staticNext reads it through the CALLER's ctx — for a background child on
+// its own goroutine that read races the parent's writes. The foreground
+// relay does not need the strip: its child runs synchronously inside the
+// parent's tools node, where the parent run loop cannot persist.
+type detachRunMetaCtx struct{ context.Context }
+
+func (d detachRunMetaCtx) Value(key any) any {
+	if graphCarrierKey(key, "executionMetaKey") {
 		return nil
 	}
 	return d.Context.Value(key)
@@ -396,6 +427,9 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 
 	// Streaming subagent run (background Task output): consume node
 	// updates for complete AI messages and the final values snapshot.
+	// The child runs on its own goroutine, so it must not see the parent
+	// run's execution-meta carrier (see detachRunMetaCtx).
+	ctx = detachRunMetaCtx{ctx}
 	final := ""
 	for chunk, err := range sub.Graph().Stream(ctx, sub.NewState(ctx, history), lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: NewThreadID()},
