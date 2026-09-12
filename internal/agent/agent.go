@@ -317,7 +317,7 @@ type Agent struct {
 	// an interrupt re-execution does not re-run tools that already executed
 	// (side effects). Keys are tool call IDs; entries are deleted when the
 	// tools node returns normally.
-	batchMemo sync.Map // map[string]messages.Message
+	batchMemo sync.Map // map[string]batchMemoEntry
 	// escalate rebuilds the model at the escalated output cap (optional).
 	escalate func() (language.ChatModel, error)
 	// toolBudget is the per-round tool-result character budget (0 disables).
@@ -1302,6 +1302,17 @@ func (a *Agent) observedNode(graphName, nodeName string, fn lggraph.NodeFunc) lg
 	}
 }
 
+// batchMemoEntry is a memoized tool result plus the number of resume values
+// the call's gate consumed via Interrupt in the execution that produced it.
+// langgraph resume consumption is positional (each re-execution's Interrupt
+// calls consume the queued resume values in call order), so a memo hit that
+// skips the gate must replay that consumption — otherwise the batch's
+// remaining Interrupt calls shift left onto answers meant for earlier calls.
+type batchMemoEntry struct {
+	msg      messages.Message
+	consumed int
+}
+
 // toolsNode executes pending tool calls, applying the interaction gate and
 // Pre/Post tool-use hooks.
 func (a *Agent) toolsNode() lggraph.NodeFunc {
@@ -1322,6 +1333,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		preFeedback := make([]string, len(calls))
 		futures := make([]*toolFuture, len(calls))
 		memoHits := make([]bool, len(calls))
+		consumed := make([]int, len(calls))
 		results := make([]messages.Message, len(calls))
 
 		// Gates and PreToolUse hooks run sequentially so interrupts pause
@@ -1337,10 +1349,17 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				continue
 			}
 			if m, ok := a.batchMemo.Load(call.ID); ok {
-				results[i] = m.(messages.Message)
+				entry := m.(batchMemoEntry)
+				results[i] = entry.msg
 				memoHits[i] = true
+				// This call's gate consumed entry.consumed resume values in
+				// the earlier execution; skipping the gate must not shift the
+				// positional resume queue under the calls that still
+				// interrupt.
+				lggraph.ReplayInterruptConsumption(ctx, entry.consumed)
 				continue
 			}
+			gateConsumed := lggraph.InterruptConsumeCount(ctx)
 			shouldRun, override, err := a.gate(ctx, call)
 			if err != nil {
 				return nil, err
@@ -1369,6 +1388,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				preFeedback[i] = d.Feedback
 			}
 			run[i] = true
+			consumed[i] = lggraph.InterruptConsumeCount(ctx) - gateConsumed
 		}
 
 		var wg sync.WaitGroup
@@ -1422,8 +1442,9 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				}
 				results[i] = toolMessageFromResult(call.ID, content, &res)
 				// Memoize so a later interrupt's re-execution of this batch
-				// reuses the result instead of re-running the tool.
-				a.batchMemo.Store(call.ID, results[i])
+				// reuses the result instead of re-running the tool; the gate's
+				// resume consumption goes along so the memo hit can replay it.
+				a.batchMemo.Store(call.ID, batchMemoEntry{msg: results[i], consumed: consumed[i]})
 			}(i, call)
 		}
 		wg.Wait()
