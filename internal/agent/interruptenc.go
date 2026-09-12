@@ -29,7 +29,7 @@ const wocaResumePrefix = "__woca_resume__:"
 // and unknown shapes pass through unchanged.
 func encodeInterruptPayload(v any) any {
 	switch v.(type) {
-	case PermissionRequest, AskUserRequest, AskUserAnswer, PlanApprovalRequest, GoalDelta:
+	case PermissionRequest, AskUserRequest, AskUserAnswer, PlanApprovalRequest, GoalDelta, SubagentInterrupt:
 	default:
 		return v // JSON-native or already envelope-shaped
 	}
@@ -75,6 +75,8 @@ func decodeInterruptPayload(v any) any {
 		out = &PlanApprovalRequest{}
 	case "agent.GoalDelta":
 		out = &GoalDelta{}
+	case "agent.SubagentInterrupt":
+		out = &SubagentInterrupt{}
 	default:
 		return v
 	}
@@ -96,6 +98,8 @@ func derefAny(v any) any {
 	case *PlanApprovalRequest:
 		return *p
 	case *GoalDelta:
+		return *p
+	case *SubagentInterrupt:
 		return *p
 	}
 	return v

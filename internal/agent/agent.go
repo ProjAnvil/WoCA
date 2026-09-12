@@ -134,6 +134,17 @@ type PlanApprovalRequest struct {
 	Plan string `json:"plan"`
 }
 
+// SubagentInterrupt wraps a foreground Task subagent's permission pause so
+// the parent graph surfaces it for approval. The answer semantics are the
+// inner permission's ("y"/"n"); ThreadID is the derived subagent checkpoint
+// thread used to resume the child after approval.
+type SubagentInterrupt struct {
+	Subagent   string            `json:"subagent"`
+	ToolCallID string            `json:"tool_call_id"`
+	ThreadID   string            `json:"thread_id"`
+	Inner      PermissionRequest `json:"inner"`
+}
+
 // Config configures an Agent.
 type Config struct {
 	Model    language.ChatModel
