@@ -16,10 +16,12 @@ import (
 	"github.com/projanvil/langchain-golang/core/schema"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
+	lgcpsqlite "github.com/projanvil/langchain-golang/langgraph/checkpoint/sqlite"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/cpserde"
 	"github.com/projanvil/woca/internal/permissions"
 	"github.com/projanvil/woca/internal/tools"
 )
@@ -685,5 +687,99 @@ func TestResumePathsStoreLastThread(t *testing.T) {
 	pumpStream(t, a3.ResumeStream(ctx, thread2, "y"))
 	if got := a3.LastThreadID(); got != thread2 {
 		t.Fatalf("after ResumeStream LastThreadID = %q, want %q", got, thread2)
+	}
+}
+
+// TestSubagentRelayCrossProcess: the durable (sqlite) tier of the relay.
+// Agent A1 pauses on the child's Write permission; the paused parent and
+// child checkpoints live in a shared sqlite saver. A fresh agent A2 — new
+// instance, new saver on the SAME database file, simulating a process
+// restart — resumes the parent thread with "y". The relay must find the
+// child's checkpoint (not respawn it), the Write executes exactly once, and
+// the child report lands in the Task result.
+//
+// Both models are transcript-driven: a resumed run re-invokes each model on
+// the rebuilt transcript, so a cursor-scripted FakeChatModel on A2 would
+// replay script[0] (re-calling Task forever). The transcript models answer
+// from conversation state, like a real stateless model.
+func TestSubagentRelayCrossProcess(t *testing.T) {
+	workdir := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "checkpoints.db")
+	subScript := []messages.Message{
+		writeCall("w1", "cross.txt", "hello"),
+		messages.AI("sub done"),
+	}
+	build := func() (*Agent, *lgcpsqlite.Saver) {
+		saver, err := lgcpsqlite.New(dbPath, cpserde.NewSerializer())
+		if err != nil {
+			t.Fatalf("sqlite.New: %v", err)
+		}
+		parentModel := &transcriptModel{script: []messages.Message{
+			{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+				{ID: "t1", Name: "Task", Args: map[string]any{
+					"description": "write files",
+					"prompt":      "write the files I asked for",
+				}},
+			}},
+			messages.AI("parent done"),
+		}}
+		a, err := New(Config{
+			Model:          parentModel,
+			SubagentModel:  &transcriptModel{script: subScript},
+			Registry:       tools.NewRegistry(workdir),
+			SystemPrompt:   "t",
+			PermissionMode: config.ModeDefault,
+			WorkDir:        workdir,
+			Checkpointer:   saver,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a, saver
+	}
+	ctx := context.Background()
+	thread := "parent-thread-1"
+
+	// Process 1: run until the child's Write permission bubbles up.
+	a1, saver1 := build()
+	intrs, _ := pumpStream(t, a1.Stream(ctx, []messages.Message{messages.Human("do it")}, thread))
+	if len(intrs) != 1 {
+		t.Fatalf("pauses = %d, want 1", len(intrs))
+	}
+	si, ok := DecodeInterruptValue(intrs[0].Value).(SubagentInterrupt)
+	if !ok {
+		t.Fatalf("interrupt payload = %T, want SubagentInterrupt", DecodeInterruptValue(intrs[0].Value))
+	}
+	if si.Subagent != "general" || si.Inner.ToolName != "Write" || si.ToolCallID != "t1" || si.ThreadID == "" {
+		t.Fatalf("envelope = %+v", si)
+	}
+	// The Write is gated pre-execution: no side effect may have landed yet.
+	if _, err := os.Stat(filepath.Join(workdir, "cross.txt")); !os.IsNotExist(err) {
+		t.Fatalf("Write executed before approval (stat err = %v)", err)
+	}
+	// Simulate the process exiting: the paused checkpoints are flushed and
+	// the first saver connection is gone.
+	if err := saver1.Close(); err != nil {
+		t.Fatalf("close saver1: %v", err)
+	}
+
+	// Process 2: a fresh agent over the same database resumes the parent.
+	a2, saver2 := build()
+	defer func() { _ = saver2.Close() }()
+	final, err := a2.Resume(ctx, thread, "y")
+	if err != nil {
+		// A GraphInterrupt here means the relay failed to find the child's
+		// checkpoint and restarted it (the re-run Write re-paused).
+		t.Fatalf("cross-process resume: %v", err)
+	}
+	if !toolContentContains(final, "sub done") {
+		t.Fatalf("Task result lacks the child report; final transcript: %v", final)
+	}
+	blob, err := os.ReadFile(filepath.Join(workdir, "cross.txt"))
+	if err != nil {
+		t.Fatalf("child Write did not execute after cross-process approval: %v", err)
+	}
+	if string(blob) != "hello" {
+		t.Fatalf("cross.txt = %q, want %q (Write must run exactly once)", blob, "hello")
 	}
 }
