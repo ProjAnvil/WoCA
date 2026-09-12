@@ -313,6 +313,11 @@ type Agent struct {
 	// spec tracks speculatively executed tool calls started while the model
 	// was still streaming (streaming tool execution).
 	spec speculativeRegistry
+	// batchMemo holds completed tool results of the in-flight call batch so
+	// an interrupt re-execution does not re-run tools that already executed
+	// (side effects). Keys are tool call IDs; entries are deleted when the
+	// tools node returns normally.
+	batchMemo sync.Map // map[string]messages.Message
 	// escalate rebuilds the model at the escalated output cap (optional).
 	escalate func() (language.ChatModel, error)
 	// toolBudget is the per-round tool-result character budget (0 disables).
@@ -1316,14 +1321,24 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		overrides := make([]*coretools.Result, len(calls))
 		preFeedback := make([]string, len(calls))
 		futures := make([]*toolFuture, len(calls))
+		memoHits := make([]bool, len(calls))
+		results := make([]messages.Message, len(calls))
 
 		// Gates and PreToolUse hooks run sequentially so interrupts pause
 		// deterministically. Calls already speculatively executed during
 		// model streaming (permission decided then) skip the gate: the tools
-		// node only awaits their result.
+		// node only awaits their result. Calls memoized by a previous
+		// execution of this batch (which then paused on an interrupt) skip
+		// the gate too — their permission was already granted and re-asking
+		// would consume a resume value.
 		for i, call := range calls {
 			if f := a.spec.get(call.ID); f != nil {
 				futures[i] = f
+				continue
+			}
+			if m, ok := a.batchMemo.Load(call.ID); ok {
+				results[i] = m.(messages.Message)
+				memoHits[i] = true
 				continue
 			}
 			shouldRun, override, err := a.gate(ctx, call)
@@ -1356,11 +1371,14 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 			run[i] = true
 		}
 
-		results := make([]messages.Message, len(calls))
 		var wg sync.WaitGroup
+		paused := make([]*lgtypes.GraphInterrupt, len(calls))
 		for i, call := range calls {
 			if futures[i] != nil {
 				results[i] = futures[i].wait()
+				continue
+			}
+			if memoHits[i] {
 				continue
 			}
 			if overrides[i] != nil {
@@ -1376,6 +1394,15 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				defer wg.Done()
 				defer func() {
 					if rec := recover(); rec != nil {
+						// A GraphInterrupt panic (subagent HITL or a tool's own
+						// lggraph.Interrupt) must bubble out of the node: stash
+						// it in this call's slot; the node's goroutine re-panics
+						// it after wg.Wait. Each goroutine writes only its own
+						// index, so the post-Wait read is race-free.
+						if gi, ok := rec.(*lgtypes.GraphInterrupt); ok {
+							paused[i] = gi
+							return
+						}
 						stack := debug.Stack()
 						if len(stack) > 2048 {
 							stack = stack[:2048]
@@ -1394,9 +1421,25 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 					}
 				}
 				results[i] = toolMessageFromResult(call.ID, content, &res)
+				// Memoize so a later interrupt's re-execution of this batch
+				// reuses the result instead of re-running the tool.
+				a.batchMemo.Store(call.ID, results[i])
 			}(i, call)
 		}
 		wg.Wait()
+		// A tool interrupted mid-execution: re-panic the first GraphInterrupt
+		// on the node's goroutine so the graph executor converts it into a
+		// pause. Completed results stay in batchMemo for the re-execution.
+		for _, gi := range paused {
+			if gi != nil {
+				panic(gi)
+			}
+		}
+		// The batch finished without an interrupt: drop its memo entries
+		// (both return paths below — the MaxTurns cap and the normal return).
+		for _, call := range calls {
+			a.batchMemo.Delete(call.ID)
+		}
 		// Results are merged into state: retire the consumed futures. On the
 		// interrupt path above they remain for a same-process resume.
 		for i := range calls {
