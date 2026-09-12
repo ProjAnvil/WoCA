@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -291,6 +293,54 @@ func TestRunTaskSubagentErrors(t *testing.T) {
 		out, err := a.taskOutput(context.Background(), taskOutputArgs{TaskID: "task-1"})
 		return err == nil && strings.Contains(out.Content, "Error: subagent exploded")
 	}, "failed background task report")
+}
+
+// TestBackgroundSubagentInterruptStaysError locks the background Task path
+// against the foreground interrupt relay: a background subagent's permission
+// pause must NOT bubble onto the parent graph (the parent stream completes
+// without an interrupt chunk) and the task must fail closed — the pending
+// pause surfaces as an "Error: ..." final report (no one can answer a
+// background pause) instead of silently completing, and the gated Write never
+// executes. The parent model is transcript-driven: the Task tool returns
+// immediately, so the scripted second response would replay the Task call.
+func TestBackgroundSubagentInterruptStaysError(t *testing.T) {
+	workdir := t.TempDir()
+	a, err := New(Config{
+		Model: &transcriptModel{script: []messages.Message{
+			{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+				{ID: "t1", Name: "Task", Args: map[string]any{
+					"description":       "write files",
+					"prompt":            "write the files I asked for",
+					"run_in_background": true,
+				}},
+			}},
+			messages.AI("parent done"),
+		}},
+		SubagentModel: &transcriptModel{script: []messages.Message{
+			writeCall("w1", "bg.txt", "hello"),
+			messages.AI("sub done"),
+		}},
+		Registry:       tools.NewRegistry(workdir),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeDefault,
+		WorkDir:        workdir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	intrs, _ := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("do it")}, "thread-bg-relay"))
+	if len(intrs) != 0 {
+		t.Fatalf("parent paused on a background subagent's permission: %v", DecodeInterruptValue(intrs[0].Value))
+	}
+	waitFor(t, 10*time.Second, func() bool {
+		out, err := a.taskOutput(ctx, taskOutputArgs{TaskID: "task-1"})
+		return err == nil && strings.HasPrefix(out.Content, "Error:")
+	}, "background task error report")
+	// The gated Write never executed: the pause is pending, not approved.
+	if _, err := os.Stat(filepath.Join(workdir, "bg.txt")); !os.IsNotExist(err) {
+		t.Fatalf("background Write executed despite the pending pause (stat err = %v)", err)
+	}
 }
 
 func TestRunSubagentStreamsProgressToCallback(t *testing.T) {

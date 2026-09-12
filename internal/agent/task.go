@@ -407,6 +407,15 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 		switch chunk.Mode {
 		case lggraph.StreamUpdates:
 			updates, _ := chunk.Payload.(map[string]any)
+			if intrs, ok := updates[lgcheckpoint.ReservedInterrupt].([]lgtypes.Interrupt); ok && len(intrs) > 0 {
+				// A background subagent has no one to answer a pause: fail
+				// the task closed instead of completing with a silent empty
+				// report. (The foreground relay lives in runForegroundTask.)
+				if req, ok := decodeInterruptPayload(intrs[0].Value).(PermissionRequest); ok && req.ToolName != "" {
+					return "", fmt.Errorf("subagent paused for a permission (%s) it cannot ask while running in the background", req.ToolName)
+				}
+				return "", fmt.Errorf("subagent paused (%v) while running in the background with no one to answer", decodeInterruptPayload(intrs[0].Value))
+			}
 			for _, v := range updates {
 				nodeUpdate, _ := v.(map[string]any)
 				for _, m := range MessagesFrom(nodeUpdate) {
