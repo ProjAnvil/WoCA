@@ -460,6 +460,7 @@ func New(cfg Config) (*Agent, error) {
 			Primary:    cfg.Model,
 			Fallback:   cfg.FallbackModel,
 			MaxRetries: cfg.ModelMaxRetries,
+			Retryable:  model.IsRetryable,
 		})
 		if err != nil {
 			return nil, err
