@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -257,5 +258,107 @@ func TestToolsNodeMemoReplayKeepsResumeAlignment(t *testing.T) {
 	}
 	if toolContentContains(final, "resumed:y") {
 		t.Fatal("pausing tool consumed the permission answer — resume queue misaligned")
+	}
+}
+
+// TestToolsNodeMemoReplayCoversExecutionInterrupts: a batch [pauseX, pauseY]
+// (bypass mode, no gate interrupts) pauses twice — X mid-execution, then Y
+// mid-execution after X resumed and completed. X's memo entry must carry its
+// execution-phase Interrupt consumption, so on the final re-execution X's
+// memo hit replays it and Y's Interrupt consumes its own resume value ("vy")
+// instead of the already-spent "vx".
+//
+// The execution goroutines run concurrently, so the test must order the two
+// Interrupt calls deterministically: Y waits on xConsumed (closed when X's
+// Interrupt returns, i.e. after X consumed its resume value) before calling
+// its own. In the first execution X panics before closing the channel, so Y
+// falls through a timeout and interrupts too — its panic is stashed and only
+// X's (index 0) is re-panicked, yielding pause #1 = X.
+func TestToolsNodeMemoReplayCoversExecutionInterrupts(t *testing.T) {
+	var xDone, yDone atomic.Int32
+	xConsumed := make(chan struct{})
+	pauseX, err := coretools.FromFunc("pause_x", "test pausing tool",
+		func(ctx context.Context, args struct{}) (coretools.Result, error) {
+			v, _ := lggraph.Interrupt(ctx, "pause-x").(string)
+			close(xConsumed)
+			xDone.Add(1)
+			return coretools.Result{Content: "pause_x:" + v}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pauseY, err := coretools.FromFunc("pause_y", "test pausing tool",
+		func(ctx context.Context, args struct{}) (coretools.Result, error) {
+			select {
+			case <-xConsumed:
+			case <-time.After(500 * time.Millisecond):
+			}
+			v, _ := lggraph.Interrupt(ctx, "pause-y").(string)
+			yDone.Add(1)
+			return coretools.Result{Content: "pause_y:" + v}, nil
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+				{ID: "x1", Name: "pause_x", Args: map[string]any{}},
+				{ID: "y1", Name: "pause_y", Args: map[string]any{}},
+			}},
+			messages.AI("done"),
+		),
+	)
+	a, err := New(Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		ExtraTools:     []coretools.Tool{pauseX, pauseY},
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	thread := "thread-toolsnode-exec-replay"
+	wantPause := []string{"pause-x", "pause-y"}
+	answers := []string{"vx", "vy"}
+	stream := a.Stream(ctx, []messages.Message{messages.Human("go")}, thread)
+	pauses := 0
+	var final []messages.Message
+	for {
+		intrs, vals := pumpStream(t, stream)
+		if len(vals) > 0 {
+			final = vals
+		}
+		if len(intrs) == 0 {
+			break
+		}
+		if pauses >= len(answers) {
+			t.Fatalf("unexpected extra pause: %v", decodeInterruptPayload(intrs[0].Value))
+		}
+		if got := decodeInterruptPayload(intrs[0].Value); got != wantPause[pauses] {
+			t.Fatalf("pause #%d value = %v, want %s", pauses+1, got, wantPause[pauses])
+		}
+		stream = a.ResumeStream(ctx, thread, answers[pauses])
+		pauses++
+	}
+	if pauses != 2 {
+		t.Fatalf("pauses = %d, want 2 (X's then Y's execution interrupt)", pauses)
+	}
+	if got := xDone.Load(); got != 1 {
+		t.Fatalf("pause_x completed %d times, want 1", got)
+	}
+	if got := yDone.Load(); got != 1 {
+		t.Fatalf("pause_y completed %d times, want 1", got)
+	}
+	// Queue: ["vx" (X), "vy" (Y)]. Without replaying X's execution-phase
+	// consumption, Y's memo-aligned Interrupt would consume "vx".
+	if !toolContentContains(final, "pause_x:vx") {
+		t.Fatalf("X's result missing or wrong; final transcript: %v", final)
+	}
+	if !toolContentContains(final, "pause_y:vy") {
+		t.Fatalf("Y consumed the wrong resume value; final transcript: %v", final)
 	}
 }

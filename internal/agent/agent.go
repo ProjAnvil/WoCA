@@ -1303,11 +1303,12 @@ func (a *Agent) observedNode(graphName, nodeName string, fn lggraph.NodeFunc) lg
 }
 
 // batchMemoEntry is a memoized tool result plus the number of resume values
-// the call's gate consumed via Interrupt in the execution that produced it.
-// langgraph resume consumption is positional (each re-execution's Interrupt
-// calls consume the queued resume values in call order), so a memo hit that
-// skips the gate must replay that consumption — otherwise the batch's
-// remaining Interrupt calls shift left onto answers meant for earlier calls.
+// the call consumed via Interrupt — across both its gate and its execution —
+// in the execution that produced it. langgraph resume consumption is
+// positional (each re-execution's Interrupt calls consume the queued resume
+// values in call order), so a memo hit that skips both phases must replay
+// that consumption — otherwise the batch's remaining Interrupt calls shift
+// left onto answers meant for earlier calls.
 type batchMemoEntry struct {
 	msg      messages.Message
 	consumed int
@@ -1430,7 +1431,12 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 						results[i] = messages.Tool(call.ID, fmt.Sprintf("Error: tool %q panicked: %v\n%s", call.Name, rec, stack))
 					}
 				}()
-				res := a.execute(withToolCallID(ctx, call.ID), call.Name, call.Args)
+				tctx := withToolCallID(ctx, call.ID)
+				// Baseline for this call's execution-phase Interrupt
+				// consumption; the memo stores the per-call total (gate
+				// delta + execution delta) so a memo hit replays both.
+				execBase := lggraph.InterruptConsumeCount(tctx)
+				res := a.execute(tctx, call.Name, call.Args)
 				content := res.Content
 				if preFeedback[i] != "" {
 					content = preFeedback[i] + "\n" + content
@@ -1442,9 +1448,14 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				}
 				results[i] = toolMessageFromResult(call.ID, content, &res)
 				// Memoize so a later interrupt's re-execution of this batch
-				// reuses the result instead of re-running the tool; the gate's
-				// resume consumption goes along so the memo hit can replay it.
-				a.batchMemo.Store(call.ID, batchMemoEntry{msg: results[i], consumed: consumed[i]})
+				// reuses the result instead of re-running the tool; the
+				// call's total resume consumption goes along so the memo hit
+				// can replay it and keep the positional queue aligned.
+				// Concurrent goroutines can interleave their consumption, so
+				// the attribution is approximate when two calls interrupt at
+				// the same time — already an order-ambiguous case.
+				total := consumed[i] + lggraph.InterruptConsumeCount(tctx) - execBase
+				a.batchMemo.Store(call.ID, batchMemoEntry{msg: results[i], consumed: total})
 			}(i, call)
 		}
 		wg.Wait()
