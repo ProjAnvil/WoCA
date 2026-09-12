@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"iter"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -10,6 +12,8 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/langchain-golang/core/runnables"
+	"github.com/projanvil/langchain-golang/core/schema"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
@@ -360,5 +364,266 @@ func TestToolsNodeMemoReplayCoversExecutionInterrupts(t *testing.T) {
 	}
 	if !toolContentContains(final, "pause_y:vy") {
 		t.Fatalf("Y consumed the wrong resume value; final transcript: %v", final)
+	}
+}
+
+// --- Task 4: foreground subagent permission relay -------------------------
+
+// transcriptModel is a transcript-driven ChatModel for the relay tests'
+// subagent: runForegroundTask rebuilds the subagent (and re-binds its model)
+// on every re-entry, and FakeChatModel's script cursor resets per bind copy
+// — a transcript-driven fake answers from the conversation state instead,
+// like a real stateless model. It returns script[len(tool results so far)],
+// clamped to the last entry.
+type transcriptModel struct {
+	script []messages.Message
+}
+
+func (m *transcriptModel) pick(input []messages.Message) messages.Message {
+	toolResults := 0
+	for _, msg := range input {
+		if msg.Role == messages.RoleTool {
+			toolResults++
+		}
+	}
+	idx := toolResults
+	if idx >= len(m.script) {
+		idx = len(m.script) - 1
+	}
+	return m.script[idx]
+}
+
+func (m *transcriptModel) Invoke(ctx context.Context, input []messages.Message, _ ...runnables.Option) (messages.Message, error) {
+	return m.pick(input), nil
+}
+
+func (m *transcriptModel) Batch(ctx context.Context, inputs [][]messages.Message, opts ...runnables.Option) ([]messages.Message, error) {
+	out := make([]messages.Message, len(inputs))
+	for i, in := range inputs {
+		resp, err := m.Invoke(ctx, in, opts...)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = resp
+	}
+	return out, nil
+}
+
+func (m *transcriptModel) Stream(_ context.Context, input []messages.Message, _ ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	return runnables.NewSliceStream([]messages.Message{m.pick(input)}), nil
+}
+
+func (m *transcriptModel) InputSchema() schema.Schema {
+	return schema.Schema{"type": "array", "description": "chat messages"}
+}
+
+func (m *transcriptModel) OutputSchema() schema.Schema { return schema.Schema{"type": "object"} }
+
+// BindTools returns the model itself: the script is transcript-driven, so a
+// per-bind copy (FakeChatModel semantics) is neither needed nor wanted.
+func (m *transcriptModel) BindTools([]coretools.Tool) (language.ChatModel, error) { return m, nil }
+
+func (m *transcriptModel) Capabilities() language.ChatModelCapabilities {
+	return language.ChatModelCapabilities{ToolCalling: true, Streaming: true}
+}
+
+// relayTestAgent builds a parent agent whose model is scripted to call the
+// Task tool once and then finish, paired with a transcript-driven subagent
+// model (Config.SubagentModel) scripted per test. workdir roots both
+// registries so the child's Write calls land in the test's temp dir.
+func relayTestAgent(t *testing.T, workdir string, subScript ...messages.Message) *Agent {
+	t.Helper()
+	parentModel := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+				{ID: "t1", Name: "Task", Args: map[string]any{
+					"description": "write files",
+					"prompt":      "write the files I asked for",
+				}},
+			}},
+			messages.AI("parent done"),
+		),
+	)
+	a, err := New(Config{
+		Model:          parentModel,
+		SubagentModel:  &transcriptModel{script: subScript},
+		Registry:       tools.NewRegistry(workdir),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeDefault,
+		WorkDir:        workdir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func writeCall(id, path, content string) messages.Message {
+	return messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+		{ID: id, Name: "Write", Args: map[string]any{"file_path": path, "content": content}},
+	}}
+}
+
+// TestForegroundSubagentPermissionRelay: the child's Write permission pause
+// must bubble out of the Task tool as a SubagentInterrupt on the PARENT
+// graph; answering "y" resumes the child, its Write executes for real, and
+// the child report lands in the Task tool result.
+func TestForegroundSubagentPermissionRelay(t *testing.T) {
+	workdir := t.TempDir()
+	a := relayTestAgent(t, workdir,
+		writeCall("w1", "relay.txt", "hello"),
+		messages.AI("sub done"),
+	)
+	ctx := context.Background()
+	thread := "thread-fg-relay"
+	intrs, _ := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread))
+	if len(intrs) != 1 {
+		t.Fatalf("pauses = %d, want 1", len(intrs))
+	}
+	si, ok := DecodeInterruptValue(intrs[0].Value).(SubagentInterrupt)
+	if !ok {
+		t.Fatalf("interrupt payload = %T, want SubagentInterrupt", DecodeInterruptValue(intrs[0].Value))
+	}
+	if si.Subagent != "general" {
+		t.Fatalf("Subagent = %q, want general", si.Subagent)
+	}
+	if si.Inner.ToolName != "Write" {
+		t.Fatalf("Inner.ToolName = %q, want Write", si.Inner.ToolName)
+	}
+	if si.ToolCallID != "t1" || si.ThreadID == "" {
+		t.Fatalf("ToolCallID = %q, ThreadID = %q", si.ToolCallID, si.ThreadID)
+	}
+	_, final := pumpStream(t, a.ResumeStream(ctx, thread, "y"))
+	if !toolContentContains(final, "sub done") {
+		t.Fatalf("Task result lacks the child report; final transcript: %v", final)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "relay.txt")); err != nil {
+		t.Fatalf("child Write did not execute after approval: %v", err)
+	}
+}
+
+// TestForegroundSubagentPermissionDenied: answering "n" to the bubbled pause
+// aborts the subagent — the Task result carries the denial text and the
+// child's Write never executes.
+func TestForegroundSubagentPermissionDenied(t *testing.T) {
+	workdir := t.TempDir()
+	a := relayTestAgent(t, workdir,
+		writeCall("w1", "denied.txt", "nope"),
+		messages.AI("sub done"),
+	)
+	ctx := context.Background()
+	thread := "thread-fg-deny"
+	intrs, _ := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread))
+	if len(intrs) != 1 {
+		t.Fatalf("pauses = %d, want 1", len(intrs))
+	}
+	if _, ok := DecodeInterruptValue(intrs[0].Value).(SubagentInterrupt); !ok {
+		t.Fatalf("interrupt payload = %T, want SubagentInterrupt", DecodeInterruptValue(intrs[0].Value))
+	}
+	_, final := pumpStream(t, a.ResumeStream(ctx, thread, "n"))
+	if !toolContentContains(final, "denied") {
+		t.Fatalf("Task result lacks the denial text; final transcript: %v", final)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "denied.txt")); !os.IsNotExist(err) {
+		t.Fatalf("child Write executed despite denial (stat err = %v)", err)
+	}
+}
+
+// TestForegroundSubagentTwoSequentialPermissions: the child pauses on two
+// Writes in a row; each pause bubbles separately and both approvals land on
+// the right child interrupt.
+func TestForegroundSubagentTwoSequentialPermissions(t *testing.T) {
+	workdir := t.TempDir()
+	a := relayTestAgent(t, workdir,
+		writeCall("w1", "a.txt", "a"),
+		writeCall("w2", "b.txt", "b"),
+		messages.AI("sub done"),
+	)
+	ctx := context.Background()
+	thread := "thread-fg-two"
+	stream := a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread)
+	pauses := 0
+	var final []messages.Message
+	for {
+		intrs, vals := pumpStream(t, stream)
+		if len(vals) > 0 {
+			final = vals
+		}
+		if len(intrs) == 0 {
+			break
+		}
+		if pauses >= 2 {
+			t.Fatalf("unexpected extra pause: %v", DecodeInterruptValue(intrs[0].Value))
+		}
+		si, ok := DecodeInterruptValue(intrs[0].Value).(SubagentInterrupt)
+		if !ok {
+			t.Fatalf("pause #%d payload = %T, want SubagentInterrupt", pauses+1, DecodeInterruptValue(intrs[0].Value))
+		}
+		if si.Inner.ToolName != "Write" {
+			t.Fatalf("pause #%d Inner.ToolName = %q, want Write", pauses+1, si.Inner.ToolName)
+		}
+		stream = a.ResumeStream(ctx, thread, "y")
+		pauses++
+	}
+	if pauses != 2 {
+		t.Fatalf("pauses = %d, want 2 (one per child Write)", pauses)
+	}
+	if !toolContentContains(final, "sub done") {
+		t.Fatalf("Task result lacks the child report; final transcript: %v", final)
+	}
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if _, err := os.Stat(filepath.Join(workdir, name)); err != nil {
+			t.Fatalf("child Write %s did not execute: %v", name, err)
+		}
+	}
+}
+
+// TestForegroundSubagentSequentialPermissionDenied: approving the first
+// pause and denying the SECOND must abort on the second answer — the fork's
+// resume queue is positional (consumed prefix + fresh answer), so a relay
+// that always reads the first queued slot would replay the stale "y" and
+// wrongly resume the child.
+func TestForegroundSubagentSequentialPermissionDenied(t *testing.T) {
+	workdir := t.TempDir()
+	a := relayTestAgent(t, workdir,
+		writeCall("w1", "a.txt", "a"),
+		writeCall("w2", "b.txt", "b"),
+		messages.AI("sub done"),
+	)
+	ctx := context.Background()
+	thread := "thread-fg-two-deny"
+	stream := a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread)
+	answers := []string{"y", "n"}
+	pauses := 0
+	var final []messages.Message
+	for {
+		intrs, vals := pumpStream(t, stream)
+		if len(vals) > 0 {
+			final = vals
+		}
+		if len(intrs) == 0 {
+			break
+		}
+		if pauses >= len(answers) {
+			t.Fatalf("unexpected extra pause: %v", DecodeInterruptValue(intrs[0].Value))
+		}
+		if _, ok := DecodeInterruptValue(intrs[0].Value).(SubagentInterrupt); !ok {
+			t.Fatalf("pause #%d payload = %T, want SubagentInterrupt", pauses+1, DecodeInterruptValue(intrs[0].Value))
+		}
+		stream = a.ResumeStream(ctx, thread, answers[pauses])
+		pauses++
+	}
+	if pauses != 2 {
+		t.Fatalf("pauses = %d, want 2", pauses)
+	}
+	if !toolContentContains(final, "denied") {
+		t.Fatalf("Task result lacks the denial text; final transcript: %v", final)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "a.txt")); err != nil {
+		t.Fatalf("approved Write a.txt did not execute: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "b.txt")); !os.IsNotExist(err) {
+		t.Fatalf("denied Write b.txt executed anyway (stat err = %v)", err)
 	}
 }

@@ -137,12 +137,16 @@ type PlanApprovalRequest struct {
 // SubagentInterrupt wraps a foreground Task subagent's permission pause so
 // the parent graph surfaces it for approval. The answer semantics are the
 // inner permission's ("y"/"n"); ThreadID is the derived subagent checkpoint
-// thread used to resume the child after approval.
+// thread used to resume the child after approval. Seq counts the resume
+// values the relay consumed before this pause — the fork's resume queue is
+// positional (persisted consumed prefix + fresh answer), so on re-entry the
+// relay fast-forwards past Seq replayed answers to reach the fresh one.
 type SubagentInterrupt struct {
 	Subagent   string            `json:"subagent"`
 	ToolCallID string            `json:"tool_call_id"`
 	ThreadID   string            `json:"thread_id"`
 	Inner      PermissionRequest `json:"inner"`
+	Seq        int               `json:"seq,omitempty"`
 }
 
 // Config configures an Agent.
