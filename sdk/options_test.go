@@ -100,3 +100,31 @@ func TestCustomInterruptHandlerTranslatesAskUserAnswer(t *testing.T) {
 		t.Fatalf("answers mismatch: %#v", ans)
 	}
 }
+
+func TestInterruptFromSubagentPermission(t *testing.T) {
+	in := agent.SubagentInterrupt{
+		Subagent: "reviewer",
+		Inner: agent.PermissionRequest{
+			ToolName:   "Write",
+			ToolArgs:   map[string]any{"path": "x"},
+			Reason:     "edit file",
+			IsReadOnly: false,
+		},
+	}
+	i := interruptFrom(in)
+	if i.Kind != "subagent_permission" {
+		t.Fatalf("kind = %q, want subagent_permission", i.Kind)
+	}
+	if i.Subagent != "reviewer" {
+		t.Fatalf("subagent = %q", i.Subagent)
+	}
+	if i.Permission == nil || i.Permission.ToolName != "Write" || i.Permission.Reason != "edit file" {
+		t.Fatalf("permission = %+v", i.Permission)
+	}
+
+	// The default headless handler auto-denies subagent permission pauses.
+	v, err := (Options{}).interruptHandler()(in)
+	if err != nil || v != "n" {
+		t.Fatalf("default handler = %v, %v", v, err)
+	}
+}

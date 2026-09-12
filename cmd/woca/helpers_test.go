@@ -284,6 +284,31 @@ func TestInterruptHandler(t *testing.T) {
 	}
 }
 
+func TestInterruptHandlerSubagent(t *testing.T) {
+	sub := agent.SubagentInterrupt{
+		Subagent: "reviewer",
+		Inner:    agent.PermissionRequest{ToolName: "Write", Reason: "edit file"},
+	}
+
+	// Non-interactive: denied, same posture as a plain permission.
+	var stderr bytes.Buffer
+	nonInteractive := interruptHandler(bufio.NewReader(strings.NewReader("")), false, &stderr)
+	v, err := nonInteractive(sub)
+	if err != nil || v != "n" {
+		t.Fatalf("non-interactive subagent = %v %v", v, err)
+	}
+
+	// Interactive: "y" approves; the prompt names the subagent.
+	interactive := interruptHandler(bufio.NewReader(strings.NewReader("y\n")), true, &stderr)
+	v, err = interactive(sub)
+	if err != nil || v != "y" {
+		t.Fatalf("interactive subagent = %v %v", v, err)
+	}
+	if !strings.Contains(stderr.String(), "reviewer") {
+		t.Fatalf("prompt should name the subagent, got %q", stderr.String())
+	}
+}
+
 func http_Mux(t *testing.T, routes ...string) string {
 	t.Helper()
 	mux := http.NewServeMux()
