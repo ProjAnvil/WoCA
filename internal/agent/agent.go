@@ -321,6 +321,16 @@ type Agent struct {
 	// an interrupt re-execution does not re-run tools that already executed
 	// (side effects). Keys are tool call IDs; entries are deleted when the
 	// tools node returns normally.
+	//
+	// The memo is process-local: a cross-process resume (new process over a
+	// durable saver) loses it, so the interrupted batch's already-completed
+	// sibling tools re-execute once — including their gates, whose answers
+	// were consumed positionally and are NOT replayed (the memo's
+	// ReplayInterruptConsumption bookkeeping dies with the process), which
+	// can misalign the resume queue. Persisting the memo is a known
+	// follow-up. The foreground Task relay is unaffected for the child
+	// itself (its checkpoint thread is durable) but shares this gap for any
+	// sibling calls in the Task's batch.
 	batchMemo sync.Map // map[string]batchMemoEntry
 	// escalate rebuilds the model at the escalated output cap (optional).
 	escalate func() (language.ChatModel, error)
@@ -1338,6 +1348,13 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		}
 
 		calls := last.ToolCalls
+		// The run's thread rides the tool-call ctx (with the call ID) so the
+		// Task relay can address its child checkpoints without the
+		// agent-global LastThreadID, which concurrent sessions overwrite.
+		parentThread := ""
+		if ei := rt.ExecutionInfo; ei != nil {
+			parentThread = ei.ThreadID
+		}
 		run := make([]bool, len(calls))
 		overrides := make([]*coretools.Result, len(calls))
 		preFeedback := make([]string, len(calls))
@@ -1440,7 +1457,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 						results[i] = messages.Tool(call.ID, fmt.Sprintf("Error: tool %q panicked: %v\n%s", call.Name, rec, stack))
 					}
 				}()
-				tctx := withToolCallID(ctx, call.ID)
+				tctx := withToolCallThread(ctx, call.ID, parentThread)
 				// Baseline for this call's execution-phase Interrupt
 				// consumption; the memo stores the per-call total (gate
 				// delta + execution delta) so a memo hit replays both.

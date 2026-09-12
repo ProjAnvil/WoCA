@@ -496,6 +496,11 @@ func TestForegroundSubagentPermissionRelay(t *testing.T) {
 	if si.ToolCallID != "t1" || si.ThreadID == "" {
 		t.Fatalf("ToolCallID = %q, ThreadID = %q", si.ToolCallID, si.ThreadID)
 	}
+	// The child thread is derived from the PARENT run's thread carried on
+	// the tool-call ctx (toolsNode injects it from the run's ExecutionInfo).
+	if !strings.HasPrefix(si.ThreadID, thread+"/sub-t1-") {
+		t.Fatalf("ThreadID = %q, want %q prefix", si.ThreadID, thread+"/sub-t1-")
+	}
 	_, final := pumpStream(t, a.ResumeStream(ctx, thread, "y"))
 	if !toolContentContains(final, "sub done") {
 		t.Fatalf("Task result lacks the child report; final transcript: %v", final)
@@ -781,5 +786,28 @@ func TestSubagentRelayCrossProcess(t *testing.T) {
 	}
 	if string(blob) != "hello" {
 		t.Fatalf("cross.txt = %q, want %q (Write must run exactly once)", blob, "hello")
+	}
+}
+
+// TestParentThreadForPrefersCtxCarrier: relay addressing must follow the
+// tool-call ctx carrier (per-run, race-free under concurrent sessions on a
+// shared agent), not the agent-global LastThreadID; the global is only the
+// fallback when no carrier was installed (non-graph-driven callers).
+func TestParentThreadForPrefersCtxCarrier(t *testing.T) {
+	a := &Agent{}
+	a.lastThread.Store("global-thread")
+	if got := a.parentThreadFor(context.Background()); got != "global-thread" {
+		t.Fatalf("no carrier: parentThreadFor = %q, want global-thread fallback", got)
+	}
+	ctx := withToolCallThread(context.Background(), "call_1", "ctx-thread")
+	if got := a.parentThreadFor(ctx); got != "ctx-thread" {
+		t.Fatalf("carrier present: parentThreadFor = %q, want ctx-thread", got)
+	}
+	if got := deriveSubagentThread(a.parentThreadFor(ctx), toolCallIDFrom(ctx), "p"); !strings.HasPrefix(got, "ctx-thread/sub-call_1-") {
+		t.Fatalf("derived thread = %q, want ctx-thread/sub-call_1- prefix", got)
+	}
+	// withToolCallID alone carries no thread: the global fallback applies.
+	if got := a.parentThreadFor(withToolCallID(context.Background(), "call_2")); got != "global-thread" {
+		t.Fatalf("id-only carrier: parentThreadFor = %q, want global-thread fallback", got)
 	}
 }

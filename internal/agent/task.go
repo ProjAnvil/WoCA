@@ -24,17 +24,38 @@ import (
 	"github.com/projanvil/woca/internal/tools"
 )
 
-// toolCallIDKey carries the executing tool call's ID through ctx so the Task
-// tool can derive a stable subagent thread across interrupt re-executions.
+// toolCallIDKey carries the executing tool call's identity through ctx so the
+// Task tool can derive a stable subagent thread across interrupt
+// re-executions: the call ID plus the PARENT run's thread (injected by
+// toolsNode from the run's ExecutionInfo). The parent thread must travel on
+// ctx rather than via Agent.LastThreadID: a shared agent serves concurrent
+// sessions, and another session's turn would overwrite the global mid-relay.
 type toolCallIDKey struct{}
 
+type toolCallCtx struct {
+	id     string
+	thread string
+}
+
 func withToolCallID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, toolCallIDKey{}, id)
+	return context.WithValue(ctx, toolCallIDKey{}, toolCallCtx{id: id})
+}
+
+// withToolCallThread is withToolCallID plus the parent run's thread.
+func withToolCallThread(ctx context.Context, id, thread string) context.Context {
+	return context.WithValue(ctx, toolCallIDKey{}, toolCallCtx{id: id, thread: thread})
 }
 
 func toolCallIDFrom(ctx context.Context) string {
-	v, _ := ctx.Value(toolCallIDKey{}).(string)
-	return v
+	v, _ := ctx.Value(toolCallIDKey{}).(toolCallCtx)
+	return v.id
+}
+
+// parentThreadFrom returns the parent run's thread carried on the tool-call
+// ctx ("" when the caller was not dispatched from toolsNode).
+func parentThreadFrom(ctx context.Context) string {
+	v, _ := ctx.Value(toolCallIDKey{}).(toolCallCtx)
+	return v.thread
 }
 
 // deriveSubagentThread mints the subagent's checkpoint thread: stable across
@@ -471,6 +492,18 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 	return final, nil
 }
 
+// parentThreadFor resolves the parent run's thread for relay addressing: the
+// tool-call ctx carrier first (injected by toolsNode from the run's
+// ExecutionInfo, race-free under concurrent sessions); the agent-global
+// LastThreadID is only a fallback for non-graph-driven invocations where the
+// carrier was never installed.
+func (a *Agent) parentThreadFor(ctx context.Context) string {
+	if t := parentThreadFrom(ctx); t != "" {
+		return t
+	}
+	return a.LastThreadID()
+}
+
 // relaySeq recovers how many resume values earlier re-executions of this
 // relay consumed, read back from the SubagentInterrupt pending on the parent
 // checkpoint. The fork's resume queue is positional — the persisted consumed
@@ -478,7 +511,7 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 // exactly the Seq the last surfaced SubagentInterrupt recorded. Missing or
 // undecodable state degrades to 0 (correct for the first re-entry).
 func (a *Agent) relaySeq(ctx context.Context, thread string) int {
-	snap, err := a.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: a.LastThreadID()})
+	snap, err := a.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: a.parentThreadFor(ctx)})
 	if err != nil {
 		return 0
 	}
@@ -495,8 +528,14 @@ func (a *Agent) relaySeq(ctx context.Context, thread string) int {
 // SubagentInterrupt, so the user approves it on the main session; on resume
 // this handler re-executes, finds the child's checkpoint by its derived
 // thread, and resumes it with the answer.
+//
+// Durability note: the child's own checkpoint thread persists on the shared
+// saver, so a cross-process parent resume re-enters here and continues the
+// paused child — but the toolsNode batch memo is process-local (see
+// Agent.batchMemo), so sibling tool calls in the same batch re-execute once
+// after a process restart.
 func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Message, def *agents.Definition, name, prompt string) (string, error) {
-	thread := deriveSubagentThread(a.LastThreadID(), toolCallIDFrom(ctx), prompt)
+	thread := deriveSubagentThread(a.parentThreadFor(ctx), toolCallIDFrom(ctx), prompt)
 	sub, err := a.newSubagent(ctx, def)
 	if err != nil {
 		return "", err
