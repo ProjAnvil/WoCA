@@ -49,6 +49,8 @@ func deriveSubagentThread(parentThread, callID, prompt string) string {
 // subagentStarted reports whether the derived thread already has a
 // checkpoint on the shared saver — i.e. this handler execution is a
 // re-entry after a parent-graph resume, not a fresh spawn.
+//
+//nolint:unused // consumed by the Task-4 relay (runForegroundTask)
 func (a *Agent) subagentStarted(ctx context.Context, sub *Agent, thread string) bool {
 	snap, err := sub.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: thread})
 	if err != nil {
