@@ -102,6 +102,5 @@ values (`"ai"` / `"tool"`); only the result envelope is fully identical.
 
 ## Known limitations
 
-- For anthropic streaming runs, token usage is always reported as zero. This
-  is a gap in the dependency layer: langchain-golang v0.6.3 only delivers
-  usage through callbacks, which streaming runs do not receive.
+(none currently — token usage for streaming runs is reported correctly since
+langchain-golang v0.7.0, which yields a terminal usage-only chunk)

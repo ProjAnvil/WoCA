@@ -86,11 +86,11 @@ func TestQueryStreamsAndFinishes(t *testing.T) {
 	if !sawAssistant {
 		t.Fatal("no assistant event streamed")
 	}
-	// Usage totals are currently always zero for anthropic streaming runs:
-	// langchain-golang v0.6.3 emits usage only via callbacks
-	// EventChatModelEnd, which woca does not consume
-	// (internal/agent/stream.go folds chunk usage only). Tracked as a known
-	// dependency-layer gap, so no numeric usage assertion here.
+	// langchain-golang v0.7.0 yields a terminal usage-only chunk on
+	// message_delta, which internal/agent folds into the run totals.
+	if res.Usage.InputTokens != 10 || res.Usage.OutputTokens != 5 {
+		t.Fatalf("usage = %+v", res.Usage)
+	}
 }
 
 // TestCloseTwice verifies Close is idempotent: a second call must neither
