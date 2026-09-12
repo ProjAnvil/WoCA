@@ -769,6 +769,12 @@ func (m *Model) resolvePending(answer any) {
 			verdict = "allowed"
 		}
 		m.write("\n" + dimStyle.Render(fmt.Sprintf("[permission] %s — %s (%s by user)", v.ToolName, v.Reason, verdict)) + "\n")
+	case agent.SubagentInterrupt:
+		verdict := "denied"
+		if s, ok := answer.(string); ok && (s == "y" || s == "Y") {
+			verdict = "allowed"
+		}
+		m.write("\n" + dimStyle.Render(fmt.Sprintf("[permission] subagent %q: %s — %s (%s by user)", v.Subagent, v.Inner.ToolName, v.Inner.Reason, verdict)) + "\n")
 	case agent.PlanApprovalRequest:
 		verdict := "rejected"
 		if s, ok := answer.(string); ok && (s == "y" || s == "Y") {

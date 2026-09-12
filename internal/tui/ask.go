@@ -26,7 +26,7 @@ var decisionOptions = [2]string{"allow", "deny"}
 // interrupt.
 func (m *Model) pendingBegin() {
 	switch v := m.pending.value.(type) {
-	case agent.PermissionRequest, agent.PlanApprovalRequest:
+	case agent.PermissionRequest, agent.SubagentInterrupt, agent.PlanApprovalRequest:
 		m.decSel = 1 // safe default: deny
 	case agent.AskUserRequest:
 		m.askIdx = 0
@@ -48,7 +48,7 @@ func (m *Model) askResetFor(q tools.Question) {
 // resolvePendingKey handles a keypress while an interrupt awaits a decision.
 func (m *Model) resolvePendingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.pending.value.(type) {
-	case agent.PermissionRequest, agent.PlanApprovalRequest:
+	case agent.PermissionRequest, agent.SubagentInterrupt, agent.PlanApprovalRequest:
 		switch msg.String() {
 		case "y", "Y":
 			m.resolvePending("y")
@@ -173,6 +173,8 @@ func (m *Model) pendingPrompt() string {
 	switch v := m.pending.value.(type) {
 	case agent.PermissionRequest:
 		return fmt.Sprintf("Allow %s? — %s\n%s", v.ToolName, v.Reason, m.decisionRow())
+	case agent.SubagentInterrupt:
+		return fmt.Sprintf("Subagent %q requests permission: %s — %s\n%s", v.Subagent, v.Inner.ToolName, v.Inner.Reason, m.decisionRow())
 	case agent.PlanApprovalRequest:
 		return fmt.Sprintf("Approve this plan?\n%s", m.decisionRow())
 	case agent.AskUserRequest:
