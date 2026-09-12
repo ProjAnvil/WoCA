@@ -989,6 +989,10 @@ func (a *Agent) runTurn(ctx context.Context, history []messages.Message, threadI
 // path: with a durable Saver configured, a process restart can resume the
 // thread's latest paused checkpoint (the old ResumeCheckpoint semantics).
 func (a *Agent) Resume(ctx context.Context, threadID string, resumeValue any) ([]messages.Message, error) {
+	// Keep LastThreadID in sync with the fresh-run paths (runTurn,
+	// streamWithBudget): a cross-process resume enters through here, and the
+	// foreground subagent relay derives the child thread from it.
+	a.lastThread.Store(threadID)
 	res, err := a.graph.InvokeWithOptions(ctx, nil, lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue)})
 	if err != nil {
 		return nil, err
@@ -1055,6 +1059,7 @@ func (a *Agent) streamWithBudget(ctx context.Context, history []messages.Message
 // resumeStreamWithBudget is the interrupt-resume counterpart of
 // streamWithBudget, keeping the cycle's budget across a pause.
 func (a *Agent) resumeStreamWithBudget(ctx context.Context, threadID string, resumeValue any, budget int) iter.Seq2[lggraph.StreamChunk, error] {
+	a.lastThread.Store(threadID) // see Resume
 	return a.graph.Stream(ctx, nil, lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue), RecursionLimit: budget},
 		Modes:   streamModes,

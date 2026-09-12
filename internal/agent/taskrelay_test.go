@@ -627,3 +627,63 @@ func TestForegroundSubagentSequentialPermissionDenied(t *testing.T) {
 		t.Fatalf("denied Write b.txt executed anyway (stat err = %v)", err)
 	}
 }
+
+// TestResumePathsStoreLastThread: the cross-process resume entry points must
+// store the resumed thread as LastThreadID — the foreground subagent relay
+// derives the child thread from it, and a fresh process resuming via Resume
+// (ResumeCheckpoint is an alias) or ResumeStream would otherwise derive
+// "/sub-..." and respawn the child from scratch. Pauses are raised on one
+// agent instance and resumed on a fresh instance over the same saver to
+// mimic the process restart.
+func TestResumePathsStoreLastThread(t *testing.T) {
+	saver := lgcheckpoint.NewMemorySaver()
+	var completions atomic.Int32
+	build := func() *Agent {
+		a, err := New(Config{
+			Model: &transcriptModel{script: []messages.Message{
+				{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+					{ID: "p1", Name: "pausing_tool", Args: map[string]any{}},
+				}},
+				messages.AI("done"),
+			}},
+			Registry:       tools.NewRegistry(t.TempDir()),
+			ExtraTools:     []coretools.Tool{pausingTestTool(&completions)},
+			SystemPrompt:   "t",
+			PermissionMode: config.ModeBypass,
+			Checkpointer:   saver,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	ctx := context.Background()
+
+	// Resume (also covers the ResumeCheckpoint alias).
+	a1 := build()
+	thread1 := "thread-resume-store"
+	if intrs, _ := pumpStream(t, a1.Stream(ctx, []messages.Message{messages.Human("go")}, thread1)); len(intrs) != 1 {
+		t.Fatalf("pauses = %d, want 1", len(intrs))
+	}
+	a2 := build()
+	if got := a2.LastThreadID(); got != "" {
+		t.Fatalf("fresh instance LastThreadID = %q, want empty", got)
+	}
+	if _, err := a2.Resume(ctx, thread1, "y"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a2.LastThreadID(); got != thread1 {
+		t.Fatalf("after Resume LastThreadID = %q, want %q", got, thread1)
+	}
+
+	// ResumeStream.
+	thread2 := "thread-resumestream-store"
+	if intrs, _ := pumpStream(t, a1.Stream(ctx, []messages.Message{messages.Human("go")}, thread2)); len(intrs) != 1 {
+		t.Fatalf("pauses = %d, want 1", len(intrs))
+	}
+	a3 := build()
+	pumpStream(t, a3.ResumeStream(ctx, thread2, "y"))
+	if got := a3.LastThreadID(); got != thread2 {
+		t.Fatalf("after ResumeStream LastThreadID = %q, want %q", got, thread2)
+	}
+}
