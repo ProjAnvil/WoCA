@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -11,12 +13,49 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/skills"
 	"github.com/projanvil/woca/internal/tools"
 )
+
+// toolCallIDKey carries the executing tool call's ID through ctx so the Task
+// tool can derive a stable subagent thread across interrupt re-executions.
+type toolCallIDKey struct{}
+
+func withToolCallID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, toolCallIDKey{}, id)
+}
+
+func toolCallIDFrom(ctx context.Context) string {
+	v, _ := ctx.Value(toolCallIDKey{}).(string)
+	return v
+}
+
+// deriveSubagentThread mints the subagent's checkpoint thread: stable across
+// the parent toolsNode's interrupt re-executions (same replayed tool call),
+// unique per call.
+func deriveSubagentThread(parentThread, callID, prompt string) string {
+	sum := sha256.Sum256([]byte(prompt))
+	digest := hex.EncodeToString(sum[:8])
+	if callID == "" {
+		return parentThread + "/sub-" + digest
+	}
+	return parentThread + "/sub-" + callID + "-" + digest
+}
+
+// subagentStarted reports whether the derived thread already has a
+// checkpoint on the shared saver — i.e. this handler execution is a
+// re-entry after a parent-graph resume, not a fresh spawn.
+func (a *Agent) subagentStarted(ctx context.Context, sub *Agent, thread string) bool {
+	snap, err := sub.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: thread})
+	if err != nil {
+		return false
+	}
+	return len(snap.Values) > 0 || len(snap.Interrupts) > 0
+}
 
 // TaskStatus is the lifecycle state of a background task.
 type TaskStatus string

@@ -1383,7 +1383,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 						results[i] = messages.Tool(call.ID, fmt.Sprintf("Error: tool %q panicked: %v\n%s", call.Name, rec, stack))
 					}
 				}()
-				res := a.execute(ctx, call.Name, call.Args)
+				res := a.execute(withToolCallID(ctx, call.ID), call.Name, call.Args)
 				content := res.Content
 				if preFeedback[i] != "" {
 					content = preFeedback[i] + "\n" + content
@@ -1627,6 +1627,8 @@ func (a *Agent) newSubagent(ctx context.Context, def *agents.Definition) (*Agent
 		Subagent:       true,
 		MemoryEngine:   a.MemoryEngine(), // read-only memory tools stay available
 		LoadSettings:   a.loadSettings,
+		// Share the parent's saver so a paused subagent resumes across processes when the parent is durable (and in-process otherwise).
+		Checkpointer: a.saver,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("agent: build subagent: %w", err)
