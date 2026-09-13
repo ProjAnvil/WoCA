@@ -134,6 +134,21 @@ type PlanApprovalRequest struct {
 	Plan string `json:"plan"`
 }
 
+// SubagentInterrupt wraps a foreground Task subagent's permission pause so
+// the parent graph surfaces it for approval. The answer semantics are the
+// inner permission's ("y"/"n"); ThreadID is the derived subagent checkpoint
+// thread used to resume the child after approval. Seq counts the resume
+// values the relay consumed before this pause — the fork's resume queue is
+// positional (persisted consumed prefix + fresh answer), so on re-entry the
+// relay fast-forwards past Seq replayed answers to reach the fresh one.
+type SubagentInterrupt struct {
+	Subagent   string            `json:"subagent"`
+	ToolCallID string            `json:"tool_call_id"`
+	ThreadID   string            `json:"thread_id"`
+	Inner      PermissionRequest `json:"inner"`
+	Seq        int               `json:"seq,omitempty"`
+}
+
 // Config configures an Agent.
 type Config struct {
 	Model    language.ChatModel
@@ -302,6 +317,21 @@ type Agent struct {
 	// spec tracks speculatively executed tool calls started while the model
 	// was still streaming (streaming tool execution).
 	spec speculativeRegistry
+	// batchMemo holds completed tool results of the in-flight call batch so
+	// an interrupt re-execution does not re-run tools that already executed
+	// (side effects). Keys are tool call IDs; entries are deleted when the
+	// tools node returns normally.
+	//
+	// The memo is process-local: a cross-process resume (new process over a
+	// durable saver) loses it, so the interrupted batch's already-completed
+	// sibling tools re-execute once — including their gates, whose answers
+	// were consumed positionally and are NOT replayed (the memo's
+	// ReplayInterruptConsumption bookkeeping dies with the process), which
+	// can misalign the resume queue. Persisting the memo is a known
+	// follow-up. The foreground Task relay is unaffected for the child
+	// itself (its checkpoint thread is durable) but shares this gap for any
+	// sibling calls in the Task's batch.
+	batchMemo sync.Map // map[string]batchMemoEntry
 	// escalate rebuilds the model at the escalated output cap (optional).
 	escalate func() (language.ChatModel, error)
 	// toolBudget is the per-round tool-result character budget (0 disables).
@@ -969,6 +999,10 @@ func (a *Agent) runTurn(ctx context.Context, history []messages.Message, threadI
 // path: with a durable Saver configured, a process restart can resume the
 // thread's latest paused checkpoint (the old ResumeCheckpoint semantics).
 func (a *Agent) Resume(ctx context.Context, threadID string, resumeValue any) ([]messages.Message, error) {
+	// Keep LastThreadID in sync with the fresh-run paths (runTurn,
+	// streamWithBudget): a cross-process resume enters through here, and the
+	// foreground subagent relay derives the child thread from it.
+	a.lastThread.Store(threadID)
 	res, err := a.graph.InvokeWithOptions(ctx, nil, lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue)})
 	if err != nil {
 		return nil, err
@@ -1035,6 +1069,7 @@ func (a *Agent) streamWithBudget(ctx context.Context, history []messages.Message
 // resumeStreamWithBudget is the interrupt-resume counterpart of
 // streamWithBudget, keeping the cycle's budget across a pause.
 func (a *Agent) resumeStreamWithBudget(ctx context.Context, threadID string, resumeValue any, budget int) iter.Seq2[lggraph.StreamChunk, error] {
+	a.lastThread.Store(threadID) // see Resume
 	return a.graph.Stream(ctx, nil, lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue), RecursionLimit: budget},
 		Modes:   streamModes,
@@ -1286,6 +1321,18 @@ func (a *Agent) observedNode(graphName, nodeName string, fn lggraph.NodeFunc) lg
 	}
 }
 
+// batchMemoEntry is a memoized tool result plus the number of resume values
+// the call consumed via Interrupt — across both its gate and its execution —
+// in the execution that produced it. langgraph resume consumption is
+// positional (each re-execution's Interrupt calls consume the queued resume
+// values in call order), so a memo hit that skips both phases must replay
+// that consumption — otherwise the batch's remaining Interrupt calls shift
+// left onto answers meant for earlier calls.
+type batchMemoEntry struct {
+	msg      messages.Message
+	consumed int
+}
+
 // toolsNode executes pending tool calls, applying the interaction gate and
 // Pre/Post tool-use hooks.
 func (a *Agent) toolsNode() lggraph.NodeFunc {
@@ -1301,20 +1348,45 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		}
 
 		calls := last.ToolCalls
+		// The run's thread rides the tool-call ctx (with the call ID) so the
+		// Task relay can address its child checkpoints without the
+		// agent-global LastThreadID, which concurrent sessions overwrite.
+		parentThread := ""
+		if ei := rt.ExecutionInfo; ei != nil {
+			parentThread = ei.ThreadID
+		}
 		run := make([]bool, len(calls))
 		overrides := make([]*coretools.Result, len(calls))
 		preFeedback := make([]string, len(calls))
 		futures := make([]*toolFuture, len(calls))
+		memoHits := make([]bool, len(calls))
+		consumed := make([]int, len(calls))
+		results := make([]messages.Message, len(calls))
 
 		// Gates and PreToolUse hooks run sequentially so interrupts pause
 		// deterministically. Calls already speculatively executed during
 		// model streaming (permission decided then) skip the gate: the tools
-		// node only awaits their result.
+		// node only awaits their result. Calls memoized by a previous
+		// execution of this batch (which then paused on an interrupt) skip
+		// the gate too — their permission was already granted and re-asking
+		// would consume a resume value.
 		for i, call := range calls {
 			if f := a.spec.get(call.ID); f != nil {
 				futures[i] = f
 				continue
 			}
+			if m, ok := a.batchMemo.Load(call.ID); ok {
+				entry := m.(batchMemoEntry)
+				results[i] = entry.msg
+				memoHits[i] = true
+				// This call's gate consumed entry.consumed resume values in
+				// the earlier execution; skipping the gate must not shift the
+				// positional resume queue under the calls that still
+				// interrupt.
+				lggraph.ReplayInterruptConsumption(ctx, entry.consumed)
+				continue
+			}
+			gateConsumed := lggraph.InterruptConsumeCount(ctx)
 			shouldRun, override, err := a.gate(ctx, call)
 			if err != nil {
 				return nil, err
@@ -1343,13 +1415,17 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				preFeedback[i] = d.Feedback
 			}
 			run[i] = true
+			consumed[i] = lggraph.InterruptConsumeCount(ctx) - gateConsumed
 		}
 
-		results := make([]messages.Message, len(calls))
 		var wg sync.WaitGroup
+		paused := make([]*lgtypes.GraphInterrupt, len(calls))
 		for i, call := range calls {
 			if futures[i] != nil {
 				results[i] = futures[i].wait()
+				continue
+			}
+			if memoHits[i] {
 				continue
 			}
 			if overrides[i] != nil {
@@ -1365,6 +1441,15 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				defer wg.Done()
 				defer func() {
 					if rec := recover(); rec != nil {
+						// A GraphInterrupt panic (subagent HITL or a tool's own
+						// lggraph.Interrupt) must bubble out of the node: stash
+						// it in this call's slot; the node's goroutine re-panics
+						// it after wg.Wait. Each goroutine writes only its own
+						// index, so the post-Wait read is race-free.
+						if gi, ok := rec.(*lgtypes.GraphInterrupt); ok {
+							paused[i] = gi
+							return
+						}
 						stack := debug.Stack()
 						if len(stack) > 2048 {
 							stack = stack[:2048]
@@ -1372,7 +1457,12 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 						results[i] = messages.Tool(call.ID, fmt.Sprintf("Error: tool %q panicked: %v\n%s", call.Name, rec, stack))
 					}
 				}()
-				res := a.execute(ctx, call.Name, call.Args)
+				tctx := withToolCallThread(ctx, call.ID, parentThread)
+				// Baseline for this call's execution-phase Interrupt
+				// consumption; the memo stores the per-call total (gate
+				// delta + execution delta) so a memo hit replays both.
+				execBase := lggraph.InterruptConsumeCount(tctx)
+				res := a.execute(tctx, call.Name, call.Args)
 				content := res.Content
 				if preFeedback[i] != "" {
 					content = preFeedback[i] + "\n" + content
@@ -1383,9 +1473,31 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 					}
 				}
 				results[i] = toolMessageFromResult(call.ID, content, &res)
+				// Memoize so a later interrupt's re-execution of this batch
+				// reuses the result instead of re-running the tool; the
+				// call's total resume consumption goes along so the memo hit
+				// can replay it and keep the positional queue aligned.
+				// Concurrent goroutines can interleave their consumption, so
+				// the attribution is approximate when two calls interrupt at
+				// the same time — already an order-ambiguous case.
+				total := consumed[i] + lggraph.InterruptConsumeCount(tctx) - execBase
+				a.batchMemo.Store(call.ID, batchMemoEntry{msg: results[i], consumed: total})
 			}(i, call)
 		}
 		wg.Wait()
+		// A tool interrupted mid-execution: re-panic the first GraphInterrupt
+		// on the node's goroutine so the graph executor converts it into a
+		// pause. Completed results stay in batchMemo for the re-execution.
+		for _, gi := range paused {
+			if gi != nil {
+				panic(gi)
+			}
+		}
+		// The batch finished without an interrupt: drop its memo entries
+		// (both return paths below — the MaxTurns cap and the normal return).
+		for _, call := range calls {
+			a.batchMemo.Delete(call.ID)
+		}
 		// Results are merged into state: retire the consumed futures. On the
 		// interrupt path above they remain for a same-process resume.
 		for i := range calls {
@@ -1616,6 +1728,8 @@ func (a *Agent) newSubagent(ctx context.Context, def *agents.Definition) (*Agent
 		Subagent:       true,
 		MemoryEngine:   a.MemoryEngine(), // read-only memory tools stay available
 		LoadSettings:   a.loadSettings,
+		// Share the parent's saver so a paused subagent resumes across processes when the parent is durable (and in-process otherwise).
+		Checkpointer: a.saver,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("agent: build subagent: %w", err)

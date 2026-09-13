@@ -7,9 +7,11 @@ import (
 	"github.com/projanvil/woca/internal/runner"
 )
 
-// Interrupt is the public view of a graph pause: exactly one field is set.
+// Interrupt is the public view of a graph pause: Kind selects the payload.
+// "subagent_permission" sets Subagent plus the inner Permission.
 type Interrupt struct {
-	Kind       string // permission | ask_user | plan_approval
+	Kind       string // permission | subagent_permission | ask_user | plan_approval
+	Subagent   string
 	Permission *PermissionInterrupt
 	AskUser    *AskUserInterrupt
 	Plan       *PlanInterrupt
@@ -50,7 +52,7 @@ func (o Options) interruptHandler() runner.InterruptHandler {
 			return v, nil
 		}
 		switch value.(type) {
-		case agent.PermissionRequest:
+		case agent.PermissionRequest, agent.SubagentInterrupt:
 			return "n", nil
 		case agent.AskUserRequest:
 			return agent.AskUserAnswer{}, nil
@@ -67,6 +69,10 @@ func interruptFrom(value any) Interrupt {
 	case agent.PermissionRequest:
 		return Interrupt{Kind: "permission", Permission: &PermissionInterrupt{
 			ToolName: v.ToolName, ToolArgs: v.ToolArgs, Reason: v.Reason, IsReadOnly: v.IsReadOnly,
+		}}
+	case agent.SubagentInterrupt:
+		return Interrupt{Kind: "subagent_permission", Subagent: v.Subagent, Permission: &PermissionInterrupt{
+			ToolName: v.Inner.ToolName, ToolArgs: v.Inner.ToolArgs, Reason: v.Inner.Reason, IsReadOnly: v.Inner.IsReadOnly,
 		}}
 	case agent.AskUserRequest:
 		qs := make([]string, 0, len(v.Questions))

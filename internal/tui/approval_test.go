@@ -136,6 +136,39 @@ func TestPendingAskUserQuestion(t *testing.T) {
 	}
 }
 
+func TestPendingSubagentPermission(t *testing.T) {
+	sub := agent.SubagentInterrupt{
+		Subagent: "reviewer",
+		Inner:    agent.PermissionRequest{ToolName: "Write", Reason: "edits a file"},
+	}
+	m, answerCh := newPendingModel(t, sub)
+	v := m.View()
+	if !strings.Contains(v, "reviewer") || !strings.Contains(v, "Write") || !strings.Contains(v, "awaiting your decision") {
+		t.Fatalf("view missing subagent approval box:\n%s", v)
+	}
+	// Safe default: the highlight starts on deny and enter executes it.
+	model, _ := m.Update(key("enter"))
+	m = model.(*Model)
+	if ans := <-answerCh; ans != "n" {
+		t.Fatalf("enter must execute the deny default, got %v", ans)
+	}
+	if m.pending != nil {
+		t.Fatal("pending not cleared after deny")
+	}
+
+	// y approves, same answer semantics as a plain permission.
+	m2, answerCh2 := newPendingModel(t, sub)
+	mm, _ := m2.Update(key("y"))
+	_ = mm.(*Model)
+	if ans := <-answerCh2; ans != "y" {
+		t.Fatalf("answer = %v, want y", ans)
+	}
+	m2.flush()
+	if !strings.Contains(strings.Join(m2.lines, "\n"), "allowed by user") {
+		t.Fatal("transcript missing the subagent decision echo")
+	}
+}
+
 // TestRunInterruptApprovalEndToEnd drives a full run whose model calls Write
 // in default mode: the TUI must surface the permission interrupt, the user
 // approves with 'y', and the run resumes to completion with the tool

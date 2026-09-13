@@ -82,6 +82,9 @@ Set `WithInterruptHandler` to override. The handler receives an
 - `permission` and `plan_approval`: return `"y"` or `"n"`.
 - `ask_user`: return `sdk.AskUserAnswer{Answers: []string{...}}` — one answer
   per question, in question order.
+- `subagent_permission`: a foreground subagent's permission pause, carrying
+  the subagent name in `Subagent` and the inner request in `Permission`;
+  answer with `"y"` or `"n"`. The default handler auto-denies it.
 
 ## Resource lifecycle
 

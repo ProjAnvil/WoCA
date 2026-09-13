@@ -690,6 +690,15 @@ func interruptHandler(stdin *bufio.Reader, interactive bool, stderr io.Writer) r
 			fmt.Fprint(stderr, "  Allow? [y/N] ")
 			return readYesNo(stdin)
 
+		case agent.SubagentInterrupt:
+			fmt.Fprintf(stderr, "\nSubagent %q requests permission: %s — %s\n", v.Subagent, v.Inner.ToolName, v.Inner.Reason)
+			if !interactive {
+				fmt.Fprintln(stderr, "  (non-interactive: denied; use --dangerously-skip-permissions or --accept-edits to allow)")
+				return "n", nil
+			}
+			fmt.Fprint(stderr, "  Allow? [y/N] ")
+			return readYesNo(stdin)
+
 		case agent.AskUserRequest:
 			for i, q := range v.Questions {
 				fmt.Fprintf(stderr, "\n%s", tools.FormatQuestion(i, q))

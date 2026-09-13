@@ -2,7 +2,11 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,12 +15,132 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/skills"
 	"github.com/projanvil/woca/internal/tools"
 )
+
+// toolCallIDKey carries the executing tool call's identity through ctx so the
+// Task tool can derive a stable subagent thread across interrupt
+// re-executions: the call ID plus the PARENT run's thread (injected by
+// toolsNode from the run's ExecutionInfo). The parent thread must travel on
+// ctx rather than via Agent.LastThreadID: a shared agent serves concurrent
+// sessions, and another session's turn would overwrite the global mid-relay.
+type toolCallIDKey struct{}
+
+type toolCallCtx struct {
+	id     string
+	thread string
+}
+
+func withToolCallID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, toolCallIDKey{}, toolCallCtx{id: id})
+}
+
+// withToolCallThread is withToolCallID plus the parent run's thread.
+func withToolCallThread(ctx context.Context, id, thread string) context.Context {
+	return context.WithValue(ctx, toolCallIDKey{}, toolCallCtx{id: id, thread: thread})
+}
+
+func toolCallIDFrom(ctx context.Context) string {
+	v, _ := ctx.Value(toolCallIDKey{}).(toolCallCtx)
+	return v.id
+}
+
+// parentThreadFrom returns the parent run's thread carried on the tool-call
+// ctx ("" when the caller was not dispatched from toolsNode).
+func parentThreadFrom(ctx context.Context) string {
+	v, _ := ctx.Value(toolCallIDKey{}).(toolCallCtx)
+	return v.thread
+}
+
+// deriveSubagentThread mints the subagent's checkpoint thread: stable across
+// the parent toolsNode's interrupt re-executions (same replayed tool call),
+// unique per call.
+func deriveSubagentThread(parentThread, callID, prompt string) string {
+	sum := sha256.Sum256([]byte(prompt))
+	digest := hex.EncodeToString(sum[:8])
+	if callID == "" {
+		return parentThread + "/sub-" + digest
+	}
+	return parentThread + "/sub-" + callID + "-" + digest
+}
+
+// subagentStarted reports whether the derived thread already has a
+// checkpoint on the shared saver — i.e. this handler execution is a
+// re-entry after a parent-graph resume, not a fresh spawn.
+func (a *Agent) subagentStarted(ctx context.Context, sub *Agent, thread string) bool {
+	snap, err := sub.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: thread})
+	if err != nil {
+		return false
+	}
+	return len(snap.Values) > 0 || len(snap.Interrupts) > 0
+}
+
+// subagentPendingPermission decodes the permission request the child is
+// paused on, so a re-entering relay can rebuild an accurate payload.
+func subagentPendingPermission(ctx context.Context, sub *Agent, thread string) (PermissionRequest, bool) {
+	snap, err := sub.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: thread})
+	if err != nil || len(snap.Interrupts) == 0 {
+		return PermissionRequest{}, false
+	}
+	req, ok := decodeInterruptPayload(snap.Interrupts[0].Value).(PermissionRequest)
+	return req, ok
+}
+
+// graphCarrierKey reports whether key is one of the named unexported
+// context-carrier types in the pinned langgraph-golang fork's graph package,
+// matched by type identity via reflection (the module is pinned; the tests
+// fail loudly if this stops matching).
+func graphCarrierKey(key any, names ...string) bool {
+	t := reflect.TypeOf(key)
+	if t == nil || t.PkgPath() != "github.com/projanvil/langchain-golang/langgraph/graph" {
+		return false
+	}
+	for _, name := range names {
+		if t.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+// detachStreamCtx hides the fork's stream emitter from a nested graph run.
+// The emitter travels via an unexported context key, so a foreground
+// subagent invoked with the tool goroutine's ctx would otherwise emit its
+// chunks — including its RAW pause interrupts — into the parent run's
+// stream, ahead of the wrapped SubagentInterrupt the relay raises; the
+// harness surfaces the first interrupt chunk it sees, so the leak would
+// defeat the relay.
+type detachStreamCtx struct{ context.Context }
+
+func (d detachStreamCtx) Value(key any) any {
+	if graphCarrierKey(key, "streamEmitterKey") {
+		return nil
+	}
+	return d.Context.Value(key)
+}
+
+// detachRunMetaCtx hides the fork's execution-meta carrier from a background
+// subagent run. The run loop publishes its checkpoint position under
+// executionMetaKey as a *checkpoint.Config it keeps mutating in place
+// between supersteps (persist's `*currentCfg = cfg`), and a nested run's
+// staticNext reads it through the CALLER's ctx — for a background child on
+// its own goroutine that read races the parent's writes. The foreground
+// relay does not need the strip: its child runs synchronously inside the
+// parent's tools node, where the parent run loop cannot persist.
+type detachRunMetaCtx struct{ context.Context }
+
+func (d detachRunMetaCtx) Value(key any) any {
+	if graphCarrierKey(key, "executionMetaKey") {
+		return nil
+	}
+	return d.Context.Value(key)
+}
 
 // TaskStatus is the lifecycle state of a background task.
 type TaskStatus string
@@ -253,7 +377,7 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 		return coretools.Result{Content: fmt.Sprintf("Started background task %s: %s", t.ID, args.Description)}, nil
 	}
 
-	report, err := a.runSubagent(ctx, history, nil, def)
+	report, err := a.runForegroundTask(ctx, history, def, subagentName(def, args), prompt)
 	if err != nil {
 		return coretools.Result{}, err
 	}
@@ -324,6 +448,9 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 
 	// Streaming subagent run (background Task output): consume node
 	// updates for complete AI messages and the final values snapshot.
+	// The child runs on its own goroutine, so it must not see the parent
+	// run's execution-meta carrier (see detachRunMetaCtx).
+	ctx = detachRunMetaCtx{ctx}
 	final := ""
 	for chunk, err := range sub.Graph().Stream(ctx, sub.NewState(ctx, history), lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: NewThreadID()},
@@ -335,6 +462,15 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 		switch chunk.Mode {
 		case lggraph.StreamUpdates:
 			updates, _ := chunk.Payload.(map[string]any)
+			if intrs, ok := updates[lgcheckpoint.ReservedInterrupt].([]lgtypes.Interrupt); ok && len(intrs) > 0 {
+				// A background subagent has no one to answer a pause: fail
+				// the task closed instead of completing with a silent empty
+				// report. (The foreground relay lives in runForegroundTask.)
+				if req, ok := decodeInterruptPayload(intrs[0].Value).(PermissionRequest); ok && req.ToolName != "" {
+					return "", fmt.Errorf("subagent paused for a permission (%s) it cannot ask while running in the background", req.ToolName)
+				}
+				return "", fmt.Errorf("subagent paused (%v) while running in the background with no one to answer", decodeInterruptPayload(intrs[0].Value))
+			}
 			for _, v := range updates {
 				nodeUpdate, _ := v.(map[string]any)
 				for _, m := range MessagesFrom(nodeUpdate) {
@@ -356,7 +492,112 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 	return final, nil
 }
 
-// valuesState extracts the channel-state map from a values-chunk payload.
+// parentThreadFor resolves the parent run's thread for relay addressing: the
+// tool-call ctx carrier first (injected by toolsNode from the run's
+// ExecutionInfo, race-free under concurrent sessions); the agent-global
+// LastThreadID is only a fallback for non-graph-driven invocations where the
+// carrier was never installed.
+func (a *Agent) parentThreadFor(ctx context.Context) string {
+	if t := parentThreadFrom(ctx); t != "" {
+		return t
+	}
+	return a.LastThreadID()
+}
+
+// relaySeq recovers how many resume values earlier re-executions of this
+// relay consumed, read back from the SubagentInterrupt pending on the parent
+// checkpoint. The fork's resume queue is positional — the persisted consumed
+// prefix followed by this resume's fresh answer — and the prefix length is
+// exactly the Seq the last surfaced SubagentInterrupt recorded. Missing or
+// undecodable state degrades to 0 (correct for the first re-entry).
+func (a *Agent) relaySeq(ctx context.Context, thread string) int {
+	snap, err := a.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: a.parentThreadFor(ctx)})
+	if err != nil {
+		return 0
+	}
+	for _, intr := range snap.Interrupts {
+		if si, ok := decodeInterruptPayload(intr.Value).(SubagentInterrupt); ok && si.ThreadID == thread {
+			return si.Seq
+		}
+	}
+	return 0
+}
+
+// runForegroundTask runs a foreground subagent with interrupt relay: a
+// permission pause inside the subagent re-interrupts the PARENT graph as a
+// SubagentInterrupt, so the user approves it on the main session; on resume
+// this handler re-executes, finds the child's checkpoint by its derived
+// thread, and resumes it with the answer.
+//
+// Durability note: the child's own checkpoint thread persists on the shared
+// saver, so a cross-process parent resume re-enters here and continues the
+// paused child — but the toolsNode batch memo is process-local (see
+// Agent.batchMemo), so sibling tool calls in the same batch re-execute once
+// after a process restart.
+func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Message, def *agents.Definition, name, prompt string) (string, error) {
+	thread := deriveSubagentThread(a.parentThreadFor(ctx), toolCallIDFrom(ctx), prompt)
+	sub, err := a.newSubagent(ctx, def)
+	if err != nil {
+		return "", err
+	}
+	// The child runs detached from the parent stream's emitter so its chunks
+	// (above all its raw pause interrupts) never reach the harness; the relay
+	// surfaces pauses itself, wrapped as SubagentInterrupt.
+	subCtx := detachStreamCtx{ctx}
+	started := a.subagentStarted(ctx, sub, thread)
+	pending := SubagentInterrupt{Subagent: name, ToolCallID: toolCallIDFrom(ctx), ThreadID: thread}
+	seq := 0
+	if started {
+		// Re-entry after a parent resume: rebuild the payload from the
+		// child's paused checkpoint and fast-forward the positional resume
+		// queue past the answers earlier re-executions already consumed, so
+		// the loop's first Interrupt call reads THIS resume's answer.
+		if req, ok := subagentPendingPermission(ctx, sub, thread); ok {
+			pending.Inner = req
+		}
+		seq = a.relaySeq(ctx, thread)
+		pending.Seq = seq
+		lggraph.ReplayInterruptConsumption(ctx, seq)
+	}
+	for {
+		var msgs []messages.Message
+		if !started {
+			msgs, err = sub.Invoke(subCtx, history, thread)
+			started = true
+		} else {
+			// Collect the queued answer to the pause that restarted us.
+			answer := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(pending))))
+			seq++
+			if !parseAnswer(answer) {
+				_ = a.saver.DeleteThread(context.WithoutCancel(ctx), thread)
+				return fmt.Sprintf("Subagent %q paused for a permission (%s) the user denied; the task was aborted.", name, pending.Inner.ToolName), nil
+			}
+			msgs, err = sub.Resume(subCtx, thread, "y")
+		}
+		var gi *lgtypes.GraphInterrupt
+		if !errors.As(err, &gi) {
+			if err == nil {
+				_ = a.saver.DeleteThread(context.WithoutCancel(ctx), thread)
+				return lastAIText(msgs), nil
+			}
+			return "", err
+		}
+		req, ok := decodeInterruptPayload(gi.Interrupt.Value).(PermissionRequest)
+		if !ok {
+			// Non-permission pauses (AskUser etc.) stay fatal for subagents.
+			return "", err
+		}
+		pending.Inner = req
+		pending.Seq = seq
+		// Pause the parent graph. On the pause pass this call never returns
+		// (panics GraphInterrupt); the re-execution restarts this function
+		// and takes the started==true branch above. The return value is
+		// deliberately unused: with one queued answer per resume, this call
+		// is always the one that pauses.
+		_ = lggraph.Interrupt(ctx, encodeInterruptPayload(pending))
+	}
+}
+
 func valuesState(payload any) map[string]any {
 	state, _ := payload.(map[string]any)
 	return state

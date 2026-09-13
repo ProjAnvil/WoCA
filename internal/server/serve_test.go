@@ -213,6 +213,7 @@ func TestHandleInterruptParksEachKind(t *testing.T) {
 		{agent.PermissionRequest{}, "permission", `{"approve":true}`},
 		{agent.AskUserRequest{}, "ask", `{"answers":["A"]}`},
 		{agent.PlanApprovalRequest{}, "plan", `{"approve":false}`},
+		{agent.SubagentInterrupt{Subagent: "r", Inner: agent.PermissionRequest{ToolName: "Write"}}, "permission", `{"approve":true}`},
 	}
 	for _, c := range cases {
 		r, cancel := mkRun()
@@ -252,6 +253,44 @@ func TestHandleInterruptParksEachKind(t *testing.T) {
 		}
 		cancel()
 	}
+}
+
+func TestHandleInterruptSubagentFlatPayload(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	r := newRun("ir", nil, ctx, cancel)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = r.handleInterrupt(agent.SubagentInterrupt{
+			Subagent: "reviewer",
+			Inner:    agent.PermissionRequest{ToolName: "Write", Reason: "edit", IsReadOnly: true},
+		})
+	}()
+	waitPending(t, r)
+
+	r.mu.Lock()
+	kind, payload := r.pending.kind, r.pending.payload
+	r.mu.Unlock()
+	if kind != "permission" {
+		t.Fatalf("kind = %q, want permission", kind)
+	}
+	// The frontend renders the permission payload flat (tool_name etc.);
+	// the subagent name rides along as an extra flat field, no nesting.
+	m, ok := payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want flat map", payload)
+	}
+	if m["subagent"] != "reviewer" || m["tool_name"] != "Write" || m["reason"] != "edit" || m["is_read_only"] != true {
+		t.Fatalf("payload = %#v", m)
+	}
+	if _, nested := m["inner"]; nested {
+		t.Fatalf("payload should be flat for the frontend, got nested: %#v", m)
+	}
+	if err := r.answer([]byte(`{"approve":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	<-done
 }
 
 // waitPending blocks until the run has a parked interrupt.

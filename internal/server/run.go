@@ -191,6 +191,16 @@ func (r *Run) handleInterrupt(value any) (any, error) {
 	switch v := value.(type) {
 	case agent.PermissionRequest:
 		return r.park("permission", v)
+	case agent.SubagentInterrupt:
+		// Flat payload: the frontend renders the permission card from
+		// tool_name/tool_args/reason; the subagent name rides along.
+		return r.park("permission", map[string]any{
+			"subagent":     v.Subagent,
+			"tool_name":    v.Inner.ToolName,
+			"tool_args":    v.Inner.ToolArgs,
+			"reason":       v.Inner.Reason,
+			"is_read_only": v.Inner.IsReadOnly,
+		})
 	case agent.AskUserRequest:
 		return r.park("ask", v)
 	case agent.PlanApprovalRequest:
