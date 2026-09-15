@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -449,7 +449,7 @@ func TestConcurrentPublishSubscribe(t *testing.T) {
 	for i := 0; i < publishers*eventsPerPub; i++ {
 		seqs = append(seqs, <-seqCh)
 	}
-	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+	slices.Sort(seqs)
 	for i, seq := range seqs {
 		if seq != int64(i)+1 {
 			t.Fatalf("seqs not a 1..%d permutation: got %d at index %d", publishers*eventsPerPub, seq, i)

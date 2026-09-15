@@ -16,13 +16,13 @@ import (
 // reach a real OTLP/HTTP collector endpoint (BatchSpanProcessor flush), the
 // same wiring the worker/server roles use.
 func TestSetupExportsTracesOverOTLP(t *testing.T) {
-	var traces, metrics int32
+	var traces, metrics atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/traces":
-			atomic.AddInt32(&traces, 1)
+			traces.Add(1)
 		case "/v1/metrics":
-			atomic.AddInt32(&metrics, 1)
+			metrics.Add(1)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -58,11 +58,11 @@ func TestSetupExportsTracesOverOTLP(t *testing.T) {
 	// BatchSpanProcessor flushes on its 5s interval; Shutdown would flush
 	// too, but the point is the periodic path.
 	deadline := time.Now().Add(8 * time.Second)
-	for time.Now().Before(deadline) && atomic.LoadInt32(&traces) == 0 {
+	for time.Now().Before(deadline) && traces.Load() == 0 {
 		time.Sleep(100 * time.Millisecond)
 	}
-	if atomic.LoadInt32(&traces) == 0 {
-		t.Fatalf("no trace export reached the collector (metrics pushes: %d)", atomic.LoadInt32(&metrics))
+	if traces.Load() == 0 {
+		t.Fatalf("no trace export reached the collector (metrics pushes: %d)", metrics.Load())
 	}
 }
 

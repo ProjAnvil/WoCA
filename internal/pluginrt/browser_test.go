@@ -214,12 +214,12 @@ func TestBrowserClientAdoptsRunningServer(t *testing.T) {
 }
 
 func TestBrowserCallRestartsDeadServer(t *testing.T) {
-	var phase int32
+	var phase atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Connection: close keeps the client from pooling keep-alive
 		// connections, so the helper can rebind the port after Close.
 		w.Header().Set("Connection", "close")
-		if atomic.LoadInt32(&phase) == 0 && r.URL.Path == "/health" {
+		if phase.Load() == 0 && r.URL.Path == "/health" {
 			_, _ = w.Write([]byte(`{"status":"ok"}`))
 			return
 		}
@@ -236,13 +236,13 @@ func TestBrowserCallRestartsDeadServer(t *testing.T) {
 	ctx := context.Background()
 	// First call adopts the fake server; force a transport failure by
 	// tearing it down, then the retry must spawn the helper binary.
-	var calls int32
+	var calls atomic.Int32
 	err := b.call(ctx, func(c *pinchClient) error {
-		if atomic.AddInt32(&calls, 1) == 1 {
+		if calls.Add(1) == 1 {
 			if err := c.health(ctx); err != nil {
 				t.Fatalf("initial health: %v", err)
 			}
-			atomic.StoreInt32(&phase, 1)
+			phase.Store(1)
 			srv.Close()
 			// Give the closed listener a beat to release the port.
 			time.Sleep(100 * time.Millisecond)
@@ -261,7 +261,7 @@ func TestBrowserCallRestartsDeadServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call with restart: %v", err)
 	}
-	if got := atomic.LoadInt32(&calls); got != 2 {
+	if got := calls.Load(); got != 2 {
 		t.Fatalf("fn calls = %d, want 2", got)
 	}
 }
@@ -625,16 +625,16 @@ func TestBrowserCallRestartFails(t *testing.T) {
 		t.Fatalf("adopt: %v", err)
 	}
 	srv.Close()
-	var attempts int32
+	var attempts atomic.Int32
 	err := b.call(ctx, func(c *pinchClient) error {
-		atomic.AddInt32(&attempts, 1)
+		attempts.Add(1)
 		_, err := c.navigate(ctx, "https://example.com")
 		return err
 	})
 	// The transport failure triggers exactly one restart attempt, whose spawn
 	// failure must surface (no retry against an unstartable binary).
-	if err == nil || !strings.Contains(err.Error(), "start pinchtab") || atomic.LoadInt32(&attempts) != 1 {
-		t.Fatalf("err = %v, attempts = %d (want failed restart after one attempt)", err, attempts)
+	if err == nil || !strings.Contains(err.Error(), "start pinchtab") || attempts.Load() != 1 {
+		t.Fatalf("err = %v, attempts = %d (want failed restart after one attempt)", err, attempts.Load())
 	}
 }
 

@@ -4,7 +4,10 @@
 // import cycle.
 package slashcmds
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+)
 
 // Command describes one slash command for help and completion.
 type Command struct {
@@ -58,6 +61,6 @@ func Builtin() []Command {
 		{Name: "exit", Description: "exit woca"},
 		{Name: "quit", Description: "exit woca"},
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
+	slices.SortFunc(list, func(a, b Command) int { return cmp.Compare(a.Name, b.Name) })
 	return list
 }

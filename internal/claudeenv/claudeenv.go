@@ -8,11 +8,12 @@
 package claudeenv
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -80,7 +81,7 @@ func Skills() ([]SkillEntry, error) {
 		name, desc := parseFrontmatter(e.Name(), data)
 		out = append(out, SkillEntry{Name: name, Description: desc, Source: src})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b SkillEntry) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 
@@ -182,7 +183,7 @@ func SyncSkills(wocaRoot string, selected []string) ([]string, error) {
 		}
 		linked = append(linked, name)
 	}
-	sort.Strings(linked)
+	slices.Sort(linked)
 	return linked, nil
 }
 
@@ -224,7 +225,7 @@ func Servers() ([]MCPServer, error) {
 		}
 		out = append(out, srv)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b MCPServer) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 
@@ -343,7 +344,7 @@ func LoadMCPConfig(wocaRoot string) ([]string, error) {
 	for name := range doc.MCPServers {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	out := make([]string, 0, len(names))
 	for _, name := range names {
 		cfg := doc.MCPServers[name]
@@ -366,7 +367,7 @@ func sortedKeys(m map[string]string) []string {
 	for k := range m {
 		out = append(out, k)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

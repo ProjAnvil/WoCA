@@ -15,10 +15,11 @@
 package configsvc
 
 import (
+	"cmp"
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"sort"
+	"slices"
 
 	"github.com/projanvil/woca/internal/gateway"
 	"github.com/projanvil/woca/internal/platform/authz"
@@ -239,7 +240,7 @@ func (s *Service) handleStatus(w http.ResponseWriter, _ *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		sort.Slice(acks, func(i, j int) bool { return acks[i].ServiceID < acks[j].ServiceID })
+		slices.SortFunc(acks, func(a, b wocadb.ConfigAck) int { return cmp.Compare(a.ServiceID, b.ServiceID) })
 		services := make([]map[string]any, 0, len(acks))
 		for _, a := range acks {
 			services = append(services, map[string]any{

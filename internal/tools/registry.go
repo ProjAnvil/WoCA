@@ -7,7 +7,7 @@ package tools
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
@@ -233,6 +233,6 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]any
 
 // sortedEntries is a small helper for deterministic directory listings.
 func sortedEntries(entries []string) []string {
-	sort.Strings(entries)
+	slices.Sort(entries)
 	return entries
 }

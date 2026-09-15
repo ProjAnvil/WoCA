@@ -1,12 +1,13 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -236,7 +237,7 @@ func (s *Server) handleGlobalEvents(w http.ResponseWriter, r *http.Request) {
 	for _, st := range states {
 		rows = append(rows, st)
 	}
-	sort.Slice(rows, func(i, j int) bool { return rows[i].UpdatedAt < rows[j].UpdatedAt })
+	slices.SortFunc(rows, func(a, b wocadb.SessionState) int { return cmp.Compare(a.UpdatedAt, b.UpdatedAt) })
 	for _, st := range rows {
 		writeSSE(w, s.sessionStateEvent(st.SessionID, st.Status, st.RunID))
 	}

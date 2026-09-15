@@ -12,12 +12,13 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -318,10 +319,10 @@ func (s *Store) Delete(ctx context.Context, namespace, key string) error {
 }
 
 func sortEntries(entries []Entry) {
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].Namespace != entries[j].Namespace {
-			return entries[i].Namespace < entries[j].Namespace
-		}
-		return entries[i].Key < entries[j].Key
+	slices.SortFunc(entries, func(a, b Entry) int {
+		return cmp.Or(
+			cmp.Compare(a.Namespace, b.Namespace),
+			cmp.Compare(a.Key, b.Key),
+		)
 	})
 }

@@ -3,12 +3,13 @@
 package skills
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/projanvil/woca/internal/telemetry"
@@ -68,7 +69,7 @@ func Load(root string) ([]Skill, error) {
 		}
 	}
 	walk(root)
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b Skill) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 
@@ -95,7 +96,7 @@ func LoadFS(fsys fs.FS) ([]Skill, error) {
 		sk.Source = "builtin/" + sk.Name
 		out = append(out, sk)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b Skill) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 

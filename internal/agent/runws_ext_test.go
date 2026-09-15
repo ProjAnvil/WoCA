@@ -48,13 +48,13 @@ func newScopedAgent(t *testing.T, dir string, cfgExtras func(*Config)) *Agent {
 func TestSkillsFollowRunWorkspace(t *testing.T) {
 	base := t.TempDir()
 	ws := t.TempDir()
-	var loads int32
+	var loads atomic.Int32
 	a := newScopedAgent(t, base, func(c *Config) {
 		// The base set loads at startup (main injects loadSkills(workdir)
 		// into Skills); SkillsFor covers runs in other workspaces.
 		c.Skills = []skills.Skill{{Name: "skill-of-" + base, Description: "d", Body: "do " + base}}
 		c.SkillsFor = func(dir string) []skills.Skill {
-			atomic.AddInt32(&loads, 1)
+			loads.Add(1)
 			return []skills.Skill{{Name: "skill-of-" + dir, Description: "d", Body: "do " + dir}}
 		}
 	})
@@ -84,7 +84,7 @@ func TestSkillsFollowRunWorkspace(t *testing.T) {
 
 	// Repeated resolution is cached per workspace.
 	skill.Invoke(ctx, map[string]any{"skill": "skill-of-" + ws})
-	if n := atomic.LoadInt32(&loads); n != 1 {
+	if n := loads.Load(); n != 1 {
 		t.Fatalf("SkillsFor called %d times, want 1 (cached afterwards)", n)
 	}
 }

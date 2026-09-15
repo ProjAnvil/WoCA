@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,7 +67,7 @@ func (c *Console) ListSessions() ([]SessionEntry, error) {
 			})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ModTime.After(out[j].ModTime) })
+	slices.SortFunc(out, func(a, b SessionEntry) int { return b.ModTime.Compare(a.ModTime) })
 	return out, nil
 }
 

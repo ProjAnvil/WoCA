@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -643,7 +642,7 @@ func (s *Server) logObsRunEnd(sid, runID, workspace string, final []messages.Mes
 
 // newSessionID returns a unique, restart-safe session identifier.
 func newSessionID() string {
-	return fmt.Sprintf("sess-%x-%d", time.Now().UnixNano(), atomic.AddInt64(&sessionSeq, 1))
+	return fmt.Sprintf("sess-%x-%d", time.Now().UnixNano(), sessionSeq.Add(1))
 }
 
 // newRunID mints a run id unique across processes: the shared run ledger
@@ -651,7 +650,7 @@ func newSessionID() string {
 // with rows left by previous instances — an enterprise restart used to
 // fail its very first run on the stale primary key.
 func newRunID() string {
-	return fmt.Sprintf("run-%x-%d", time.Now().UnixNano(), atomic.AddInt64(&runSeq, 1))
+	return fmt.Sprintf("run-%x-%d", time.Now().UnixNano(), runSeq.Add(1))
 }
 
 // stripSystem removes the leading system message from a transcript.

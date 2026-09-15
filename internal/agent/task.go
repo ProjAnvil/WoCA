@@ -1,13 +1,14 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -292,7 +293,7 @@ func (m *TaskManager) list() []*backgroundTask {
 	for _, t := range m.tasks {
 		out = append(out, t)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	slices.SortFunc(out, func(a, b *backgroundTask) int { return cmp.Compare(a.ID, b.ID) })
 	return out
 }
 

@@ -1,10 +1,11 @@
 package server
 
 import (
+	"cmp"
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -78,12 +79,17 @@ func walkWorkspace(root, dir string, depth int) *workspaceNode {
 	if err != nil {
 		return node
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		di, dj := entries[i].IsDir(), entries[j].IsDir()
-		if di != dj {
-			return di
+	dirRank := func(e os.DirEntry) int {
+		if e.IsDir() {
+			return 0
 		}
-		return entries[i].Name() < entries[j].Name()
+		return 1
+	}
+	slices.SortFunc(entries, func(a, b os.DirEntry) int {
+		return cmp.Or(
+			cmp.Compare(dirRank(a), dirRank(b)),
+			cmp.Compare(a.Name(), b.Name()),
+		)
 	})
 
 	for _, e := range entries {

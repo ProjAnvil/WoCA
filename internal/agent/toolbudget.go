@@ -1,8 +1,9 @@
 package agent
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -77,7 +78,7 @@ func budgetRound(msgs []messages.Message, from, to, budget int) []messages.Messa
 	}
 
 	// Replace the largest results first — cheapest path under budget.
-	sort.Slice(candidates, func(a, b int) bool { return candidates[a].size > candidates[b].size })
+	slices.SortFunc(candidates, func(a, b candidate) int { return cmp.Compare(b.size, a.size) })
 	out := append([]messages.Message(nil), msgs...) // copy; input never mutated
 	over := total - budget
 	for _, c := range candidates {

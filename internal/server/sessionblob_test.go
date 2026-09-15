@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 	"testing"
 
@@ -57,7 +57,7 @@ func (m *memBlobs) List(_ context.Context, prefix string) ([]string, error) {
 			out = append(out, k)
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out, nil
 }
 

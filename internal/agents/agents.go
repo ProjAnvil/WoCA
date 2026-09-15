@@ -3,11 +3,12 @@
 package agents
 
 import (
+	"cmp"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -52,7 +53,7 @@ func Load(root string) ([]Definition, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b Definition) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 

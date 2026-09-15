@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"sort"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -547,7 +547,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // obsSeq numbers TUI runs for the observability log.
-var obsSeq int32
+var obsSeq atomic.Int32
 
 // obsBegin scopes observability events to this run and logs its start. The
 // debug-log setting is re-read first so toggles made in other processes (the
@@ -559,7 +559,7 @@ func (m *Model) obsBegin(prompt string) string {
 	if m.settings != nil {
 		m.agent.Obs().SetEnabled(m.settings.Load().DebugLog)
 	}
-	run := fmt.Sprintf("tui-run-%d", atomic.AddInt32(&obsSeq, 1))
+	run := fmt.Sprintf("tui-run-%d", obsSeq.Add(1))
 	m.agent.SetObsRun(m.cfg.WorkDir, "tui", run)
 	m.agent.Obs().Log("info", "run_start", map[string]any{"prompt": prompt})
 	return run
@@ -713,7 +713,7 @@ func sortedValues(m map[string]string) []string {
 	for _, v := range m {
 		out = append(out, v)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 

@@ -5,7 +5,10 @@
 // woca-internal imports so it stays trivially testable.
 package merge
 
-import "sort"
+import (
+	"cmp"
+	"slices"
+)
 
 // Level is a configuration source layer. Higher values win over lower ones.
 type Level int
@@ -77,14 +80,12 @@ func Entries[T any](es []Entry[T]) ([]Entry[T], []Conflict) {
 	for _, e := range byName {
 		out = append(out, e)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Level != out[j].Level {
-			return out[i].Level > out[j].Level
-		}
-		if out[i].Order != out[j].Order {
-			return out[i].Order < out[j].Order
-		}
-		return out[i].Name < out[j].Name
+	slices.SortFunc(out, func(a, b Entry[T]) int {
+		return cmp.Or(
+			cmp.Compare(b.Level, a.Level),
+			cmp.Compare(a.Order, b.Order),
+			cmp.Compare(a.Name, b.Name),
+		)
 	})
 	return out, conflicts
 }

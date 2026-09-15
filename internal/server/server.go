@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/projanvil/woca/internal/platform/httpx"
@@ -230,8 +231,8 @@ type Server struct {
 }
 
 var (
-	runSeq     int64
-	sessionSeq int64
+	runSeq     atomic.Int64
+	sessionSeq atomic.Int64
 )
 
 // New creates a Server.

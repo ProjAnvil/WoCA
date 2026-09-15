@@ -3,7 +3,7 @@ package console
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -217,7 +217,7 @@ func (c *Console) memoryEngineCmd(ctx context.Context, eng memory.Engine, args [
 		for layer := range st.Layers {
 			layers = append(layers, layer)
 		}
-		sort.Strings(layers)
+		slices.Sort(layers)
 		for _, layer := range layers {
 			fmt.Fprintf(&b, "  %s: %d\n", layer, st.Layers[layer])
 		}

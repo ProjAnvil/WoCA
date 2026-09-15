@@ -14,7 +14,7 @@ import (
 	"iter"
 	"path/filepath"
 	"runtime/debug"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -895,7 +895,7 @@ func (a *Agent) ToolNames() []string {
 	for _, t := range list {
 		names = append(names, t.Name())
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names
 }
 

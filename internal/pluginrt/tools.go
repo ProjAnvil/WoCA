@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -267,7 +267,7 @@ func pdfTools(py *PythonRuntime, workdir string) []coretools.Tool {
 					for k := range meta {
 						keys = append(keys, k)
 					}
-					sort.Strings(keys)
+					slices.Sort(keys)
 					for _, k := range keys {
 						fmt.Fprintf(&b, "  %s: %v\n", k, meta[k])
 					}

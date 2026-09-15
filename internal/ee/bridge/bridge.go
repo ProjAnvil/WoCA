@@ -10,6 +10,7 @@
 package bridge
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,7 +19,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -440,7 +441,7 @@ func (s *sessionStore) list() []mirrorSession {
 			out = append(out, m)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].LastSeen > out[j].LastSeen })
+	slices.SortFunc(out, func(a, b mirrorSession) int { return cmp.Compare(b.LastSeen, a.LastSeen) })
 	return out
 }
 

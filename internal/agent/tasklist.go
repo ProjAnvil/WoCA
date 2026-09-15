@@ -1,8 +1,9 @@
 package agent
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -102,7 +103,7 @@ func (l *TaskList) List() []TaskRecord {
 	for _, t := range l.tasks {
 		out = append(out, t)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	slices.SortFunc(out, func(a, b TaskRecord) int { return cmp.Compare(a.ID, b.ID) })
 	return out
 }
 

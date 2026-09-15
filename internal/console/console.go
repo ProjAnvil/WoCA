@@ -8,7 +8,7 @@ package console
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -460,7 +460,7 @@ func (c *Console) mcp() string {
 	for s := range byServer {
 		servers = append(servers, s)
 	}
-	sort.Strings(servers)
+	slices.Sort(servers)
 	var b strings.Builder
 	for _, s := range servers {
 		fmt.Fprintf(&b, "%s (%d tools):\n", s, len(byServer[s]))
@@ -478,7 +478,7 @@ func (c *Console) tools() string {
 	if len(names) == 0 {
 		return "no tools registered\n"
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	var b strings.Builder
 	for _, name := range names {
 		cat := tools.CategoryOf(name)

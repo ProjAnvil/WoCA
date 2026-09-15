@@ -49,7 +49,7 @@ func buildOptions(app *App, assets fs.FS, handler http.Handler) *options.App {
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
-		Bind:       []interface{}{app},
+		Bind:       []any{app},
 		SingleInstanceLock: &options.SingleInstanceLock{
 			UniqueId: singleInstanceUniqueID,
 		},

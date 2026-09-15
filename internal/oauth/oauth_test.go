@@ -12,7 +12,7 @@ import (
 )
 
 func TestDeviceFlow(t *testing.T) {
-	var tokenCalls int32
+	var tokenCalls atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/device", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(DeviceAuthResponse{
@@ -24,7 +24,7 @@ func TestDeviceFlow(t *testing.T) {
 		})
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&tokenCalls, 1)
+		n := tokenCalls.Add(1)
 		if n < 3 {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
@@ -57,8 +57,8 @@ func TestDeviceFlow(t *testing.T) {
 	if tok.AccessToken != "access-123" || tok.RefreshToken != "refresh-456" {
 		t.Fatalf("token = %+v", tok)
 	}
-	if atomic.LoadInt32(&tokenCalls) < 3 {
-		t.Fatalf("expected at least 3 token polls, got %d", tokenCalls)
+	if tokenCalls.Load() < 3 {
+		t.Fatalf("expected at least 3 token polls, got %d", tokenCalls.Load())
 	}
 }
 
@@ -124,9 +124,9 @@ func TestPollDeviceTokenExpiryAndCancel(t *testing.T) {
 
 	// Pending forever with a cancelled context.
 	dev2 := &DeviceAuthResponse{DeviceCode: "dc", ExpiresIn: 3600}
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
 	}))
@@ -141,8 +141,8 @@ func TestPollDeviceTokenExpiryAndCancel(t *testing.T) {
 	if _, err := PollDeviceToken(cctx, cfg2, dev2, func(s string) { statuses = append(statuses, s) }); err == nil {
 		t.Fatal("expected ctx error")
 	}
-	if atomic.LoadInt32(&calls) < 2 || len(statuses) == 0 {
-		t.Fatalf("calls=%d statuses=%v", calls, statuses)
+	if calls.Load() < 2 || len(statuses) == 0 {
+		t.Fatalf("calls=%d statuses=%v", calls.Load(), statuses)
 	}
 
 	// A transport failure during polling surfaces directly.
@@ -152,9 +152,9 @@ func TestPollDeviceTokenExpiryAndCancel(t *testing.T) {
 	}
 
 	// An unknown OAuth error aborts the poll.
-	var n int32
+	var n atomic.Int32
 	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&n, 1) == 1 {
+		if n.Add(1) == 1 {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]string{"error": "slow_down"})
 			return

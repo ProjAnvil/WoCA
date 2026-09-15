@@ -8,11 +8,12 @@ package bridge
 // metadata only: env values never cross the wire (the claudeenv ruling).
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/projanvil/woca/internal/skills"
@@ -102,7 +103,7 @@ func readManagedMCP(root string) []ManagedMCPServer {
 		}
 		out = append(out, entry)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortFunc(out, func(a, b ManagedMCPServer) int { return cmp.Compare(a.Name, b.Name) })
 	return out
 }
 

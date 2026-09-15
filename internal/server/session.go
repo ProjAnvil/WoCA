@@ -1,12 +1,13 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -300,7 +301,7 @@ func (s *sessionStore) writeIndex(index map[string]sessionMeta) {
 	for _, m := range index {
 		list = append(list, m)
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].ID < list[j].ID })
+	slices.SortFunc(list, func(a, b sessionMeta) int { return cmp.Compare(a.ID, b.ID) })
 	b, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
 		return
@@ -407,7 +408,7 @@ func (s *sessionStore) list() ([]sessionSummary, error) {
 			WorkspaceName: workspaceName,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt > out[j].UpdatedAt })
+	slices.SortFunc(out, func(a, b sessionSummary) int { return cmp.Compare(b.UpdatedAt, a.UpdatedAt) })
 	return out, nil
 }
 

@@ -53,7 +53,7 @@ func TestLoginMissingEnv(t *testing.T) {
 
 func TestLoginDeviceFlow(t *testing.T) {
 	home := isolateEnv(t)
-	var tokenCalls int32
+	var tokenCalls atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/device", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
@@ -65,7 +65,7 @@ func TestLoginDeviceFlow(t *testing.T) {
 		})
 	})
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
-		if atomic.AddInt32(&tokenCalls, 1) < 2 {
+		if tokenCalls.Add(1) < 2 {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]string{"error": "authorization_pending"})
 			return

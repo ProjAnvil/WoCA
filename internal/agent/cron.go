@@ -1,9 +1,10 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -121,7 +122,7 @@ func (s *cronScheduler) List() []cronEntry {
 	for _, e := range s.entries {
 		out = append(out, cronEntry{ID: e.ID, Name: e.Name, Prompt: e.Prompt, Spec: e.Spec})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	slices.SortFunc(out, func(a, b cronEntry) int { return cmp.Compare(a.ID, b.ID) })
 	return out
 }
 

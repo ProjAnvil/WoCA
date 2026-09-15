@@ -2,10 +2,11 @@
 package promptref
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -62,7 +63,7 @@ func Candidates(prefix, workdir string) []Candidate {
 		}
 		return nil
 	})
-	sort.Slice(candidates, func(left, right int) bool { return candidates[left].Path < candidates[right].Path })
+	slices.SortFunc(candidates, func(a, b Candidate) int { return cmp.Compare(a.Path, b.Path) })
 	return candidates
 }
 
@@ -172,7 +173,7 @@ func readDirectory(root, directory, reference string) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("read @%s: %w", reference, err)
 	}
-	sort.Strings(paths)
+	slices.Sort(paths)
 	var out strings.Builder
 	for _, path := range paths {
 		content, _, err := readTextFile(root, path, reference)

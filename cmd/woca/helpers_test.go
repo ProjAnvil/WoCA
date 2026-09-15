@@ -332,9 +332,9 @@ func http_Mux(t *testing.T, routes ...string) string {
 
 func fakeOpenAIToolFlow(t *testing.T, final string) string {
 	t.Helper()
-	var calls int32
+	var calls atomic.Int32
 	srv := newFakeStreamServer(t, func() []map[string]any {
-		if atomic.AddInt32(&calls, 1) == 1 {
+		if calls.Add(1) == 1 {
 			return []map[string]any{{
 				"index": 0,
 				"delta": map[string]any{
@@ -406,9 +406,9 @@ func startHTTPServer(t *testing.T, h http.HandlerFunc) string {
 
 func fakeOpenAICustomToolFlow(t *testing.T, tool string, args string, final string) string {
 	t.Helper()
-	var calls int32
+	var calls atomic.Int32
 	return newFakeStreamServer(t, func() []map[string]any {
-		if atomic.AddInt32(&calls, 1) == 1 {
+		if calls.Add(1) == 1 {
 			return []map[string]any{{
 				"index": 0,
 				"delta": map[string]any{

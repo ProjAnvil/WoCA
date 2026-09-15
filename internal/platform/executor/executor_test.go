@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -11,7 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -234,7 +235,7 @@ func TestGlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob: %v", err)
 	}
-	sort.Strings(matches)
+	slices.Sort(matches)
 	if len(matches) != 2 || filepath.Base(matches[0]) != "a.go" || filepath.Base(matches[1]) != "b.go" {
 		t.Errorf("Glob = %v, want a.go b.go", matches)
 	}
@@ -277,11 +278,11 @@ func TestGrep(t *testing.T) {
 	for _, m := range matches {
 		got = append(got, key{filepath.Base(m.Path), m.Line})
 	}
-	sort.Slice(got, func(i, j int) bool {
-		if got[i].base != got[j].base {
-			return got[i].base < got[j].base
-		}
-		return got[i].line < got[j].line
+	slices.SortFunc(got, func(a, b key) int {
+		return cmp.Or(
+			cmp.Compare(a.base, b.base),
+			cmp.Compare(a.line, b.line),
+		)
 	})
 	want := []key{{"one.txt", 2}, {"two.txt", 2}}
 	if len(got) != len(want) {

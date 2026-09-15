@@ -13,10 +13,11 @@
 package pluginrt
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"sort"
+	"slices"
 
 	"github.com/projanvil/woca"
 )
@@ -82,11 +83,11 @@ func Builtins() []Builtin {
 			out = append(out, b)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Kind != out[j].Kind {
-			return out[i].Kind < out[j].Kind
-		}
-		return out[i].Name < out[j].Name
+	slices.SortFunc(out, func(a, b Builtin) int {
+		return cmp.Or(
+			cmp.Compare(a.Kind, b.Kind),
+			cmp.Compare(a.Name, b.Name),
+		)
 	})
 	return out
 }

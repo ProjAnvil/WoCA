@@ -33,9 +33,9 @@ func newRunAgent(t *testing.T, dir string, promptFor func(ws, model string) stri
 }
 
 func TestNewStateFollowsRunWorkspace(t *testing.T) {
-	var builds int32
+	var builds atomic.Int32
 	a := newRunAgent(t, "/ws/base", func(ws, model string) string {
-		atomic.AddInt32(&builds, 1)
+		builds.Add(1)
 		return "PROMPT:" + ws
 	})
 	hist := []messages.Message{messages.Human("hi")}
@@ -70,15 +70,15 @@ func TestNewStateFollowsRunWorkspace(t *testing.T) {
 	if sys := MessagesFrom(a.NewState(ctx, hist))[0]; sys.Content != "PROMPT:/ws/other" {
 		t.Fatalf("cached workspace prompt = %q", sys.Content)
 	}
-	if n := atomic.LoadInt32(&builds); n != 2 {
+	if n := builds.Load(); n != 2 {
 		t.Fatalf("prompt builder ran %d times, want 2 (cached)", n)
 	}
 }
 
 func TestSetSystemPromptInvalidatesWorkspaceCache(t *testing.T) {
-	var builds int32
+	var builds atomic.Int32
 	a := newRunAgent(t, "/ws/base", func(ws, model string) string {
-		atomic.AddInt32(&builds, 1)
+		builds.Add(1)
 		return "PROMPT:" + ws
 	})
 	ctx := runws.With(context.Background(), "/ws/other")
@@ -86,7 +86,7 @@ func TestSetSystemPromptInvalidatesWorkspaceCache(t *testing.T) {
 	if sys := MessagesFrom(a.NewState(ctx, hist))[0]; sys.Content != "PROMPT:/ws/other" {
 		t.Fatalf("workspace prompt = %q", sys.Content)
 	}
-	n := atomic.LoadInt32(&builds)
+	n := builds.Load()
 
 	// A runtime swap drops the caches: the next run in each workspace
 	// rebuilds through the builder (which reads live settings).
@@ -97,8 +97,8 @@ func TestSetSystemPromptInvalidatesWorkspaceCache(t *testing.T) {
 	if sys := MessagesFrom(a.NewState(ctx, hist))[0]; sys.Content != "PROMPT:/ws/other" {
 		t.Fatalf("workspace prompt after swap = %q", sys.Content)
 	}
-	if atomic.LoadInt32(&builds) != n+2 {
-		t.Fatalf("builder ran %d times after swap, want %d (both rebuilt)", atomic.LoadInt32(&builds), n+2)
+	if builds.Load() != n+2 {
+		t.Fatalf("builder ran %d times after swap, want %d (both rebuilt)", builds.Load(), n+2)
 	}
 }
 

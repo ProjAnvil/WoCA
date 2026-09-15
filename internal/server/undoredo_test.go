@@ -163,13 +163,13 @@ func TestUndoRedoCommandRuns(t *testing.T) {
 	if err := json.NewDecoder(sess.Body).Decode(&transcript); err != nil {
 		t.Fatal(err)
 	}
-	var undoTurns int64
+	var undoTurns atomic.Int64
 	for _, m := range transcript.Messages {
 		if m.Role == "human" && strings.TrimSpace(m.Content) == "/undo" {
-			atomic.AddInt64(&undoTurns, 1)
+			undoTurns.Add(1)
 		}
 	}
-	if undoTurns != 1 {
-		t.Fatalf("session should carry the /undo turn, found %d", undoTurns)
+	if undoTurns.Load() != 1 {
+		t.Fatalf("session should carry the /undo turn, found %d", undoTurns.Load())
 	}
 }

@@ -8,12 +8,13 @@
 package fsb
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -199,7 +200,7 @@ func (s *Service) List(path string) (Listing, error) {
 			Writable: probeWritable(full),
 		})
 	}
-	sort.Slice(out.Dirs, func(i, j int) bool { return out.Dirs[i].Name < out.Dirs[j].Name })
+	slices.SortFunc(out.Dirs, func(a, b Entry) int { return cmp.Compare(a.Name, b.Name) })
 	return out, nil
 }
 

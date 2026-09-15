@@ -11,7 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -138,6 +138,6 @@ func (l *Local) List(_ context.Context, prefix string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys, nil
 }
