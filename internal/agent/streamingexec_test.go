@@ -219,7 +219,7 @@ func TestStreamingToolExecutionOverlaps(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("sleep please")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("sleep please")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +300,7 @@ func TestStreamingExecutionSkipsGatedCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write a file")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("write a file")}, "t")
 	ie := interruptFromError(t, err)
 	if req, ok := ie.Value.(PermissionRequest); !ok || req.ToolName != "Write" {
 		t.Fatalf("interrupt value = %+v", ie.Value)
@@ -310,7 +310,7 @@ func TestStreamingExecutionSkipsGatedCalls(t *testing.T) {
 	}
 
 	// Approve: the run completes and the write happened exactly once.
-	if _, err := a.Resume(context.Background(), "t", "y"); err != nil {
+	if _, err := a.Resume(t.Context(), "t", "y"); err != nil {
 		t.Fatal(err)
 	}
 	if got := rec.count(); got != 0 {
@@ -387,7 +387,7 @@ func TestStreamingExecutionReadOnlyDefaultMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("search it")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("search it")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

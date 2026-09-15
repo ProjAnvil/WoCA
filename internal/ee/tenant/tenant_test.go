@@ -1,7 +1,6 @@
 package tenant
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -29,7 +28,7 @@ func openTestStore(t *testing.T) *Store {
 
 func TestTenantCRUD(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	a, err := st.CreateTenant(ctx, "Acme")
 	if err != nil {
@@ -80,7 +79,7 @@ func TestTenantCRUD(t *testing.T) {
 
 func TestIssueAndAuthenticate(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ten, _ := st.CreateTenant(ctx, "Acme")
 	u, err := st.CreateUser(ctx, ten.ID, "alice", authz.RoleAdmin)
@@ -125,7 +124,7 @@ func wrongSecret(key string) string {
 
 func TestAuthenticateRejects(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ten, _ := st.CreateTenant(ctx, "Acme")
 	u, _ := st.CreateUser(ctx, ten.ID, "alice", authz.RoleMember)
@@ -156,7 +155,7 @@ func TestAuthenticateRejects(t *testing.T) {
 
 func TestRevokeKey(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ten, _ := st.CreateTenant(ctx, "Acme")
 	u, _ := st.CreateUser(ctx, ten.ID, "alice", authz.RoleViewer)
@@ -193,7 +192,7 @@ func TestRevokeKey(t *testing.T) {
 
 func TestKeyIssueValidatesTenantAndUser(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ten, _ := st.CreateTenant(ctx, "Acme")
 	other, _ := st.CreateTenant(ctx, "Beta")
@@ -214,13 +213,13 @@ func TestKeyIssueValidatesTenantAndUser(t *testing.T) {
 // every key must authenticate.
 func TestUniquePrefixes(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	ten, _ := st.CreateTenant(ctx, "Acme")
 	u, _ := st.CreateUser(ctx, ten.ID, "alice", authz.RoleMember)
 	p := NewAPIKeyProvider(st)
 	seen := map[string]bool{}
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		k, full, err := st.IssueKey(ctx, ten.ID, u.ID, "", authz.RoleMember)
 		if err != nil {
 			t.Fatal(err)

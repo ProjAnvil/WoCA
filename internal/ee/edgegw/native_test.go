@@ -115,15 +115,15 @@ func (d *nativeDevice) request(method, path string, proofOK bool) *http.Response
 // enrollNamed registers one bridge and returns (access token, bridge id).
 func enrollNamed(t *testing.T, core *fakeCore) (string, string) {
 	t.Helper()
-	token, err := core.store.IssueEnrollment(context.Background(), 10*time.Minute)
+	token, err := core.store.IssueEnrollment(t.Context(), 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bridgeID, err := core.store.ConsumeEnrollment(context.Background(), machineid.HashToken(token), []byte("native-test-pub"), 10*time.Minute)
+	bridgeID, err := core.store.ConsumeEnrollment(t.Context(), machineid.HashToken(token), []byte("native-test-pub"), 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
-	access, _, err := core.store.IssueAccess(context.Background(), bridgeID, 10*time.Minute)
+	access, _, err := core.store.IssueAccess(t.Context(), bridgeID, 10*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestNativeAPITrafficTunneled(t *testing.T) {
 	core := newFakeCore(t)
 	edge := newEdge(t, core)
 	access, bridgeID := enrollNamed(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runTunnel(ctx, t, core, edge.URL, access, echoBridge(bridgeID))
 

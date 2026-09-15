@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"testing/fstest"
 
@@ -69,20 +70,11 @@ func TestCompletionsScopedToWorkspace(t *testing.T) {
 	}
 
 	got, _ := get(ts.URL + "/api/completions")
-	if !contains(got, "skill-base") || contains(got, "skill-of-"+ws) {
+	if !slices.Contains(got, "skill-base") || slices.Contains(got, "skill-of-"+ws) {
 		t.Fatalf("default completions = %v, want only the startup skills", got)
 	}
 	got, _ = get(ts.URL + "/api/completions?workspace=" + ws)
-	if !contains(got, "skill-of-"+ws) {
+	if !slices.Contains(got, "skill-of-"+ws) {
 		t.Fatalf("scoped completions = %v, want the workspace skill", got)
 	}
-}
-
-func contains(list []string, want string) bool {
-	for _, v := range list {
-		if v == want {
-			return true
-		}
-	}
-	return false
 }

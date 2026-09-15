@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -12,8 +11,8 @@ import (
 // another (reworked from the original case that acknowledged the clobbering).
 func TestMemoryScopeIsolatesConcurrentRuns(t *testing.T) {
 	m := &memoryRuntime{}
-	ctxA := WithMemoryScope(context.Background())
-	ctxB := WithMemoryScope(context.Background())
+	ctxA := WithMemoryScope(t.Context())
+	ctxB := WithMemoryScope(t.Context())
 
 	scopeA, scopeB := memoryScopeFrom(ctxA), memoryScopeFrom(ctxB)
 	scopeA.entries = []store.Entry{{Namespace: "ns", Key: "a-1", Value: []byte(`"alpha"`)}}
@@ -38,7 +37,7 @@ func TestMemoryScopeIsolatesConcurrentRuns(t *testing.T) {
 func TestTakeAttachmentsFallbackWithoutScope(t *testing.T) {
 	m := &memoryRuntime{}
 	m.prefetch.entries = []store.Entry{{Namespace: "ns", Key: "x", Value: []byte(`"legacy"`)}}
-	got := m.TakeAttachments(context.Background())
+	got := m.TakeAttachments(t.Context())
 	if len(got) != 1 {
 		t.Fatalf("fallback take = %+v, want 1 attachment", got)
 	}

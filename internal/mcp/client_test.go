@@ -74,11 +74,11 @@ func TestClientInitializeListAndCall(t *testing.T) {
 	})
 
 	client := NewClient("woca", w, r, nil)
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
-	tools, err := client.ListTools(context.Background())
+	tools, err := client.ListTools(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestClientInitializeListAndCall(t *testing.T) {
 		t.Fatalf("tools = %+v", tools)
 	}
 
-	out, err := client.CallTool(context.Background(), "echo", map[string]any{"message": "hi"})
+	out, err := client.CallTool(t.Context(), "echo", map[string]any{"message": "hi"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,13 +109,13 @@ func TestAsToolWrapsCallTool(t *testing.T) {
 		return nil, nil
 	})
 	client := NewClient("woca", w, r, nil)
-	_ = client.Initialize(context.Background())
+	_ = client.Initialize(t.Context())
 
 	tool := client.AsTool("srv", Tool{Name: "echo", Description: "d", InputSchema: map[string]any{"type": "object"}})
 	if tool.Name() != "mcp__srv__echo" {
 		t.Fatalf("name = %q", tool.Name())
 	}
-	res, err := tool.Invoke(context.Background(), map[string]any{"message": "x"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"message": "x"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,13 +137,13 @@ func TestListAndReadResources(t *testing.T) {
 		return nil, nil
 	})
 	client := NewClient("woca", w, r, nil)
-	_ = client.Initialize(context.Background())
+	_ = client.Initialize(t.Context())
 
-	resources, err := client.ListResources(context.Background())
+	resources, err := client.ListResources(t.Context())
 	if err != nil || len(resources) != 1 || resources[0].Name != "X" {
 		t.Fatalf("resources = %+v err=%v", resources, err)
 	}
-	text, err := client.ReadResource(context.Background(), "file:///x")
+	text, err := client.ReadResource(t.Context(), "file:///x")
 	if err != nil || text != "hello resource" {
 		t.Fatalf("read = %q err=%v", text, err)
 	}
@@ -160,7 +160,7 @@ func TestNotificationDispatch(t *testing.T) {
 	client.OnNotification = func(method string, params json.RawMessage) {
 		t.Logf("notification: %s %s", method, params)
 	}
-	_ = client.Initialize(context.Background())
+	_ = client.Initialize(t.Context())
 }
 
 func TestClientRequestErrorPaths(t *testing.T) {
@@ -169,25 +169,25 @@ func TestClientRequestErrorPaths(t *testing.T) {
 		return nil, &rpcError{Code: -32000, Message: "boom"}
 	})
 	client := NewClient("err", w, r, nil)
-	if err := client.Initialize(context.Background()); err == nil {
+	if err := client.Initialize(t.Context()); err == nil {
 		t.Fatal("expected initialize error")
 	}
-	if _, err := client.ListTools(context.Background()); err == nil {
+	if _, err := client.ListTools(t.Context()); err == nil {
 		t.Fatal("expected list error")
 	}
-	if _, err := client.CallTool(context.Background(), "echo", nil); err == nil {
+	if _, err := client.CallTool(t.Context(), "echo", nil); err == nil {
 		t.Fatal("expected call error")
 	}
-	if _, err := client.ListResources(context.Background()); err == nil {
+	if _, err := client.ListResources(t.Context()); err == nil {
 		t.Fatal("expected resources error")
 	}
-	if _, err := client.ReadResource(context.Background(), "u"); err == nil {
+	if _, err := client.ReadResource(t.Context(), "u"); err == nil {
 		t.Fatal("expected read error")
 	}
-	if _, err := client.ListPrompts(context.Background()); err == nil {
+	if _, err := client.ListPrompts(t.Context()); err == nil {
 		t.Fatal("expected prompts error")
 	}
-	if _, err := client.GetPrompt(context.Background(), "p", nil); err == nil {
+	if _, err := client.GetPrompt(t.Context(), "p", nil); err == nil {
 		t.Fatal("expected prompt error")
 	}
 	_ = client.Close()
@@ -201,10 +201,10 @@ func TestClientRequestErrorPaths(t *testing.T) {
 	})
 	c2 := NewClient("flag", w2, r2, nil)
 	defer c2.Close()
-	if err := c2.Initialize(context.Background()); err != nil {
+	if err := c2.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c2.CallTool(context.Background(), "x", nil); err == nil {
+	if _, err := c2.CallTool(t.Context(), "x", nil); err == nil {
 		t.Fatal("expected isError to surface")
 	}
 }
@@ -221,32 +221,32 @@ func TestDecodeErrorResults(t *testing.T) {
 	})
 	client := NewClient("bad", w, r, nil)
 	defer client.Close()
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.ListTools(context.Background()); err == nil {
+	if _, err := client.ListTools(t.Context()); err == nil {
 		t.Error("expected tools/list decode error")
 	}
-	if _, err := client.CallTool(context.Background(), "x", nil); err == nil {
+	if _, err := client.CallTool(t.Context(), "x", nil); err == nil {
 		t.Error("expected tools/call decode error")
 	}
-	if _, err := client.ListResources(context.Background()); err == nil {
+	if _, err := client.ListResources(t.Context()); err == nil {
 		t.Error("expected resources/list decode error")
 	}
-	if _, err := client.ReadResource(context.Background(), "u"); err == nil {
+	if _, err := client.ReadResource(t.Context(), "u"); err == nil {
 		t.Error("expected resources/read decode error")
 	}
-	if _, err := client.ListPrompts(context.Background()); err == nil {
+	if _, err := client.ListPrompts(t.Context()); err == nil {
 		t.Error("expected prompts/list decode error")
 	}
-	if _, err := client.GetPrompt(context.Background(), "p", nil); err == nil {
+	if _, err := client.GetPrompt(t.Context(), "p", nil); err == nil {
 		t.Error("expected prompts/get decode error")
 	}
-	if _, err := client.CreateMessage(context.Background(), CreateMessageParams{}); err == nil {
+	if _, err := client.CreateMessage(t.Context(), CreateMessageParams{}); err == nil {
 		t.Error("expected sampling decode error")
 	}
 	// Cancelled contexts fail before any request is written.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := client.ListTools(ctx); err == nil {
 		t.Error("expected ctx error")
@@ -266,10 +266,10 @@ func TestCallToolNonTextContent(t *testing.T) {
 	})
 	client := NewClient("img", w, r, nil)
 	defer client.Close()
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	out, err := client.CallTool(context.Background(), "x", nil)
+	out, err := client.CallTool(t.Context(), "x", nil)
 	if err != nil || out != "" {
 		t.Fatalf("non-text content = %q %v (text parts only)", out, err)
 	}

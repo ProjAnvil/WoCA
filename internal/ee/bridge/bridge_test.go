@@ -508,7 +508,7 @@ func TestGatewayClientLoginWireShape(t *testing.T) {
 	g := NewGatewayClient(GatewayConfig{URL: srv.URL}, zerolog.Nop())
 	g.SetAccessTokenForTest("tok")
 
-	_, err := g.AuthLogin(context.Background(), "woca_ab12cd34_"+strings.Repeat("0", 48))
+	_, err := g.AuthLogin(t.Context(), "woca_ab12cd34_"+strings.Repeat("0", 48))
 	if !errors.Is(err, ErrCoreLoginRevoked) {
 		t.Fatalf("revoked login via real client = %v", err)
 	}
@@ -544,15 +544,15 @@ func TestGatewayClientModelCatalogWire(t *testing.T) {
 	g := NewGatewayClient(GatewayConfig{URL: srv.URL}, zerolog.Nop())
 	g.SetAccessTokenForTest("tok")
 
-	presets, err := g.FetchModels(context.Background())
+	presets, err := g.FetchModels(t.Context())
 	if err != nil || len(presets) != 1 || presets[0].Model != "claude-x" || presets[0].APIKey != "" {
 		t.Fatalf("fetch = %+v err=%v", presets, err)
 	}
-	p, err := g.VerifyModel(context.Background(), "p1", "", "")
+	p, err := g.VerifyModel(t.Context(), "p1", "", "")
 	if err != nil || p.APIKey != "sk-wire" || !verified {
 		t.Fatalf("verify = %+v err=%v verified=%v", p, err, verified)
 	}
-	if _, err := g.VerifyModel(context.Background(), "", "anthropic", "nope"); !errors.Is(err, ErrUnknownModel) {
+	if _, err := g.VerifyModel(t.Context(), "", "anthropic", "nope"); !errors.Is(err, ErrUnknownModel) {
 		t.Fatalf("unknown verify = %v", err)
 	}
 }

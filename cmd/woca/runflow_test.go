@@ -354,7 +354,7 @@ func TestRunResumeCheckpointSuccess(t *testing.T) {
 	// The upstream sqlite saver persists to <dir>/checkpoints.db; the
 	// resumable thread id is printed on stderr when a checkpoint dir is set.
 	var key string
-	for _, line := range strings.Split(errBuf.String(), "\n") {
+	for line := range strings.SplitSeq(errBuf.String(), "\n") {
 		if after, ok := strings.CutPrefix(line, "checkpoint thread: "); ok {
 			key = strings.TrimSpace(after)
 		}

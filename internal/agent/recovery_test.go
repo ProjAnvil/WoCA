@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/language"
@@ -57,7 +56,7 @@ func TestInvokeOutputLimitRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("long answer please")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("long answer please")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +101,7 @@ func TestInvokeOutputLimitExhaustion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("long answer please")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("long answer please")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +145,7 @@ func TestInvokeOutputLimitEscalation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("long answer please")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("long answer please")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

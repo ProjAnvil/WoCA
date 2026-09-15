@@ -1,7 +1,6 @@
 package tenant
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -17,7 +16,7 @@ import (
 
 func TestSessionProviderAuthenticatesValidProof(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantID, userID := seedSessionTenant(t, st)
 
 	key := newDPoPKey(t)
@@ -44,7 +43,7 @@ func TestSessionProviderAuthenticatesValidProof(t *testing.T) {
 
 func TestSessionProviderRejectsFailures(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantID, userID := seedSessionTenant(t, st)
 
 	key := newDPoPKey(t)

@@ -1,7 +1,6 @@
 package machineid
 
 import (
-	"context"
 	"crypto/ed25519"
 	"strings"
 	"testing"
@@ -39,16 +38,16 @@ func TestEnrollmentTokenLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := reg.ConsumeEnrollment(context.Background(), HashToken(tok), pubPEM, time.Hour)
+	id, err := reg.ConsumeEnrollment(t.Context(), HashToken(tok), pubPEM, time.Hour)
 	if err != nil || id == "" {
 		t.Fatalf("consume = %q %v", id, err)
 	}
 	// One-time: second consumption fails.
-	if _, err := reg.ConsumeEnrollment(context.Background(), HashToken(tok), pubPEM, time.Hour); err == nil {
+	if _, err := reg.ConsumeEnrollment(t.Context(), HashToken(tok), pubPEM, time.Hour); err == nil {
 		t.Fatal("enrollment token reused")
 	}
 	// Unknown token.
-	if _, err := reg.ConsumeEnrollment(context.Background(), HashToken("woca_enroll_"+strings.Repeat("0", 64)), pubPEM, time.Hour); err == nil {
+	if _, err := reg.ConsumeEnrollment(t.Context(), HashToken("woca_enroll_"+strings.Repeat("0", 64)), pubPEM, time.Hour); err == nil {
 		t.Fatal("unknown enrollment accepted")
 	}
 }
@@ -59,40 +58,40 @@ func TestAccessTokensAndRevocation(t *testing.T) {
 	pubPEM, _ := PublicKeyPEM(pubOf(priv))
 	tok, _ := NewEnrollmentToken()
 	reg.AddEnrollment(HashToken(tok), time.Minute)
-	id, err := reg.ConsumeEnrollment(context.Background(), HashToken(tok), pubPEM, time.Hour)
+	id, err := reg.ConsumeEnrollment(t.Context(), HashToken(tok), pubPEM, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	access, exp, err := reg.IssueAccess(context.Background(), id, time.Hour)
+	access, exp, err := reg.IssueAccess(t.Context(), id, time.Hour)
 	if err != nil || access == "" || exp <= time.Now().UnixMilli() {
 		t.Fatalf("issue = %q %d %v", access, exp, err)
 	}
-	got, err := reg.ResolveAccess(context.Background(), HashToken(access))
+	got, err := reg.ResolveAccess(t.Context(), HashToken(access))
 	if err != nil || got != id {
 		t.Fatalf("resolve = %q %v", got, err)
 	}
 
 	// Renewal rotates the token: the old one dies.
-	fresh, _, err := reg.RenewAccess(context.Background(), HashToken(access), time.Hour)
+	fresh, _, err := reg.RenewAccess(t.Context(), HashToken(access), time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reg.ResolveAccess(context.Background(), HashToken(access)); err == nil {
+	if _, err := reg.ResolveAccess(t.Context(), HashToken(access)); err == nil {
 		t.Fatal("old access token survived renewal")
 	}
-	if got, err := reg.ResolveAccess(context.Background(), HashToken(fresh)); err != nil || got != id {
+	if got, err := reg.ResolveAccess(t.Context(), HashToken(fresh)); err != nil || got != id {
 		t.Fatalf("renewed resolve = %q %v", got, err)
 	}
 
 	// Revocation cascades instantly.
-	if err := reg.RevokeBridge(context.Background(), id); err != nil {
+	if err := reg.RevokeBridge(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reg.ResolveAccess(context.Background(), HashToken(fresh)); err == nil {
+	if _, err := reg.ResolveAccess(t.Context(), HashToken(fresh)); err == nil {
 		t.Fatal("revoked bridge still resolves")
 	}
-	if _, _, err := reg.IssueAccess(context.Background(), id, time.Hour); err == nil {
+	if _, _, err := reg.IssueAccess(t.Context(), id, time.Hour); err == nil {
 		t.Fatal("revoked bridge issued a token")
 	}
 }
@@ -103,7 +102,7 @@ func TestExpiredEnrollmentRejected(t *testing.T) {
 	reg.AddEnrollment(HashToken(tok), -time.Second) // already expired
 	priv, _ := GenerateIdentity()
 	pubPEM, _ := PublicKeyPEM(pubOf(priv))
-	if _, err := reg.ConsumeEnrollment(context.Background(), HashToken(tok), pubPEM, time.Hour); err == nil {
+	if _, err := reg.ConsumeEnrollment(t.Context(), HashToken(tok), pubPEM, time.Hour); err == nil {
 		t.Fatal("expired enrollment accepted")
 	}
 }

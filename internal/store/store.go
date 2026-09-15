@@ -85,7 +85,7 @@ func (s *Store) q(query string) string {
 	}
 	var b strings.Builder
 	n := 0
-	for i := 0; i < len(query); i++ {
+	for i := range len(query) {
 		if query[i] == '?' {
 			n++
 			fmt.Fprintf(&b, "$%d", n)

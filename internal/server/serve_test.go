@@ -59,7 +59,7 @@ func newFailingAgent(t *testing.T) *agent.Agent {
 // event (type + data), failing on stream end before one arrives.
 func streamTerminalEvent(t *testing.T, base, runID string) (string, string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/runs/"+runID+"/events", nil)
 	if err != nil {
@@ -89,7 +89,7 @@ func streamTerminalEvent(t *testing.T, base, runID string) (string, string) {
 // first one buffered ahead).
 func waitForRunInterrupt(t *testing.T, base, runID string) (*http.Response, *bufio.Scanner) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	t.Cleanup(cancel) // the request outlives this helper
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/runs/"+runID+"/events", nil)
 	if err != nil {
@@ -119,7 +119,7 @@ func waitForRunInterrupt(t *testing.T, base, runID string) (*http.Response, *buf
 
 func TestServeGracefulShutdown(t *testing.T) {
 	s := New(Config{Static: fstest.MapFS{}, Logger: zerolog.Nop()})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	errCh := make(chan error, 1)
 	go func() { errCh <- s.Serve(ctx, "127.0.0.1:0") }()
 
@@ -140,7 +140,7 @@ func TestServeListenError(t *testing.T) {
 	s := New(Config{Static: fstest.MapFS{}, Logger: zerolog.Nop()})
 	// An invalid port fails ListenAndServe immediately (no network egress);
 	// Serve must surface the error rather than treating it as shutdown.
-	err := s.Serve(context.Background(), "127.0.0.1:-1")
+	err := s.Serve(t.Context(), "127.0.0.1:-1")
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
 		t.Fatalf("Serve on bad addr = %v, want a listen error", err)
 	}
@@ -194,7 +194,7 @@ func TestRunCancelWhileParked(t *testing.T) {
 
 func TestHandleInterruptParksEachKind(t *testing.T) {
 	mkRun := func() (*Run, context.CancelFunc) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		return newRun("ir", nil, ctx, cancel), cancel
 	}
 
@@ -256,7 +256,7 @@ func TestHandleInterruptParksEachKind(t *testing.T) {
 }
 
 func TestHandleInterruptSubagentFlatPayload(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	r := newRun("ir", nil, ctx, cancel)
 	done := make(chan struct{})
@@ -337,7 +337,7 @@ func TestHandleEventsDegradedPaths(t *testing.T) {
 	}
 
 	// A ResponseWriter that cannot flush: 500.
-	run := newRun("noflush", nil, context.Background(), func() {})
+	run := newRun("noflush", nil, t.Context(), func() {})
 	s.registerRun(run.id, run)
 	req := httptest.NewRequest(http.MethodGet, "/api/runs/noflush/events", nil)
 	req.SetPathValue("id", run.id)
@@ -348,11 +348,11 @@ func TestHandleEventsDegradedPaths(t *testing.T) {
 	}
 
 	// An event whose data cannot be marshaled ends the stream silently.
-	bad := newRun("baddata", nil, context.Background(), func() {})
+	bad := newRun("baddata", nil, t.Context(), func() {})
 	bad.emit(Event{Type: "boom", Data: map[string]any{"ch": make(chan int)}})
 	s.registerRun(bad.id, bad)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	getReq, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/runs/baddata/events", nil)
 	getResp, err := http.DefaultClient.Do(getReq)
@@ -376,7 +376,7 @@ func TestHandleEventsClientDisconnect(t *testing.T) {
 
 	runID, _ := createRun(t, ts.URL, "")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/runs/"+runID+"/events", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -425,7 +425,7 @@ func TestAnswerEndpointErrors(t *testing.T) {
 	}
 
 	// A registered-but-not-started run has no pending interrupt: 400.
-	run := newRun("idle-run", nil, context.Background(), func() {})
+	run := newRun("idle-run", nil, t.Context(), func() {})
 	s.registerRun(run.id, run)
 	resp, err = http.Post(ts.URL+"/api/runs/idle-run/answer", "application/json",
 		strings.NewReader(`{"answers":["A"]}`))
@@ -455,7 +455,7 @@ func (errReader) Read([]byte) (int, error) { return 0, errors.New("body boom") }
 func TestCancelRunWithoutCancelFunc(t *testing.T) {
 	s := New(Config{Static: fstest.MapFS{}, Logger: zerolog.Nop()})
 	// A run built without a cancel func must not panic on cancel.
-	run := newRun("nil-cancel", nil, context.Background(), nil)
+	run := newRun("nil-cancel", nil, t.Context(), nil)
 	s.registerRun(run.id, run)
 	run.cancelRun()
 
@@ -768,7 +768,7 @@ func (w *failFlushWriter) Flush()                    {}
 
 func TestHandleEventsWriteError(t *testing.T) {
 	s := New(Config{Static: fstest.MapFS{}, Logger: zerolog.Nop()})
-	run := newRun("write-fail", nil, context.Background(), func() {})
+	run := newRun("write-fail", nil, t.Context(), func() {})
 	run.emit(Event{Type: "delta", Data: map[string]any{"text": "hi"}})
 	s.registerRun(run.id, run)
 
@@ -811,7 +811,7 @@ func TestServeStartedShutdown(t *testing.T) {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- hs.Serve(ln) }()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- s.ServeStarted(ctx, hs, serveErr) }()
 

@@ -39,7 +39,7 @@ func sanitizeRequestID(v string) string {
 	if len(v) == 0 || len(v) > 64 {
 		return ""
 	}
-	for i := 0; i < len(v); i++ {
+	for i := range len(v) {
 		c := v[i]
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':

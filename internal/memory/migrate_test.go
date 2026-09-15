@@ -2,7 +2,6 @@ package memory
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +12,7 @@ import (
 
 func TestExportImportRoundtrip(t *testing.T) {
 	src, dst := newMigrationStores(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, c := range []string{"fact one", "fact two", "fact three"} {
 		if _, err := src.Remember(ctx, "/repo", c, []string{"migration"}, "woca:test"); err != nil {
@@ -75,7 +74,7 @@ func TestImportPreservesContentAndTargetsWorkspace(t *testing.T) {
 	in := strings.NewReader(
 		`{"workspace":"/old","content":"alpha","tags":["t"],"source":"woca:test","layer":"L2_semantic","type":"fact","updated_at":1}` + "\n" +
 			`{"workspace":"/old","content":"beta","tags":[],"source":"woca:test","layer":"L2_semantic","type":"fact","updated_at":2}` + "\n")
-	imported, dropped, err := ImportInto(context.Background(), dst, in, "woca:t:u:/target")
+	imported, dropped, err := ImportInto(t.Context(), dst, in, "woca:t:u:/target")
 	if err != nil || imported != 2 || dropped != 0 {
 		t.Fatalf("import = %d/%d err=%v", imported, dropped, err)
 	}
@@ -96,7 +95,7 @@ func TestImportCountsGateDrops(t *testing.T) {
 	defer dst.Close()
 
 	in := strings.NewReader(`{"workspace":"/x","content":"dup","tags":[],"source":"s","layer":"L","type":"fact","updated_at":1}` + "\n")
-	imported, dropped, err := ImportInto(context.Background(), dst, in, "/x")
+	imported, dropped, err := ImportInto(t.Context(), dst, in, "/x")
 	if err != nil || imported != 0 || dropped != 1 {
 		t.Fatalf("drops = %d/%d err=%v", imported, dropped, err)
 	}
@@ -113,7 +112,7 @@ func TestImportRejectsBlankLines(t *testing.T) {
 	defer dst.Close()
 
 	in := strings.NewReader("\n{\"workspace\":\"/x\",\"content\":\"ok\",\"tags\":[],\"source\":\"s\",\"layer\":\"L\",\"type\":\"fact\",\"updated_at\":1}\n\n")
-	if _, _, err := ImportInto(context.Background(), dst, in, "/x"); err != nil {
+	if _, _, err := ImportInto(t.Context(), dst, in, "/x"); err != nil {
 		t.Fatalf("blank lines rejected: %v", err)
 	}
 	if seen != 1 {

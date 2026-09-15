@@ -236,8 +236,8 @@ func TestRemoteBreakerOpensAndRecovers(t *testing.T) {
 	eng := newTestRemote(t, f)
 
 	f.setFail(true)
-	for i := 0; i < breakerFailures*2; i++ {
-		if _, err := eng.Recall(context.Background(), "q", "w", 4); err != nil {
+	for range breakerFailures * 2 {
+		if _, err := eng.Recall(t.Context(), "q", "w", 4); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -247,7 +247,7 @@ func TestRemoteBreakerOpensAndRecovers(t *testing.T) {
 	}
 	f.setFail(false)
 	// The breaker window has not elapsed, so reads still short-circuit…
-	if hits, _ := eng.Recall(context.Background(), "q", "w", 4); hits != nil {
+	if hits, _ := eng.Recall(t.Context(), "q", "w", 4); hits != nil {
 		t.Fatal("breaker window open but a call went out")
 	}
 	// …and explicitly resetting the breaker (as a recovered health probe
@@ -255,7 +255,7 @@ func TestRemoteBreakerOpensAndRecovers(t *testing.T) {
 	eng.mu.Lock()
 	eng.openUntil = timeZero
 	eng.mu.Unlock()
-	if hits, err := eng.Recall(context.Background(), "q", "w", 4); err != nil || len(hits) == 0 {
+	if hits, err := eng.Recall(t.Context(), "q", "w", 4); err != nil || len(hits) == 0 {
 		t.Fatalf("recovered Recall = %v err=%v", hits, err)
 	}
 }
@@ -324,7 +324,7 @@ func TestRemoteListStatsForgetConsolidate(t *testing.T) {
 func TestRemoteIndexCodeRequiresSandbox(t *testing.T) {
 	f := newFakeLadyM(t)
 	eng := newTestRemote(t, f)
-	if _, err := eng.IndexCode(context.Background(), "/repo", "/repo", false); err == nil {
+	if _, err := eng.IndexCode(t.Context(), "/repo", "/repo", false); err == nil {
 		t.Fatal("IndexCode succeeded over the remote data-plane")
 	}
 }
@@ -362,8 +362,8 @@ func TestRemoteTenantKeyIsolation(t *testing.T) {
 	f := newFakeLadyM(t)
 	eng := newTestRemote(t, f)
 
-	ctxA := tenancy.NewContext(context.Background(), tenancy.Context{TenantID: "tA", UserID: "u1"})
-	ctxB := tenancy.NewContext(context.Background(), tenancy.Context{TenantID: "tB", UserID: "u1"})
+	ctxA := tenancy.NewContext(t.Context(), tenancy.Context{TenantID: "tA", UserID: "u1"})
+	ctxB := tenancy.NewContext(t.Context(), tenancy.Context{TenantID: "tB", UserID: "u1"})
 
 	if _, err := eng.Remember(ctxA, "/w", "alpha-secret", nil, "s"); err != nil {
 		t.Fatal(err)

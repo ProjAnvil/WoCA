@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -51,19 +50,19 @@ func TestNewStateFollowsRunWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sys := MessagesFrom(plain.NewState(context.Background(), hist))[0]; sys.Content != "BASE:/ws/base" {
+	if sys := MessagesFrom(plain.NewState(t.Context(), hist))[0]; sys.Content != "BASE:/ws/base" {
 		t.Fatalf("plain base prompt = %q", sys.Content)
 	}
-	if sys := MessagesFrom(plain.NewState(runws.With(context.Background(), "/ws/other"), hist))[0]; sys.Content != "BASE:/ws/base" {
+	if sys := MessagesFrom(plain.NewState(runws.With(t.Context(), "/ws/other"), hist))[0]; sys.Content != "BASE:/ws/base" {
 		t.Fatalf("plain workspace prompt = %q", sys.Content)
 	}
 
 	// With a builder, the base workspace and each run workspace get their
 	// own cached build.
-	if sys := MessagesFrom(a.NewState(context.Background(), hist))[0]; sys.Content != "PROMPT:/ws/base" {
+	if sys := MessagesFrom(a.NewState(t.Context(), hist))[0]; sys.Content != "PROMPT:/ws/base" {
 		t.Fatalf("base prompt = %q", sys.Content)
 	}
-	ctx := runws.With(context.Background(), "/ws/other")
+	ctx := runws.With(t.Context(), "/ws/other")
 	if sys := MessagesFrom(a.NewState(ctx, hist))[0]; sys.Content != "PROMPT:/ws/other" {
 		t.Fatalf("workspace prompt = %q", sys.Content)
 	}
@@ -81,7 +80,7 @@ func TestSetSystemPromptInvalidatesWorkspaceCache(t *testing.T) {
 		builds.Add(1)
 		return "PROMPT:" + ws
 	})
-	ctx := runws.With(context.Background(), "/ws/other")
+	ctx := runws.With(t.Context(), "/ws/other")
 	hist := []messages.Message{messages.Human("hi")}
 	if sys := MessagesFrom(a.NewState(ctx, hist))[0]; sys.Content != "PROMPT:/ws/other" {
 		t.Fatalf("workspace prompt = %q", sys.Content)
@@ -91,7 +90,7 @@ func TestSetSystemPromptInvalidatesWorkspaceCache(t *testing.T) {
 	// A runtime swap drops the caches: the next run in each workspace
 	// rebuilds through the builder (which reads live settings).
 	a.SetSystemPrompt("NEW-BASE")
-	if sys := MessagesFrom(a.NewState(context.Background(), hist))[0]; sys.Content != "PROMPT:/ws/base" {
+	if sys := MessagesFrom(a.NewState(t.Context(), hist))[0]; sys.Content != "PROMPT:/ws/base" {
 		t.Fatalf("base prompt after swap = %q", sys.Content)
 	}
 	if sys := MessagesFrom(a.NewState(ctx, hist))[0]; sys.Content != "PROMPT:/ws/other" {
@@ -106,7 +105,7 @@ func TestSubagentInheritsRunWorkspace(t *testing.T) {
 	base := t.TempDir()
 	ws := t.TempDir()
 	a := newRunAgent(t, base, nil)
-	ctx := runws.With(context.Background(), ws)
+	ctx := runws.With(t.Context(), ws)
 
 	sub, err := a.newSubagent(ctx, nil)
 	if err != nil {
@@ -128,7 +127,7 @@ func TestSubagentInheritsRunWorkspace(t *testing.T) {
 	}
 
 	// Without a run workspace the parent's workdir applies (TUI semantics).
-	sub, err = a.newSubagent(context.Background(), nil)
+	sub, err = a.newSubagent(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

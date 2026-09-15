@@ -48,7 +48,7 @@ func TestQueryStreamsAndFinishes(t *testing.T) {
 	srv := fakeAnthropic(t)
 	defer srv.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	s, err := Query(ctx, "say hi",
@@ -102,7 +102,7 @@ func TestCloseTwice(t *testing.T) {
 	srv := fakeAnthropic(t)
 	defer srv.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	s, err := Query(ctx, "say hi",

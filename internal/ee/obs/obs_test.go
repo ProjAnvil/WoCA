@@ -1,7 +1,6 @@
 package obs
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,11 +16,11 @@ import (
 )
 
 func TestWrapServesHealthzAndMetrics(t *testing.T) {
-	o, err := Setup(context.Background(), Config{ServiceName: "test-svc"})
+	o, err := Setup(t.Context(), Config{ServiceName: "test-svc"})
 	if err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	defer func() { _ = o.Shutdown(context.Background()) }()
+	defer func() { _ = o.Shutdown(t.Context()) }()
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/runs/abc" {
@@ -144,7 +143,7 @@ func TestSinkRecordsGenAISpans(t *testing.T) {
 	sink := &otelSink{tracer: tp.Tracer("test")}
 
 	now := time.Now()
-	sink.Record(context.Background(), telemetry.Span{
+	sink.Record(t.Context(), telemetry.Span{
 		Name:       "chat",
 		Kind:       telemetry.KindLLM,
 		Status:     telemetry.StatusError,
@@ -178,18 +177,18 @@ func TestSinkRecordsGenAISpans(t *testing.T) {
 }
 
 func TestWorkerInstrumentsAvailable(t *testing.T) {
-	o, err := Setup(context.Background(), Config{ServiceName: "worker-test"})
+	o, err := Setup(t.Context(), Config{ServiceName: "worker-test"})
 	if err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	defer func() { _ = o.Shutdown(context.Background()) }()
+	defer func() { _ = o.Shutdown(t.Context()) }()
 	w := o.Worker()
 	if w == nil {
 		t.Fatal("Worker() = nil")
 	}
-	w.Claimed.Add(context.Background(), 1)
-	w.Runs.Add(context.Background(), 1)
-	w.RunDur.Record(context.Background(), 0.5)
+	w.Claimed.Add(t.Context(), 1)
+	w.Runs.Add(t.Context(), 1)
+	w.RunDur.Record(t.Context(), 0.5)
 
 	reg := prometheus.NewRegistry() // ensure instruments write to the provider, not this empty reg
 	_ = reg

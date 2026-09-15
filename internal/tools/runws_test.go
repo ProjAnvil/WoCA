@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +19,7 @@ func TestBashRunWorkspaceScopesCwd(t *testing.T) {
 	ws := t.TempDir()
 	reg := NewRegistry(base)
 
-	res := reg.Execute(runws.With(context.Background(), ws), "Bash", map[string]any{"command": "pwd"})
+	res := reg.Execute(runws.With(t.Context(), ws), "Bash", map[string]any{"command": "pwd"})
 	if !strings.Contains(res.Content, ws) {
 		t.Fatalf("pwd = %q, want it inside %q", res.Content, ws)
 	}
@@ -40,11 +39,11 @@ func TestReadWriteFollowRunWorkspace(t *testing.T) {
 	}
 	reg := NewRegistry(base)
 
-	res := reg.Execute(runws.With(context.Background(), ws), "Read", map[string]any{"file_path": "marker.txt"})
+	res := reg.Execute(runws.With(t.Context(), ws), "Read", map[string]any{"file_path": "marker.txt"})
 	if !strings.Contains(res.Content, "from-ws") {
 		t.Fatalf("Read under run workspace = %q, want from-ws", res.Content)
 	}
-	res = reg.Execute(runws.With(context.Background(), ws), "Write", map[string]any{"file_path": "out.txt", "content": "ws"})
+	res = reg.Execute(runws.With(t.Context(), ws), "Write", map[string]any{"file_path": "out.txt", "content": "ws"})
 	if strings.Contains(res.Content, "Error") {
 		t.Fatalf("Write under run workspace failed: %q", res.Content)
 	}
@@ -61,7 +60,7 @@ func TestGlobFollowRunWorkspace(t *testing.T) {
 	}
 	reg := NewRegistry(base)
 
-	res := reg.Execute(runws.With(context.Background(), ws), "Glob", map[string]any{"pattern": "*.md"})
+	res := reg.Execute(runws.With(t.Context(), ws), "Glob", map[string]any{"pattern": "*.md"})
 	if !strings.Contains(res.Content, "only-in-ws.md") {
 		t.Fatalf("Glob under run workspace = %q, want only-in-ws.md", res.Content)
 	}
@@ -75,8 +74,8 @@ func TestWorktreeScopedPerRunWorkspace(t *testing.T) {
 	wtB := filepath.Join(wsB, ".woca-worktrees", "fix")
 	d := NewDir(base)
 
-	ctxA := runws.With(context.Background(), wsA)
-	ctxB := runws.With(context.Background(), wsB)
+	ctxA := runws.With(t.Context(), wsA)
+	ctxB := runws.With(t.Context(), wsB)
 
 	// Each run's worktree switch is isolated to that run's workspace.
 	d.Enter(ctxA, wtA)
@@ -105,7 +104,7 @@ func TestWorktreeScopedPerRunWorkspace(t *testing.T) {
 
 	// TUI compatibility: without a run workspace the base session behaves as
 	// the single worktree slot it always was.
-	plain := context.Background()
+	plain := t.Context()
 	d.Enter(plain, filepath.Join(base, "wt-main"))
 	if got := d.For(plain); got != filepath.Join(base, "wt-main") {
 		t.Fatalf("For(plain) = %q, want the base worktree", got)
@@ -124,14 +123,14 @@ func TestWorktreeScopedPerRunWorkspace(t *testing.T) {
 func TestDirFallbacks(t *testing.T) {
 	base := t.TempDir()
 	d := NewDir(base)
-	if got := d.For(context.Background()); got != base {
+	if got := d.For(t.Context()); got != base {
 		t.Fatalf("For without run workspace = %q, want %q", got, base)
 	}
-	if got := d.BaseFor(context.Background()); got != base {
+	if got := d.BaseFor(t.Context()); got != base {
 		t.Fatalf("BaseFor without run workspace = %q, want %q", got, base)
 	}
 	ws := t.TempDir()
-	ctx := runws.With(context.Background(), ws)
+	ctx := runws.With(t.Context(), ws)
 	if got := d.For(ctx); got != ws {
 		t.Fatalf("For with run workspace = %q, want %q", got, ws)
 	}

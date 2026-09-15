@@ -46,7 +46,7 @@ func newGW(t *testing.T) (*Store, *httptest.Server) {
 // token, bridge id).
 func enrollBridge(t *testing.T, store *Store, ts *httptest.Server) (string, string) {
 	t.Helper()
-	token, err := store.IssueEnrollment(context.Background(), EnrollmentTTL)
+	token, err := store.IssueEnrollment(t.Context(), EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestEnrollPullHeartbeatRevoke(t *testing.T) {
 	}
 
 	// Revocation cascades: the renewed token dies immediately.
-	if err := store.RevokeBridge(context.Background(), bridgeID); err != nil {
+	if err := store.RevokeBridge(t.Context(), bridgeID); err != nil {
 		t.Fatal(err)
 	}
 	if code := get(t, ts.URL+"/gw/config", renewed.AccessToken); code != http.StatusUnauthorized {
@@ -162,7 +162,7 @@ func TestEnrollPullHeartbeatRevoke(t *testing.T) {
 // TestExpiredEnrollmentRejected: stale tokens cannot enroll.
 func TestExpiredEnrollmentRejected(t *testing.T) {
 	store, ts := newGW(t)
-	token, err := store.IssueEnrollment(context.Background(), -time.Second)
+	token, err := store.IssueEnrollment(t.Context(), -time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,11 +261,11 @@ func TestWorkerLedEnrollment(t *testing.T) {
 		t.Fatalf("unapproved status = %d", poll.StatusCode)
 	}
 
-	pending, err := store.PendingRequests(context.Background())
+	pending, err := store.PendingRequests(t.Context())
 	if err != nil || len(pending) != 1 || pending[0].Fingerprint != out.Fingerprint {
 		t.Fatalf("pending = %v %v", pending, err)
 	}
-	if _, err := store.ApproveEnrollment(context.Background(), out.Fingerprint); err != nil {
+	if _, err := store.ApproveEnrollment(t.Context(), out.Fingerprint); err != nil {
 		t.Fatal(err)
 	}
 
@@ -313,10 +313,10 @@ func TestGatewaySettingsAndHello(t *testing.T) {
 		t.Fatalf("hello = %+v", hello)
 	}
 
-	if err := store.SetSetting(context.Background(), SettingKeyAllowInsecure, "true"); err != nil {
+	if err := store.SetSetting(t.Context(), SettingKeyAllowInsecure, "true"); err != nil {
 		t.Fatal(err)
 	}
-	if !store.AllowInsecure(context.Background()) {
+	if !store.AllowInsecure(t.Context()) {
 		t.Fatal("setting not persisted")
 	}
 	resp2, err := http.Get(ts.URL + "/gw/hello")
@@ -394,7 +394,7 @@ func TestResolveAndBridges(t *testing.T) {
 	}
 
 	// Revocation removes the bridge from the inventory and kills the token.
-	if err := store.RevokeBridge(context.Background(), bridgeID); err != nil {
+	if err := store.RevokeBridge(t.Context(), bridgeID); err != nil {
 		t.Fatal(err)
 	}
 	list3, _ := http.Get(ts.URL + "/gw/bridges")

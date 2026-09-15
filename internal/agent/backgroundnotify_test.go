@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +43,7 @@ func TestBackgroundCompletionNotificationInjected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run things")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("run things")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +113,7 @@ func TestBackgroundNotificationIdleDeliveredNextRun(t *testing.T) {
 		t.Fatal("idle completion never queued")
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("next run")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("next run")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

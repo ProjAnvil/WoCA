@@ -11,6 +11,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -100,7 +101,7 @@ func parseFrontmatter(defaultName string, data []byte) (name, description string
 	if len(parts) < 3 {
 		return name, ""
 	}
-	for _, line := range strings.Split(parts[1], "\n") {
+	for line := range strings.SplitSeq(parts[1], "\n") {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), ":")
 		if !ok {
 			continue
@@ -363,12 +364,7 @@ func mustJSON(v any) json.RawMessage {
 }
 
 func sortedKeys(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
+	return slices.Sorted(maps.Keys(m))
 }
 
 // shellSpecials are the characters that force quoting in an sh -c word.

@@ -144,7 +144,7 @@ func TestJWKCoordPadsTo32Octets(t *testing.T) {
 
 	// A key whose X coordinate genuinely starts with 0x00 must still
 	// thumbprint consistently between Thumbprint and the verifier path.
-	for i := 0; i < 2000; i++ {
+	for range 2000 {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatal(err)

@@ -99,7 +99,7 @@ func TestQuitKeys(t *testing.T) {
 	}
 	// While a turn runs, ctrl+c interrupts it (the cancel is wired through
 	// a real context).
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	r := New(nil, nil, config.Config{})
 	r.running = true
@@ -654,7 +654,7 @@ func TestReadCmd(t *testing.T) {
 func TestAppendTrimsTranscript(t *testing.T) {
 	m := New(nil, nil, config.Config{})
 	total := transcriptLimit + 2
-	for i := 0; i < total; i++ {
+	for i := range total {
 		m.append(fmt.Sprintf("l%d", i))
 	}
 	if len(m.lines) != transcriptLimit || m.lines[0] != "l2" || m.lines[transcriptLimit-1] != fmt.Sprintf("l%d", total-1) {
@@ -694,7 +694,7 @@ func TestShiftTabCyclesPermissionMode(t *testing.T) {
 	// newConsoleModel's fixture starts the agent in ModeBypass without
 	// syncing it to the console's cfg; normalize both first so the cycle
 	// below is deterministic.
-	if _, err := m.console.Execute(context.Background(), "permissions", []string{"default"}, &console.Session{}); err != nil {
+	if _, err := m.console.Execute(t.Context(), "permissions", []string{"default"}, &console.Session{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -715,7 +715,7 @@ func TestShiftTabCyclesPermissionMode(t *testing.T) {
 // "/" or "@" completion menu is open, matching the web composer's guard.
 func TestShiftTabIgnoredDuringCompletionMenu(t *testing.T) {
 	m := newConsoleModel(t, messages.AI("ok"))
-	if _, err := m.console.Execute(context.Background(), "permissions", []string{"default"}, &console.Session{}); err != nil {
+	if _, err := m.console.Execute(t.Context(), "permissions", []string{"default"}, &console.Session{}); err != nil {
 		t.Fatal(err)
 	}
 	m.input = "/"

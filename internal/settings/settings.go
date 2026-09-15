@@ -725,10 +725,10 @@ func (s *Store) q(query string) string {
 	}
 	var b []byte
 	n := 0
-	for i := 0; i < len(query); i++ {
+	for i := range len(query) {
 		if query[i] == '?' {
 			n++
-			b = append(b, []byte(fmt.Sprintf("$%d", n))...)
+			b = fmt.Appendf(b, "$%d", n)
 		} else {
 			b = append(b, query[i])
 		}

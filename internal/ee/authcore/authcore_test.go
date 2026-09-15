@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/projanvil/woca/internal/ee/tenant"
@@ -206,13 +207,7 @@ func TestHTTPSurface(t *testing.T) {
 	}
 
 	for _, want := range []string{"login", "login_failed", "session_revoked"} {
-		found := false
-		for _, e := range audit {
-			if e == want {
-				found = true
-			}
-		}
-		if !found {
+		if !slices.Contains(audit, want) {
 			t.Fatalf("audit missing %q: %v", want, audit)
 		}
 	}
@@ -228,7 +223,7 @@ func keyPrefixOf(full string) string {
 
 func repeat(s string, n int) string {
 	out := make([]byte, 0, n*len(s))
-	for i := 0; i < n; i++ {
+	for range n {
 		out = append(out, s...)
 	}
 	return string(out)
@@ -237,7 +232,7 @@ func repeat(s string, n int) string {
 func splitUnderscore(s string) []string {
 	var out []string
 	start := 0
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] == '_' {
 			out = append(out, s[start:i])
 			start = i + 1

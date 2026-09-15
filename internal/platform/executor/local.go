@@ -41,8 +41,7 @@ func (l *Local) Exec(ctx context.Context, req ExecRequest) (ExecResult, error) {
 	if err == nil {
 		return res, nil
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && ctx.Err() == nil {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok && ctx.Err() == nil {
 		// The process ran and exited non-zero: report the code, not an error.
 		res.ExitCode = exitErr.ExitCode()
 		return res, nil
@@ -63,8 +62,7 @@ func (p *localProcess) Stdout() io.Reader     { return p.stdout }
 
 func (p *localProcess) Wait() error {
 	if err := p.cmd.Wait(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			return &ExitError{Code: exitErr.ExitCode()}
 		}
 		return err

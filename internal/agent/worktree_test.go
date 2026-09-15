@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,7 +58,7 @@ func TestWorktreeEnterSwitchAndExit(t *testing.T) {
 	write := a.toolByName["Write"]
 	base := a.registry.Dir().Base()
 
-	res, err := enter.Invoke(context.Background(), map[string]any{"name": "feature-x"})
+	res, err := enter.Invoke(t.Context(), map[string]any{"name": "feature-x"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +68,7 @@ func TestWorktreeEnterSwitchAndExit(t *testing.T) {
 
 	// Every tool now resolves against the worktree: a Write of a relative
 	// path lands inside it.
-	if _, err := write.Invoke(context.Background(), map[string]any{
+	if _, err := write.Invoke(t.Context(), map[string]any{
 		"file_path": "note.txt", "content": "in worktree",
 	}); err != nil {
 		t.Fatal(err)
@@ -82,19 +81,19 @@ func TestWorktreeEnterSwitchAndExit(t *testing.T) {
 	}
 
 	// Double-enter is rejected.
-	res, _ = enter.Invoke(context.Background(), map[string]any{"name": "another"})
+	res, _ = enter.Invoke(t.Context(), map[string]any{"name": "another"})
 	if !strings.Contains(res.Content, "Error") {
 		t.Fatalf("double enter = %q", res.Content)
 	}
 
 	// Exit returns tools to the base directory.
-	if _, err := exit.Invoke(context.Background(), map[string]any{}); err != nil {
+	if _, err := exit.Invoke(t.Context(), map[string]any{}); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.registry.Dir().For(context.Background()); got != base {
+	if got := a.registry.Dir().For(t.Context()); got != base {
 		t.Fatalf("current = %s, want base %s", got, base)
 	}
-	_, err = write.Invoke(context.Background(), map[string]any{"file_path": "base-note.txt", "content": "back"})
+	_, err = write.Invoke(t.Context(), map[string]any{"file_path": "base-note.txt", "content": "back"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,14 +108,14 @@ func TestWorktreeExitRemoves(t *testing.T) {
 	exit := a.toolByName["ExitWorktree"]
 	base := a.registry.Dir().Base()
 
-	if _, err := enter.Invoke(context.Background(), map[string]any{"name": "tmp"}); err != nil {
+	if _, err := enter.Invoke(t.Context(), map[string]any{"name": "tmp"}); err != nil {
 		t.Fatal(err)
 	}
 	wt := filepath.Join(base, ".woca-worktrees", "tmp")
 	if _, err := os.Stat(wt); err != nil {
 		t.Fatal(err)
 	}
-	res, err := exit.Invoke(context.Background(), map[string]any{"remove": true})
+	res, err := exit.Invoke(t.Context(), map[string]any{"remove": true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +140,7 @@ func TestWorktreeRequiresGitRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 	enter := a.toolByName["EnterWorktree"]
-	res, err := enter.Invoke(context.Background(), map[string]any{"name": "x"})
+	res, err := enter.Invoke(t.Context(), map[string]any{"name": "x"})
 	if err != nil {
 		t.Fatal(err)
 	}

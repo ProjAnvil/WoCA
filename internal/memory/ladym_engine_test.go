@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,7 +36,7 @@ func TestRememberRecallListStatsForget(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	id, err := eng.Remember(ctx, "/ws/test", "auth uses JWT with 24h expiry", []string{"auth"}, "test")
 	if err != nil {
@@ -144,10 +143,10 @@ func TestBuildInheritChatOnlyEndpointFallsBackToHashing(t *testing.T) {
 		t.Fatalf("Build should fall back to hashing, got: %v", err)
 	}
 	defer eng.Close()
-	if _, err := eng.Remember(context.Background(), "/ws", "auth uses JWT", nil, "t"); err != nil {
+	if _, err := eng.Remember(t.Context(), "/ws", "auth uses JWT", nil, "t"); err != nil {
 		t.Fatal(err)
 	}
-	hits, err := eng.Recall(context.Background(), "auth", "/ws", 5)
+	hits, err := eng.Recall(t.Context(), "auth", "/ws", 5)
 	if err != nil || len(hits) == 0 {
 		t.Fatalf("hashing engine should work offline: %v %v", hits, err)
 	}
@@ -190,7 +189,7 @@ func TestWorkspaceWriteIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Writes into a non-default workspace must land in that workspace, not
 	// silently in the engine's default.
@@ -255,7 +254,7 @@ func TestRememberGateDropReturnsEmptyID(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// RecordEvent persists the episodic tuple as
 	// "agent=.. | action=.. | observation=.. | outcome=..". Remembering
@@ -299,29 +298,25 @@ func TestConcurrentWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	const perWS = 8
 	var wg sync.WaitGroup
-	for i := 0; i < perWS; i++ {
-		wg.Add(3)
-		go func(i int) { // writer into workspace A
-			defer wg.Done()
+	for i := range perWS {
+		wg.Go(func() { // writer into workspace A
 			id, err := eng.Remember(ctx, "/ws/A", fmt.Sprintf("fact number %d about auth flows", i), nil, "race")
 			if err != nil || id == "" {
 				t.Errorf("A write %d: id=%q err=%v", i, id, err)
 			}
-		}(i)
-		go func(i int) { // writer into workspace B
-			defer wg.Done()
+		})
+		wg.Go(func() { // writer into workspace B
 			id, err := eng.Remember(ctx, "/ws/B", fmt.Sprintf("resolver number %d for graphql queries", i), nil, "race")
 			if err != nil || id == "" {
 				t.Errorf("B write %d: id=%q err=%v", i, id, err)
 			}
-		}(i)
-		go func() { // concurrent readers on both workspaces
-			defer wg.Done()
-			for q := 0; q < 3; q++ {
+		})
+		wg.Go(func() { // concurrent readers on both workspaces
+			for range 3 {
 				if _, err := eng.Recall(ctx, "auth flows", "/ws/A", 5); err != nil {
 					t.Errorf("recall A: %v", err)
 				}
@@ -329,7 +324,7 @@ func TestConcurrentWorkspaces(t *testing.T) {
 					t.Errorf("recall B: %v", err)
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -402,7 +397,7 @@ func TestBuildValidation(t *testing.T) {
 
 func TestEngineCRUDAndStats(t *testing.T) {
 	eng := newEngine(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if eng.Description() == "" {
 		t.Fatal("description empty")
@@ -465,7 +460,7 @@ func writeFile(root, name, content string) error {
 
 func TestEngineBranches(t *testing.T) {
 	eng := newEngine(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Default topK and workspace fallback (empty workspace → default).
 	if _, err := eng.Recall(ctx, "anything", "", 0); err != nil {
@@ -569,7 +564,7 @@ func TestBuildInheritChatModel(t *testing.T) {
 		t.Fatalf("Build with inherit chat model: %v", err)
 	}
 	defer eng.Close()
-	if _, err := eng.Remember(context.Background(), "/ws/test", "a fact stored via the inherited-model engine", nil, "t"); err != nil {
+	if _, err := eng.Remember(t.Context(), "/ws/test", "a fact stored via the inherited-model engine", nil, "t"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -596,7 +591,7 @@ func TestEngineErrorsAfterClose(t *testing.T) {
 	if err := eng.Close(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if _, err := eng.Recall(ctx, "q", "/ws/test", 5); err == nil {
 		t.Error("Recall after Close should fail")
@@ -652,7 +647,7 @@ func TestLadyMEngineClosedSurfacesErrors(t *testing.T) {
 	if err := eng.Close(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	check := func(what string, err error) {
 		t.Helper()
 		if err == nil {
@@ -684,7 +679,7 @@ func TestLadyMEngineClosedSurfacesErrors(t *testing.T) {
 // cycle must not duplicate it.
 func TestConsolidatePromotesEpisodeMaterialIntoFacts(t *testing.T) {
 	eng := newEngine(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if err := eng.RecordEvent(ctx, "/ws", "woca", "run",
 		"Q: which framework does this project use?\nA: fiber, pinned in go.mod", "success"); err != nil {

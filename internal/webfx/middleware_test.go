@@ -3,7 +3,6 @@ package webfx
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -310,7 +309,7 @@ func TestGraceOptions(t *testing.T) {
 	if r2.readHeaderTimeout() != defaultReadHeaderTimout {
 		t.Fatalf("default read header timeout = %v", r2.readHeaderTimeout())
 	}
-	_ = context.Background()
+	_ = t.Context()
 }
 
 // TestCaptureWriterReadFromFallbackNoRecursion: the fallback branch

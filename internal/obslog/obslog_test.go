@@ -106,7 +106,7 @@ func TestRotatingWriterKeepsNewest(t *testing.T) {
 		keep:     3,
 	}
 	chunk := strings.Repeat("x", 30) + "\n" // 31 bytes; rotates every ~3 writes
-	for i := 0; i < 12; i++ {
+	for range 12 {
 		if _, err := w.Write([]byte(chunk)); err != nil {
 			t.Fatal(err)
 		}
@@ -294,7 +294,7 @@ func TestSummarizeMessagesFields(t *testing.T) {
 
 	// Bounded output: 41 messages with max 40 truncates the tail.
 	var many []messages.Message
-	for i := 0; i < 41; i++ {
+	for range 41 {
 		many = append(many, messages.Human("m"))
 	}
 	out = summarizeMessages(many, 40)
@@ -445,7 +445,7 @@ func TestRotationBySize(t *testing.T) {
 	s.keep = 2
 	s.SetContext("ws", "wsname", "sess", "run")
 	// Write enough events to trip the size rotation several times.
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		s.Log("info", "event", map[string]any{"seq": i, "pad": strings.Repeat("x", 20)})
 	}
 	// At least one rotated file exists (path.1) and the primary file is

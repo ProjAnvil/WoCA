@@ -152,10 +152,10 @@ func TestPrefetchUsesEngineRecall(t *testing.T) {
 	}}}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.SetMemoryWorkspace("/ws/custom")
-	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("how does auth work?")})
+	a.beginMemoryPrefetch(t.Context(), []messages.Message{messages.Human("how does auth work?")})
 	var got []messages.Message
 	for i := 0; i < 50 && len(got) < 2; i++ {
-		got = a.takeMemoryAttachments(context.Background())
+		got = a.takeMemoryAttachments(t.Context())
 		if len(got) < 2 {
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -180,7 +180,7 @@ func TestPrefetchUsesEngineRecall(t *testing.T) {
 	if recalls := f.recordedRecalls(); len(recalls) != 1 || recalls[0] != "/ws/custom|how does auth work?" {
 		t.Fatalf("recalls = %v", f.recordedRecalls())
 	}
-	if more := a.takeMemoryAttachments(context.Background()); len(more) != 0 {
+	if more := a.takeMemoryAttachments(t.Context()); len(more) != 0 {
 		t.Fatalf("dedup failed: %v", more)
 	}
 }
@@ -198,7 +198,7 @@ func TestPrefetchEngineTopKFromSettings(t *testing.T) {
 		},
 		workdir: "/ws",
 	}
-	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("q")})
+	a.beginMemoryPrefetch(t.Context(), []messages.Message{messages.Human("q")})
 	deadline := time.Now().Add(2 * time.Second)
 	for len(f.recordedTopKs()) == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -226,12 +226,12 @@ func TestMemoryWorkspaceDefaultsToWorkdir(t *testing.T) {
 func TestEngineRecallErrorSkipsSilently(t *testing.T) {
 	f := &fakeEngine{err: true}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
-	a.beginMemoryPrefetch(context.Background(), []messages.Message{messages.Human("q")})
+	a.beginMemoryPrefetch(t.Context(), []messages.Message{messages.Human("q")})
 	time.Sleep(150 * time.Millisecond)
 	if recalls := f.recordedRecalls(); len(recalls) != 1 {
 		t.Fatalf("error path should have executed exactly one Recall, got %v", recalls)
 	}
-	if got := a.takeMemoryAttachments(context.Background()); len(got) != 0 {
+	if got := a.takeMemoryAttachments(t.Context()); len(got) != 0 {
 		t.Fatalf("error path should produce no attachments: %v", got)
 	}
 }
@@ -271,7 +271,7 @@ func TestClampUTF8(t *testing.T) {
 func TestMemoryRuntimeStandalone(t *testing.T) {
 	f := &fakeEngine{hits: []memory.Hit{{ID: "h1", Layer: "L2", Type: "fact", Summary: "auth uses oauth2", Score: 0.9}}}
 	m := memoryRuntime{engine: f}
-	m.Begin(context.Background(), []messages.Message{messages.Human("how does auth work?")}, "/ws")
+	m.Begin(t.Context(), []messages.Message{messages.Human("how does auth work?")}, "/ws")
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && len(f.recordedRecalls()) == 0 {
 		time.Sleep(10 * time.Millisecond)
@@ -279,12 +279,12 @@ func TestMemoryRuntimeStandalone(t *testing.T) {
 	if recalls := f.recordedRecalls(); len(recalls) != 1 || recalls[0] != "/ws|how does auth work?" {
 		t.Fatalf("recalls = %v", recalls)
 	}
-	atts := m.TakeAttachments(context.Background())
+	atts := m.TakeAttachments(t.Context())
 	if len(atts) != 1 || !strings.Contains(atts[0].Content, "auth uses oauth2") {
 		t.Fatalf("attachments = %v", atts)
 	}
 	// Retention: engine swap is visible through the same snapshot path.
-	m.RetainRun(context.Background(), "/ws",
+	m.RetainRun(t.Context(), "/ws",
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
 	if len(f.remembered) != 0 {
 		t.Fatalf("auto-retain must not write facts directly: %v", f.remembered)

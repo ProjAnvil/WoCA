@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 )
@@ -31,12 +30,12 @@ func TestSubscribeAndUnsubscribe(t *testing.T) {
 		return nil, nil
 	})
 	client := NewClient("woca", w, r, nil)
-	_ = client.Initialize(context.Background())
+	_ = client.Initialize(t.Context())
 
-	if err := client.Subscribe(context.Background(), "file:///a"); err != nil {
+	if err := client.Subscribe(t.Context(), "file:///a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.Unsubscribe(context.Background(), "file:///b"); err != nil {
+	if err := client.Unsubscribe(t.Context(), "file:///b"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -65,9 +64,9 @@ func TestCreateMessageSingleBlock(t *testing.T) {
 		return nil, nil
 	})
 	client := NewClient("woca", w, r, nil)
-	_ = client.Initialize(context.Background())
+	_ = client.Initialize(t.Context())
 
-	got, err := client.CreateMessage(context.Background(), CreateMessageParams{
+	got, err := client.CreateMessage(t.Context(), CreateMessageParams{
 		Messages:  []SamplingMessage{{Role: "user", Content: "hi"}},
 		MaxTokens: 10,
 	})
@@ -96,9 +95,9 @@ func TestCreateMessageArrayBlocks(t *testing.T) {
 		return nil, nil
 	})
 	client := NewClient("woca", w, r, nil)
-	_ = client.Initialize(context.Background())
+	_ = client.Initialize(t.Context())
 
-	got, err := client.CreateMessage(context.Background(), CreateMessageParams{
+	got, err := client.CreateMessage(t.Context(), CreateMessageParams{
 		Messages:  []SamplingMessage{{Role: "user", Content: "hi"}},
 		MaxTokens: 10,
 	})
@@ -121,9 +120,9 @@ func TestCreateMessagePropagatesError(t *testing.T) {
 		return nil, nil
 	})
 	client := NewClient("woca", w, r, nil)
-	_ = client.Initialize(context.Background())
+	_ = client.Initialize(t.Context())
 
-	_, err := client.CreateMessage(context.Background(), CreateMessageParams{
+	_, err := client.CreateMessage(t.Context(), CreateMessageParams{
 		Messages:  []SamplingMessage{{Role: "user", Content: "hi"}},
 		MaxTokens: 10,
 	})

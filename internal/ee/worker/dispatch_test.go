@@ -5,7 +5,6 @@ package worker
 // track the run's lifetime from claim to finish.
 
 import (
-	"context"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -85,12 +84,12 @@ func TestWorkerDispatchContinuesAndSavesSession(t *testing.T) {
 	snap, _ := runstate.EncodeSnapshot(runstate.RunSnapshot{
 		Prompt: "next question", SessionID: "s1", Workspace: t.TempDir(), ThreadID: "th-1",
 	})
-	if err := ledger.Enqueue(context.Background(), runstate.Run{
+	if err := ledger.Enqueue(t.Context(), runstate.Run{
 		RunID: "r1", SessionID: "s1", ThreadID: "th-1", ConfigSnapshot: snap,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Step(context.Background()); err != nil {
+	if err := w.Step(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	saved := sessions.saved["s1"]
@@ -135,15 +134,15 @@ func TestWorkerDispatchRebuildsAttachments(t *testing.T) {
 func TestWorkerUnreadableSnapshotFailsRun(t *testing.T) {
 	states := &memStates{}
 	w, ledger := newDispatchFixture(t, &memSessions{}, states)
-	if err := ledger.Enqueue(context.Background(), runstate.Run{
+	if err := ledger.Enqueue(t.Context(), runstate.Run{
 		RunID: "r-bad", SessionID: "s-bad", ThreadID: "th-bad", ConfigSnapshot: "{not json",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Step(context.Background()); err != nil {
+	if err := w.Step(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	row, _, _ := ledger.Row(context.Background(), "r-bad")
+	row, _, _ := ledger.Row(t.Context(), "r-bad")
 	if row.Status != "error" {
 		t.Fatalf("status = %q want error", row.Status)
 	}

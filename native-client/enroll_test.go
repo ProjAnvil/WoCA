@@ -184,7 +184,7 @@ func TestEnrollHappyPath(t *testing.T) {
 		gotInput = in
 		return bridge.BootstrapState{State: bridge.StateReady, ServerURL: in.ServerURL}, nil
 	})
-	res := f.enr.enroll(context.Background(), validInput(f.edgeSrv.URL))
+	res := f.enr.enroll(t.Context(), validInput(f.edgeSrv.URL))
 	if res.Error != "" {
 		t.Fatalf("error class = %q", res.Error)
 	}
@@ -217,7 +217,7 @@ func TestEnrollEdgeUnreachable(t *testing.T) {
 	f := newEnrollFixture(t, nil)
 	edgeURL := httptest.NewServer(http.NotFoundHandler())
 	defer edgeURL.Close()
-	res := f.enr.enroll(context.Background(), validInput(edgeURL.URL))
+	res := f.enr.enroll(t.Context(), validInput(edgeURL.URL))
 	if res.Error != enrollErrEdge {
 		t.Fatalf("class = %q, want %q", res.Error, enrollErrEdge)
 	}
@@ -231,7 +231,7 @@ func TestEnrollTokenPrefixRejected(t *testing.T) {
 	f := newEnrollFixture(t, nil)
 	in := validInput(f.edgeSrv.URL)
 	in.EnrollmentToken = "woca_userkey_wrongshape"
-	if res := f.enr.enroll(context.Background(), in); res.Error != enrollErrToken {
+	if res := f.enr.enroll(t.Context(), in); res.Error != enrollErrToken {
 		t.Fatalf("class = %q, want %q", res.Error, enrollErrToken)
 	}
 }
@@ -255,7 +255,7 @@ func TestEnrollTokenNeverConsumed(t *testing.T) {
 		}
 		f.stub.handler().ServeHTTP(w, r)
 	})
-	res := f.enr.enroll(context.Background(), validInput(f.edgeSrv.URL))
+	res := f.enr.enroll(t.Context(), validInput(f.edgeSrv.URL))
 	if res.Error != enrollErrToken {
 		t.Fatalf("class = %q, want %q", res.Error, enrollErrToken)
 	}
@@ -268,7 +268,7 @@ func TestEnrollUserKeyRejectedStillEnrolled(t *testing.T) {
 	f := newEnrollFixture(t, func(_ context.Context, _ bridge.ConnectionInput) (bridge.BootstrapState, error) {
 		return bridge.BootstrapState{State: bridge.StateAuthorizationNeeded}, context.DeadlineExceeded
 	})
-	res := f.enr.enroll(context.Background(), validInput(f.edgeSrv.URL))
+	res := f.enr.enroll(t.Context(), validInput(f.edgeSrv.URL))
 	if res.Error != enrollErrKey {
 		t.Fatalf("class = %q, want %q", res.Error, enrollErrKey)
 	}
@@ -284,7 +284,7 @@ func TestEnrollUserKeyRejectedStillEnrolled(t *testing.T) {
 func TestEnrollFlipFailureRollsBackToLocal(t *testing.T) {
 	f := newEnrollFixture(t, nil)
 	f.proc.failOnArgs = []string{"--auth", "apikey"}
-	res := f.enr.enroll(context.Background(), validInput(f.edgeSrv.URL))
+	res := f.enr.enroll(t.Context(), validInput(f.edgeSrv.URL))
 	if res.Error != enrollErrFlip {
 		t.Fatalf("class = %q, want %q", res.Error, enrollErrFlip)
 	}
@@ -301,7 +301,7 @@ func TestEnrollFlipFailureRollsBackToLocal(t *testing.T) {
 func TestEnrollBridgeLiveTimeout(t *testing.T) {
 	f := newEnrollFixture(t, nil)
 	f.edge.exists = false
-	if res := f.enr.enroll(context.Background(), validInput(f.edgeSrv.URL)); res.Error != enrollErrFlip {
+	if res := f.enr.enroll(t.Context(), validInput(f.edgeSrv.URL)); res.Error != enrollErrFlip {
 		t.Fatalf("class = %q, want %q", res.Error, enrollErrFlip)
 	}
 }
@@ -311,7 +311,7 @@ func TestDeregisterEmbedded(t *testing.T) {
 	if err := saveEnrollMarker(f.enr.path, enrollMarker{Enrolled: true, EdgeURL: f.edgeSrv.URL, BridgeID: "br_1"}); err != nil {
 		t.Fatal(err)
 	}
-	res := f.enr.deregister(context.Background())
+	res := f.enr.deregister(t.Context())
 	if res.Error != "" {
 		t.Fatalf("error class = %q", res.Error)
 	}
@@ -332,7 +332,7 @@ func TestDeregisterEmbedded(t *testing.T) {
 
 func TestDeregisterUnenrolledIsNoop(t *testing.T) {
 	f := newEnrollFixture(t, nil)
-	res := f.enr.deregister(context.Background())
+	res := f.enr.deregister(t.Context())
 	if res.Error != "" || res.State.State != bridge.StateUnconfigured {
 		t.Fatalf("res = %+v", res)
 	}
@@ -347,7 +347,7 @@ func TestReconcileStartupHealsLocalDrift(t *testing.T) {
 	f.stub.mu.Lock()
 	f.stub.enrolled = true
 	f.stub.mu.Unlock()
-	f.enr.reconcileStartup(context.Background())
+	f.enr.reconcileStartup(t.Context())
 	restarts := f.proc.restartsWith()
 	if len(restarts) != 1 || !argsEqual(restarts[0], []string{"--auth", "apikey"}) {
 		t.Fatalf("restarts = %v", restarts)
@@ -363,7 +363,7 @@ func TestReconcileStartupSkipsWhenEnrolled(t *testing.T) {
 	if err := saveEnrollMarker(f.enr.path, enrollMarker{Enrolled: true, BridgeID: "br_1"}); err != nil {
 		t.Fatal(err)
 	}
-	f.enr.reconcileStartup(context.Background())
+	f.enr.reconcileStartup(t.Context())
 	if len(f.proc.restartsWith()) != 0 {
 		t.Fatal("restart happened for an already-enrolled marker")
 	}

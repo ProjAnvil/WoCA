@@ -156,7 +156,7 @@ func TestStreamFallbackCleanMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("go")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("go")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/language"
@@ -23,7 +22,7 @@ func TestAgentAccessorSweep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Accessors return zero values on a fresh agent.
 	if a.ActiveTeammateCount() != 0 {

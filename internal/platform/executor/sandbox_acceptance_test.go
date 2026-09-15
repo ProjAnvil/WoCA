@@ -5,7 +5,6 @@
 package executor
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,7 +45,7 @@ func TestSandboxZeroHostMounts(t *testing.T) {
 	// Write a file through the sandbox — it goes to the remote API, not
 	// the local filesystem.
 	sandboxPath := filepath.Join(localDir, "sandbox_only.txt")
-	if err := sb.WriteFile(context.Background(), sandboxPath, []byte("sandbox data"), 0o644); err != nil {
+	if err := sb.WriteFile(t.Context(), sandboxPath, []byte("sandbox data"), 0o644); err != nil {
 		t.Fatalf("sandbox write: %v", err)
 	}
 
@@ -56,7 +55,7 @@ func TestSandboxZeroHostMounts(t *testing.T) {
 	}
 
 	// Exec a command through the sandbox — no local process is spawned.
-	if _, err := sb.Exec(context.Background(), ExecRequest{Name: "touch", Args: []string{filepath.Join(localDir, "touched.txt")}}); err != nil {
+	if _, err := sb.Exec(t.Context(), ExecRequest{Name: "touch", Args: []string{filepath.Join(localDir, "touched.txt")}}); err != nil {
 		t.Fatalf("sandbox exec: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(localDir, "touched.txt")); err == nil {

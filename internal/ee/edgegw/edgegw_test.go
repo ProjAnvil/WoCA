@@ -102,7 +102,7 @@ func newEdge(t *testing.T, core *fakeCore) *httptest.Server {
 // enroll registers one bridge through the real registry flow.
 func enroll(t *testing.T, core *fakeCore) (access string) {
 	t.Helper()
-	token, err := core.store.IssueEnrollment(context.Background(), entrygw.EnrollmentTTL)
+	token, err := core.store.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,11 +110,11 @@ func enroll(t *testing.T, core *fakeCore) (access string) {
 	// equivalent for wiring purposes (the public-key checks live in the
 	// handler tests).
 	pub := []byte("test-public-key")
-	bridgeID, err := core.store.ConsumeEnrollment(context.Background(), machineid.HashToken(token), pub, entrygw.EnrollmentTTL)
+	bridgeID, err := core.store.ConsumeEnrollment(t.Context(), machineid.HashToken(token), pub, entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	access, _, err = core.store.IssueAccess(context.Background(), bridgeID, entrygw.AccessTTL)
+	access, _, err = core.store.IssueAccess(t.Context(), bridgeID, entrygw.AccessTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func echoBridge(self string) http.Handler {
 	mux.HandleFunc("/api/stream", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		rc := http.NewResponseController(w)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			fmt.Fprintf(w, "event: tick\ndata: %d-%s\n\n", i, self)
 			_ = rc.Flush()
 			time.Sleep(120 * time.Millisecond)
@@ -242,7 +242,7 @@ func TestTunnelRoundTrip(t *testing.T) {
 	core := newFakeCore(t)
 	edge := newEdge(t, core)
 	access := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runTunnel(ctx, t, core, edge.URL, access, echoBridge("br_main"))
 
@@ -326,7 +326,7 @@ func TestTunnelSSE(t *testing.T) {
 	core := newFakeCore(t)
 	edge := newEdge(t, core)
 	access := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runTunnel(ctx, t, core, edge.URL, access, echoBridge("br_sse"))
 	tok := userKey(t, edge, core, "sse-user")
@@ -371,7 +371,7 @@ func TestBridgeSelection(t *testing.T) {
 	edge := newEdge(t, core)
 	a1 := enroll(t, core)
 	a2 := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	beatOnce(t, core, a1)
 	runTunnel(ctx, t, core, edge.URL, a1, echoBridge("br_one"))
@@ -447,7 +447,7 @@ func TestSingleBridgeAutoRoute(t *testing.T) {
 	core := newFakeCore(t)
 	edge := newEdge(t, core)
 	access := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runTunnel(ctx, t, core, edge.URL, access, echoBridge("br_solo"))
 	tok := userKey(t, edge, core, "solo-user")
@@ -574,7 +574,7 @@ func TestSweepSparesPickedRequests(t *testing.T) {
 	edge := httptest.NewServer(e.Handler())
 	t.Cleanup(edge.Close)
 	access := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	slow := http.NewServeMux()
@@ -621,7 +621,7 @@ func TestRespondIsBridgeScoped(t *testing.T) {
 	edge := newEdge(t, core)
 	a1 := enroll(t, core)
 	a2 := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	// Routing counts live bridges only and /api/* client traffic needs a
 	// session: beat bridge 1 in (bridge 2 stays silent so auto-route picks
@@ -716,7 +716,7 @@ func TestClientBodyLimit(t *testing.T) {
 	core := newFakeCore(t)
 	edge := newEdge(t, core)
 	access := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runTunnel(ctx, t, core, edge.URL, access, echoBridge("br_cap"))
 

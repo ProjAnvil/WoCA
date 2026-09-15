@@ -50,11 +50,11 @@ func TestListPromptsAndGetPrompt(t *testing.T) {
 	defer srv.Close()
 
 	client := NewStreamableHTTP("woca", srv.URL+"/mcp")
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
-	prompts, err := client.ListPrompts(context.Background())
+	prompts, err := client.ListPrompts(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestListPromptsAndGetPrompt(t *testing.T) {
 		t.Fatalf("prompt[1] = %+v", prompts[1])
 	}
 
-	text, err := client.GetPrompt(context.Background(), "greet", map[string]any{"who": "world"})
+	text, err := client.GetPrompt(t.Context(), "greet", map[string]any{"who": "world"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestAsPromptTools(t *testing.T) {
 	defer srv.Close()
 
 	client := NewStreamableHTTP("woca", srv.URL+"/mcp")
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,7 +132,7 @@ func TestAsPromptTools(t *testing.T) {
 		t.Fatalf("get name = %q", tools[1].Name())
 	}
 
-	listRes, err := tools[0].Invoke(context.Background(), map[string]any{})
+	listRes, err := tools[0].Invoke(t.Context(), map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestAsPromptTools(t *testing.T) {
 		}
 	}
 
-	getRes, err := tools[1].Invoke(context.Background(), map[string]any{
+	getRes, err := tools[1].Invoke(t.Context(), map[string]any{
 		"name":      "greet",
 		"arguments": map[string]any{"who": "world"},
 	})
@@ -192,11 +192,11 @@ func TestListen(t *testing.T) {
 		got = append(got, method)
 		mu.Unlock()
 	}
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- client.Listen(ctx) }()
 

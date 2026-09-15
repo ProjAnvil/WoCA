@@ -34,7 +34,7 @@ func TestServeStartedCancelWithStuckConn(t *testing.T) {
 	}
 	defer stuck.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- s.ServeStarted(ctx, hs, serveErr) }()
 
@@ -77,7 +77,7 @@ func TestServeStartedCancelWithSlowRequest(t *testing.T) {
 	}()
 	time.Sleep(100 * time.Millisecond) // let the handler start
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- s.ServeStarted(ctx, slow, serveErr) }()
 	cancel()

@@ -12,7 +12,7 @@ import (
 // ctxAs returns a context authenticated as the given tenant.
 func ctxAs(t *testing.T, tenantID string) context.Context {
 	t.Helper()
-	return tenancy.NewContext(context.Background(), tenancy.Context{TenantID: tenantID, UserID: "u1"})
+	return tenancy.NewContext(t.Context(), tenancy.Context{TenantID: tenantID, UserID: "u1"})
 }
 
 // TestTenantIsolation exercises the Phase 1 acceptance criterion "双租户互
@@ -39,7 +39,7 @@ func testIsolation(t *testing.T, backend string, newStore func(*testing.T) *Stor
 	t.Helper()
 	t.Run(backend, func(t *testing.T) {
 		s := newStore(t)
-		local := context.Background()
+		local := t.Context()
 		a := ctxAs(t, "t_aaa")
 		b := ctxAs(t, "t_bbb")
 
@@ -122,7 +122,7 @@ func testIsolation(t *testing.T, backend string, newStore func(*testing.T) *Stor
 // exact historical form (backward compatibility for existing data).
 func TestLocalUnchanged(t *testing.T) {
 	s := NewMemory()
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := s.Put(ctx, "facts", "k", "v"); err != nil {
 		t.Fatal(err)
 	}

@@ -52,7 +52,7 @@ func staticTestDist() fs.FS {
 // obs HTTP span middleware around the edge router.
 func realEdgeServer(t *testing.T, core *fakeCore) *httptest.Server {
 	t.Helper()
-	obsInst, err := obs.Setup(context.Background(), obs.FromEnv())
+	obsInst, err := obs.Setup(t.Context(), obs.FromEnv())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func realEdgeServer(t *testing.T, core *fakeCore) *httptest.Server {
 // the Observability seam (spansOff), so only Wrap applies.
 func realBridgeHandler(t *testing.T) http.Handler {
 	t.Helper()
-	obsInst, err := obs.Setup(context.Background(), obs.FromEnv())
+	obsInst, err := obs.Setup(t.Context(), obs.FromEnv())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func staticStack(t *testing.T) *httptest.Server {
 	core := newFakeCore(t)
 	edge := realEdgeServer(t, core)
 	access := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	runTunnel(ctx, t, core, edge.URL, access, realBridgeHandler(t))
 	return edge
@@ -181,7 +181,7 @@ func TestTunnelStaticStackAPIRoundTrip(t *testing.T) {
 	core := newFakeCore(t)
 	edge := realEdgeServer(t, core)
 	access := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runTunnel(ctx, t, core, edge.URL, access, realBridgeHandler(t))
 	tok := userKey(t, edge, core, "static-api-user")

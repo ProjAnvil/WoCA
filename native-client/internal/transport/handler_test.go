@@ -282,7 +282,7 @@ func TestHandlerRejectsInvalidAndDuplicateNativeRequestIDsBeforeLookup(t *testin
 
 	registry := NewCancellationRegistry()
 	id := requestID("K")
-	_, unregister, ok := registry.register(context.Background(), id)
+	_, unregister, ok := registry.register(t.Context(), id)
 	if !ok {
 		t.Fatal("precondition registration failed")
 	}
@@ -305,7 +305,7 @@ func TestHandlerRejectsAllNativeRequestIDsDuringCancellationOverflowBeforeLookup
 	start := time.Unix(1_700_000_000, 0)
 	now := start
 	registry := newCancellationRegistryWithClock(func() time.Time { return now })
-	for index := 0; index < maxPendingCancellations; index++ {
+	for index := range maxPendingCancellations {
 		if !registry.Cancel(indexedRequestID(index)) {
 			t.Fatalf("Cancel() rejected pending ID %d", index)
 		}
@@ -1101,7 +1101,7 @@ func TestHandlerPropagatesCancellation(t *testing.T) {
 	))
 	defer handlerServer.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, handlerServer.URL+"/api/events", nil)
 	if err != nil {
 		t.Fatal(err)

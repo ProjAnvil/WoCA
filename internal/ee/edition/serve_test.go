@@ -120,19 +120,19 @@ func TestServeAPIKeyAuthEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, viewerKey, err := st.IssueKey(context.Background(), "local", "u_local", "test", authz.RoleViewer)
+	_, viewerKey, err := st.IssueKey(t.Context(), "local", "u_local", "test", authz.RoleViewer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote, err := st.CreateTenant(context.Background(), "remote-co")
+	remote, err := st.CreateTenant(t.Context(), "remote-co")
 	if err != nil {
 		t.Fatal(err)
 	}
-	remoteUser, err := st.CreateUser(context.Background(), remote.ID, "rider", authz.RoleAdmin)
+	remoteUser, err := st.CreateUser(t.Context(), remote.ID, "rider", authz.RoleAdmin)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, remoteKey, err := st.IssueKey(context.Background(), remote.ID, remoteUser.ID, "ci", authz.RoleAdmin)
+	_, remoteKey, err := st.IssueKey(t.Context(), remote.ID, remoteUser.ID, "ci", authz.RoleAdmin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestServeAPIKeyAuthEndToEnd(t *testing.T) {
 
 	// Wait for the real handler (health answers from port bind already).
 	up := false
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		if code := get("/api/sessions", viewerKey); code == http.StatusOK {
 			up = true
 			break

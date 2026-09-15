@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,7 +46,7 @@ func TestDebugLogCommand(t *testing.T) {
 	c, a, obs := newObsConsole(t)
 	sess := &Session{}
 
-	res, err := c.Execute(context.Background(), "debug-log", nil, sess)
+	res, err := c.Execute(t.Context(), "debug-log", nil, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +54,7 @@ func TestDebugLogCommand(t *testing.T) {
 		t.Fatalf("status = %q", res.Output)
 	}
 
-	res, err = c.Execute(context.Background(), "debug-log", []string{"on"}, sess)
+	res, err = c.Execute(t.Context(), "debug-log", []string{"on"}, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +69,7 @@ func TestDebugLogCommand(t *testing.T) {
 		t.Fatal("debug-log not persisted")
 	}
 
-	res, err = c.Execute(context.Background(), "debug-log", []string{"off"}, sess)
+	res, err = c.Execute(t.Context(), "debug-log", []string{"off"}, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +80,7 @@ func TestDebugLogCommand(t *testing.T) {
 		t.Fatal("obs store lost")
 	}
 
-	if _, err := c.Execute(context.Background(), "debug-log", []string{"wibble"}, sess); err == nil {
+	if _, err := c.Execute(t.Context(), "debug-log", []string{"wibble"}, sess); err == nil {
 		t.Fatal("invalid value should error")
 	}
 }

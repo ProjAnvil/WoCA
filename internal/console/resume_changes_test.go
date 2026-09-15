@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +22,7 @@ func writeSnapshotFile(dir, name string, msgs []messages.Message) error {
 func TestResumeListsAndLoads(t *testing.T) {
 	c, _ := newFullConsole(t)
 	dir := c.deps.SessionDir
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, name := range []string{"alpha", "beta"} {
 		if err := writeSnapshotFile(dir, name, []messages.Message{
@@ -72,7 +71,7 @@ func TestResumeListsAndLoads(t *testing.T) {
 
 func TestChangesListsPending(t *testing.T) {
 	c, _ := newFullConsole(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// No pending changes yet.
 	res, err := c.Execute(ctx, "changes", nil, &Session{})

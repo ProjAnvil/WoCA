@@ -327,10 +327,8 @@ func (s *Service) signature(path string) string {
 // parentOf returns the visible parent of path: empty at an allowed root
 // (browsing stops at the jail edge), the ordinary parent elsewhere.
 func parentOf(path string, roots []string) string {
-	for _, r := range roots {
-		if path == r {
-			return ""
-		}
+	if slices.Contains(roots, path) {
+		return ""
 	}
 	return filepath.Dir(path)
 }

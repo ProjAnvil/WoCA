@@ -117,7 +117,7 @@ func TestManagerReadyAndDetailDispatch(t *testing.T) {
 	}
 
 	// The install dispatcher rejects plugins without an installable runtime.
-	if err := m.install(context.Background(), Builtin{Name: "odd"}, nil); err == nil ||
+	if err := m.install(t.Context(), Builtin{Name: "odd"}, nil); err == nil ||
 		!strings.Contains(err.Error(), "no installable runtime") {
 		t.Fatalf("install dispatch: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestManagerInstallBrowserAlreadyPresent(t *testing.T) {
 	if err := os.WriteFile(m.br.binaryPath(), []byte("fake"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.InstallWait(context.Background(), "browser"); err != nil {
+	if err := m.InstallWait(t.Context(), "browser"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if st := waitState(t, m, "browser", StateReady); st.Detail != "pinchtab "+pinchtabVer {
@@ -170,7 +170,7 @@ func TestManagerInstallBrowserDownloadFails(t *testing.T) {
 	// without touching the network.
 	m := NewManager(t.TempDir(), t.TempDir(), zerolog.Nop())
 	defer m.Close()
-	if err := m.InstallWait(context.Background(), "browser"); err == nil ||
+	if err := m.InstallWait(t.Context(), "browser"); err == nil ||
 		!strings.Contains(err.Error(), "download pinchtab") {
 		t.Fatalf("err = %v, want download pinchtab", err)
 	}
@@ -184,7 +184,7 @@ func TestManagerInstallPDFWithFakeUV(t *testing.T) {
 	m := NewManager(t.TempDir(), t.TempDir(), zerolog.Nop())
 	defer m.Close()
 	writeFakeUV(t, m.py)
-	if err := m.InstallWait(context.Background(), "pdf"); err != nil {
+	if err := m.InstallWait(t.Context(), "pdf"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	waitState(t, m, "pdf", StateReady)
@@ -198,7 +198,7 @@ func TestManagerInstallFinishesButNotReady(t *testing.T) {
 	defer m.Close()
 	writeFakeUV(t, m.py)
 	t.Setenv("FAKE_UV_MAKE_PYTHON", "0")
-	err := m.InstallWait(context.Background(), "pdf")
+	err := m.InstallWait(t.Context(), "pdf")
 	if err == nil || !strings.Contains(err.Error(), "install finished but runtime still not ready") {
 		t.Fatalf("err = %v", err)
 	}
@@ -210,7 +210,7 @@ func TestManagerInstallWaitContextCanceled(t *testing.T) {
 	defer m.Close()
 	writeFakeUV(t, m.py)
 	t.Setenv("FAKE_UV_SLEEP", "1")
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
 	defer cancel()
 	if err := m.InstallWait(ctx, "pdf"); err == nil {
 		t.Fatal("canceled InstallWait must fail")
@@ -218,7 +218,7 @@ func TestManagerInstallWaitContextCanceled(t *testing.T) {
 }
 
 func TestManagerReinstall(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if err := NewManager(t.TempDir(), t.TempDir(), zerolog.Nop()).Reinstall(ctx, "ghost"); err == nil {
 		t.Fatal("unknown plugin reinstall must fail")
@@ -261,14 +261,14 @@ func TestManagerReinstall(t *testing.T) {
 func TestManagerClose(t *testing.T) {
 	m := NewManager(t.TempDir(), t.TempDir(), zerolog.Nop())
 	m.Close() // no runtimes started: must be a safe no-op
-	if _, err := m.br.Client(context.Background()); err == nil {
+	if _, err := m.br.Client(t.Context()); err == nil {
 		t.Fatal("runtime must be stopped after Close")
 	}
 }
 
 func TestManagerInstallWaitUnknownPlugin(t *testing.T) {
 	m := NewManager(t.TempDir(), t.TempDir(), zerolog.Nop())
-	if err := m.InstallWait(context.Background(), "ghost"); err == nil ||
+	if err := m.InstallWait(t.Context(), "ghost"); err == nil ||
 		!strings.Contains(err.Error(), "unknown plugin") {
 		t.Fatalf("err = %v", err)
 	}
@@ -284,7 +284,7 @@ func TestManagerReinstallRemoveAllFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(home, 0o700) })
-	if err := m.Reinstall(context.Background(), "pdf"); err == nil {
+	if err := m.Reinstall(t.Context(), "pdf"); err == nil {
 		t.Fatal("reinstall with unremovable env must fail")
 	}
 }

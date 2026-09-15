@@ -147,7 +147,7 @@ var previewableExts = map[string]bool{
 
 // isPreviewable reports whether name's extension allows a text preview.
 func isPreviewable(name string) bool {
-	if strings.HasPrefix(name, ".") && !strings.Contains(strings.TrimPrefix(name, "."), ".") {
+	if rest, ok := strings.CutPrefix(name, "."); ok && !strings.Contains(rest, ".") {
 		// Dotfiles like .gitignore / .env-preview have no ext to check; allow
 		// a small set by whole name.
 		switch strings.ToLower(name) {

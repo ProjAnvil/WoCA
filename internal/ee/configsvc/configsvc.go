@@ -288,7 +288,7 @@ func (u *update) patches() []patch {
 	// plugins to the bridge's users.
 	if u.BuiltinPlugins != nil {
 		if raw, err := json.Marshal(*u.BuiltinPlugins); err == nil {
-			p = append(p, patch{key: settings.KeyBuiltinPlugins, value: ptr(string(raw))})
+			p = append(p, patch{key: settings.KeyBuiltinPlugins, value: new(string(raw))})
 		}
 	}
 	out := make([]patch, 0, len(p))

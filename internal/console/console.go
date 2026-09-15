@@ -8,6 +8,7 @@ package console
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -456,11 +457,7 @@ func (c *Console) mcp() string {
 	if len(byServer) == 0 {
 		return "no MCP servers connected (start one with --mcp name=command or name=https://endpoint)\n"
 	}
-	servers := make([]string, 0, len(byServer))
-	for s := range byServer {
-		servers = append(servers, s)
-	}
-	slices.Sort(servers)
+	servers := slices.Sorted(maps.Keys(byServer))
 	var b strings.Builder
 	for _, s := range servers {
 		fmt.Fprintf(&b, "%s (%d tools):\n", s, len(byServer[s]))

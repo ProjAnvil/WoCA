@@ -59,7 +59,7 @@ func TestLSPDiagnosticsViaFakeTransport(t *testing.T) {
 			},
 		},
 	}}
-	out, err := lspDiagnostics(context.Background(), tr, path)
+	out, err := lspDiagnostics(t.Context(), tr, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestLSPDiagnosticsEmpty(t *testing.T) {
 	tr := &fakeTransport{responses: map[string]any{
 		"textDocument/diagnostic": map[string]any{"kind": "full", "items": []map[string]any{}},
 	}}
-	out, err := lspDiagnostics(context.Background(), tr, path)
+	out, err := lspDiagnostics(t.Context(), tr, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := lspDiagnostics(context.Background(), tr, path)
+	out, err := lspDiagnostics(t.Context(), tr, path)
 	_ = tr.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestLSPToolUnconfigured(t *testing.T) {
 	if !ok {
 		t.Fatal("LSP tool not registered")
 	}
-	res, err := tool.Invoke(context.Background(), map[string]any{"path": "x.go"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"path": "x.go"})
 	if err != nil {
 		t.Fatal(err)
 	}

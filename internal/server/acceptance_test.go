@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -36,7 +35,7 @@ func TestReconcilerAdoptsDeadInstanceRuns(t *testing.T) {
 	ledger := openSharedLedger(t)
 
 	// Instance A started a run and died: the row is running under A's lease.
-	if err := ledger.Start(context.Background(), runstate.Run{
+	if err := ledger.Start(t.Context(), runstate.Run{
 		RunID: "run-dead", SessionID: "sess-adopt", ThreadID: "thread-dead",
 	}, "srv-A", 50*time.Millisecond); err != nil {
 		t.Fatal(err)
@@ -55,10 +54,10 @@ func TestReconcilerAdoptsDeadInstanceRuns(t *testing.T) {
 
 	// The dead lease lapses; B's reconciler re-queues the run.
 	time.Sleep(80 * time.Millisecond)
-	if err := b.reconcileRunLeases(context.Background()); err != nil {
+	if err := b.reconcileRunLeases(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	row, ok, err := ledger.Row(context.Background(), "run-dead")
+	row, ok, err := ledger.Row(t.Context(), "run-dead")
 	if err != nil || !ok {
 		t.Fatalf("row = ok=%v err=%v", ok, err)
 	}
@@ -69,11 +68,11 @@ func TestReconcilerAdoptsDeadInstanceRuns(t *testing.T) {
 	// The takeover seam: a claiming worker (the Phase 3 role) receives the
 	// re-queued run under its own lease, and once it finishes, the session
 	// admits a fresh run on B.
-	claimed, err := ledger.Claim(context.Background(), "worker-1", time.Minute)
+	claimed, err := ledger.Claim(t.Context(), "worker-1", time.Minute)
 	if err != nil || claimed == nil || claimed.RunID != "run-dead" {
 		t.Fatalf("claim after reap = %+v err=%v", claimed, err)
 	}
-	if err := ledger.Finish(context.Background(), "run-dead", "worker-1", "done"); err != nil {
+	if err := ledger.Finish(t.Context(), "run-dead", "worker-1", "done"); err != nil {
 		t.Fatal(err)
 	}
 	runID := startAndAwaitRun(t, a, srvB, ledger, "sess-adopt", "after adoption", "done")

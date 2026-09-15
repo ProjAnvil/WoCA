@@ -223,7 +223,7 @@ func TestModelNodeAppliesToolResultBudget(t *testing.T) {
 		messages.AI("using tools"),
 		messages.Tool("t1", strings.Repeat("r", 30_000)),
 	}
-	out, err := a.Invoke(context.Background(), history, "t")
+	out, err := a.Invoke(t.Context(), history, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

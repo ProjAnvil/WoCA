@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -55,11 +54,11 @@ func postChangesJSON(t *testing.T, url string, body any) *http.Response {
 func TestWorkspaceChangesEndpoint(t *testing.T) {
 	s, ws := newChangesServer(t)
 	fh := s.agent.FileHistory()
-	fh.Record(agent.WithRunWorkspace(context.Background(), ws), ws+"/src/a.go",
+	fh.Record(agent.WithRunWorkspace(t.Context(), ws), ws+"/src/a.go",
 		[]byte("package main\n\nfunc f() {}\n"), []byte("package main\n\nfunc f() { return }\n"))
-	fh.Record(agent.WithRunWorkspace(context.Background(), ws), ws+"/new.txt",
+	fh.Record(agent.WithRunWorkspace(t.Context(), ws), ws+"/new.txt",
 		nil, []byte("hello\n"))
-	fh.Record(agent.WithRunWorkspace(context.Background(), ws), ws+"/img.bin",
+	fh.Record(agent.WithRunWorkspace(t.Context(), ws), ws+"/img.bin",
 		[]byte{0x00, 0x01}, []byte{0x00, 0x02})
 
 	ts := httptest.NewServer(s.Handler())
@@ -103,7 +102,7 @@ func TestWorkspaceChangesEndpoint(t *testing.T) {
 func TestWorkspaceUndoEndpoint(t *testing.T) {
 	s, ws := newChangesServer(t)
 	fh := s.agent.FileHistory()
-	ctx := agent.WithRunWorkspace(context.Background(), ws)
+	ctx := agent.WithRunWorkspace(t.Context(), ws)
 	fh.Record(ctx, ws+"/a.txt", []byte("a1"), []byte("a2"))
 	fh.Record(ctx, ws+"/b.txt", []byte("b1"), []byte("b2"))
 	// Record only logs bytes; materialize the after states so rollback
@@ -144,7 +143,7 @@ func TestWorkspaceUndoEndpoint(t *testing.T) {
 func TestTruncateSessionEndpoint(t *testing.T) {
 	s, ws := newChangesServer(t)
 	sid := "trunc-test"
-	if err := s.sessions.save(context.Background(), sid, []messages.Message{
+	if err := s.sessions.save(t.Context(), sid, []messages.Message{
 		messages.Human("one"), messages.AI("two"), messages.Human("three"), messages.AI("four"),
 	}, ws); err != nil {
 		t.Fatal(err)
@@ -165,7 +164,7 @@ func TestTruncateSessionEndpoint(t *testing.T) {
 	if out.Kept != 2 {
 		t.Fatalf("kept = %d", out.Kept)
 	}
-	msgs := s.sessions.load(context.Background(), sid)
+	msgs := s.sessions.load(t.Context(), sid)
 	if len(msgs) != 2 || msgs[0].Content != "one" || msgs[1].Content != "two" {
 		t.Fatalf("truncated transcript = %v", msgs)
 	}

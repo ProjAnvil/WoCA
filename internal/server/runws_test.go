@@ -87,7 +87,7 @@ func TestRunScopesToolsToSessionWorkspace(t *testing.T) {
 // tool result content (failing the test on errors).
 func readRunToolResult(t *testing.T, base, runID string) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/runs/"+runID+"/events", nil)
 	if err != nil {

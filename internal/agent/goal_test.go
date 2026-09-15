@@ -78,7 +78,7 @@ func TestGoalCompletesAfterVerification(t *testing.T) {
 	if _, err := a.SetGoal("make the tests pass", "", 5, 1_000_000); err != nil {
 		t.Fatal(err)
 	}
-	stream, err := a.GoalStream(context.Background(), []messages.Message{messages.Human("hello")})
+	stream, err := a.GoalStream(t.Context(), []messages.Message{messages.Human("hello")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestGoalCycleSurvivesInnerRecursionLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.SetGoal("long-running goal", "", 2, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,13 +286,15 @@ func TestStreamWithBudgetAppliesRecursionLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	var hit *lgtypes.GraphRecursionError
-	for _, err := range a.streamWithBudget(context.Background(), nil, "budget-test", 7) {
+	for _, err := range a.streamWithBudget(t.Context(), nil, "budget-test", 7) {
 		if err == nil {
 			continue
 		}
-		if !errors.As(err, &hit) {
+		h, ok := errors.AsType[*lgtypes.GraphRecursionError](err)
+		if !ok {
 			t.Fatalf("unexpected stream error: %v", err)
 		}
+		hit = h
 		break
 	}
 	if hit == nil {
@@ -309,7 +311,7 @@ func TestGoalBudgetLimitedByCycles(t *testing.T) {
 		messages.AI("work 1"),
 		messages.AI(`{"verdict":"continue","gaps":"not done"}`))
 	a.SetGoal("endless goal", "", 1, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +332,7 @@ func TestGoalStallBlockedAfterTwoEmptyCycles(t *testing.T) {
 		messages.AI("still just talking"), // zero tool rounds again
 		messages.AI(`{"verdict":"continue","gaps":"nothing happened"}`))
 	a.SetGoal("do something", "", 10, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +363,7 @@ func TestGoalClaimNeedsEvaluatorVerification(t *testing.T) {
 		messages.AI(`{"verdict":"complete","evidence":"tests green"}`),
 	)
 	a.SetGoal("ship it", "", 5, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +417,7 @@ func TestGoalInterruptResumesMidCycle(t *testing.T) {
 	}
 	a.SetGoal("write a file", "", 5, 1_000_000)
 
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,7 +430,7 @@ func TestGoalInterruptResumesMidCycle(t *testing.T) {
 		t.Fatalf("interrupt value = %#v", res.interrupts[0].Value)
 	}
 
-	resumed, err := a.GoalResume(context.Background(), true)
+	resumed, err := a.GoalResume(t.Context(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,13 +477,13 @@ func TestGoalPauseAndResume(t *testing.T) {
 	if !a.PauseGoal() {
 		t.Fatal("pause failed")
 	}
-	if _, err := a.GoalStream(context.Background(), nil); err == nil {
+	if _, err := a.GoalStream(t.Context(), nil); err == nil {
 		t.Fatal("GoalStream should refuse a paused goal")
 	}
 	if !a.ResumeGoal() {
 		t.Fatal("resume failed")
 	}
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +511,7 @@ func TestGoalClearEndsLoopAtBoundary(t *testing.T) {
 		messages.AI("work 2"),
 		messages.AI(`{"verdict":"continue","gaps":"more"}`))
 	a.SetGoal("goal", "", 10, 1_000_000)
-	stream, _ := a.GoalStream(context.Background(), nil)
+	stream, _ := a.GoalStream(t.Context(), nil)
 	cycles := 0
 	var termErr error
 	for c, cerr := range stream {
@@ -541,31 +543,31 @@ func TestGoalClearEndsLoopAtBoundary(t *testing.T) {
 func TestGoalToolRestrictedActions(t *testing.T) {
 	a := newGoalAgent(t)
 	// No goal: read-only report.
-	res := a.execute(context.Background(), "GetGoal", nil)
+	res := a.execute(t.Context(), "GetGoal", nil)
 	if res.Content != "(no active goal)" {
 		t.Fatalf("GetGoal = %q", res.Content)
 	}
 	a.SetGoal("restricted", "", 5, 1_000_000)
 	// The model cannot pause/resume/clear.
-	if res := a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "pause"}); !strings.Contains(res.Content, "unknown action") {
+	if res := a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "pause"}); !strings.Contains(res.Content, "unknown action") {
 		t.Fatalf("pause should be rejected: %q", res.Content)
 	}
-	if res := a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "clear"}); !strings.Contains(res.Content, "unknown action") {
+	if res := a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "clear"}); !strings.Contains(res.Content, "unknown action") {
 		t.Fatalf("clear should be rejected: %q", res.Content)
 	}
 	// Progress, claim, blocked all work and are visible in snapshots.
-	a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "progress", "note": "halfway"})
+	a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "progress", "note": "halfway"})
 	if g := a.Goal(); len(g.Notes) != 1 || g.Notes[0] != "halfway" {
 		t.Fatalf("notes = %+v", g.Notes)
 	}
-	a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "claim_complete", "evidence": "e"})
+	a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "claim_complete", "evidence": "e"})
 	if g := a.Goal(); !g.Claimed {
 		t.Fatal("claim not recorded")
 	}
 	if g := a.Goal(); g.Status != GoalActive {
 		t.Fatalf("claim must not complete the goal by itself, status = %q", g.Status)
 	}
-	a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "blocked", "reason": "need creds"})
+	a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "blocked", "reason": "need creds"})
 	if g := a.Goal(); g.Status != GoalBlocked || g.BlockedReason != "need creds" {
 		t.Fatalf("blocked not applied: %+v", g)
 	}
@@ -645,7 +647,7 @@ func TestGoalBlockedByModelEndsLoop(t *testing.T) {
 		messages.AI("cannot proceed"),
 		messages.AI(`{"verdict":"continue","gaps":"blocked on creds"}`))
 	a.SetGoal("needs creds", "", 5, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -704,7 +706,7 @@ func TestGoalEvaluatorNativeStructuredOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.SetGoal("native structured goal", "", 5, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

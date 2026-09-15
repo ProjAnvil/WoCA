@@ -72,7 +72,7 @@ func TestTeamSpawnClaimsAndCompletes(t *testing.T) {
 		t.Fatalf("task id = %s", rec.ID)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	if err := team.Spawn(ctx, "alice", "You write reports.", nil); err != nil {
 		t.Fatal(err)
@@ -153,19 +153,19 @@ func TestTeamSharedListClaimRules(t *testing.T) {
 	if _, ok := team.list.Claim(third.ID, "alice"); !ok {
 		t.Fatal("claim third")
 	}
-	bob, err := lead.newSubagent(context.Background(), nil)
+	bob, err := lead.newSubagent(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	bob.agentName = "bob"
 	bob.team = team
 	bob.taskList = team.list
-	if _, err := bob.taskUpdate(context.Background(), taskUpdateArgs{TaskID: third.ID, Status: "in_progress"}); err == nil {
+	if _, err := bob.taskUpdate(t.Context(), taskUpdateArgs{TaskID: third.ID, Status: "in_progress"}); err == nil {
 		t.Fatal("bob must not update alice's task")
 	}
 	// The lead overrides.
 	lead.agentName = LeadName
-	if _, err := lead.taskUpdate(context.Background(), taskUpdateArgs{TaskID: third.ID, Status: "completed"}); err != nil {
+	if _, err := lead.taskUpdate(t.Context(), taskUpdateArgs{TaskID: third.ID, Status: "completed"}); err != nil {
 		t.Fatalf("lead override failed: %v", err)
 	}
 }
@@ -174,12 +174,12 @@ func TestTeamSpawnCap(t *testing.T) {
 	lead, _ := newTeamLead(t, nil)
 	team := lead.ensureTeam()
 	defer team.Close()
-	for i := 0; i < maxActiveTeammates; i++ {
-		if err := team.Spawn(context.Background(), fmt.Sprintf("mate-%d", i), "idle", nil); err != nil {
+	for i := range maxActiveTeammates {
+		if err := team.Spawn(t.Context(), fmt.Sprintf("mate-%d", i), "idle", nil); err != nil {
 			t.Fatalf("spawn %d: %v", i, err)
 		}
 	}
-	err := team.Spawn(context.Background(), "one-too-many", "idle", nil)
+	err := team.Spawn(t.Context(), "one-too-many", "idle", nil)
 	if err == nil || !strings.Contains(err.Error(), "上限") {
 		t.Fatalf("err = %v, want cap error with guidance", err)
 	}

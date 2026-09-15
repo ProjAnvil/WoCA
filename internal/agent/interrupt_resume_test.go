@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/language"
@@ -38,7 +37,7 @@ func TestStatsAccessorsOnFreshAgent(t *testing.T) {
 	}
 	// After one (fake-model) turn the thread is recorded on both the
 	// invoke and streaming paths.
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "thread-stat"); err != nil {
+	if _, err := a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "thread-stat"); err != nil {
 		t.Fatalf("invoke: %v", err)
 	}
 	if got := a.LastThreadID(); got != "thread-stat" {
@@ -70,7 +69,7 @@ func TestResumeStreamContinuesParkedThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	_ = a
 	// Draining the stream (even on an unknown thread) exercises the
 	// wrapper; it must terminate without hanging.
@@ -80,7 +79,7 @@ func TestResumeStreamContinuesParkedThread(t *testing.T) {
 
 // SetWorkspace records the override; an empty value is ignored.
 func TestRunWorkspaceContext(t *testing.T) {
-	ws := WithRunWorkspace(context.Background(), "/explicit")
+	ws := WithRunWorkspace(t.Context(), "/explicit")
 	if ws == nil {
 		t.Fatal("WithRunWorkspace returned nil")
 	}

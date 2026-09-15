@@ -19,7 +19,7 @@ type admission struct {
 	gates    map[string]*sessionGate
 	stopped  bool
 	stopCh   chan struct{}
-	stopOnce sync.Once
+	stopOnce func()
 }
 
 type sessionGate struct {
@@ -33,7 +33,14 @@ type gateWaiter struct {
 }
 
 func newAdmission() *admission {
-	return &admission{gates: map[string]*sessionGate{}, stopCh: make(chan struct{})}
+	a := &admission{gates: map[string]*sessionGate{}, stopCh: make(chan struct{})}
+	a.stopOnce = sync.OnceFunc(func() {
+		a.mu.Lock()
+		a.stopped = true
+		a.mu.Unlock()
+		close(a.stopCh)
+	})
+	return a
 }
 
 // enter takes or queues for the session gate. pos=0 means granted (w==nil);
@@ -134,12 +141,7 @@ func renumberLocked(g *sessionGate) {
 // stop aborts all queued waiters (server shutdown); held gates are
 // untouched — in-flight runs finish through the existing cancel path.
 func (a *admission) stop() {
-	a.stopOnce.Do(func() {
-		a.mu.Lock()
-		a.stopped = true
-		a.mu.Unlock()
-		close(a.stopCh)
-	})
+	a.stopOnce()
 }
 
 // stats reports total queued waiters and per-session depths (for /api/stats).

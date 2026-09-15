@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +17,7 @@ func TestSessionExportAndRename(t *testing.T) {
 	if err := writeSessionFile(dir, "s1", []messages.Message{messages.Human("hi"), messages.AI("hello")}); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{History: []messages.Message{messages.Human("live turn")}}
 
 	res, err := c.Execute(ctx, "export", []string{filepath.Join(dir, "s1.jsonl")}, s)
@@ -61,7 +60,7 @@ func TestSessionExportAndRename(t *testing.T) {
 
 func TestSessionExportVariants(t *testing.T) {
 	c, _ := newFullConsole(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{History: []messages.Message{
 		messages.Human("question"),
 		messages.AI("answer"),

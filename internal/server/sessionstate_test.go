@@ -134,7 +134,7 @@ func TestSessionRunStateLifecycle(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	events := collectGlobalEvents(ctx, t, ts)
 
@@ -159,7 +159,7 @@ func TestSessionRunStateLifecycle(t *testing.T) {
 // the wanted event type shows up.
 func waitRunEvent(t *testing.T, base, runID, want string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/runs/"+runID+"/events", nil)
 	if err != nil {
@@ -238,7 +238,7 @@ func TestGlobalEventsSeedsSnapshot(t *testing.T) {
 	defer ts.Close()
 
 	s.markSessionState("sess-x", wocadb.SessionAwaiting, "run-x")
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	events := collectGlobalEvents(ctx, t, ts)
 	expectGlobal(t, events, "sess-x", "awaiting")

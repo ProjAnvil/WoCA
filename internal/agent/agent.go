@@ -1436,9 +1436,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				results[i] = messages.Tool(call.ID, "Error: permission denied")
 				continue
 			}
-			wg.Add(1)
-			go func(i int, call messages.ToolCall) {
-				defer wg.Done()
+			wg.Go(func() {
 				defer func() {
 					if rec := recover(); rec != nil {
 						// A GraphInterrupt panic (subagent HITL or a tool's own
@@ -1482,7 +1480,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				// the same time — already an order-ambiguous case.
 				total := consumed[i] + lggraph.InterruptConsumeCount(tctx) - execBase
 				a.batchMemo.Store(call.ID, batchMemoEntry{msg: results[i], consumed: total})
-			}(i, call)
+			})
 		}
 		wg.Wait()
 		// A tool interrupted mid-execution: re-panic the first GraphInterrupt

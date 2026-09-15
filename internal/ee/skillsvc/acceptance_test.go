@@ -4,7 +4,6 @@
 package skillsvc
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -28,8 +27,8 @@ func TestDualTenantSkillAssetIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctxA := tenancy.NewContext(context.Background(), tenancy.Context{TenantID: "tenantA", UserID: "u1"})
-	ctxB := tenancy.NewContext(context.Background(), tenancy.Context{TenantID: "tenantB", UserID: "u2"})
+	ctxA := tenancy.NewContext(t.Context(), tenancy.Context{TenantID: "tenantA", UserID: "u1"})
+	ctxB := tenancy.NewContext(t.Context(), tenancy.Context{TenantID: "tenantB", UserID: "u2"})
 
 	// Both tenants create an asset named "shared-deploy-skill".
 	aA, err := st.CreateAsset(ctxA, "shared-deploy-skill", "tenant A's copy")
@@ -94,7 +93,7 @@ func TestCohortPinnedVersionReproducible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	a, _ := st.CreateAsset(ctx, "review-skill", "code review")
 	v1, _ := st.PublishVersion(ctx, a.ID, "# v1 conservative review", "rev-1")
@@ -105,7 +104,7 @@ func TestCohortPinnedVersionReproducible(t *testing.T) {
 	_ = st.SetLabel(ctx, a.ID, "canary", v2.Version)
 
 	// Multiple resolutions are stable (no drift between calls).
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		prod, err := st.ResolveLabel(ctx, a.ID, "production")
 		if err != nil || prod.Version != 1 || prod.Body != "# v1 conservative review" {
 			t.Fatalf("iteration %d: production = %+v err=%v", i, prod, err)

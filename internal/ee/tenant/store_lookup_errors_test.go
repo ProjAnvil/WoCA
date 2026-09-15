@@ -4,7 +4,6 @@ package tenant
 // miss/wrong-secret/revoked branches, and the constant-time comparator.
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,13 +27,13 @@ func openGapStore(t *testing.T) (*Store, *wocadb.DB) {
 
 func TestStoreClosedDBSurfacesErrors(t *testing.T) {
 	st, db := openGapStore(t)
-	if _, err := st.CreateTenant(context.Background(), "x"); err != nil {
+	if _, err := st.CreateTenant(t.Context(), "x"); err != nil {
 		t.Fatal(err) // warm the pool before closing
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := st.CreateTenant(ctx, "y"); err == nil {
 		t.Error("CreateTenant on closed DB should fail")
 	}
@@ -75,7 +74,7 @@ func TestLookupRejectsMalformedKeys(t *testing.T) {
 
 func TestLookupUnknownPrefixWrongSecretAndRevoked(t *testing.T) {
 	st, _ := openGapStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tn, err := st.CreateTenant(ctx, "acme")
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +114,7 @@ func TestLookupUnknownPrefixWrongSecretAndRevoked(t *testing.T) {
 
 func TestCreateUserValidationAndMissingTenant(t *testing.T) {
 	st, _ := openGapStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := st.CreateUser(ctx, "t", "u", "warlock"); err == nil ||
 		!strings.Contains(err.Error(), "unknown role") {
 		t.Fatalf("unknown role = %v", err)

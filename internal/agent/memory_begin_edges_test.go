@@ -61,7 +61,7 @@ func TestMemoryScopeFromNilContext(t *testing.T) {
 	if s := memoryScopeFrom(nil); s != nil {
 		t.Fatalf("memoryScopeFrom(nil) = %v, want nil", s)
 	}
-	if s := memoryScopeFrom(context.Background()); s != nil {
+	if s := memoryScopeFrom(t.Context()); s != nil {
 		t.Fatalf("memoryScopeFrom(plain ctx) = %v, want nil", s)
 	}
 }
@@ -157,12 +157,12 @@ func TestInterruptEnvelopeEdgeCases(t *testing.T) {
 // failConnector is a driver.Connector whose every Connect fails; Connect
 // signals the attempt on a channel so tests can wait deterministically.
 type failConnector struct {
-	once   sync.Once
-	called chan struct{}
+	signalOnce func()
+	called     chan struct{}
 }
 
 func (c *failConnector) Connect(context.Context) (driver.Conn, error) {
-	c.once.Do(func() { close(c.called) })
+	c.signalOnce()
 	return nil, errors.New("db down")
 }
 
@@ -170,23 +170,24 @@ func (c *failConnector) Driver() driver.Driver { return nil }
 
 func TestMemoryBeginKVListErrorSkipsAttachments(t *testing.T) {
 	fc := &failConnector{called: make(chan struct{})}
+	fc.signalOnce = sync.OnceFunc(func() { close(fc.called) })
 	kv := store.NewSQL(sql.OpenDB(fc), "sqlite", "broken")
 	m := memoryRuntime{store: kv}
-	m.Begin(context.Background(), []messages.Message{messages.Human("alpha beta")}, "/ws")
+	m.Begin(t.Context(), []messages.Message{messages.Human("alpha beta")}, "/ws")
 	select {
 	case <-fc.called:
 	case <-time.After(2 * time.Second):
 		t.Fatal("store.List never attempted the connection")
 	}
-	if got := m.TakeAttachments(context.Background()); len(got) != 0 {
+	if got := m.TakeAttachments(t.Context()); len(got) != 0 {
 		t.Fatalf("failed list must produce no attachments: %v", got)
 	}
 }
 
 func TestMemoryBeginKVCapsHitsAndUsesScope(t *testing.T) {
 	kv := store.NewMemory()
-	ctx := context.Background()
-	for i := 0; i < 12; i++ {
+	ctx := t.Context()
+	for i := range 12 {
 		if err := kv.Put(ctx, "ns", fmt.Sprintf("k%d", i), fmt.Sprintf("alpha note %d", i)); err != nil {
 			t.Fatal(err)
 		}
@@ -217,7 +218,7 @@ func TestMemoryBeginEngineUsesScope(t *testing.T) {
 		ID: "h1", Layer: "L2", Type: "fact", Summary: "scoped hit", Content: "scoped content", Score: 0.5,
 	}}}
 	m := memoryRuntime{engine: f}
-	scopeCtx := WithMemoryScope(context.Background())
+	scopeCtx := WithMemoryScope(t.Context())
 	m.Begin(scopeCtx, []messages.Message{messages.Human("query words")}, "/ws")
 	waitFor(t, 2*time.Second, func() bool { return len(f.recordedRecalls()) > 0 }, "scoped engine recall")
 	atts := m.TakeAttachments(scopeCtx)
@@ -236,7 +237,7 @@ func TestBuildAttachmentsSkipsEmptyAndCapsEntries(t *testing.T) {
 	}
 	// The entries loop stops at the attachment cap.
 	entries := make([]store.Entry, 0, 7)
-	for i := 0; i < 7; i++ {
+	for i := range 7 {
 		entries = append(entries, store.Entry{
 			Namespace: "ns", Key: fmt.Sprintf("k%d", i), Value: []byte(fmt.Sprintf(`"value %d"`, i)),
 		})
@@ -267,7 +268,7 @@ func TestSearchCodeToolReportsHits(t *testing.T) {
 	if !ok {
 		t.Fatal("search_code tool not present with an engine wired")
 	}
-	res, err := tool.Invoke(context.Background(), map[string]any{"query": "auth"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"query": "auth"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +279,7 @@ func TestSearchCodeToolReportsHits(t *testing.T) {
 
 func TestRefreshExtraToolsWithoutHook(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
-	if a.refreshExtraTools(context.Background()) {
+	if a.refreshExtraTools(t.Context()) {
 		t.Fatal("refresh without a hook must report no change")
 	}
 }
@@ -309,7 +310,7 @@ func TestReactiveCompactSummarizerErrorReturnsHistory(t *testing.T) {
 	for i := range hist {
 		hist[i] = messages.Human(strings.Repeat(fmt.Sprintf("question %d ", i), 40))
 	}
-	out := a.ReactiveCompactHistory(context.Background(), hist)
+	out := a.ReactiveCompactHistory(t.Context(), hist)
 	if len(out) == 0 {
 		t.Fatal("failed summarization must return the (snipped) history, not nothing")
 	}
@@ -318,8 +319,8 @@ func TestReactiveCompactSummarizerErrorReturnsHistory(t *testing.T) {
 func TestMaybeBeginTaskSummaryInvokeErrorBestEffort(t *testing.T) {
 	a := &Agent{summarizer: failingSummarizer{language.NewFakeChatModel()}}
 	msgs := []messages.Message{messages.Human("do a thing")}
-	for i := 0; i < taskSummaryInterval; i++ {
-		a.maybeBeginTaskSummary(context.Background(), msgs)
+	for range taskSummaryInterval {
+		a.maybeBeginTaskSummary(t.Context(), msgs)
 	}
 	waitFor(t, 2*time.Second, func() bool {
 		a.taskState.mu.Lock()
@@ -336,17 +337,18 @@ func TestMaybeBeginTaskSummaryInvokeErrorBestEffort(t *testing.T) {
 // consolidateFailEngine fails Consolidate and signals the attempt.
 type consolidateFailEngine struct {
 	*fakeEngine
-	once   sync.Once
-	called chan struct{}
+	signalOnce func()
+	called     chan struct{}
 }
 
 func (c *consolidateFailEngine) Consolidate(ctx context.Context, ws string, since float64) (string, error) {
-	c.once.Do(func() { close(c.called) })
+	c.signalOnce()
 	return "", errors.New("consolidate boom")
 }
 
 func TestRetainRunSystem2ConsolidateError(t *testing.T) {
 	e := &consolidateFailEngine{fakeEngine: &fakeEngine{}, called: make(chan struct{})}
+	e.signalOnce = sync.OnceFunc(func() { close(e.called) })
 	m := memoryRuntime{engine: e, loadSettings: func() settings.Settings {
 		s := settings.Default()
 		s.LadyMAutoRetain = true
@@ -354,7 +356,7 @@ func TestRetainRunSystem2ConsolidateError(t *testing.T) {
 		s.LadyMSystem2Interval = 60
 		return s
 	}}
-	m.RetainRun(context.Background(), "/ws-s2fail",
+	m.RetainRun(t.Context(), "/ws-s2fail",
 		[]messages.Message{messages.Human("what is this about?")},
 		[]messages.Message{messages.AI("an answer")},
 		nil)
@@ -393,7 +395,7 @@ func TestContextBreakdownWorkspacesMemoryAndExtras(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := runws.With(context.Background(), ws)
+	ctx := runws.With(t.Context(), ws)
 	info := a.ContextBreakdown(ctx, []messages.Message{
 		messages.System("compact summary"),
 		messages.Human("hello"),
@@ -429,7 +431,7 @@ func TestContextBreakdownWorkspacesMemoryAndExtras(t *testing.T) {
 
 func TestExitWorktreeRemoveFailure(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
-	ctx := context.Background()
+	ctx := t.Context()
 	ghost := filepath.Join(t.TempDir(), "ghost-worktree")
 	a.registry.Dir().Enter(ctx, ghost)
 	tool, ok := a.toolByName["ExitWorktree"]
@@ -471,7 +473,7 @@ func TestTeamSpawnLostRace(t *testing.T) {
 		pokes:   map[string]chan struct{}{},
 	}
 	tm.factory = &racingTeamFactory{tm: tm, inner: inner}
-	err := tm.Spawn(context.Background(), "dup", "prompt", nil)
+	err := tm.Spawn(t.Context(), "dup", "prompt", nil)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("Spawn race error = %v, want already exists", err)
 	}
@@ -504,7 +506,7 @@ func TestTeamSpawnToolTypedSubagentAndDuplicate(t *testing.T) {
 	if !ok {
 		t.Fatal("TeamSpawn tool missing")
 	}
-	res, err := spawn.Invoke(context.Background(), map[string]any{
+	res, err := spawn.Invoke(t.Context(), map[string]any{
 		"name": "w1", "prompt": "help out", "subagent_type": "coder",
 	})
 	if err != nil {
@@ -517,7 +519,7 @@ func TestTeamSpawnToolTypedSubagentAndDuplicate(t *testing.T) {
 		t.Fatalf("active teammates = %d, want 1", a.ActiveTeammateCount())
 	}
 	// Duplicate name surfaces the spawn error through the tool.
-	if _, err := spawn.Invoke(context.Background(), map[string]any{
+	if _, err := spawn.Invoke(t.Context(), map[string]any{
 		"name": "w1", "prompt": "again", "subagent_type": "coder",
 	}); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("duplicate spawn error = %v", err)
@@ -531,12 +533,12 @@ func TestTeamSpawnToolTypedSubagentAndDuplicate(t *testing.T) {
 
 func TestRunTaskBackgroundCapReached(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
-	for i := 0; i < maxBackgroundTasks; i++ {
+	for range maxBackgroundTasks {
 		if _, err := a.tasks.start("s", "d"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	_, err := a.runTask(context.Background(), taskArgs{Description: "overflow", RunInBackground: true})
+	_, err := a.runTask(t.Context(), taskArgs{Description: "overflow", RunInBackground: true})
 	if err == nil || !strings.Contains(err.Error(), "上限") {
 		t.Fatalf("cap error = %v", err)
 	}
@@ -575,7 +577,7 @@ func TestZeroAgentLSPStats(t *testing.T) {
 func TestCompactHistoryUnderLimitReturnsUnchanged(t *testing.T) {
 	a := newCompactAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("summary"))))
 	hist := []messages.Message{messages.Human("hi")}
-	out := a.CompactHistory(context.Background(), hist)
+	out := a.CompactHistory(t.Context(), hist)
 	if len(out) != 1 || out[0].Content != "hi" {
 		t.Fatalf("small history changed by compaction: %+v", out)
 	}
@@ -617,14 +619,14 @@ func newObsAgent(t *testing.T, model language.ChatModel, mode config.PermissionM
 
 func TestObservedNodeRecordsModelError(t *testing.T) {
 	a := newObsAgent(t, &streamErrModel{language.NewFakeChatModel()}, config.ModeBypass)
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t"); err == nil {
+	if _, err := a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t"); err == nil {
 		t.Fatal("stream error must fail the run")
 	}
 }
 
 func TestObservedNodeRecordsInterrupt(t *testing.T) {
 	a := newObsAgent(t, gatedWriteModel("done"), config.ModeDefault)
-	_, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
+	_, err := a.Invoke(t.Context(), []messages.Message{messages.Human("write")}, "t")
 	ie := interruptFromError(t, err)
 	if _, ok := ie.Value.(PermissionRequest); !ok {
 		t.Fatalf("interrupt value = %T", ie.Value)
@@ -654,7 +656,7 @@ func TestToolsNodeGateDecodeErrorFailsRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("ask")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("ask")}, "t")
 	if err == nil {
 		t.Fatal("undecodable AskUserQuestion args must fail the run")
 	}
@@ -679,7 +681,7 @@ func TestToolsNodePreToolUseHookErrorFailsRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("write")}, "t")
 	if err == nil || !strings.Contains(err.Error(), "hook exec boom") {
 		t.Fatalf("hook error = %v, want hook exec boom", err)
 	}
@@ -706,7 +708,7 @@ func TestDispatchSpeculativeRecoversToolPanic(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := messages.ToolCall{ID: "sp1", Name: "Read", Args: map[string]any{}}
-	if !a.dispatchSpeculative(context.Background(), call) {
+	if !a.dispatchSpeculative(t.Context(), call) {
 		t.Fatal("expected the call to be dispatched speculatively")
 	}
 	f := a.spec.get("sp1")
@@ -723,7 +725,7 @@ func TestDispatchSpeculativeRecoversToolPanic(t *testing.T) {
 // --- goalgraph.go: node guards, reply composition, token clamp ---
 
 func TestGoalGraphNodeGuards(t *testing.T) {
-	rt := lgruntime.NewRuntime(context.Background())
+	rt := lgruntime.NewRuntime(t.Context())
 	// goalBeginCycle on a goal-less agent reports stop.
 	bare := &Agent{}
 	if bare.goalBeginCycle() {
@@ -785,7 +787,7 @@ func TestGoalAssessTrimsLongNotes(t *testing.T) {
 	if _, err := a.SetGoal("trim the notes", "", 5, 1_000_000); err != nil {
 		t.Fatal(err)
 	}
-	stream, err := a.GoalStream(context.Background(), []messages.Message{messages.Human("go")})
+	stream, err := a.GoalStream(t.Context(), []messages.Message{messages.Human("go")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -831,7 +833,7 @@ func TestGoalResumeRepausesAndBreaks(t *testing.T) {
 	if _, err := a.SetGoal("write files", "", 5, 1_000_000); err != nil {
 		t.Fatal(err)
 	}
-	stream, err := a.GoalStream(context.Background(), []messages.Message{messages.Human("go")})
+	stream, err := a.GoalStream(t.Context(), []messages.Message{messages.Human("go")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -842,7 +844,7 @@ func TestGoalResumeRepausesAndBreaks(t *testing.T) {
 
 	// Resume once: the cycle asks again, so the resumed stream pauses too
 	// (GoalResume's paused bookkeeping).
-	resumed, err := a.GoalResume(context.Background(), "y")
+	resumed, err := a.GoalResume(t.Context(), "y")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -855,7 +857,7 @@ func TestGoalResumeRepausesAndBreaks(t *testing.T) {
 	}
 
 	// A consumer that stops pumping immediately must not wedge the loop.
-	broken, err := a.GoalResume(context.Background(), "y")
+	broken, err := a.GoalResume(t.Context(), "y")
 	if err != nil {
 		t.Fatal(err)
 	}

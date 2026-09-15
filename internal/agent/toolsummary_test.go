@@ -122,7 +122,7 @@ func awaitSummaries(t *testing.T, a *Agent, n int) []ToolUseSummary {
 
 func takeAll(t *testing.T, a *Agent) []ToolUseSummary {
 	t.Helper()
-	wctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	wctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	return a.WaitToolUseSummaries(wctx)
 }
@@ -132,7 +132,7 @@ func TestToolUseSummaryGeneratedAsync(t *testing.T) {
 	a := newSummaryTestAgent(t, summarizer, true)
 
 	start := time.Now()
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("check config")}, "t")
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestToolUseSummaryGeneratedAsync(t *testing.T) {
 func TestToolUseSummaryDisabled(t *testing.T) {
 	summarizer := &slowSummarizer{}
 	a := newSummaryTestAgent(t, summarizer, false)
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")}, "t"); err != nil {
+	if _, err := a.Invoke(t.Context(), []messages.Message{messages.Human("check config")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -213,7 +213,7 @@ func TestToolUseSummarySubagentSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check")}, "t"); err != nil {
+	if _, err := a.Invoke(t.Context(), []messages.Message{messages.Human("check")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -225,7 +225,7 @@ func TestToolUseSummarySubagentSkipped(t *testing.T) {
 func TestToolUseSummaryFailureSilent(t *testing.T) {
 	summarizer := &slowSummarizer{fail: true, delay: 20 * time.Millisecond}
 	a := newSummaryTestAgent(t, summarizer, true)
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("check config")}, "t")
 	if err != nil {
 		t.Fatalf("summarizer failure must not fail the run: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestToolUseSummaryFailureSilent(t *testing.T) {
 func TestTakeReadyNonBlockingSemantics(t *testing.T) {
 	summarizer := &slowSummarizer{delay: 10 * time.Millisecond}
 	a := newSummaryTestAgent(t, summarizer, true)
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("check config")}, "t"); err != nil {
+	if _, err := a.Invoke(t.Context(), []messages.Message{messages.Human("check config")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 	// TakeReady never blocks: immediately after the turn it may legitimately

@@ -21,8 +21,8 @@ func TestLSPPoolReuse(t *testing.T) {
 	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
-	for i := 0; i < 3; i++ {
-		if err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil }); err != nil {
+	for range 3 {
+		if err := p.call(t.Context(), ws, cmd, func(tr lspTransport) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -40,7 +40,7 @@ func TestLSPPoolRestartOnCrash(t *testing.T) {
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
 	calls := 0
-	err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error {
+	err := p.call(t.Context(), ws, cmd, func(tr lspTransport) error {
 		calls++
 		if calls == 1 {
 			return errors.New("process died") // first Call errors → evict, restart, retry once
@@ -63,11 +63,11 @@ func TestLSPPoolBrokenCircuitBreaker(t *testing.T) {
 	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
-	for i := 0; i < lspMaxSpawnFailures; i++ {
-		_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
+	for range lspMaxSpawnFailures {
+		_ = p.call(t.Context(), ws, cmd, func(tr lspTransport) error { return nil })
 	}
 	// 3rd call: in breaker cooldown, errors immediately without spawning
-	err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
+	err := p.call(t.Context(), ws, cmd, func(tr lspTransport) error { return nil })
 	if err == nil {
 		t.Fatal("want broken error during cooldown")
 	}
@@ -87,9 +87,9 @@ func TestLSPPoolIdleReap(t *testing.T) {
 	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
-	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
+	_ = p.call(t.Context(), ws, cmd, func(tr lspTransport) error { return nil })
 	time.Sleep(150 * time.Millisecond) // wait for the reaper
-	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
+	_ = p.call(t.Context(), ws, cmd, func(tr lspTransport) error { return nil })
 	if n := spawns.Load(); n != 2 {
 		t.Fatalf("spawns = %d, want 2 (idle entry reaped)", n)
 	}
@@ -128,9 +128,9 @@ func TestLSPPoolInitializesOncePerServer(t *testing.T) {
 	}, lspInitialize)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
-	for i := 0; i < 2; i++ {
-		err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error {
-			_, err := lspDiagnostics(context.Background(), tr, path)
+	for i := range 2 {
+		err := p.call(t.Context(), ws, cmd, func(tr lspTransport) error {
+			_, err := lspDiagnostics(t.Context(), tr, path)
 			return err
 		})
 		if err != nil {
@@ -153,13 +153,13 @@ func TestLSPPoolInitFailureFeedsBreaker(t *testing.T) {
 	}, lspInitialize)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
-	for i := 0; i < lspMaxSpawnFailures; i++ {
-		if err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil }); err == nil {
+	for range lspMaxSpawnFailures {
+		if err := p.call(t.Context(), ws, cmd, func(tr lspTransport) error { return nil }); err == nil {
 			t.Fatal("want handshake failure surfaced")
 		}
 	}
 	// In breaker cooldown: errors immediately without spawning.
-	if err := p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil }); err == nil {
+	if err := p.call(t.Context(), ws, cmd, func(tr lspTransport) error { return nil }); err == nil {
 		t.Fatal("want broken error during cooldown")
 	}
 	if n := spawns.Load(); n != int32(lspMaxSpawnFailures) {
@@ -187,17 +187,15 @@ func TestLSPPoolPerEntrySerialization(t *testing.T) {
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error {
+	for range 8 {
+		wg.Go(func() {
+			_ = p.call(t.Context(), ws, cmd, func(tr lspTransport) error {
 				record()
 				time.Sleep(10 * time.Millisecond) // long enough to overlap if calls ran unserialized
 				cur.Add(-1)
 				return nil
 			})
-		}()
+		})
 	}
 	wg.Wait()
 	if d := maxDepth.Load(); d != 1 {
@@ -219,17 +217,17 @@ func TestLSPPoolAcquireReuseRefreshesLastUsed(t *testing.T) {
 	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
-	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
+	_ = p.call(t.Context(), ws, cmd, func(tr lspTransport) error { return nil })
 	// Idle for 350ms (within the 500ms threshold), then reused and crossing
 	// the threshold inside fn: a reaper tick during fn (at 600ms, cutoff=100ms)
 	// would reap the entry if it saw the stale lastUsed.
 	time.Sleep(350 * time.Millisecond)
-	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error {
+	_ = p.call(t.Context(), ws, cmd, func(tr lspTransport) error {
 		time.Sleep(350 * time.Millisecond)
 		return nil
 	})
 	// Reuse succeeded without being reaped → still the same process.
-	_ = p.call(context.Background(), ws, cmd, func(tr lspTransport) error { return nil })
+	_ = p.call(t.Context(), ws, cmd, func(tr lspTransport) error { return nil })
 	if n := spawns.Load(); n != 1 {
 		t.Fatalf("spawns = %d, want 1 (in-use entry must not be reaped)", n)
 	}

@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,13 +21,13 @@ func badEndpointTransport() *httpTransport {
 // branches of roundTrip, send, and listen.
 func TestHTTPTransportInvalidEndpointURL(t *testing.T) {
 	tr := badEndpointTransport()
-	if _, err := tr.roundTrip(context.Background(), 1, []byte(`{"id":1}`)); err == nil {
+	if _, err := tr.roundTrip(t.Context(), 1, []byte(`{"id":1}`)); err == nil {
 		t.Fatal("roundTrip should fail on invalid endpoint URL")
 	}
 	if err := tr.send([]byte(`{"method":"x"}`)); err == nil {
 		t.Fatal("send should fail on invalid endpoint URL")
 	}
-	if err := tr.listen(context.Background()); err == nil {
+	if err := tr.listen(t.Context()); err == nil {
 		t.Fatal("listen should fail on invalid endpoint URL")
 	}
 }
@@ -48,7 +47,7 @@ func TestHTTPTransportReadBodyError(t *testing.T) {
 	if tr == nil {
 		t.Fatal("nil transport")
 	}
-	if _, err := tr.roundTrip(context.Background(), 1, []byte(`{"id":1}`)); err == nil {
+	if _, err := tr.roundTrip(t.Context(), 1, []byte(`{"id":1}`)); err == nil {
 		t.Fatal("roundTrip should surface the truncated body")
 	}
 }
@@ -63,7 +62,7 @@ func TestHTTPTransportListenRefused(t *testing.T) {
 	if tr == nil {
 		t.Fatal("nil transport")
 	}
-	if err := tr.listen(context.Background()); err == nil || !strings.Contains(err.Error(), "listen") {
+	if err := tr.listen(t.Context()); err == nil || !strings.Contains(err.Error(), "listen") {
 		t.Fatalf("listen on refused port = %v, want listen error", err)
 	}
 }
@@ -80,7 +79,7 @@ func TestHTTPTransportListenScannerTooLong(t *testing.T) {
 	if tr == nil {
 		t.Fatal("nil transport")
 	}
-	if err := tr.listen(context.Background()); err == nil || !strings.Contains(err.Error(), "listen") {
+	if err := tr.listen(t.Context()); err == nil || !strings.Contains(err.Error(), "listen") {
 		t.Fatalf("listen with oversized token = %v, want scanner error", err)
 	}
 }
@@ -97,7 +96,7 @@ func TestHTTPTransportListenCleanEnd(t *testing.T) {
 	if tr == nil {
 		t.Fatal("nil transport")
 	}
-	if err := tr.listen(context.Background()); err != nil {
+	if err := tr.listen(t.Context()); err != nil {
 		t.Fatalf("clean listen end = %v, want nil", err)
 	}
 }
@@ -132,7 +131,7 @@ func TestRunOAuthRegistrationBadURL(t *testing.T) {
 	}))
 	defer srv.Close()
 	flow := OAuthFlow{ServerName: "badreg", Endpoint: srv.URL + "/mcp", Client: srv.Client()}
-	if err := RunOAuth(context.Background(), flow); err == nil || !strings.Contains(err.Error(), "dynamic client registration") {
+	if err := RunOAuth(t.Context(), flow); err == nil || !strings.Contains(err.Error(), "dynamic client registration") {
 		t.Fatalf("bad registration URL = %v, want registration error", err)
 	}
 }
@@ -141,7 +140,7 @@ func TestRunOAuthRegistrationBadURL(t *testing.T) {
 // the read-response error.
 func TestStdioTransportReadError(t *testing.T) {
 	tr := newStdioTransportFromIO(io.Discard, iotest.ErrReader(io.ErrUnexpectedEOF))
-	if _, err := tr.roundTrip(context.Background(), 1, []byte(`{"id":1}`)); err == nil {
+	if _, err := tr.roundTrip(t.Context(), 1, []byte(`{"id":1}`)); err == nil {
 		t.Fatal("roundTrip should surface reader failure")
 	}
 }
@@ -155,13 +154,13 @@ func TestClientEdgeBranches(t *testing.T) {
 	}
 
 	c := NewClient("stdio", io.Discard, strings.NewReader(""), nil)
-	if err := c.Listen(context.Background()); err != nil {
+	if err := c.Listen(t.Context()); err != nil {
 		t.Fatalf("stdio Listen = %v, want nil no-op", err)
 	}
 	if err := c.notify(rpcRequest{JSONRPC: "2.0", Method: "m", Params: make(chan int)}); err == nil {
 		t.Fatal("notify with unmarshalable params should fail")
 	}
-	if _, err := c.request(context.Background(), "m", make(chan int)); err == nil {
+	if _, err := c.request(t.Context(), "m", make(chan int)); err == nil {
 		t.Fatal("request with unmarshalable params should fail")
 	}
 }
@@ -182,7 +181,7 @@ func TestAsToolInvalidPropertiesSchema(t *testing.T) {
 	if props, ok := tool.ArgsSchema()["properties"].(map[string]any); !ok || len(props) != 0 {
 		t.Fatalf("fallback schema properties = %v, want empty object", tool.ArgsSchema()["properties"])
 	}
-	res, err := tool.Invoke(context.Background(), map[string]any{})
+	res, err := tool.Invoke(t.Context(), map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +189,7 @@ func TestAsToolInvalidPropertiesSchema(t *testing.T) {
 		t.Fatalf("invoke content = %q", res.Content)
 	}
 	// The next read fails, so the fallback closure's error return runs too.
-	if _, err := tool.Invoke(context.Background(), map[string]any{}); err == nil {
+	if _, err := tool.Invoke(t.Context(), map[string]any{}); err == nil {
 		t.Fatal("invoke after transport failure should error")
 	}
 }

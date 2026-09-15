@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +26,7 @@ func TestMemoryMigrateCmdExportImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.Remember(context.Background(), "/repo", "exported fact", []string{"t"}, "test"); err != nil {
+	if _, err := eng.Remember(t.Context(), "/repo", "exported fact", []string{"t"}, "test"); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.Close(); err != nil {

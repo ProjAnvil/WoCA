@@ -73,7 +73,7 @@ func TestBashToolRoutesThroughExecutor(t *testing.T) {
 	reg := NewRegistryWithExecutor(dir, fake)
 	tool, _ := reg.Get("Bash")
 
-	res, err := tool.Invoke(context.Background(), map[string]any{"command": "echo hello"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"command": "echo hello"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestBashToolExecutorResultMapping(t *testing.T) {
 	fake := &fakeExecutor{execRes: executor.ExecResult{Stdout: []byte("out\n"), Stderr: []byte("boom\n"), ExitCode: 7}}
 	reg := NewRegistryWithExecutor(dir, fake)
 	tool, _ := reg.Get("Bash")
-	res, err := tool.Invoke(context.Background(), map[string]any{"command": "false"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"command": "false"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestBashToolExecutorResultMapping(t *testing.T) {
 	fake = &fakeExecutor{execErr: errors.New("spawn failed")}
 	reg = NewRegistryWithExecutor(dir, fake)
 	tool, _ = reg.Get("Bash")
-	res, err = tool.Invoke(context.Background(), map[string]any{"command": "nope"})
+	res, err = tool.Invoke(t.Context(), map[string]any{"command": "nope"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestWriteToolRoutesThroughExecutor(t *testing.T) {
 	reg := NewRegistryWithExecutor(dir, fake)
 	tool, _ := reg.Get("Write")
 
-	res, err := tool.Invoke(context.Background(), map[string]any{
+	res, err := tool.Invoke(t.Context(), map[string]any{
 		"file_path": "sub/a.txt",
 		"content":   "data",
 	})
@@ -158,7 +158,7 @@ func TestReadToolRoutesThroughExecutor(t *testing.T) {
 	reg := NewRegistryWithExecutor(dir, fake)
 	tool, _ := reg.Get("Read")
 
-	res, err := tool.Invoke(context.Background(), map[string]any{"file_path": "f.txt"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"file_path": "f.txt"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestEditToolRoutesThroughExecutor(t *testing.T) {
 	reg := NewRegistryWithExecutor(dir, fake)
 	tool, _ := reg.Get("Edit")
 
-	res, err := tool.Invoke(context.Background(), map[string]any{
+	res, err := tool.Invoke(t.Context(), map[string]any{
 		"file_path":  "f.txt",
 		"old_string": "world",
 		"new_string": "there",

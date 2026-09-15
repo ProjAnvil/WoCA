@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/projanvil/woca/internal/config"
@@ -138,7 +139,7 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 	// GLM 4.5+ thinking, DeepSeek's thinking switch).
 	cfg := s.liveConfig()
 	levels := config.ThinkingLevelsFor(cfg.Provider, cfg.Model)
-	if budget > 0 && !containsLevel(levels, config.ThinkingLevel(budget)) {
+	if budget > 0 && !slices.Contains(levels, config.ThinkingLevel(budget)) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("model %s (%s) does not support thinking (levels %v)", cfg.Model, cfg.Provider, levels))
 		return
 	}
@@ -151,15 +152,6 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 		"level":  config.ThinkingLevel(budget),
 		"budget": budget,
 	})
-}
-
-func containsLevel(levels []string, level string) bool {
-	for _, l := range levels {
-		if l == level {
-			return true
-		}
-	}
-	return false
 }
 
 // handleQuota reports the provider quota plus this process's session usage

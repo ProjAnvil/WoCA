@@ -84,7 +84,7 @@ func TestRunStreamsAndResolvesInterrupt(t *testing.T) {
 
 	runID, _ := createRun(t, ts.URL, "")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/runs/"+runID+"/events", nil)
@@ -189,10 +189,10 @@ func TestSessionStoreRoundTrip(t *testing.T) {
 		{Role: messages.RoleTool, ToolCallID: "1", Content: "tool result"},
 		messages.AI("done"),
 	}
-	if err := st.save(context.Background(), "s1", msgs, ""); err != nil {
+	if err := st.save(t.Context(), "s1", msgs, ""); err != nil {
 		t.Fatal(err)
 	}
-	got := st.load(context.Background(), "s1")
+	got := st.load(t.Context(), "s1")
 	if len(got) != len(msgs) {
 		t.Fatalf("len = %d, want %d", len(got), len(msgs))
 	}
@@ -241,7 +241,7 @@ func TestSessionDelete(t *testing.T) {
 	}
 
 	// A run completing after its session was deleted must not resurrect it.
-	if err := st.save(context.Background(), sessionID, []messages.Message{messages.Human("again")}, ""); err != nil {
+	if err := st.save(t.Context(), sessionID, []messages.Message{messages.Human("again")}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, sessionID+".jsonl")); !os.IsNotExist(err) {
@@ -523,7 +523,7 @@ func TestSessionListGroupsByWorkspace(t *testing.T) {
 	st := newSessionStore(dir)
 	st.defaultWorkspace = "/tmp/current-project"
 	// New session explicitly tagged with another workspace.
-	if err := st.save(context.Background(), "tagged", []messages.Message{messages.Human("new")}, "/tmp/other-project"); err != nil {
+	if err := st.save(t.Context(), "tagged", []messages.Message{messages.Human("new")}, "/tmp/other-project"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -821,7 +821,7 @@ func createRun(t *testing.T, base, sessionID string) (string, string) {
 // and blocks until the run reaches a terminal state.
 func driveToDone(t *testing.T, base, runID string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/runs/"+runID+"/events", nil)
@@ -978,8 +978,8 @@ func bytesReader(b []byte) io.Reader { return strings.NewReader(string(b)) }
 
 func TestRegisterRunPrunesFinishedRuns(t *testing.T) {
 	s := &Server{runs: map[string]*Run{}}
-	for i := 0; i < maxRetainedRuns+10; i++ {
-		run := newRun(fmt.Sprintf("run-%d", i), nil, context.Background(), func() {})
+	for i := range maxRetainedRuns + 10 {
+		run := newRun(fmt.Sprintf("run-%d", i), nil, t.Context(), func() {})
 		s.registerRun(run.id, run)
 		run.finish("done", nil)
 	}
@@ -992,10 +992,10 @@ func TestRegisterRunPrunesFinishedRuns(t *testing.T) {
 
 	// An unfinished run blocks pruning so a live stream is never dropped.
 	s2 := &Server{runs: map[string]*Run{}}
-	live := newRun("live", nil, context.Background(), func() {})
+	live := newRun("live", nil, t.Context(), func() {})
 	s2.registerRun(live.id, live)
-	for i := 0; i < maxRetainedRuns+5; i++ {
-		run := newRun(fmt.Sprintf("r-%d", i), nil, context.Background(), func() {})
+	for i := range maxRetainedRuns + 5 {
+		run := newRun(fmt.Sprintf("r-%d", i), nil, t.Context(), func() {})
 		s2.registerRun(run.id, run)
 		run.finish("done", nil)
 	}

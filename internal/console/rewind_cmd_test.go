@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 
 func TestRewindBranchAndWebCommands(t *testing.T) {
 	c, _ := newFullConsole(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{History: []messages.Message{messages.Human("hi")}}
 
 	// /rewind with no args lists snapshot turns.
@@ -50,7 +49,7 @@ func TestRewindBranchAndWebCommands(t *testing.T) {
 
 func TestRewindTurnSelection(t *testing.T) {
 	c, _ := newAgentConsole(t, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{History: []messages.Message{
 		messages.Human("first question"),
 		messages.AI("first answer"),

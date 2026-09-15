@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -75,7 +74,7 @@ func TestSettingsSetMemoryKeyRouting(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, rc := newSettingsConsole(t, nil)
-			res, err := c.Execute(context.Background(), "settings", []string{"set", tc.key, tc.val}, &Session{})
+			res, err := c.Execute(t.Context(), "settings", []string{"set", tc.key, tc.val}, &Session{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -95,7 +94,7 @@ func TestSettingsSetMemoryKeyRouting(t *testing.T) {
 
 func TestSettingsSetLadyMEmbeddingKeyRoutesToMemoryRebuild(t *testing.T) {
 	c, rc := newSettingsConsole(t, nil)
-	res, err := c.Execute(context.Background(), "settings", []string{"set", settings.KeyLadyMEmbeddingAPIKey, "sk-test"}, &Session{})
+	res, err := c.Execute(t.Context(), "settings", []string{"set", settings.KeyLadyMEmbeddingAPIKey, "sk-test"}, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +109,7 @@ func TestSettingsSetLadyMEmbeddingKeyRoutesToMemoryRebuild(t *testing.T) {
 
 func TestSettingsSetMemoryRebuildFailureSurfaces(t *testing.T) {
 	c, rc := newSettingsConsole(t, errors.New("boom"))
-	res, err := c.Execute(context.Background(), "settings", []string{"set", settings.KeyMemoryEngine, "ladym"}, &Session{})
+	res, err := c.Execute(t.Context(), "settings", []string{"set", settings.KeyMemoryEngine, "ladym"}, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +139,7 @@ func TestClampRunes(t *testing.T) {
 
 func TestSettingsCommandSurface(t *testing.T) {
 	c, _ := newFullConsole(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	mustExec := func(args ...string) string {
@@ -205,7 +204,7 @@ func TestSettingsCommandSurface(t *testing.T) {
 func TestSettingsSetRebuildMessages(t *testing.T) {
 	c, _ := newFullConsole(t)
 	home := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	// Non-secret model keys rebuild the chat model.
@@ -247,7 +246,7 @@ func TestSettingsListNoArgs(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 	// The test console has no settings database wired; the list command
 	// surfaces the disabled error instead of panicking.
-	_, err := c.Execute(context.Background(), "settings", nil, &Session{})
+	_, err := c.Execute(t.Context(), "settings", nil, &Session{})
 	if err == nil {
 		// A settings store may be wired in some test setups; either outcome
 		// is acceptable as long as no panic occurred.
@@ -258,7 +257,7 @@ func TestSettingsListNoArgs(t *testing.T) {
 // /settings get on an unknown key errors.
 func TestSettingsGetUnknownKey(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
-	_, err := c.Execute(context.Background(), "settings get nonexistent-key", nil, &Session{})
+	_, err := c.Execute(t.Context(), "settings get nonexistent-key", nil, &Session{})
 	if err == nil {
 		t.Fatal("unknown key accepted")
 	}

@@ -61,7 +61,7 @@ func TestPreToolUseDeny(t *testing.T) {
 		map[string]CommandResult{"deny": {Stdout: "blocked by policy", ExitCode: 2}},
 		&seen,
 	)))
-	d, err := r.PreToolUse(context.Background(), "Bash", map[string]any{"command": "rm"})
+	d, err := r.PreToolUse(t.Context(), "Bash", map[string]any{"command": "rm"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestPreToolUseAllowFeedback(t *testing.T) {
 		map[string]CommandResult{"ok": {Stdout: "extra context", ExitCode: 0}},
 		&seen,
 	)))
-	d, err := r.PreToolUse(context.Background(), "Read", map[string]any{"file_path": "x"})
+	d, err := r.PreToolUse(t.Context(), "Read", map[string]any{"file_path": "x"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestPostToolUseBlock(t *testing.T) {
 		map[string]CommandResult{"post": {Stdout: "please stop", ExitCode: 2}},
 		&seen,
 	)))
-	p, err := r.PostToolUse(context.Background(), "Bash", map[string]any{"command": "x"}, "output")
+	p, err := r.PostToolUse(t.Context(), "Bash", map[string]any{"command": "x"}, "output")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestStopHook(t *testing.T) {
 		map[string]CommandResult{"stop": {Stdout: "do more", ExitCode: 0}},
 		&[]Event{},
 	)))
-	feedback, blocked, err := r.Stop(context.Background(), "completed")
+	feedback, blocked, err := r.Stop(t.Context(), "completed")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestSessionStartHook(t *testing.T) {
 		map[string]CommandResult{"start": {Stdout: "  hello session  \n", ExitCode: 0}},
 		&seen,
 	)))
-	out, err := r.SessionStart(context.Background())
+	out, err := r.SessionStart(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestSubagentStopBlock(t *testing.T) {
 		map[string]CommandResult{"sub": {Stdout: "stop subagent", ExitCode: 2}},
 		&seen,
 	)))
-	out, blocked, err := r.SubagentStop(context.Background())
+	out, blocked, err := r.SubagentStop(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestNotificationPassesMessage(t *testing.T) {
 		map[string]CommandResult{"notify": {Stdout: "ack", ExitCode: 0}},
 		&seen,
 	)))
-	out, err := r.Notification(context.Background(), "hello there")
+	out, err := r.Notification(t.Context(), "hello there")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestPreCompactBlock(t *testing.T) {
 		map[string]CommandResult{"pre": {Stdout: "too big", ExitCode: 2}},
 		&seen,
 	)))
-	out, blocked, err := r.PreCompact(context.Background())
+	out, blocked, err := r.PreCompact(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestPostCompactHook(t *testing.T) {
 		map[string]CommandResult{"postc": {Stdout: "  compacted  ", ExitCode: 0}},
 		&seen,
 	)))
-	out, err := r.PostCompact(context.Background())
+	out, err := r.PostCompact(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestNonToolEventOnlyWildcardMatcher(t *testing.T) {
 		map[string]CommandResult{"always": {Stdout: "ran", ExitCode: 0}},
 		&seen,
 	)))
-	out, err := r.SessionStart(context.Background())
+	out, err := r.SessionStart(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,17 +261,17 @@ func TestLoadConfigMissingFile(t *testing.T) {
 }
 
 func TestDefaultCommandRunner(t *testing.T) {
-	res, err := DefaultCommandRunner(context.Background(), "echo out; echo err 1>&2", "", "")
+	res, err := DefaultCommandRunner(t.Context(), "echo out; echo err 1>&2", "", "")
 	if err != nil || res.Stdout == "" || res.Stderr == "" {
 		t.Fatalf("res = %+v %v", res, err)
 	}
 	// Exit codes are captured, not errors.
-	res, err = DefaultCommandRunner(context.Background(), "exit 5", "", "")
+	res, err = DefaultCommandRunner(t.Context(), "exit 5", "", "")
 	if err != nil || res.ExitCode != 5 {
 		t.Fatalf("exit = %+v %v", res, err)
 	}
 	// A cancelled context surfaces as an error.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := DefaultCommandRunner(ctx, "sleep 5", "", ""); err == nil {
 		t.Fatal("expected ctx error")
@@ -300,7 +300,7 @@ func hookCmd(event string, command string) Config {
 }
 
 func TestAllHookEventsHappyAndError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ok := mkRunner(hookCmd("", "echo feedback"))
 	// The sh -c of a missing binary only yields exit code 127; a genuine
 	// runner error needs injection.
@@ -409,7 +409,7 @@ func TestUnsupportedHookTypeSkipped(t *testing.T) {
 		}}},
 	}
 	r := mkRunner(cfg)
-	d, err := r.PreToolUse(context.Background(), "Bash", nil)
+	d, err := r.PreToolUse(t.Context(), "Bash", nil)
 	if err != nil || !strings.Contains(d.Feedback, "kept") {
 		t.Fatalf("decision = %+v %v", d, err)
 	}

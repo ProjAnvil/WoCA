@@ -3,7 +3,6 @@ package server
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -55,13 +54,13 @@ func startAndAwaitRun(t *testing.T, s *Server, srv *httptest.Server, ledger *run
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		row, ok, err := ledger.Row(context.Background(), out.RunID)
+		row, ok, err := ledger.Row(t.Context(), out.RunID)
 		if err == nil && ok && row.Status == wantStatus && (wantStatus != "done" || row.ThreadID != "") {
 			return out.RunID
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	row, ok, _ := ledger.Row(context.Background(), out.RunID)
+	row, ok, _ := ledger.Row(t.Context(), out.RunID)
 	s.mu.Lock()
 	r := s.runs[out.RunID]
 	s.mu.Unlock()
@@ -88,7 +87,7 @@ func TestRunLedgerRecordsRunLifecycle(t *testing.T) {
 
 	runID := startAndAwaitRun(t, s, srv, ledger, "sess-ledger-1", "hello ledger", "done")
 
-	row, ok, err := ledger.Row(context.Background(), runID)
+	row, ok, err := ledger.Row(t.Context(), runID)
 	if err != nil || !ok {
 		t.Fatalf("ledger row = ok=%v err=%v", ok, err)
 	}
@@ -118,7 +117,7 @@ func TestRunLedgerRejectsCrossInstanceActiveRun(t *testing.T) {
 	defer srv.Close()
 
 	// Simulate another instance holding the session: a foreign active row.
-	if err := ledger.Enqueue(context.Background(), runstate.Run{
+	if err := ledger.Enqueue(t.Context(), runstate.Run{
 		RunID: "foreign-run", SessionID: "sess-foreign", ThreadID: "thread-foreign",
 	}); err != nil {
 		t.Fatal(err)
@@ -219,7 +218,7 @@ func TestRunEventsMirrorToLedger(t *testing.T) {
 
 	runID := startAndAwaitRun(t, s, srv, ledger, "sess-mirror", "mirror me", "done")
 
-	events, err := ledger.Replay(context.Background(), runID, 0, 100)
+	events, err := ledger.Replay(t.Context(), runID, 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +330,7 @@ func TestSessionStateDegradesOnStoreErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := &dbSessionState{db: db}
-	ctx := context.Background()
+	ctx := t.Context()
 	_ = ctx
 	st.Set(wocadb.SessionState{SessionID: "s1", Status: "running", RunID: "r1"})
 	if ok := st.ClearIfRun("s1", "r1"); !ok {

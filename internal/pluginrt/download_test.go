@@ -95,13 +95,13 @@ func TestFetchVerifiedFailurePaths(t *testing.T) {
 		http.Error(w, "gone", http.StatusNotFound)
 	}))
 	defer srv.Close()
-	err := fetchVerified(context.Background(), srv.URL, strings.Repeat("a", 64), filepath.Join(dir, "a.bin"))
+	err := fetchVerified(t.Context(), srv.URL, strings.Repeat("a", 64), filepath.Join(dir, "a.bin"))
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("404: err = %v", err)
 	}
 
 	// Canceled context fails before any dial.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := fetchVerified(ctx, srv.URL, strings.Repeat("a", 64), filepath.Join(dir, "b.bin")); err == nil {
 		t.Fatal("canceled ctx must fail")
@@ -112,7 +112,7 @@ func TestFetchVerifiedFailurePaths(t *testing.T) {
 	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := fetchVerified(context.Background(), srv.URL, strings.Repeat("a", 64), filepath.Join(blocker, "c.bin")); err == nil {
+	if err := fetchVerified(t.Context(), srv.URL, strings.Repeat("a", 64), filepath.Join(blocker, "c.bin")); err == nil {
 		t.Fatal("dest under a file must fail")
 	}
 
@@ -122,7 +122,7 @@ func TestFetchVerifiedFailurePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(ro, 0o700) })
-	if err := fetchVerified(context.Background(), srv.URL, strings.Repeat("a", 64), filepath.Join(ro, "d.bin")); err == nil {
+	if err := fetchVerified(t.Context(), srv.URL, strings.Repeat("a", 64), filepath.Join(ro, "d.bin")); err == nil {
 		t.Fatal("read-only dest dir must fail")
 	}
 
@@ -134,7 +134,7 @@ func TestFetchVerifiedFailurePaths(t *testing.T) {
 		panic(http.ErrAbortHandler)
 	}))
 	defer srv2.Close()
-	if err := fetchVerified(context.Background(), srv2.URL, strings.Repeat("a", 64), filepath.Join(dir, "e.bin")); err == nil {
+	if err := fetchVerified(t.Context(), srv2.URL, strings.Repeat("a", 64), filepath.Join(dir, "e.bin")); err == nil {
 		t.Fatal("truncated body must fail")
 	}
 	leftover, _ := filepath.Glob(filepath.Join(dir, "e.bin.download-*"))
@@ -349,7 +349,7 @@ func TestFetchVerifiedBodyReset(t *testing.T) {
 	}))
 	defer srv.Close()
 	dir := t.TempDir()
-	if err := fetchVerified(context.Background(), srv.URL, strings.Repeat("a", 64), filepath.Join(dir, "r.bin")); err == nil {
+	if err := fetchVerified(t.Context(), srv.URL, strings.Repeat("a", 64), filepath.Join(dir, "r.bin")); err == nil {
 		t.Fatal("reset mid-download must fail")
 	}
 	leftover, _ := filepath.Glob(filepath.Join(dir, "r.bin.download-*"))
@@ -431,7 +431,7 @@ func TestBuiltinDirAndPythonBuiltins(t *testing.T) {
 func TestFetchVerifiedRequestAndTempFailures(t *testing.T) {
 	dir := t.TempDir()
 	// A control character in the URL fails request construction.
-	if err := fetchVerified(context.Background(), "http://bad\x7fhost/x", strings.Repeat("a", 64), filepath.Join(dir, "u.bin")); err == nil {
+	if err := fetchVerified(t.Context(), "http://bad\x7fhost/x", strings.Repeat("a", 64), filepath.Join(dir, "u.bin")); err == nil {
 		t.Fatal("invalid URL must fail")
 	}
 	// A readable 200 server plus an unwritable dest dir: CreateTemp fails
@@ -445,7 +445,7 @@ func TestFetchVerifiedRequestAndTempFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(ro, 0o700) })
-	if err := fetchVerified(context.Background(), srv.URL, strings.Repeat("a", 64), filepath.Join(ro, "v.bin")); err == nil {
+	if err := fetchVerified(t.Context(), srv.URL, strings.Repeat("a", 64), filepath.Join(ro, "v.bin")); err == nil {
 		t.Fatal("read-only dest dir must fail at temp creation")
 	}
 }
@@ -498,7 +498,7 @@ func TestBrowserInstallFromLocalRelease(t *testing.T) {
 
 	b := NewBrowserRuntime(t.TempDir(), zerolog.Nop())
 	var lines []string
-	if err := b.Install(context.Background(), func(line string) { lines = append(lines, line) }); err != nil {
+	if err := b.Install(t.Context(), func(line string) { lines = append(lines, line) }); err != nil {
 		t.Fatalf("install from local release: %v", err)
 	}
 	raw, err := os.ReadFile(b.binaryPath())
@@ -510,7 +510,7 @@ func TestBrowserInstallFromLocalRelease(t *testing.T) {
 		t.Fatalf("progress = %v", lines)
 	}
 	// Second install is a no-op.
-	if err := b.Install(context.Background(), nil); err != nil {
+	if err := b.Install(t.Context(), nil); err != nil {
 		t.Fatalf("idempotent reinstall: %v", err)
 	}
 }
@@ -557,7 +557,7 @@ func TestPythonInstallDownloadsUV(t *testing.T) {
 	t.Cleanup(func() { uvReleaseBase = oldBase })
 
 	var lines []string
-	if err := py.Install(context.Background(), mustBuiltin(t, "pdf"), func(line string) {
+	if err := py.Install(t.Context(), mustBuiltin(t, "pdf"), func(line string) {
 		lines = append(lines, line)
 	}); err != nil {
 		t.Fatalf("install with downloaded uv: %v", err)
@@ -602,7 +602,7 @@ func TestPythonInstallArchiveMissingUV(t *testing.T) {
 	uvReleaseBase = srv.URL
 	t.Cleanup(func() { uvReleaseBase = oldBase })
 
-	err = py.Install(context.Background(), mustBuiltin(t, "pdf"), nil)
+	err = py.Install(t.Context(), mustBuiltin(t, "pdf"), nil)
 	if err == nil || !strings.Contains(err.Error(), "extract uv") {
 		t.Fatalf("err = %v, want extract uv failure", err)
 	}

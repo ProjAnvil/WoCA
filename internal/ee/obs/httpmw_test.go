@@ -2,7 +2,6 @@ package obs
 
 import (
 	"bytes"
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,7 +26,7 @@ func TestHTTPMiddlewareSpanAttributes(t *testing.T) {
 	buf, restore := spanLog(t)
 	defer restore()
 
-	o, err := Setup(context.Background(), Config{ServiceName: "woca-server"})
+	o, err := Setup(t.Context(), Config{ServiceName: "woca-server"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +63,7 @@ func TestHTTPMiddlewareTenantAndErrorStatus(t *testing.T) {
 	buf, restore := spanLog(t)
 	defer restore()
 
-	o, err := Setup(context.Background(), Config{ServiceName: "woca-ops"})
+	o, err := Setup(t.Context(), Config{ServiceName: "woca-ops"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +90,7 @@ func TestHTTPMiddlewareRequestIDFromResponseHeader(t *testing.T) {
 	buf, restore := spanLog(t)
 	defer restore()
 
-	o, err := Setup(context.Background(), Config{ServiceName: "woca-edge"})
+	o, err := Setup(t.Context(), Config{ServiceName: "woca-edge"})
 	if err != nil {
 		t.Fatal(err)
 	}

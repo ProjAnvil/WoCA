@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -196,7 +197,7 @@ func streamSince(t *testing.T, base, runID, lastEventID string, untilDone bool) 
 	if untilDone {
 		deadline = 15 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	ctx, cancel := context.WithTimeout(t.Context(), deadline)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/runs/"+runID+"/events", nil)
 	req.Header.Set("Last-Event-ID", lastEventID)
@@ -210,8 +211,7 @@ func streamSince(t *testing.T, base, runID, lastEventID string, untilDone bool) 
 	var out []string
 	for sc.Scan() {
 		line := sc.Text()
-		if strings.HasPrefix(line, "event: ") {
-			ev := strings.TrimPrefix(line, "event: ")
+		if ev, ok := strings.CutPrefix(line, "event: "); ok {
 			out = append(out, ev)
 			if !untilDone && len(out) >= 1 {
 				break
@@ -234,13 +234,7 @@ func TestSSELastEventIDReplayAndGap(t *testing.T) {
 
 	// Replaying run-1 since seq 1 reaches the terminal done event.
 	types := streamSince(t, srv.URL, runID, "1", true)
-	found := false
-	for _, ty := range types {
-		if ty == "done" {
-			found = true
-		}
-	}
-	if !found {
+	if !slices.Contains(types, "done") {
 		t.Fatalf("replay tail missing done event: %v", types)
 	}
 }
@@ -279,20 +273,20 @@ func TestServeStartedShutdownBranches(t *testing.T) {
 	// A server-closed error is a clean stop.
 	ch := make(chan error, 1)
 	ch <- http.ErrServerClosed
-	if err := s.ServeStarted(context.Background(), &http.Server{}, ch); err != nil {
+	if err := s.ServeStarted(t.Context(), &http.Server{}, ch); err != nil {
 		t.Fatalf("ErrServerClosed = %v", err)
 	}
 
 	// A real error propagates.
 	ch2 := make(chan error, 1)
 	ch2 <- fmt.Errorf("bind: nope")
-	if err := s.ServeStarted(context.Background(), &http.Server{}, ch2); err == nil {
+	if err := s.ServeStarted(t.Context(), &http.Server{}, ch2); err == nil {
 		t.Fatal("serve error should propagate")
 	}
 
 	// Context cancellation shuts the http server down gracefully (and with a
 	// ledger wired, stops the reconciler loop too).
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	db, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "r.db"))
 	if err != nil {

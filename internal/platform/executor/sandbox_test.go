@@ -2,7 +2,6 @@ package executor
 
 import (
 	"bytes"
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,7 +46,7 @@ func TestSandboxExecRunsCommand(t *testing.T) {
 	}
 	defer sb.Close()
 
-	res, err := sb.Exec(context.Background(), ExecRequest{Name: "echo", Args: []string{"hi"}})
+	res, err := sb.Exec(t.Context(), ExecRequest{Name: "echo", Args: []string{"hi"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,11 +61,11 @@ func TestSandboxReadWriteFile(t *testing.T) {
 	sb, _ := NewSandbox(SandboxConfig{Endpoint: srv.URL})
 	defer sb.Close()
 
-	data, err := sb.ReadFile(context.Background(), "/x.txt")
+	data, err := sb.ReadFile(t.Context(), "/x.txt")
 	if err != nil || string(data) != "hello" {
 		t.Fatalf("read = %q err=%v", string(data), err)
 	}
-	if err := sb.WriteFile(context.Background(), "/x.txt", []byte("new"), 0o644); err != nil {
+	if err := sb.WriteFile(t.Context(), "/x.txt", []byte("new"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -77,7 +76,7 @@ func TestSandboxGlob(t *testing.T) {
 	sb, _ := NewSandbox(SandboxConfig{Endpoint: srv.URL})
 	defer sb.Close()
 
-	matches, err := sb.Glob(context.Background(), "*.go")
+	matches, err := sb.Glob(t.Context(), "*.go")
 	if err != nil || len(matches) != 2 {
 		t.Fatalf("glob = %v err=%v", matches, err)
 	}
@@ -91,16 +90,16 @@ func TestSandboxUnimplementedSurfacesError(t *testing.T) {
 
 	// Start/MkdirAll/Stat/Grep are v2 — calling them surfaces explicit
 	// errors, not panics or silent successes.
-	if _, err := sb.Start(context.Background(), ExecRequest{}, StartOptions{}); err == nil {
+	if _, err := sb.Start(t.Context(), ExecRequest{}, StartOptions{}); err == nil {
 		t.Fatal("Start on sandbox succeeded")
 	}
-	if err := sb.MkdirAll(context.Background(), "/x", 0o755); err == nil {
+	if err := sb.MkdirAll(t.Context(), "/x", 0o755); err == nil {
 		t.Fatal("MkdirAll on sandbox succeeded")
 	}
-	if _, err := sb.Stat(context.Background(), "/x"); err == nil {
+	if _, err := sb.Stat(t.Context(), "/x"); err == nil {
 		t.Fatal("Stat on sandbox succeeded")
 	}
-	if _, err := sb.Grep(context.Background(), "/", nil); err == nil {
+	if _, err := sb.Grep(t.Context(), "/", nil); err == nil {
 		t.Fatal("Grep on sandbox succeeded")
 	}
 }
@@ -129,7 +128,7 @@ func TestSandboxCloseDestroys(t *testing.T) {
 	}))
 	defer srv.Close()
 	sb, _ := NewSandbox(SandboxConfig{Endpoint: srv.URL})
-	if _, err := sb.Exec(context.Background(), ExecRequest{Name: "true"}); err != nil {
+	if _, err := sb.Exec(t.Context(), ExecRequest{Name: "true"}); err != nil {
 		t.Fatal(err) // create was faked by the catch-all handler
 	}
 	if err := sb.Close(); err != nil {

@@ -836,7 +836,7 @@ func TestStoreSchemaHasNoAPIKeyOrOAuthTokenColumns(t *testing.T) {
 	}
 	defer s.Close()
 
-	rows, err := s.db.QueryContext(context.Background(), `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+	rows, err := s.db.QueryContext(t.Context(), `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -855,7 +855,7 @@ func TestStoreSchemaHasNoAPIKeyOrOAuthTokenColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, table := range tables {
-		columns, err := s.db.QueryContext(context.Background(), `SELECT name FROM pragma_table_info(?)`, table)
+		columns, err := s.db.QueryContext(t.Context(), `SELECT name FROM pragma_table_info(?)`, table)
 		if err != nil {
 			t.Fatal(err)
 		}

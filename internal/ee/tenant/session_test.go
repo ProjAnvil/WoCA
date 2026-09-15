@@ -1,7 +1,6 @@
 package tenant
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -14,7 +13,7 @@ import (
 
 func TestIssueSessionReturnsFullIDOnce(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantID, userID := seedSessionTenant(t, st)
 
 	sess, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "thumbprint-1", authz.RoleMember, time.Hour)
@@ -45,7 +44,7 @@ func TestIssueSessionReturnsFullIDOnce(t *testing.T) {
 
 func TestLookupSessionRejectsWrongSecretAndMalformed(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantID, userID := seedSessionTenant(t, st)
 
 	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", authz.RoleMember, time.Hour)
@@ -69,7 +68,7 @@ func TestLookupSessionRejectsWrongSecretAndMalformed(t *testing.T) {
 
 func TestLookupSessionRejectsExpiredSession(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantID, userID := seedSessionTenant(t, st)
 
 	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", authz.RoleMember, -time.Minute)
@@ -83,7 +82,7 @@ func TestLookupSessionRejectsExpiredSession(t *testing.T) {
 
 func TestRevokeSessionDisablesLookup(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantID, userID := seedSessionTenant(t, st)
 
 	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", authz.RoleMember, time.Hour)
@@ -104,7 +103,7 @@ func TestRevokeSessionDisablesLookup(t *testing.T) {
 
 func TestTouchSessionUpdatesLastValidated(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantID, userID := seedSessionTenant(t, st)
 
 	sess, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", authz.RoleMember, time.Hour)
@@ -137,7 +136,7 @@ func TestSessionSecretNeverPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantID, userID := seedSessionTenant(t, st)
 
 	_, full, err := st.IssueSession(ctx, tenantID, userID, "device-1", "tp", authz.RoleMember, time.Hour)
@@ -158,7 +157,7 @@ func TestSessionSecretNeverPersisted(t *testing.T) {
 
 func seedSessionTenant(t *testing.T, st *Store) (tenantID, userID string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	tn, err := st.CreateTenant(ctx, "Acme")
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +183,7 @@ func TestSessionStoreClosedDBSurfacesErrors(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	check := func(what string, err error) {
 		t.Helper()
 		if err == nil {
@@ -226,7 +225,7 @@ func TestSessionPrefixShapes(t *testing.T) {
 // IssueSession rejects blank device/thumbprint before touching the store.
 func TestIssueSessionInputValidation(t *testing.T) {
 	st := openTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	tenantID, userID := seedSessionTenant(t, st)
 	if _, _, err := st.IssueSession(ctx, tenantID, userID, "", "tp", authz.RoleMember, time.Hour); err == nil {
 		t.Fatal("blank device accepted")

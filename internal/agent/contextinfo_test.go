@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/language"
@@ -45,7 +44,7 @@ func TestContextBreakdownCategories(t *testing.T) {
 		ai,
 		messages.Tool("t1", "file contents here"),
 	}
-	info := a.ContextBreakdown(context.Background(), history)
+	info := a.ContextBreakdown(t.Context(), history)
 
 	want := map[string]bool{"system": false, "memory": false, "tools": false, "history_human": false, "history_ai": false, "history_tool": false}
 	sum := 0
@@ -95,7 +94,7 @@ func TestContextBreakdownCompactedHistory(t *testing.T) {
 		messages.Human("continue"),
 		messages.AI("done"),
 	}
-	info := a.ContextBreakdown(context.Background(), history)
+	info := a.ContextBreakdown(t.Context(), history)
 	var sum *ContextCategory
 	for i, c := range info.Categories {
 		if c.Key == "history_summary" {
@@ -136,11 +135,11 @@ func TestContextBreakdownLastRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hist, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t")
+	hist, err := a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
-	info := a.ContextBreakdown(context.Background(), hist)
+	info := a.ContextBreakdown(t.Context(), hist)
 	if info.LastRequest == nil {
 		t.Fatalf("last request missing after a model call")
 	}

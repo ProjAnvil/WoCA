@@ -2,7 +2,6 @@ package nativeauth
 
 import (
 	"bytes"
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -47,7 +46,7 @@ func newNativeAuthFixture(t *testing.T) *nativeAuthFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	tn, err := st.CreateTenant(ctx, "Acme")
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +205,7 @@ func TestActivateRejectsBadInputs(t *testing.T) {
 
 func TestActivateRateLimited(t *testing.T) {
 	f := newNativeAuthFixture(t)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if w := f.activate("woca_000000000000_"+strings.Repeat("0", 48), f.publicJWK()); w.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d = %d", i, w.Code)
 		}

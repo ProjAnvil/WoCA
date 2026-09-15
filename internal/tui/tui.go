@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -709,24 +710,19 @@ func (m *Model) renderer(ch chan<- tea.Msg) runner.Renderer {
 
 // sortedValues returns the sorted values of a map.
 func sortedValues(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	slices.Sort(out)
-	return out
+	return slices.Sorted(maps.Values(m))
 }
 
 // diffLines renders a tiny -/+ diff for Edit/Write tool arguments.
 func diffLines(args map[string]any) []string {
 	var out []string
 	if old, ok := args["old_string"].(string); ok && old != "" {
-		for _, l := range strings.Split(old, "\n") {
+		for l := range strings.SplitSeq(old, "\n") {
 			out = append(out, delStyle.Render("- "+truncate(l, 120)))
 		}
 	}
 	if new, ok := args["new_string"].(string); ok {
-		for _, l := range strings.Split(new, "\n") {
+		for l := range strings.SplitSeq(new, "\n") {
 			out = append(out, addStyle.Render("+ "+truncate(l, 120)))
 		}
 	}
@@ -1173,7 +1169,8 @@ func stripSystem(msgs []messages.Message) []messages.Message {
 // the command hands back a prompt (/init). Returns (false, nil) for plain
 // prompts.
 func (m *Model) handleCommand(text string) (bool, tea.Cmd) {
-	if !strings.HasPrefix(text, "/") {
+	rest, ok := strings.CutPrefix(text, "/")
+	if !ok {
 		return false, nil
 	}
 	if m.console == nil {
@@ -1183,7 +1180,7 @@ func (m *Model) handleCommand(text string) (bool, tea.Cmd) {
 		}
 		return false, nil
 	}
-	parts := strings.Fields(strings.TrimPrefix(text, "/"))
+	parts := strings.Fields(rest)
 	if len(parts) == 0 {
 		return false, nil
 	}

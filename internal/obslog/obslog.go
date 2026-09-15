@@ -18,9 +18,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -299,11 +301,7 @@ func updateOf(v any) map[string]any {
 }
 
 func keysOf(state map[string]any) []string {
-	out := make([]string, 0, len(state))
-	for k := range state {
-		out = append(out, k)
-	}
-	return out
+	return slices.Collect(maps.Keys(state))
 }
 
 // summarizeMessages renders bounded per-message summaries for trace events.

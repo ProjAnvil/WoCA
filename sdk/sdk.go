@@ -24,7 +24,7 @@ type Session struct {
 	done   chan struct{}
 
 	ap        *agentbuild.App
-	closeOnce sync.Once
+	closeOnce func()
 }
 
 // Query starts one headless agent run and returns its session. The caller
@@ -53,6 +53,13 @@ func Query(ctx context.Context, prompt string, opts ...Option) (*Session, error)
 		done:   make(chan struct{}),
 		ap:     ap,
 	}
+	s.closeOnce = sync.OnceFunc(func() {
+		s.ap.PluginMgr.Close()
+		s.ap.Agent.Close()
+		for _, td := range s.ap.Teardown {
+			td()
+		}
+	})
 	go s.run(runCtx, o, prompt)
 	return s, nil
 }
@@ -64,13 +71,9 @@ func (s *Session) Events() <-chan Event { return s.events }
 func (s *Session) Close() error {
 	s.cancel()
 	<-s.done
-	s.closeOnce.Do(func() {
-		s.ap.PluginMgr.Close()
-		s.ap.Agent.Close()
-		for _, td := range s.ap.Teardown {
-			td()
-		}
-	})
+	if s.closeOnce != nil {
+		s.closeOnce()
+	}
 	return nil
 }
 

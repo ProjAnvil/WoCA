@@ -120,7 +120,7 @@ func TestWorkspaceScopedResolvers(t *testing.T) {
 	}
 
 	// No workspace in ctx: the startup values apply.
-	plain := context.Background()
+	plain := t.Context()
 	if got := a.skillsFor(plain); len(got) != 0 {
 		t.Fatalf("skillsFor without ws = %+v", got)
 	}
@@ -132,7 +132,7 @@ func TestWorkspaceScopedResolvers(t *testing.T) {
 	}
 
 	// A run workspace selects and caches the loader results.
-	wsCtx := runws.With(context.Background(), "/ws/proj")
+	wsCtx := runws.With(t.Context(), "/ws/proj")
 	if got := a.skillsFor(wsCtx); len(got) != 1 || got[0].Name != "s-/ws/proj" {
 		t.Fatalf("skillsFor = %+v", got)
 	}
@@ -179,7 +179,7 @@ func TestSystemPromptBuilderAndInvalidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := runws.With(context.Background(), "/ws/alpha")
+	ctx := runws.With(t.Context(), "/ws/alpha")
 	if got := a.systemPromptFor(ctx); got != "prompt for /ws/alpha model *language.FakeChatModel" && !strings.HasPrefix(got, "prompt for /ws/alpha") {
 		t.Fatalf("built prompt = %q", got)
 	}
@@ -230,31 +230,31 @@ func TestSessionHookRunners(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fb, _, err := a.RunStopHooks(context.Background(), "end_turn"); err != nil || fb == "" {
+	if fb, _, err := a.RunStopHooks(t.Context(), "end_turn"); err != nil || fb == "" {
 		t.Fatalf("RunStopHooks = %q, %v", fb, err)
 	}
-	if ctx, err := a.RunUserPromptSubmit(context.Background(), "hello"); err != nil || ctx == "" {
+	if ctx, err := a.RunUserPromptSubmit(t.Context(), "hello"); err != nil || ctx == "" {
 		t.Fatalf("RunUserPromptSubmit = %q, %v", ctx, err)
 	}
-	if fb, err := a.RunSessionStart(context.Background()); err != nil || fb == "" {
+	if fb, err := a.RunSessionStart(t.Context()); err != nil || fb == "" {
 		t.Fatalf("RunSessionStart = %q, %v", fb, err)
 	}
-	if err := a.RunSessionEnd(context.Background(), "exit"); err != nil {
+	if err := a.RunSessionEnd(t.Context(), "exit"); err != nil {
 		t.Fatalf("RunSessionEnd = %v", err)
 	}
 
 	// Without a runner everything is a no-op.
 	bare := newBypassAgent(t, model)
-	if fb, blocked, err := bare.RunStopHooks(context.Background(), "r"); fb != "" || blocked || err != nil {
+	if fb, blocked, err := bare.RunStopHooks(t.Context(), "r"); fb != "" || blocked || err != nil {
 		t.Fatalf("bare RunStopHooks = %q/%v/%v", fb, blocked, err)
 	}
-	if ctx, err := bare.RunUserPromptSubmit(context.Background(), "p"); ctx != "" || err != nil {
+	if ctx, err := bare.RunUserPromptSubmit(t.Context(), "p"); ctx != "" || err != nil {
 		t.Fatalf("bare RunUserPromptSubmit = %q/%v", ctx, err)
 	}
-	if fb, err := bare.RunSessionStart(context.Background()); fb != "" || err != nil {
+	if fb, err := bare.RunSessionStart(t.Context()); fb != "" || err != nil {
 		t.Fatalf("bare RunSessionStart = %q/%v", fb, err)
 	}
-	if err := bare.RunSessionEnd(context.Background(), "exit"); err != nil {
+	if err := bare.RunSessionEnd(t.Context(), "exit"); err != nil {
 		t.Fatalf("bare RunSessionEnd = %v", err)
 	}
 }
@@ -339,41 +339,41 @@ func TestCheckPermissionModes(t *testing.T) {
 
 	// Plan / read-only allow reads, refuse writes.
 	plan := newAgent(config.ModePlan)
-	if ok, err := plan.checkPermission(context.Background(), read); err != nil || !ok {
+	if ok, err := plan.checkPermission(t.Context(), read); err != nil || !ok {
 		t.Fatalf("plan read = %v/%v", ok, err)
 	}
-	if ok, _ := plan.checkPermission(context.Background(), write); ok {
+	if ok, _ := plan.checkPermission(t.Context(), write); ok {
 		t.Fatal("plan must refuse writes")
 	}
 	ro := newAgent(config.ModeReadOnly)
-	if ok, _ := ro.checkPermission(context.Background(), write); ok {
+	if ok, _ := ro.checkPermission(t.Context(), write); ok {
 		t.Fatal("read-only must refuse writes")
 	}
 
 	// Accept-edits allows writes and reads; a shell tool asks (the interrupt
 	// errors outside a graph run).
 	ae := newAgent(config.ModeAcceptEdits)
-	if ok, err := ae.checkPermission(context.Background(), write); err != nil || !ok {
+	if ok, err := ae.checkPermission(t.Context(), write); err != nil || !ok {
 		t.Fatalf("acceptEdits write = %v/%v", ok, err)
 	}
-	if ok, err := ae.checkPermission(context.Background(), read); err != nil || !ok {
+	if ok, err := ae.checkPermission(t.Context(), read); err != nil || !ok {
 		t.Fatalf("acceptEdits read = %v/%v", ok, err)
 	}
 	askOutsideRun(t, func() {
-		_, _ = ae.checkPermission(context.Background(), messages.ToolCall{Name: "Bash", Args: map[string]any{"command": "make"}})
+		_, _ = ae.checkPermission(t.Context(), messages.ToolCall{Name: "Bash", Args: map[string]any{"command": "make"}})
 	})
 
 	// Default asks for writes.
 	def := newAgent(config.ModeDefault)
-	askOutsideRun(t, func() { _, _ = def.checkPermission(context.Background(), write) })
+	askOutsideRun(t, func() { _, _ = def.checkPermission(t.Context(), write) })
 
 	// Explicit rules win over the mode.
 	rules := newAgent(config.ModeDefault)
 	rules.perms = &permissions.Rules{Allow: []string{"Write"}, Deny: []string{"Read"}}
-	if ok, err := rules.checkPermission(context.Background(), write); err != nil || !ok {
+	if ok, err := rules.checkPermission(t.Context(), write); err != nil || !ok {
 		t.Fatalf("allow rule = %v/%v", ok, err)
 	}
-	if ok, err := rules.checkPermission(context.Background(), read); err != nil || ok {
+	if ok, err := rules.checkPermission(t.Context(), read); err != nil || ok {
 		t.Fatalf("deny rule = %v/%v", ok, err)
 	}
 }
@@ -406,14 +406,14 @@ func TestSpeculativeAllowedMirrorsGate(t *testing.T) {
 
 func TestExecuteUnknownToolAndBashPolicy(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
-	res := a.execute(context.Background(), "NoSuchTool", nil)
+	res := a.execute(t.Context(), "NoSuchTool", nil)
 	if !strings.Contains(res.Content, "unknown tool") {
 		t.Fatalf("result = %q", res.Content)
 	}
 	// A tool returning an error becomes an Error: result.
 	bad := a.toolByName["Read"]
 	_ = bad
-	res = a.execute(context.Background(), "Read", map[string]any{"file_path": 42})
+	res = a.execute(t.Context(), "Read", map[string]any{"file_path": 42})
 	if !strings.Contains(res.Content, "Error") {
 		t.Fatalf("read error result = %q", res.Content)
 	}
@@ -423,7 +423,7 @@ func TestGateInteractionTools(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
 
 	// EnterPlanMode flips plan mode and overrides the result.
-	run, override, err := a.gate(context.Background(), messages.ToolCall{Name: "EnterPlanMode"})
+	run, override, err := a.gate(t.Context(), messages.ToolCall{Name: "EnterPlanMode"})
 	if run || err != nil || override == nil {
 		t.Fatalf("EnterPlanMode gate = %v/%v/%v", run, override, err)
 	}
@@ -433,27 +433,27 @@ func TestGateInteractionTools(t *testing.T) {
 
 	// ExitPlanMode without plan mode reports it.
 	a.SetPlanMode(false)
-	_, override, err = a.gate(context.Background(), messages.ToolCall{Name: "ExitPlanMode"})
+	_, override, err = a.gate(t.Context(), messages.ToolCall{Name: "ExitPlanMode"})
 	if err != nil || override == nil || !strings.Contains(override.Content, "Not currently in plan mode") {
 		t.Fatalf("ExitPlanMode gate = %v/%v", override, err)
 	}
 
 	// ExitPlanMode with a bad args payload errors on decode.
 	a.SetPlanMode(true)
-	if _, _, err := a.gate(context.Background(), messages.ToolCall{Name: "ExitPlanMode", Args: map[string]any{"plan": 42}}); err == nil {
+	if _, _, err := a.gate(t.Context(), messages.ToolCall{Name: "ExitPlanMode", Args: map[string]any{"plan": 42}}); err == nil {
 		// plan is a string field; an int decode failure surfaces the error.
 		t.Fatalf("bad ExitPlanMode args must error: %v", err)
 	}
 
 	// AskUserQuestion with bad args errors.
-	if _, _, err := a.gate(context.Background(), messages.ToolCall{Name: "AskUserQuestion", Args: map[string]any{"questions": 42}}); err == nil {
+	if _, _, err := a.gate(t.Context(), messages.ToolCall{Name: "AskUserQuestion", Args: map[string]any{"questions": 42}}); err == nil {
 		t.Fatal("bad AskUserQuestion args must error")
 	}
 
 	// A denied permission yields the override result.
 	denied := &Agent{mode: config.ModeDefault}
 	denied.perms = &permissions.Rules{Deny: []string{"Write"}}
-	run, override, err = denied.gate(context.Background(), messages.ToolCall{Name: "Write", Args: map[string]any{"file_path": "x"}})
+	run, override, err = denied.gate(t.Context(), messages.ToolCall{Name: "Write", Args: map[string]any{"file_path": "x"}})
 	if run || err != nil || override == nil || !strings.Contains(override.Content, "permission denied") {
 		t.Fatalf("denied gate = %v/%v/%v", run, override, err)
 	}
@@ -522,7 +522,7 @@ func TestFilterAndAllowTools(t *testing.T) {
 func TestForceCompactWithoutSummarizer(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
 	history := []messages.Message{messages.Human("x")}
-	if got := a.ForceCompact(context.Background(), history); len(got) != 1 {
+	if got := a.ForceCompact(t.Context(), history); len(got) != 1 {
 		t.Fatalf("ForceCompact without summarizer = %d msgs", len(got))
 	}
 }
@@ -546,20 +546,20 @@ func TestPreCompactHookBlocksCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	history := bigHistory()
-	if got := a.CompactHistory(context.Background(), history); len(got) != len(history) {
+	if got := a.CompactHistory(t.Context(), history); len(got) != len(history) {
 		t.Fatalf("blocked compaction changed history: %d -> %d", len(history), len(got))
 	}
 }
 
 func TestStreamDelegatesAndResumeCheckpointError(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("hi"))))
-	for _, err := range a.Stream(context.Background(), []messages.Message{messages.Human("x")}, "t") {
+	for _, err := range a.Stream(t.Context(), []messages.Message{messages.Human("x")}, "t") {
 		if err != nil {
 			t.Fatalf("stream error: %v", err)
 		}
 	}
 	// ResumeCheckpoint on an unknown thread errors.
-	if _, err := a.ResumeCheckpoint(context.Background(), "no-such-thread", "y"); err == nil {
+	if _, err := a.ResumeCheckpoint(t.Context(), "no-such-thread", "y"); err == nil {
 		t.Fatal("ResumeCheckpoint on unknown thread must error")
 	}
 }
@@ -588,7 +588,7 @@ func TestCurrentModelNameUsesNameMethod(t *testing.T) {
 
 func TestRunTurnSurfacesGraphError(t *testing.T) {
 	a := newBypassAgent(t, erroringSubagentModel{language.NewFakeChatModel()})
-	if _, err := a.runTurn(context.Background(), []messages.Message{messages.Human("x")}, "t"); err == nil {
+	if _, err := a.runTurn(t.Context(), []messages.Message{messages.Human("x")}, "t"); err == nil {
 		t.Fatal("model error must propagate through the graph")
 	}
 }

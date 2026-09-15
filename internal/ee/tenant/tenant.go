@@ -339,7 +339,7 @@ func (s *Store) IssueKey(_ context.Context, tenantID, userID, name, role string)
 	}
 
 	// Retry on the (astronomically unlikely) prefix collision.
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := range 5 {
 		prefix, err := randomHex(keyPrefixLen / 2)
 		if err != nil {
 			return APIKey{}, "", err
@@ -639,7 +639,7 @@ func constantTimeEqualHex(a, b string) bool {
 		return false
 	}
 	var v byte
-	for i := 0; i < len(a); i++ {
+	for i := range len(a) {
 		v |= a[i] ^ b[i]
 	}
 	return v == 0

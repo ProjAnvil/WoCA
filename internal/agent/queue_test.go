@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -45,7 +44,7 @@ func TestQueuedInputInjectedAfterToolResults(t *testing.T) {
 	a := newQueueTestAgent(t, &recorder{}, 10)
 	a.QueueInput("actually, also check the tests")
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run the check")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("run the check")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +84,7 @@ func TestQueuedInputDuringToolExecution(t *testing.T) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run the check")}, "t")
+		out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("run the check")}, "t")
 		done <- result{out, err}
 	}()
 
@@ -113,7 +112,7 @@ func TestQueuedInputDuringToolExecution(t *testing.T) {
 
 func TestNoQueuedInputNoExtraMessages(t *testing.T) {
 	a := newQueueTestAgent(t, &recorder{}, 10)
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run the check")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("run the check")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,12 +150,10 @@ func TestQueueDrainSemantics(t *testing.T) {
 func TestQueueInputConcurrent(t *testing.T) {
 	a := newQueueTestAgent(t, &recorder{}, 1)
 	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+	for i := range 32 {
+		wg.Go(func() {
 			a.QueueInput(strings.Repeat("x", i+1))
-		}(i)
+		})
 	}
 	wg.Wait()
 	if got := a.QueuedInputCount(); got != 32 {

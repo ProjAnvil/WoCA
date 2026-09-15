@@ -96,27 +96,27 @@ func TestStdioClientEndToEnd(t *testing.T) {
 	if client.Name() != "helper" {
 		t.Fatalf("Name = %q", client.Name())
 	}
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	tools, err := client.ListTools(context.Background())
+	tools, err := client.ListTools(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(tools) != 1 || tools[0].Name != "echo" {
 		t.Fatalf("tools = %+v", tools)
 	}
-	out, err := client.CallTool(context.Background(), "echo", map[string]any{"message": "hi"})
+	out, err := client.CallTool(t.Context(), "echo", map[string]any{"message": "hi"})
 	if err != nil || out != "echoed: hi" {
 		t.Fatalf("CallTool = %q %v", out, err)
 	}
 
 	// Resource listing/reading.
-	resources, err := client.ListResources(context.Background())
+	resources, err := client.ListResources(t.Context())
 	if err != nil || len(resources) != 1 || resources[0].URI != "memo://one" {
 		t.Fatalf("resources = %+v %v", resources, err)
 	}
-	body, err := client.ReadResource(context.Background(), "memo://one")
+	body, err := client.ReadResource(t.Context(), "memo://one")
 	if err != nil || body != "resource body" {
 		t.Fatalf("ReadResource = %q %v", body, err)
 	}
@@ -129,7 +129,7 @@ func TestStdioClientEndToEnd(t *testing.T) {
 	if got := core[0].Name(); got != "mcp__helper__echo" {
 		t.Fatalf("tool name = %q", got)
 	}
-	res, err := core[0].Invoke(context.Background(), map[string]any{"message": "tool"})
+	res, err := core[0].Invoke(t.Context(), map[string]any{"message": "tool"})
 	if err != nil || res.Content != "echoed: tool" {
 		t.Fatalf("invoke = %+v %v", res, err)
 	}
@@ -139,11 +139,11 @@ func TestStdioClientEndToEnd(t *testing.T) {
 	if len(rt) != 2 {
 		t.Fatalf("resource tools = %d", len(rt))
 	}
-	listRes, err := rt[0].Invoke(context.Background(), map[string]any{})
+	listRes, err := rt[0].Invoke(t.Context(), map[string]any{})
 	if err != nil || !strings.Contains(listRes.Content, "memo://one") {
 		t.Fatalf("list resource tool = %+v %v", listRes, err)
 	}
-	readRes, err := rt[1].Invoke(context.Background(), map[string]any{"uri": "memo://one"})
+	readRes, err := rt[1].Invoke(t.Context(), map[string]any{"uri": "memo://one"})
 	if err != nil || readRes.Content != "resource body" {
 		t.Fatalf("read resource tool = %+v %v", readRes, err)
 	}
@@ -154,11 +154,11 @@ func TestStdioClientEndToEnd(t *testing.T) {
 	if len(pt) < 2 {
 		t.Fatalf("prompt tools = %d", len(pt))
 	}
-	listPrompt, err := pt[0].Invoke(context.Background(), map[string]any{})
+	listPrompt, err := pt[0].Invoke(t.Context(), map[string]any{})
 	if err != nil || !strings.Contains(listPrompt.Content, "greet") {
 		t.Fatalf("prompt list = %+v %v", listPrompt, err)
 	}
-	getPrompt, err := pt[1].Invoke(context.Background(), map[string]any{"name": "greet"})
+	getPrompt, err := pt[1].Invoke(t.Context(), map[string]any{"name": "greet"})
 	if err != nil || !strings.Contains(getPrompt.Content, "hello prompt") {
 		t.Fatalf("prompt get = %+v %v", getPrompt, err)
 	}
@@ -202,7 +202,7 @@ func TestStdioTransportDirect(t *testing.T) {
 			notified = "yes"
 		}
 	})
-	resp, err := tr.roundTrip(context.Background(), 7, []byte(`{"jsonrpc":"2.0","id":7,"method":"ping"}`))
+	resp, err := tr.roundTrip(t.Context(), 7, []byte(`{"jsonrpc":"2.0","id":7,"method":"ping"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestStdioTransportDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Cancelled context fails fast.
-	cancelled, cancel := context.WithCancel(context.Background())
+	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := tr.roundTrip(cancelled, 8, []byte(`{"jsonrpc":"2.0","id":8,"method":"ping"}`)); err == nil {
 		t.Fatal("expected ctx error")
@@ -260,7 +260,7 @@ func TestTransportSkipGarbageAndWrongID(t *testing.T) {
 		}
 	}()
 	tr := newStdioTransportFromIO(clientW, clientR)
-	resp, err := tr.roundTrip(context.Background(), 3, []byte(`{"jsonrpc":"2.0","id":3,"method":"ping"}`))
+	resp, err := tr.roundTrip(t.Context(), 3, []byte(`{"jsonrpc":"2.0","id":3,"method":"ping"}`))
 	if err != nil || resp.ID != 3 {
 		t.Fatalf("roundTrip = %+v %v", resp, err)
 	}

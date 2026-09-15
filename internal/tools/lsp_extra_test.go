@@ -179,7 +179,7 @@ func TestLSPToolConfiguredServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := NewRegistry(dir)
-	res := reg.Execute(context.Background(), "LSP", map[string]any{"path": "x.go"})
+	res := reg.Execute(t.Context(), "LSP", map[string]any{"path": "x.go"})
 	if strings.Contains(res.Content, "Error:") {
 		t.Fatalf("configured LSP run = %q", res.Content)
 	}
@@ -206,7 +206,7 @@ func TestLSPToolPooledServerInitializedOnce(t *testing.T) {
 	reg := NewRegistry(dir)
 	defer reg.Close()
 	for i := 1; i <= 2; i++ {
-		res := reg.Execute(context.Background(), "LSP", map[string]any{"path": "x.go"})
+		res := reg.Execute(t.Context(), "LSP", map[string]any{"path": "x.go"})
 		if strings.Contains(res.Content, "Error:") {
 			t.Fatalf("pooled LSP call %d = %q", i, res.Content)
 		}
@@ -222,7 +222,7 @@ func TestLSPToolPooledServerInitializedOnce(t *testing.T) {
 func TestLSPToolStartFailure(t *testing.T) {
 	t.Setenv("WOCA_LSP_SERVER", "/nonexistent/lsp-server-binary")
 	reg := NewRegistry(t.TempDir())
-	res := reg.Execute(context.Background(), "LSP", map[string]any{"path": "x.go"})
+	res := reg.Execute(t.Context(), "LSP", map[string]any{"path": "x.go"})
 	// The pool surfaces the raw spawn error (no "start LSP server" prefix).
 	if !strings.Contains(res.Content, "Error:") || !strings.Contains(res.Content, "/nonexistent/lsp-server-binary") {
 		t.Fatalf("start failure = %q", res.Content)
@@ -233,7 +233,7 @@ func TestLSPToolServerError(t *testing.T) {
 	bin := buildLSPTestServer(t)
 	t.Setenv("WOCA_LSP_SERVER", bin+" err")
 	reg := NewRegistry(t.TempDir())
-	res := reg.Execute(context.Background(), "LSP", map[string]any{"path": "x.go"})
+	res := reg.Execute(t.Context(), "LSP", map[string]any{"path": "x.go"})
 	if !strings.Contains(res.Content, "Error: lsp: initialize: boom") {
 		t.Fatalf("server error = %q", res.Content)
 	}
@@ -248,7 +248,7 @@ func TestLSPTransportCallAfterClose(t *testing.T) {
 	if err := tr.Close(); err != nil {
 		t.Fatalf("first Close: %v", err)
 	}
-	if err := tr.Call(context.Background(), "initialize", map[string]any{}, nil); err == nil ||
+	if err := tr.Call(t.Context(), "initialize", map[string]any{}, nil); err == nil ||
 		!strings.Contains(err.Error(), "transport closed") {
 		t.Fatalf("Call after Close = %v, want transport closed", err)
 	}
@@ -264,7 +264,7 @@ func TestLSPTransportCallContextCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tr.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	var result json.RawMessage
 	if err := tr.Call(ctx, "initialize", map[string]any{}, &result); err == nil {
@@ -280,7 +280,7 @@ func TestLSPTransportSkipsMalformedFrames(t *testing.T) {
 	}
 	defer tr.Close()
 	var result json.RawMessage
-	if err := tr.Call(context.Background(), "initialize", map[string]any{}, &result); err != nil {
+	if err := tr.Call(t.Context(), "initialize", map[string]any{}, &result); err != nil {
 		t.Fatalf("Call after malformed frame = %v, want success", err)
 	}
 }
@@ -291,7 +291,7 @@ func TestLSPTransportServerDeathFailsPendingCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	var result json.RawMessage
 	if err := tr.Call(ctx, "initialize", map[string]any{}, &result); err == nil {
@@ -305,7 +305,7 @@ func TestLSPDiagnosticsTransportErrors(t *testing.T) {
 	if err := os.WriteFile(path, []byte("package a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Handshake failures surface from lspInitialize (the pool's one-time
 	// initialize per spawned server).
@@ -342,7 +342,7 @@ func TestLSPDiagnosticsSeverityFallback(t *testing.T) {
 			},
 		},
 	}}
-	out, err := lspDiagnostics(context.Background(), tr, path)
+	out, err := lspDiagnostics(t.Context(), tr, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestLSPTransportEmptyResultCall(t *testing.T) {
 	}
 	defer tr.Close()
 	var result json.RawMessage
-	if err := tr.Call(context.Background(), "initialize", map[string]any{}, &result); err != nil {
+	if err := tr.Call(t.Context(), "initialize", map[string]any{}, &result); err != nil {
 		t.Fatalf("empty-result Call = %v, want nil", err)
 	}
 	if len(result) != 0 {
@@ -396,7 +396,7 @@ func TestLSPTransportWriteAfterServerDeath(t *testing.T) {
 	}
 	// Wait for the exited server so the stdin write deterministically EPIPEs.
 	_ = tr.proc.Wait()
-	if err := tr.Call(context.Background(), "initialize", map[string]any{}, nil); err == nil {
+	if err := tr.Call(t.Context(), "initialize", map[string]any{}, nil); err == nil {
 		t.Fatal("Call after server death = nil error, want write failure")
 	}
 	_ = tr.Close() // second Wait errors; the transport is already dead

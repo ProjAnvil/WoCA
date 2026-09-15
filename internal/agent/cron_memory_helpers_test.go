@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -72,30 +73,30 @@ func TestScheduleCronToolPaths(t *testing.T) {
 	defer a.stopCron()
 
 	// Empty list.
-	if res := a.execute(context.Background(), "ScheduleCron", map[string]any{"list": true}); res.Content != "(no scheduled entries)" {
+	if res := a.execute(t.Context(), "ScheduleCron", map[string]any{"list": true}); res.Content != "(no scheduled entries)" {
 		t.Fatalf("empty list = %q", res.Content)
 	}
 	// Create requires prompt and cron.
-	if res := a.execute(context.Background(), "ScheduleCron", map[string]any{"prompt": "p"}); !strings.Contains(res.Content, "requires prompt and cron") {
+	if res := a.execute(t.Context(), "ScheduleCron", map[string]any{"prompt": "p"}); !strings.Contains(res.Content, "requires prompt and cron") {
 		t.Fatalf("missing cron = %q", res.Content)
 	}
 	// Invalid spec surfaces the parser error.
-	if res := a.execute(context.Background(), "ScheduleCron", map[string]any{"prompt": "p", "cron": "bad"}); !strings.Contains(res.Content, "Error:") {
+	if res := a.execute(t.Context(), "ScheduleCron", map[string]any{"prompt": "p", "cron": "bad"}); !strings.Contains(res.Content, "Error:") {
 		t.Fatalf("bad cron = %q", res.Content)
 	}
 	// Create + list + delete round-trip.
-	res := a.execute(context.Background(), "ScheduleCron", map[string]any{"name": "tick", "prompt": "first line\nsecond line", "cron": "* * * * *"})
+	res := a.execute(t.Context(), "ScheduleCron", map[string]any{"name": "tick", "prompt": "first line\nsecond line", "cron": "* * * * *"})
 	if !strings.Contains(res.Content, "Scheduled cron-1") {
 		t.Fatalf("create = %q", res.Content)
 	}
-	res = a.execute(context.Background(), "ScheduleCron", map[string]any{"list": true})
+	res = a.execute(t.Context(), "ScheduleCron", map[string]any{"list": true})
 	if !strings.Contains(res.Content, "cron-1") || !strings.Contains(res.Content, "tick: first line") {
 		t.Fatalf("list = %q", res.Content)
 	}
-	if res := a.execute(context.Background(), "ScheduleCron", map[string]any{"delete_id": "cron-1"}); !strings.Contains(res.Content, "Deleted cron-1") {
+	if res := a.execute(t.Context(), "ScheduleCron", map[string]any{"delete_id": "cron-1"}); !strings.Contains(res.Content, "Deleted cron-1") {
 		t.Fatalf("delete = %q", res.Content)
 	}
-	if res := a.execute(context.Background(), "ScheduleCron", map[string]any{"delete_id": "cron-1"}); !strings.Contains(res.Content, "no scheduled entry") {
+	if res := a.execute(t.Context(), "ScheduleCron", map[string]any{"delete_id": "cron-1"}); !strings.Contains(res.Content, "no scheduled entry") {
 		t.Fatalf("double delete = %q", res.Content)
 	}
 }
@@ -133,7 +134,7 @@ func TestPreviewCronAndText(t *testing.T) {
 
 func TestFileHistoryDelegates(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
-	ctx := context.Background()
+	ctx := t.Context()
 	if a.FileHistory() == nil {
 		t.Fatal("registry-backed agent should expose FileHistory")
 	}
@@ -221,28 +222,28 @@ func TestMemoryToolsErrorAndDisabledPaths(t *testing.T) {
 
 	// Engine errors surface as tool errors.
 	f.searchErr = errors.New("search boom")
-	if _, err := byName["search_code"].Invoke(context.Background(), map[string]any{"query": "x"}); err == nil {
+	if _, err := byName["search_code"].Invoke(t.Context(), map[string]any{"query": "x"}); err == nil {
 		t.Fatal("search_code error must propagate")
 	}
 	f.searchErr = nil
 	f.err = true
-	if _, err := byName["recall_memory"].Invoke(context.Background(), map[string]any{"query": "x"}); err == nil {
+	if _, err := byName["recall_memory"].Invoke(t.Context(), map[string]any{"query": "x"}); err == nil {
 		t.Fatal("recall_memory error must propagate")
 	}
 	f.err = false
 	f.rememberErr = errors.New("remember boom")
-	if _, err := byName["remember_fact"].Invoke(context.Background(), map[string]any{"content": "c"}); err == nil {
+	if _, err := byName["remember_fact"].Invoke(t.Context(), map[string]any{"content": "c"}); err == nil {
 		t.Fatal("remember_fact error must propagate")
 	}
 	f.rememberErr = nil
 	f.indexErr = errors.New("index boom")
-	if _, err := byName["index_code"].Invoke(context.Background(), map[string]any{"root": "/src"}); err == nil {
+	if _, err := byName["index_code"].Invoke(t.Context(), map[string]any{"root": "/src"}); err == nil {
 		t.Fatal("index_code error must propagate")
 	}
 	f.indexErr = nil
 
 	// index_code defaults the root to the agent workdir and returns the report.
-	res, err := byName["index_code"].Invoke(context.Background(), map[string]any{})
+	res, err := byName["index_code"].Invoke(t.Context(), map[string]any{})
 	if err != nil || res.Content != "indexed 3 files" {
 		t.Fatalf("index_code = %q, %v", res.Content, err)
 	}
@@ -256,7 +257,7 @@ func TestMemoryToolsErrorAndDisabledPaths(t *testing.T) {
 	// A nil engine after the tools were built: every tool degrades to a note.
 	a.mem.SetEngine(nil)
 	for _, name := range []string{"recall_memory", "search_code", "remember_fact", "index_code"} {
-		res, err := byName[name].Invoke(context.Background(), map[string]any{"query": "x", "content": "c"})
+		res, err := byName[name].Invoke(t.Context(), map[string]any{"query": "x", "content": "c"})
 		if err != nil || res.Content != "memory disabled" {
 			t.Fatalf("%s with nil engine = %q, %v", name, res.Content, err)
 		}
@@ -276,15 +277,15 @@ func TestMemoryRuntimeSetEngineAndGuards(t *testing.T) {
 		t.Fatal("SetEngine did not swap")
 	}
 	// Begin without an engine or store is a no-op.
-	m.Begin(context.Background(), []messages.Message{messages.Human("find the auth token")}, "/ws")
+	m.Begin(t.Context(), []messages.Message{messages.Human("find the auth token")}, "/ws")
 	// Begin with an engine but no human query is a no-op.
 	m.SetEngine(&fakeEngine{})
-	m.Begin(context.Background(), nil, "/ws")
+	m.Begin(t.Context(), nil, "/ws")
 }
 
 func TestMemoryBeginKVPathAndAttachments(t *testing.T) {
 	kv := store.NewMemory()
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := kv.Put(ctx, "ns", "authkey", "holds the auth token"); err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +330,7 @@ func TestMemoryBeginKVPathAndAttachments(t *testing.T) {
 		defer b.mem.mu.Unlock()
 		return len(b.mem.prefetch.entries) > 0
 	}, "second KV prefetch settle")
-	for _, m := range b.mem.TakeAttachments(context.Background()) {
+	for _, m := range b.mem.TakeAttachments(t.Context()) {
 		if strings.Contains(m.Content, "ns/empty\n\n") {
 			t.Fatalf("empty entry attached: %q", m.Content)
 		}
@@ -343,27 +344,27 @@ func TestTakeAttachmentsBoundsAndReset(t *testing.T) {
 	m := memoryRuntime{}
 	m.mu.Lock()
 	var hits []memory.Hit
-	for i := 0; i < 7; i++ {
+	for i := range 7 {
 		hits = append(hits, memory.Hit{ID: string(rune('a' + i)), Layer: "L2", Type: "fact", Summary: "s"})
 	}
 	// One hit with neither summary nor content is skipped.
 	hits = append(hits, memory.Hit{ID: "blank", Layer: "L2", Type: "fact"})
 	m.prefetch.engineHits = hits
 	m.mu.Unlock()
-	got := m.TakeAttachments(context.Background())
+	got := m.TakeAttachments(t.Context())
 	if len(got) != 5 {
 		t.Fatalf("attachments = %d, want the max of 5", len(got))
 	}
 	// The injected set resets past its bound instead of growing unbounded.
 	m.mu.Lock()
 	injected := map[string]bool{}
-	for i := 0; i < injectedMemoryLimit+10; i++ {
+	for i := range injectedMemoryLimit + 10 {
 		injected[string(rune(i%128))+"x"+string(rune(i))] = true
 	}
 	m.prefetch.injected = injected
 	m.prefetch.engineHits = []memory.Hit{{ID: "fresh", Layer: "L2", Type: "fact", Summary: "s"}}
 	m.mu.Unlock()
-	if out := m.TakeAttachments(context.Background()); len(out) != 1 {
+	if out := m.TakeAttachments(t.Context()); len(out) != 1 {
 		t.Fatalf("post-reset attachments = %d", len(out))
 	}
 	m.mu.Lock()
@@ -410,18 +411,13 @@ func TestMemoryStringHelpers(t *testing.T) {
 }
 
 func seenTerm(terms []string, want string) bool {
-	for _, t := range terms {
-		if t == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(terms, want)
 }
 
 // --- retain.go ---
 
 func TestRetainRunAndGoalPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// No engine: no-op.
 	bare := memoryRuntime{}
@@ -532,8 +528,8 @@ func TestMaybeBeginTaskSummaryGenerates(t *testing.T) {
 	msgs := []messages.Message{messages.Human("do the thing")}
 	// Subagents never generate summaries.
 	a.subagent = true
-	for i := 0; i < 8; i++ {
-		a.maybeBeginTaskSummary(context.Background(), msgs)
+	for range 8 {
+		a.maybeBeginTaskSummary(t.Context(), msgs)
 	}
 	if a.TaskSummary() != "" {
 		t.Fatal("subagent must not generate task summaries")
@@ -542,7 +538,7 @@ func TestMaybeBeginTaskSummaryGenerates(t *testing.T) {
 	a.taskState.mu.Lock()
 	a.taskState.rounds = taskSummaryInterval - 1
 	a.taskState.mu.Unlock()
-	a.maybeBeginTaskSummary(context.Background(), msgs)
+	a.maybeBeginTaskSummary(t.Context(), msgs)
 	waitFor(t, 5*time.Second, func() bool { return a.TaskSummary() == "Writing the report" }, "task summary generated")
 }
 
@@ -621,12 +617,12 @@ func TestReactiveCompactHistoryGuards(t *testing.T) {
 	history := []messages.Message{messages.Human("hello")}
 	// No summarizer: unchanged.
 	bare := &Agent{}
-	if got := bare.ReactiveCompactHistory(context.Background(), history); len(got) != 1 {
+	if got := bare.ReactiveCompactHistory(t.Context(), history); len(got) != 1 {
 		t.Fatalf("nil summarizer changed history")
 	}
 	// Empty history: unchanged.
 	a := &Agent{summarizer: language.NewFakeChatModel(language.WithResponses(messages.AI("s")))}
-	if got := a.ReactiveCompactHistory(context.Background(), nil); got != nil {
+	if got := a.ReactiveCompactHistory(t.Context(), nil); got != nil {
 		t.Fatalf("empty history = %v", got)
 	}
 	// PreCompact hook blocked: unchanged.
@@ -635,12 +631,12 @@ func TestReactiveCompactHistoryGuards(t *testing.T) {
 			return hooks.CommandResult{ExitCode: 2}, nil
 		}))
 	blocked := &Agent{summarizer: language.NewFakeChatModel(), hooks: blocker}
-	if got := blocked.ReactiveCompactHistory(context.Background(), history); len(got) != 1 {
+	if got := blocked.ReactiveCompactHistory(t.Context(), history); len(got) != 1 {
 		t.Fatalf("blocked compaction changed history")
 	}
 	// Failing summarizer: history returned as-is (caller surfaces the error).
 	failing := &Agent{summarizer: failingSummarizer{language.NewFakeChatModel()}}
-	if got := failing.ReactiveCompactHistory(context.Background(), history); len(got) != 1 {
+	if got := failing.ReactiveCompactHistory(t.Context(), history); len(got) != 1 {
 		t.Fatalf("failed compaction changed history")
 	}
 }
@@ -694,17 +690,17 @@ func TestRecoverOutputLimitTurnErrors(t *testing.T) {
 	esc := &Agent{escalate: func() (language.ChatModel, error) {
 		return language.NewFakeChatModel(), nil
 	}}
-	if _, err := esc.RecoverOutputLimit(context.Background(), history, truncated, turnErr); err == nil {
+	if _, err := esc.RecoverOutputLimit(t.Context(), history, truncated, turnErr); err == nil {
 		t.Fatal("escalated turn error must propagate")
 	}
 	// Without an escalator the continuation retry failure surfaces too.
 	plain := &Agent{}
-	if _, err := plain.RecoverOutputLimit(context.Background(), history, truncated, turnErr); err == nil {
+	if _, err := plain.RecoverOutputLimit(t.Context(), history, truncated, turnErr); err == nil {
 		t.Fatal("continuation turn error must propagate")
 	}
 	// A non-truncated tail returns out unchanged.
 	ok := []messages.Message{messages.AI("fine")}
-	if got, err := plain.RecoverOutputLimit(context.Background(), history, ok, turnErr); err != nil || len(got) != 1 {
+	if got, err := plain.RecoverOutputLimit(t.Context(), history, ok, turnErr); err != nil || len(got) != 1 {
 		t.Fatalf("non-truncated = %v, %v", got, err)
 	}
 }
@@ -726,10 +722,10 @@ func TestMcpAuthToolErrorPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res := a.execute(context.Background(), "McpAuth", map[string]any{"server": "bad"}); !strings.Contains(res.Content, "oauth failed") {
+	if res := a.execute(t.Context(), "McpAuth", map[string]any{"server": "bad"}); !strings.Contains(res.Content, "oauth failed") {
 		t.Fatalf("failed flow = %q", res.Content)
 	}
-	if res := a.execute(context.Background(), "McpAuth", map[string]any{"server": "good"}); !strings.Contains(res.Content, "Authorized MCP server good") {
+	if res := a.execute(t.Context(), "McpAuth", map[string]any{"server": "good"}); !strings.Contains(res.Content, "Authorized MCP server good") {
 		t.Fatalf("success = %q", res.Content)
 	}
 }
@@ -775,7 +771,7 @@ func TestQueueTaggedEmpty(t *testing.T) {
 func TestToolSummaryBufferBounds(t *testing.T) {
 	var b toolSummaryBuffer
 	// More than the cap: the oldest are evicted.
-	for i := 0; i < maxPendingToolSummaries+5; i++ {
+	for i := range maxPendingToolSummaries + 5 {
 		b.add(&toolSummary{ids: []string{string(rune('a' + i%26))}, done: make(chan struct{})})
 	}
 	if got := b.settled(); len(got) != 0 {
@@ -797,7 +793,7 @@ func TestToolSummaryBufferBounds(t *testing.T) {
 	// waitAll with a cancelled ctx returns what settled.
 	pending := &toolSummary{ids: []string{"p"}, done: make(chan struct{})}
 	b.add(pending)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if got := b.waitAll(ctx); got != nil {
 		t.Fatalf("waitAll on cancelled ctx = %v", got)
@@ -814,7 +810,7 @@ func TestBeginToolUseSummaryJoinsBatches(t *testing.T) {
 		{ID: "2", Name: "Read", Args: map[string]any{"file_path": "x"}},
 	}
 	results := []messages.Message{messages.Tool("1", "ok"), messages.Tool("2", "data")}
-	a.beginToolUseSummary(context.Background(), calls, results, "checking things")
+	a.beginToolUseSummary(t.Context(), calls, results, "checking things")
 	if a.PendingToolUseSummaryCount() != 1 {
 		t.Fatalf("pending = %d", a.PendingToolUseSummaryCount())
 	}
@@ -823,7 +819,7 @@ func TestBeginToolUseSummaryJoinsBatches(t *testing.T) {
 	}, "summary settled")
 	// Subagents and disabled agents skip generation entirely.
 	b := &Agent{subagent: true, emitSummaries: true, summarizer: language.NewFakeChatModel()}
-	b.beginToolUseSummary(context.Background(), calls, results, "")
+	b.beginToolUseSummary(t.Context(), calls, results, "")
 	if b.PendingToolUseSummaryCount() != 0 {
 		t.Fatal("subagent must not buffer summaries")
 	}
@@ -841,7 +837,7 @@ func TestSpeculativeRegistryBounds(t *testing.T) {
 		t.Fatal("duplicate add must be rejected")
 	}
 	// Eviction past the cap keeps the registry bounded.
-	for i := 0; i < maxSpeculativeFutures+10; i++ {
+	for i := range maxSpeculativeFutures + 10 {
 		r.add(string(rune(i%128))+string(rune(i/128))+"-"+string(rune(i%10)), newToolFuture(nil))
 	}
 	r.mu.Lock()
@@ -851,7 +847,7 @@ func TestSpeculativeRegistryBounds(t *testing.T) {
 		t.Fatalf("registry = %d, want <= %d", size, maxSpeculativeFutures)
 	}
 	// cancel aborts and removes.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	g := newToolFuture(cancel)
 	r.add("gate", g)
 	r.cancel("gate")
@@ -869,10 +865,10 @@ func TestDispatchSpeculativeDuplicateIgnored(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(
 		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true})))
 	call := messages.ToolCall{ID: "d1", Name: "Read", Args: map[string]any{"file_path": "x.go"}}
-	if !a.dispatchSpeculative(context.Background(), call) {
+	if !a.dispatchSpeculative(t.Context(), call) {
 		t.Fatal("first dispatch must start")
 	}
-	if a.dispatchSpeculative(context.Background(), call) {
+	if a.dispatchSpeculative(t.Context(), call) {
 		t.Fatal("duplicate dispatch must be ignored")
 	}
 	// Wait for the future to finish so the test does not race the registry.
@@ -882,10 +878,10 @@ func TestDispatchSpeculativeDuplicateIgnored(t *testing.T) {
 	}
 	a.spec.consume("d1")
 	// Calls the gate would interrupt are never dispatched.
-	if a.dispatchSpeculative(context.Background(), messages.ToolCall{ID: "d2", Name: "AskUserQuestion"}) {
+	if a.dispatchSpeculative(t.Context(), messages.ToolCall{ID: "d2", Name: "AskUserQuestion"}) {
 		t.Fatal("interaction gate must not pre-run")
 	}
-	if a.dispatchSpeculative(context.Background(), messages.ToolCall{ID: "", Name: "Read"}) {
+	if a.dispatchSpeculative(t.Context(), messages.ToolCall{ID: "", Name: "Read"}) {
 		t.Fatal("id-less call must not dispatch")
 	}
 }
@@ -910,7 +906,7 @@ func TestRunToolCallHookFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msg := a.runToolCall(context.Background(), messages.ToolCall{ID: "h1", Name: "Read", Args: map[string]any{"file_path": "missing.txt"}})
+	msg := a.runToolCall(t.Context(), messages.ToolCall{ID: "h1", Name: "Read", Args: map[string]any{"file_path": "missing.txt"}})
 	if !strings.Contains(msg.Content, "pre-context") || !strings.Contains(msg.Content, "post-context") {
 		t.Fatalf("hook feedback missing from result: %q", msg.Content)
 	}
@@ -930,7 +926,7 @@ func TestRunToolCallHookFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msg = b.runToolCall(context.Background(), messages.ToolCall{ID: "h2", Name: "Read", Args: map[string]any{"file_path": "x"}})
+	msg = b.runToolCall(t.Context(), messages.ToolCall{ID: "h2", Name: "Read", Args: map[string]any{"file_path": "x"}})
 	if !strings.Contains(msg.Content, "no reads") {
 		t.Fatalf("deny result = %q", msg.Content)
 	}

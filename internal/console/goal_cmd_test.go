@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -12,7 +11,7 @@ func TestGoalCommandLifecycle(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 	sess := &Session{}
 
-	res, err := c.Execute(context.Background(), "goal", nil, sess)
+	res, err := c.Execute(t.Context(), "goal", nil, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +19,7 @@ func TestGoalCommandLifecycle(t *testing.T) {
 		t.Fatalf("status without goal = %q", res.Output)
 	}
 
-	res, err = c.Execute(context.Background(), "goal", []string{"set", "--cycles", "3", "make", "the", "tests", "pass"}, sess)
+	res, err = c.Execute(t.Context(), "goal", []string{"set", "--cycles", "3", "make", "the", "tests", "pass"}, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +27,7 @@ func TestGoalCommandLifecycle(t *testing.T) {
 		t.Fatalf("set output = %q", res.Output)
 	}
 
-	res, err = c.Execute(context.Background(), "goal", nil, sess)
+	res, err = c.Execute(t.Context(), "goal", nil, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,26 +36,26 @@ func TestGoalCommandLifecycle(t *testing.T) {
 		t.Fatalf("status = %q", res.Output)
 	}
 
-	res, err = c.Execute(context.Background(), "goal", []string{"pause"}, sess)
+	res, err = c.Execute(t.Context(), "goal", []string{"pause"}, sess)
 	if err != nil || !strings.Contains(res.Output, "paused") {
 		t.Fatalf("pause = %q err=%v", res.Output, err)
 	}
-	res, err = c.Execute(context.Background(), "goal", nil, sess)
+	res, err = c.Execute(t.Context(), "goal", nil, sess)
 	if err != nil || !strings.Contains(res.Output, "[paused]") {
 		t.Fatalf("paused status = %q err=%v", res.Output, err)
 	}
 
-	res, err = c.Execute(context.Background(), "goal", []string{"resume"}, sess)
+	res, err = c.Execute(t.Context(), "goal", []string{"resume"}, sess)
 	if err != nil || !strings.Contains(res.Output, "resumed") {
 		t.Fatalf("resume = %q err=%v", res.Output, err)
 	}
 
-	res, err = c.Execute(context.Background(), "goal", []string{"budget", "cycles", "8"}, sess)
+	res, err = c.Execute(t.Context(), "goal", []string{"budget", "cycles", "8"}, sess)
 	if err != nil || !strings.Contains(res.Output, "cycle 0/8") {
 		t.Fatalf("budget = %q err=%v", res.Output, err)
 	}
 
-	res, err = c.Execute(context.Background(), "goal", []string{"clear"}, sess)
+	res, err = c.Execute(t.Context(), "goal", []string{"clear"}, sess)
 	if err != nil || !strings.Contains(res.Output, "cleared") {
 		t.Fatalf("clear = %q err=%v", res.Output, err)
 	}
@@ -64,12 +63,12 @@ func TestGoalCommandLifecycle(t *testing.T) {
 		t.Fatal("goal not dropped")
 	}
 
-	if _, err := c.Execute(context.Background(), "goal", []string{"set"}, sess); err == nil {
+	if _, err := c.Execute(t.Context(), "goal", []string{"set"}, sess); err == nil {
 		t.Fatal("set without objective should fail")
 	}
 
 	// Free text without a verb is shorthand for set.
-	res, err = c.Execute(context.Background(), "goal", []string{"just", "wibble", "it"}, sess)
+	res, err = c.Execute(t.Context(), "goal", []string{"just", "wibble", "it"}, sess)
 	if err != nil || !strings.Contains(res.Output, "goal set") {
 		t.Fatalf("free-text set = %q err=%v", res.Output, err)
 	}
@@ -80,7 +79,7 @@ func TestGoalCommandLifecycle(t *testing.T) {
 
 func TestGoalCommandSurface(t *testing.T) {
 	c, _ := newAgentConsole(t, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	run := func(args ...string) (string, error) {
@@ -161,7 +160,7 @@ func TestFormatGoalVariants(t *testing.T) {
 	}
 	// Long progress windows trim to the last five cycles.
 	g = base
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		g.Progress = append(g.Progress, agent.GoalProgressEntry{Cycle: i + 1, Verdict: "continue", Summary: fmt_Sprintf("cycle-%d", i+1)})
 	}
 	out = formatGoal(&g)
@@ -172,7 +171,7 @@ func TestFormatGoalVariants(t *testing.T) {
 
 func TestGoalCommandEdgeErrors(t *testing.T) {
 	c, _ := newAgentConsole(t, nil)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 	run := func(args ...string) error {
 		_, err := c.Execute(ctx, "goal", args, s)

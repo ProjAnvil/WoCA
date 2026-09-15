@@ -114,8 +114,7 @@ func (b *BackgroundShells) Start(command, workdir, baseWorkdir string) (string, 
 		code := 0
 		if err := proc.Wait(); err != nil {
 			code = -1
-			var ee *executor.ExitError
-			if errors.As(err, &ee) {
+			if ee, ok := errors.AsType[*executor.ExitError](err); ok {
 				code = ee.Code
 			}
 		}

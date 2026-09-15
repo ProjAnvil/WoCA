@@ -64,7 +64,7 @@ func TestDispatchEnqueuesWorkerRun(t *testing.T) {
 	if out.RunID == "" {
 		t.Fatal("no run id")
 	}
-	row, ok, err := ledger.Row(context.Background(), out.RunID)
+	row, ok, err := ledger.Row(t.Context(), out.RunID)
 	if err != nil || !ok {
 		t.Fatalf("ledger row ok=%v err=%v", ok, err)
 	}
@@ -98,7 +98,7 @@ func TestDispatchSSEStreamsLedgerEvents(t *testing.T) {
 	resp.Body.Close()
 
 	// Simulate the worker: claim, mirror events, finish.
-	ctx := context.Background()
+	ctx := t.Context()
 	run, err := ledger.Claim(ctx, "worker-test", time.Minute)
 	if err != nil || run == nil {
 		t.Fatalf("claim = %v, %v", run, err)

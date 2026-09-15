@@ -286,21 +286,19 @@ func intPtr(p *int) *string {
 	if p == nil {
 		return nil
 	}
-	return ptr(strconv.Itoa(*p))
+	return new(strconv.Itoa(*p))
 }
 
 func floatPtr(p *float64) *string {
 	if p == nil {
 		return nil
 	}
-	return ptr(strconv.FormatFloat(*p, 'f', -1, 64))
+	return new(strconv.FormatFloat(*p, 'f', -1, 64))
 }
 
 func (u *update) boolPtr(p *bool) *string {
 	if p == nil {
 		return nil
 	}
-	return ptr(strconv.FormatBool(*p))
+	return new(strconv.FormatBool(*p))
 }
-
-func ptr(s string) *string { return &s }

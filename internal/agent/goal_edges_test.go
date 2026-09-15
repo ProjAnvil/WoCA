@@ -69,7 +69,7 @@ func TestNewRouterAndBindErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t")
 	if err != nil || out[len(out)-1].Content != "routed" {
 		t.Fatalf("routed reply = %q, %v", out[len(out)-1].Content, err)
 	}
@@ -103,7 +103,7 @@ func TestNewWithCheckpointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t"); err != nil {
+	if _, err := a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -155,7 +155,7 @@ func TestPostCompactHookRunsOnSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := a.ForceCompact(context.Background(), bigHistory())
+	out := a.ForceCompact(t.Context(), bigHistory())
 	if len(out) >= len(bigHistory()) {
 		t.Fatalf("compaction did not shrink: %d", len(out))
 	}
@@ -170,7 +170,7 @@ func TestToolsNodeNoopStates(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
 	node := a.toolsNode()
 	// Empty state: nothing to do.
-	rt := lgruntime.NewRuntime(context.Background())
+	rt := lgruntime.NewRuntime(t.Context())
 	v, err := node(rt, map[string]any{})
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestToolsNodeHookFeedbackAndDeny(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("write")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestToolsNodePreToolUseHookDenyInGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("write")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,9 +279,9 @@ func TestPermissionDeniedOnResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("write")}, "t")
 	_ = interruptFromError(t, err)
-	state, err := a.Resume(context.Background(), "t", "n")
+	state, err := a.Resume(t.Context(), "t", "n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,9 +318,9 @@ func TestPlanRejectionAndAskRuleInterrupt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("plan")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("plan")}, "t")
 	_ = interruptFromError(t, err)
-	state, err := a.Resume(context.Background(), "t", "n")
+	state, err := a.Resume(t.Context(), "t", "n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,17 +338,17 @@ func TestPlanRejectionAndAskRuleInterrupt(t *testing.T) {
 	asking := &Agent{mode: config.ModeDefault}
 	asking.perms = &permissions.Rules{Ask: []string{"Write"}}
 	askOutsideRun(t, func() {
-		_, _ = asking.checkPermission(context.Background(), messages.ToolCall{
+		_, _ = asking.checkPermission(t.Context(), messages.ToolCall{
 			Name: "Write", Args: map[string]any{"file_path": "x"},
 		})
 	})
 	// Bypass allows everything; default auto-allows reads.
 	byp := &Agent{mode: config.ModeBypass}
-	if ok, err := byp.checkPermission(context.Background(), messages.ToolCall{Name: "Bash", Args: map[string]any{"command": "anything"}}); err != nil || !ok {
+	if ok, err := byp.checkPermission(t.Context(), messages.ToolCall{Name: "Bash", Args: map[string]any{"command": "anything"}}); err != nil || !ok {
 		t.Fatalf("bypass = %v/%v", ok, err)
 	}
 	def := &Agent{mode: config.ModeDefault}
-	if ok, err := def.checkPermission(context.Background(), messages.ToolCall{Name: "Read", Args: map[string]any{"file_path": "x"}}); err != nil || !ok {
+	if ok, err := def.checkPermission(t.Context(), messages.ToolCall{Name: "Read", Args: map[string]any{"file_path": "x"}}); err != nil || !ok {
 		t.Fatalf("default read = %v/%v", ok, err)
 	}
 }
@@ -372,7 +372,7 @@ func TestMaxTurnsMarkerEndsTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("read")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("read")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +392,7 @@ func TestDecodeArgsMarshalError(t *testing.T) {
 func TestNewSubagentBuildError(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
 	a.subagentModel = nil
-	if _, err := a.newSubagent(context.Background(), nil); err == nil {
+	if _, err := a.newSubagent(t.Context(), nil); err == nil {
 		t.Fatal("nil subagent model must fail the build")
 	}
 }
@@ -402,7 +402,7 @@ func TestNewSubagentBuildError(t *testing.T) {
 func TestRunTaskForegroundErrorAndTypedSubagent(t *testing.T) {
 	// Foreground error path: the subagent model fails.
 	failing := newBackgroundTaskAgent(t, erroringSubagentModel{language.NewFakeChatModel()})
-	if _, err := failing.runTask(context.Background(), taskArgs{Description: "boom"}); err == nil {
+	if _, err := failing.runTask(t.Context(), taskArgs{Description: "boom"}); err == nil {
 		t.Fatal("foreground task error must propagate")
 	}
 
@@ -421,7 +421,7 @@ func TestRunTaskForegroundErrorAndTypedSubagent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := a.runTask(context.Background(), taskArgs{Description: "explore", SubagentType: "explorer"})
+	res, err := a.runTask(t.Context(), taskArgs{Description: "explore", SubagentType: "explorer"})
 	if err != nil || res.Content != "typed report" {
 		t.Fatalf("typed task = %q, %v", res.Content, err)
 	}
@@ -431,11 +431,11 @@ func TestRunTaskBackgroundBuildError(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(
 		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true})))
 	a.subagentModel = nil
-	if _, err := a.runTask(context.Background(), taskArgs{Description: "x", RunInBackground: true}); err != nil {
+	if _, err := a.runTask(t.Context(), taskArgs{Description: "x", RunInBackground: true}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, func() bool {
-		out, err := a.taskOutput(context.Background(), taskOutputArgs{TaskID: "task-1"})
+		out, err := a.taskOutput(t.Context(), taskOutputArgs{TaskID: "task-1"})
 		return err == nil && strings.HasPrefix(out.Content, "Error: ")
 	}, "background build failure report")
 }
@@ -470,11 +470,11 @@ func TestTaskOutputWhileRunningShowsProgress(t *testing.T) {
 	gate := make(chan struct{})
 	sub := &trickleModel{FakeChatModel: language.NewFakeChatModel(), gate: gate}
 	a := newBackgroundTaskAgent(t, sub)
-	if _, err := a.runTask(context.Background(), taskArgs{Description: "slow", RunInBackground: true}); err != nil {
+	if _, err := a.runTask(t.Context(), taskArgs{Description: "slow", RunInBackground: true}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, func() bool {
-		out, err := a.taskOutput(context.Background(), taskOutputArgs{TaskID: "task-1"})
+		out, err := a.taskOutput(t.Context(), taskOutputArgs{TaskID: "task-1"})
 		return err == nil && strings.Contains(out.Content, "still running. Output so far")
 	}, "partial output while running")
 	close(gate)
@@ -488,7 +488,7 @@ func TestTaskUpdateClaimsInTeamScope(t *testing.T) {
 	lead.agentName = "worker"
 
 	// An unowned pending task is claimed by moving it to in_progress.
-	res, err := lead.taskUpdate(context.Background(), taskUpdateArgs{TaskID: first.ID, Status: "in_progress"})
+	res, err := lead.taskUpdate(t.Context(), taskUpdateArgs{TaskID: first.ID, Status: "in_progress"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,12 +499,12 @@ func TestTaskUpdateClaimsInTeamScope(t *testing.T) {
 		t.Fatalf("claimed record = %+v", rec)
 	}
 	// A dependency-blocked task cannot be claimed.
-	if _, err := lead.taskUpdate(context.Background(), taskUpdateArgs{TaskID: blocked.ID, Status: "in_progress"}); err == nil {
+	if _, err := lead.taskUpdate(t.Context(), taskUpdateArgs{TaskID: blocked.ID, Status: "in_progress"}); err == nil {
 		t.Fatal("dependency-blocked claim must error")
 	}
 	// The lead's own update path (no claim transition) still works.
 	lead.agentName = LeadName
-	if _, err := lead.taskUpdate(context.Background(), taskUpdateArgs{TaskID: first.ID, Status: "completed"}); err != nil {
+	if _, err := lead.taskUpdate(t.Context(), taskUpdateArgs{TaskID: first.ID, Status: "completed"}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -521,7 +521,7 @@ func TestGoalPauseMidLoopEndsAtBoundary(t *testing.T) {
 		messages.AI(`{"verdict":"complete","evidence":"done"}`),
 	)
 	a.SetGoal("pausable", "", 10, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +560,7 @@ func TestGoalAssessRendersNotesAndEmptyAssessment(t *testing.T) {
 		messages.AI(`{"verdict":"complete","evidence":"done"}`),
 	)
 	a.SetGoal("noted", "", 5, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func TestGoalEvaluatorBlockedVerdict(t *testing.T) {
 		messages.AI(`{"verdict":"blocked","gaps":"needs human input"}`),
 	)
 	a.SetGoal("blocked goal", "", 5, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +636,7 @@ func TestGoalEvaluateModelErrorSurfaces(t *testing.T) {
 	}}
 	a.mu.Unlock()
 	a.SetGoal("eval fails", "", 5, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +668,7 @@ func TestGoalExecuteStreamErrorSurfaces(t *testing.T) {
 	a.boundModel = &goalCountingModel{answers: []messages.Message{messages.AI("assess")}}
 	a.mu.Unlock()
 	a.SetGoal("exec fails", "", 5, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -705,7 +705,7 @@ func TestGoalReasoningDeltaForwarded(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.SetGoal("think it through", "", 5, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -736,7 +736,7 @@ func TestGoalProgressWindowTrimsAtFifty(t *testing.T) {
 		a.goal.goal.Progress[i] = GoalProgressEntry{Cycle: i + 1, Verdict: "continue"}
 	}
 	a.goal.mu.Unlock()
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -795,7 +795,7 @@ func TestFormatGoalShortProgressWindow(t *testing.T) {
 
 func TestWorktreeErrorPaths(t *testing.T) {
 	a := newWorktreeAgent(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	enter := a.toolByName["EnterWorktree"]
 	exit := a.toolByName["ExitWorktree"]
 
@@ -824,7 +824,7 @@ func TestBeginEmptyTermsNoop(t *testing.T) {
 	m := memoryRuntime{}
 	m.init(kv, nil, nil, nil)
 	// A human message with no long-enough terms: no prefetch starts.
-	m.Begin(context.Background(), []messages.Message{messages.Human("hi")}, "/ws")
+	m.Begin(t.Context(), []messages.Message{messages.Human("hi")}, "/ws")
 }
 
 func TestTakeAttachmentsInjectedAndLongEntries(t *testing.T) {
@@ -838,7 +838,7 @@ func TestTakeAttachmentsInjectedAndLongEntries(t *testing.T) {
 		{Namespace: "ns", Key: "long", Value: []byte(long)},
 	}
 	m.mu.Unlock()
-	out := m.TakeAttachments(context.Background())
+	out := m.TakeAttachments(t.Context())
 	if len(out) != 2 {
 		t.Fatalf("attachments = %d: %+v", len(out), out)
 	}
@@ -862,7 +862,7 @@ func TestTakeAttachmentsEngineHitClampAndDup(t *testing.T) {
 		{ID: "h1", Layer: "L2", Type: "fact", Summary: "dup"}, // injected: skipped
 	}
 	m.mu.Unlock()
-	out := m.TakeAttachments(context.Background())
+	out := m.TakeAttachments(t.Context())
 	if len(out) != 1 {
 		t.Fatalf("attachments = %d", len(out))
 	}

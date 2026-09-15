@@ -63,7 +63,7 @@ func TestPythonRunStartFailsOnNonExecutableVenv(t *testing.T) {
 	if err := os.Chmod(py.venvPython("pdf"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := py.Run(context.Background(), "pdf", "scripts/pdf.py", nil, ".", time.Second)
+	_, _, err := py.Run(t.Context(), "pdf", "scripts/pdf.py", nil, ".", time.Second)
 	if err == nil {
 		t.Fatal("Run should fail when the venv interpreter is not executable")
 	}
@@ -91,7 +91,7 @@ func TestPythonInstallRunUVStartFailure(t *testing.T) {
 	if err := os.WriteFile(py.uvBin(), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	err := py.Install(context.Background(), mustBuiltin(t, "pdf"), nil)
+	err := py.Install(t.Context(), mustBuiltin(t, "pdf"), nil)
 	if err == nil || !strings.Contains(err.Error(), "uv python install") {
 		t.Fatalf("err = %v, want uv python install failure", err)
 	}

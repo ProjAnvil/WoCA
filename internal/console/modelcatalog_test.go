@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -27,7 +26,7 @@ func seedModelPresets(t *testing.T, c *Console, presets ...wocadb.ModelPreset) {
 
 func TestModelCatalogListAndSwitch(t *testing.T) {
 	c, _ := newFullConsole(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	// Without a catalog the legacy hint stays.

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -46,7 +45,7 @@ func TestIsPromptTooLongError(t *testing.T) {
 // find a cut point.
 func longHistory() []messages.Message {
 	out := []messages.Message{messages.Human("start the task")}
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		out = append(out,
 			messages.AI(strings.Repeat("assistant analysis number ", 40)+string(rune('a'+i))),
 			messages.Human(strings.Repeat("follow up question ", 40)+string(rune('A'+i))),
@@ -80,7 +79,7 @@ func TestInvokePromptTooLongRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), longHistory(), "t")
+	out, err := a.Invoke(t.Context(), longHistory(), "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +124,7 @@ func TestInvokePromptTooLongSingleRetryGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), longHistory(), "t")
+	_, err = a.Invoke(t.Context(), longHistory(), "t")
 	if !IsPromptTooLongError(err) {
 		t.Fatalf("expected the second prompt-too-long error to surface, got %v", err)
 	}
@@ -153,7 +152,7 @@ func TestInvokePromptTooLongNothingToCompact(t *testing.T) {
 	// A single huge human message: compaction has no cut point, so the
 	// provider error surfaces without a pointless retry.
 	huge := messages.Human(strings.Repeat("one enormous prompt ", 2000))
-	_, err = a.Invoke(context.Background(), []messages.Message{huge}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{huge}, "t")
 	if !IsPromptTooLongError(err) {
 		t.Fatalf("expected prompt-too-long to surface, got %v", err)
 	}

@@ -70,8 +70,7 @@ func runWith(
 	if err != nil {
 		return runFatalLocalDataWindow(runApp, databasePath, err)
 	}
-	var closeOnce sync.Once
-	closeStore := func() { closeOnce.Do(func() { _ = store.Close() }) }
+	closeStore := sync.OnceFunc(func() { _ = store.Close() })
 	defer closeStore()
 
 	// The device key is the client's cryptographic identity: its DPoP

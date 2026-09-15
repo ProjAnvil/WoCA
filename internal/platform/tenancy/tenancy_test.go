@@ -1,7 +1,6 @@
 package tenancy
 
 import (
-	"context"
 	"slices"
 	"testing"
 )
@@ -17,7 +16,7 @@ func TestNewContextFromContextRoundTrip(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := NewContext(context.Background(), tt.in)
+			ctx := NewContext(t.Context(), tt.in)
 			got, ok := FromContext(ctx)
 			if !ok {
 				t.Fatal("FromContext should report injected context")
@@ -33,7 +32,7 @@ func TestNewContextFromContextRoundTrip(t *testing.T) {
 }
 
 func TestFromContextNotInjected(t *testing.T) {
-	got, ok := FromContext(context.Background())
+	got, ok := FromContext(t.Context())
 	if ok {
 		t.Fatal("FromContext should return false when nothing was injected")
 	}

@@ -94,7 +94,7 @@ func TestEditorReadsAllPipedLines(t *testing.T) {
 	var got []string
 	for {
 		line, err := e.ReadLine()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

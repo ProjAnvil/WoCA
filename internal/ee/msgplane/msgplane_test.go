@@ -69,7 +69,7 @@ func TestPGModeIsNoOp(t *testing.T) {
 	w := NewWaiter(p)
 	defer w.Close()
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	w.Wait(ctx)
 	// A short pg-mode wait parks for the poll interval, not zero (no spin).
@@ -95,7 +95,7 @@ func TestNotifyWakesWaiter(t *testing.T) {
 
 	woken := make(chan struct{})
 	go func() {
-		w.Wait(context.Background())
+		w.Wait(t.Context())
 		close(woken)
 	}()
 	// Give the subscription a moment to register, then notify.
@@ -113,7 +113,7 @@ func TestNotifyWakesWaiter(t *testing.T) {
 	mode = "pg"
 	mu.Unlock()
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Millisecond)
 	defer cancel()
 	w.Wait(ctx)
 	if time.Since(start) >= 200*time.Millisecond {
@@ -133,7 +133,7 @@ func TestUnreachableNATSDegrades(t *testing.T) {
 	w := NewWaiter(p)
 	defer w.Close()
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	w.Wait(ctx)
 	if time.Since(start) >= 200*time.Millisecond {
@@ -162,7 +162,7 @@ func TestURLChangeReconnects(t *testing.T) {
 	defer w.Close()
 	woken := make(chan struct{})
 	go func() {
-		w.Wait(context.Background())
+		w.Wait(t.Context())
 		close(woken)
 	}()
 	time.Sleep(150 * time.Millisecond)

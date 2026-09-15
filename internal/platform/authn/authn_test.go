@@ -1,7 +1,6 @@
 package authn
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -27,7 +26,7 @@ func TestLocal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := p.Authenticate(context.Background(), tt.credential)
+			got, err := p.Authenticate(t.Context(), tt.credential)
 			if err != nil {
 				t.Fatalf("Authenticate(%q) returned error: %v", tt.credential, err)
 			}
@@ -43,11 +42,11 @@ func TestLocalConcurrent(t *testing.T) {
 	p := NewLocal()
 	const workers = 16
 	done := make(chan struct{}, workers)
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go func() {
 			defer func() { done <- struct{}{} }()
-			for j := 0; j < 100; j++ {
-				got, err := p.Authenticate(context.Background(), "tok")
+			for range 100 {
+				got, err := p.Authenticate(t.Context(), "tok")
 				if err != nil {
 					t.Errorf("Authenticate returned error: %v", err)
 					return
@@ -59,7 +58,7 @@ func TestLocalConcurrent(t *testing.T) {
 			}
 		}()
 	}
-	for i := 0; i < workers; i++ {
+	for range workers {
 		<-done
 	}
 }
@@ -89,7 +88,7 @@ func TestStatic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := p.Authenticate(context.Background(), tt.credential)
+			got, err := p.Authenticate(t.Context(), tt.credential)
 			if tt.wantErr {
 				if !errors.Is(err, ErrUnauthenticated) {
 					t.Fatalf("Authenticate(%q) error = %v, want ErrUnauthenticated", tt.credential, err)
@@ -111,8 +110,7 @@ func TestStaticConcurrent(t *testing.T) {
 	p := NewStatic("tok", tc)
 	const workers = 16
 	done := make(chan struct{}, workers)
-	for i := 0; i < workers; i++ {
-		i := i
+	for i := range workers {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			cred := "tok"
@@ -121,8 +119,8 @@ func TestStaticConcurrent(t *testing.T) {
 				cred = "bad"
 				wantErr = true
 			}
-			for j := 0; j < 100; j++ {
-				got, err := p.Authenticate(context.Background(), cred)
+			for range 100 {
+				got, err := p.Authenticate(t.Context(), cred)
 				if wantErr {
 					if !errors.Is(err, ErrUnauthenticated) {
 						t.Errorf("Authenticate(%q) error = %v, want ErrUnauthenticated", cred, err)
@@ -141,7 +139,7 @@ func TestStaticConcurrent(t *testing.T) {
 			}
 		}()
 	}
-	for i := 0; i < workers; i++ {
+	for range workers {
 		<-done
 	}
 }
@@ -153,12 +151,12 @@ func TestStaticContextIsolation(t *testing.T) {
 	}
 	p := NewStatic("tok", tc)
 
-	got, err := p.Authenticate(context.Background(), "tok")
+	got, err := p.Authenticate(t.Context(), "tok")
 	if err != nil {
 		t.Fatalf("Authenticate returned error: %v", err)
 	}
 	got.Scopes[0] = "mutated"
-	again, err := p.Authenticate(context.Background(), "tok")
+	again, err := p.Authenticate(t.Context(), "tok")
 	if err != nil {
 		t.Fatalf("Authenticate returned error: %v", err)
 	}
@@ -195,7 +193,7 @@ func TestTenancyContextRoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tc, err := tt.p.Authenticate(context.Background(), tt.cred)
+			tc, err := tt.p.Authenticate(t.Context(), tt.cred)
 			if tt.wantErr {
 				if !errors.Is(err, ErrUnauthenticated) {
 					t.Fatalf("Authenticate error = %v, want ErrUnauthenticated", err)
@@ -206,7 +204,7 @@ func TestTenancyContextRoundTrip(t *testing.T) {
 				t.Fatalf("Authenticate returned error: %v", err)
 			}
 
-			ctx := tenancy.NewContext(context.Background(), tc)
+			ctx := tenancy.NewContext(t.Context(), tc)
 			got, ok := tenancy.FromContext(ctx)
 			if !ok {
 				t.Fatal("FromContext returned ok=false after NewContext")

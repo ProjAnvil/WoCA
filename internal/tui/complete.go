@@ -48,7 +48,7 @@ func atTrigger(input string) int {
 	if rest == "" {
 		return i
 	}
-	for j := 0; j < len(rest); j++ {
+	for j := range len(rest) {
 		c := rest[j]
 		isAlnum := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 		if !isAlnum && c != '_' && c != '-' && c != '.' && c != '/' {

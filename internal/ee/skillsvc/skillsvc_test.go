@@ -1,7 +1,6 @@
 package skillsvc
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -24,7 +23,7 @@ func openStore(t *testing.T) *Store {
 
 func TestAssetCRUD(t *testing.T) {
 	st := openStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	a, err := st.CreateAsset(ctx, "code-review", "Reviews code for common issues")
 	if err != nil {
@@ -54,7 +53,7 @@ func TestAssetCRUD(t *testing.T) {
 
 func TestImmutableVersions(t *testing.T) {
 	st := openStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	a, _ := st.CreateAsset(ctx, "deploy", "Deployment skill")
 
 	v1, err := st.PublishVersion(ctx, a.ID, "# v1 body", "checksum-1")
@@ -86,7 +85,7 @@ func TestImmutableVersions(t *testing.T) {
 
 func TestLabelPublishAndRollback(t *testing.T) {
 	st := openStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	a, _ := st.CreateAsset(ctx, "test-skill", "Test")
 
 	v1, _ := st.PublishVersion(ctx, a.ID, "v1", "c1")
@@ -122,7 +121,7 @@ func TestLabelPublishAndRollback(t *testing.T) {
 
 func TestResolveUnknownLabelReturnsZero(t *testing.T) {
 	st := openStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	a, _ := st.CreateAsset(ctx, "x", "x")
 
 	_, err := st.ResolveLabel(ctx, a.ID, "production")
@@ -133,14 +132,14 @@ func TestResolveUnknownLabelReturnsZero(t *testing.T) {
 
 func TestPublishToUnknownAssetFails(t *testing.T) {
 	st := openStore(t)
-	if _, err := st.PublishVersion(context.Background(), "missing", "body", "c"); err == nil {
+	if _, err := st.PublishVersion(t.Context(), "missing", "body", "c"); err == nil {
 		t.Fatal("publish to unknown asset accepted")
 	}
 }
 
 func TestSetLabelUnknownVersionFails(t *testing.T) {
 	st := openStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	a, _ := st.CreateAsset(ctx, "x", "x")
 	if err := st.SetLabel(ctx, a.ID, "production", 99); err == nil {
 		t.Fatal("label to unknown version accepted")
@@ -149,7 +148,7 @@ func TestSetLabelUnknownVersionFails(t *testing.T) {
 
 func TestDeleteAssetCascadesVersions(t *testing.T) {
 	st := openStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	a, _ := st.CreateAsset(ctx, "x", "x")
 	_, _ = st.PublishVersion(ctx, a.ID, "body", "c")
 	_ = st.SetLabel(ctx, a.ID, "production", 1)
@@ -163,7 +162,7 @@ func TestDeleteAssetCascadesVersions(t *testing.T) {
 
 func TestResolveForTenant(t *testing.T) {
 	st := openStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	a, _ := st.CreateAsset(ctx, "shared", "shared skill")
 	_, _ = st.PublishVersion(ctx, a.ID, "v1", "c1")
 	_, _ = st.PublishVersion(ctx, a.ID, "v2", "c2")
@@ -190,13 +189,13 @@ func TestClosedDBSurfacesErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateAsset(context.Background(), "x", ""); err != nil {
+	if _, err := st.CreateAsset(t.Context(), "x", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	check := func(what string, err error) {
 		t.Helper()
 		if err == nil {
@@ -217,7 +216,7 @@ func TestClosedDBSurfacesErrors(t *testing.T) {
 // Input validation rejects blank fields before touching the store.
 func TestInputValidation(t *testing.T) {
 	st := openStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := st.CreateAsset(ctx, "", "d"); err == nil {
 		t.Fatal("blank name accepted")
 	}
@@ -240,7 +239,7 @@ func TestInputValidation(t *testing.T) {
 // Labels map carries both production and canary for cohort-based resolution.
 func TestLabelsMapComplete(t *testing.T) {
 	st := openStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	a, _ := st.CreateAsset(ctx, "multi", "multi")
 	v1, _ := st.PublishVersion(ctx, a.ID, "stable", "c1")
 	v2, _ := st.PublishVersion(ctx, a.ID, "canary-body", "c2")

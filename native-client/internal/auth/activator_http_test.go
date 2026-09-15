@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +42,7 @@ func TestHTTPActivatorExchangesKeyForSession(t *testing.T) {
 	defer server.Close()
 
 	a := NewHTTPActivator(server.Client(), material)
-	res, err := a.Activate(context.Background(), ActivationRequest{
+	res, err := a.Activate(t.Context(), ActivationRequest{
 		BaseURL: server.URL,
 		APIKey:  "woca_test_key",
 	})
@@ -79,19 +78,19 @@ func TestHTTPActivatorMapsStatuses(t *testing.T) {
 	defer server.Close()
 	a := NewHTTPActivator(server.Client(), material)
 
-	if _, err := a.Activate(context.Background(), ActivationRequest{BaseURL: server.URL, APIKey: "k"}); err != ErrInvalidCredentials {
+	if _, err := a.Activate(t.Context(), ActivationRequest{BaseURL: server.URL, APIKey: "k"}); err != ErrInvalidCredentials {
 		t.Fatalf("401 = %v", err)
 	}
-	if _, err := a.Activate(context.Background(), ActivationRequest{BaseURL: server.URL, APIKey: "k"}); err == nil || !strings.Contains(err.Error(), "status 502") {
+	if _, err := a.Activate(t.Context(), ActivationRequest{BaseURL: server.URL, APIKey: "k"}); err == nil || !strings.Contains(err.Error(), "status 502") {
 		t.Fatalf("502 = %v", err)
 	}
-	if _, err := a.Activate(context.Background(), ActivationRequest{BaseURL: server.URL, APIKey: "k"}); err != ErrActivationRateLimited {
+	if _, err := a.Activate(t.Context(), ActivationRequest{BaseURL: server.URL, APIKey: "k"}); err != ErrActivationRateLimited {
 		t.Fatalf("429 = %v", err)
 	}
 }
 
 func TestUnavailableActivatorStillFailsClosed(t *testing.T) {
-	if _, err := (UnavailableActivator{}).Activate(context.Background(), ActivationRequest{}); err != ErrServerContractUnavailable {
+	if _, err := (UnavailableActivator{}).Activate(t.Context(), ActivationRequest{}); err != ErrServerContractUnavailable {
 		t.Fatal("unavailable activator no longer fails closed")
 	}
 	_ = time.Now

@@ -103,12 +103,8 @@ func (t *TunnelClient) Run(ctx context.Context) {
 		workers = tunnelDefaultWorkers
 	}
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			t.worker(ctx)
-		}()
+	for range workers {
+		wg.Go(func() { t.worker(ctx) })
 	}
 	wg.Wait()
 }
@@ -282,13 +278,15 @@ type streamRecorder struct {
 	header http.Header
 	status int
 
-	mu        sync.Mutex
-	ready     chan struct{}
-	readyOnce sync.Once
+	mu            sync.Mutex
+	ready         chan struct{}
+	markReadyOnce func()
 }
 
 func newStreamRecorder(pw *io.PipeWriter) *streamRecorder {
-	return &streamRecorder{pw: pw, header: http.Header{}, ready: make(chan struct{})}
+	r := &streamRecorder{pw: pw, header: http.Header{}, ready: make(chan struct{})}
+	r.markReadyOnce = sync.OnceFunc(func() { close(r.ready) })
+	return r
 }
 
 func (r *streamRecorder) Header() http.Header { return r.header }
@@ -312,7 +310,7 @@ func (r *streamRecorder) Flush() {}
 
 func (r *streamRecorder) finish() { r.markReady() }
 
-func (r *streamRecorder) markReady() { r.readyOnce.Do(func() { close(r.ready) }) }
+func (r *streamRecorder) markReady() { r.markReadyOnce() }
 
 func (r *streamRecorder) snapshot() map[string][]string {
 	r.mu.Lock()

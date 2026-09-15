@@ -38,7 +38,7 @@ func isBinary(b []byte) bool {
 	if limit > binaryScanLimit {
 		limit = binaryScanLimit
 	}
-	for i := 0; i < limit; i++ {
+	for i := range limit {
 		if b[i] == 0 {
 			return true
 		}

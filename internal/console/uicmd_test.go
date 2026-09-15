@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"errors"
 	"os"
 	"strings"
@@ -12,7 +11,7 @@ func TestThemeCommand(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 
 	// No args: palette listing.
-	res, err := c.Execute(context.Background(), "theme", nil, &Session{})
+	res, err := c.Execute(t.Context(), "theme", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +22,7 @@ func TestThemeCommand(t *testing.T) {
 	}
 
 	// Without a TUI hook, switching degrades with a helpful error.
-	if _, err := c.Execute(context.Background(), "theme", []string{"dark"}, &Session{}); err == nil ||
+	if _, err := c.Execute(t.Context(), "theme", []string{"dark"}, &Session{}); err == nil ||
 		!strings.Contains(err.Error(), "not available") {
 		t.Fatalf("theme without ApplyTheme = %v", err)
 	}
@@ -31,7 +30,7 @@ func TestThemeCommand(t *testing.T) {
 	// With the hook wired the palette is applied live.
 	applied := ""
 	c.deps.ApplyTheme = func(name string) error { applied = name; return nil }
-	res, err = c.Execute(context.Background(), "theme", []string{"light"}, &Session{})
+	res, err = c.Execute(t.Context(), "theme", []string{"light"}, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +40,7 @@ func TestThemeCommand(t *testing.T) {
 
 	// A failing hook surfaces its error.
 	c.deps.ApplyTheme = func(name string) error { return errors.New("no such palette") }
-	if _, err := c.Execute(context.Background(), "theme", []string{"neon"}, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "theme", []string{"neon"}, &Session{}); err == nil {
 		t.Fatal("ApplyTheme error should surface")
 	}
 }
@@ -50,7 +49,7 @@ func TestVimCommand(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 
 	// Without the TUI toggle: helpful message, not an error.
-	res, err := c.Execute(context.Background(), "vim", nil, &Session{})
+	res, err := c.Execute(t.Context(), "vim", nil, &Session{})
 	if err != nil || !strings.Contains(res.Output, "not available") {
 		t.Fatalf("vim without toggle = %q, %v", res.Output, err)
 	}
@@ -58,11 +57,11 @@ func TestVimCommand(t *testing.T) {
 	// Each call flips the mode and reports the new state.
 	on := false
 	c.deps.SetVimModeToggle = func() bool { on = !on; return on }
-	res, err = c.Execute(context.Background(), "vim", nil, &Session{})
+	res, err = c.Execute(t.Context(), "vim", nil, &Session{})
 	if err != nil || !strings.Contains(res.Output, "vim input mode on") {
 		t.Fatalf("vim on = %q, %v", res.Output, err)
 	}
-	res, err = c.Execute(context.Background(), "vim", nil, &Session{})
+	res, err = c.Execute(t.Context(), "vim", nil, &Session{})
 	if err != nil || !strings.Contains(res.Output, "vim input mode off") {
 		t.Fatalf("vim off = %q, %v", res.Output, err)
 	}
@@ -70,7 +69,7 @@ func TestVimCommand(t *testing.T) {
 
 func TestKeybindingsCommand(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
-	res, err := c.Execute(context.Background(), "keybindings", nil, &Session{})
+	res, err := c.Execute(t.Context(), "keybindings", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +82,7 @@ func TestKeybindingsCommand(t *testing.T) {
 
 func TestKeybindingsCommandOpenCreatesConfig(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
-	res, err := c.Execute(context.Background(), "keybindings", []string{"open"}, &Session{})
+	res, err := c.Execute(t.Context(), "keybindings", []string{"open"}, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +99,7 @@ func TestKeybindingsCommandReportsMalformedConfig(t *testing.T) {
 	if err := os.WriteFile(c.deps.KeybindingsPath, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, err := c.Execute(context.Background(), "keybindings", nil, &Session{})
+	res, err := c.Execute(t.Context(), "keybindings", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}

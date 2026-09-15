@@ -659,8 +659,7 @@ func (e *Edge) handleRespond(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	defer close(p.done)
-	var firstOnce sync.Once
-	first := func() { firstOnce.Do(func() { close(p.firstByte) }) }
+	first := sync.OnceFunc(func() { close(p.firstByte) })
 	for k, vs := range header {
 		for _, v := range vs {
 			p.w.Header().Add(k, v)

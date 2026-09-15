@@ -36,7 +36,7 @@ func awaitCanceled(t *testing.T, canceled <-chan struct{}) {
 // double-esc window: one esc only arms, the second press inside the window
 // cancels the run, and a slow second press does not.
 func TestDoubleEscInterruptsRun(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	canceled := make(chan struct{})
 	context.AfterFunc(ctx, func() { close(canceled) })
@@ -159,7 +159,7 @@ func TestInterruptResubmitsPendingSteersAsFreshTurn(t *testing.T) {
 	m := newConsoleModel(t, messages.AI("ok"))
 	m.running = true
 	m.ch = make(chan tea.Msg, 1)
-	_, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	m.cancelRun = cancel
 

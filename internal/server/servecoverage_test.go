@@ -34,10 +34,10 @@ func TestLedgerSSEEdgeCases(t *testing.T) {
 	}
 
 	// Terminal row (done) with no mirrored events → resync.
-	if err := ledger.Start(context.Background(), runstate.Run{RunID: "term", SessionID: "s"}, "w", time.Minute); err != nil {
+	if err := ledger.Start(t.Context(), runstate.Run{RunID: "term", SessionID: "s"}, "w", time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	if err := ledger.Finish(context.Background(), "term", "w", "done"); err != nil {
+	if err := ledger.Finish(t.Context(), "term", "w", "done"); err != nil {
 		t.Fatal(err)
 	}
 	r = httptest.NewRequest(http.MethodGet, "/api/runs/term/events", nil)
@@ -56,7 +56,7 @@ func TestServeStartedPreCancelled(t *testing.T) {
 	})
 	srv := httptest.NewServer(http.NotFoundHandler())
 	defer srv.Close()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // pre-cancelled → immediate shutdown
 	err := s.ServeStarted(ctx, srv.Config, nil)
 	if err != nil {
@@ -91,7 +91,7 @@ func TestTrackRunLeaseErrorPath(t *testing.T) {
 		Agent: newScriptedAgent(t, "x"), Static: fstest.MapFS{}, Logger: zerolog.Nop(),
 		SessionDir: t.TempDir(), WorkDir: t.TempDir(), RunLedger: ledger,
 	})
-	if err := ledger.Start(context.Background(), runstate.Run{RunID: "r", SessionID: "s"}, "w", time.Minute); err != nil {
+	if err := ledger.Start(t.Context(), runstate.Run{RunID: "r", SessionID: "s"}, "w", time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	// trackRunLease sets up the mirror and heartbeat without panicking.

@@ -4,7 +4,6 @@ package memory
 // degraded reads, null-memory filtering, truncation, and error surfacing.
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -80,7 +79,7 @@ func tripBreaker(eng *RemoteEngine) {
 }
 
 func TestRemoteRecallDefaultsAndFiltering(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("default topK and empty workspace", func(t *testing.T) {
 		f := newFakeLadyM(t)
@@ -141,7 +140,7 @@ func TestRemoteBreakerShortCircuitsReads(t *testing.T) {
 	f := newFakeLadyM(t)
 	eng := newTestRemote(t, f)
 	tripBreaker(eng)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if hits, err := eng.Recall(ctx, "q", "ws", 5); err != nil || hits != nil {
 		t.Fatalf("open-breaker recall = %v %v", hits, err)
@@ -158,7 +157,7 @@ func TestRemoteBreakerShortCircuitsReads(t *testing.T) {
 }
 
 func TestRemoteDegradedAndFailingPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("search degrades to empty on failure", func(t *testing.T) {
 		srv := cannedLadyM(t, nil, true, false, false, false, false)

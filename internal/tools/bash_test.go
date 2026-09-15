@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +17,7 @@ func TestBashToolWorkdirAndStreams(t *testing.T) {
 	tool, _ := reg.Get("Bash")
 
 	// Relative workdir is resolved against the session workdir.
-	res, err := tool.Invoke(context.Background(), map[string]any{"command": "pwd", "workdir": "sub"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"command": "pwd", "workdir": "sub"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +25,7 @@ func TestBashToolWorkdirAndStreams(t *testing.T) {
 		t.Fatalf("relative workdir pwd = %q", res.Content)
 	}
 	// Absolute workdir is used verbatim.
-	res, err = tool.Invoke(context.Background(), map[string]any{"command": "pwd", "workdir": dir})
+	res, err = tool.Invoke(t.Context(), map[string]any{"command": "pwd", "workdir": dir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +34,7 @@ func TestBashToolWorkdirAndStreams(t *testing.T) {
 	}
 
 	// stderr is appended after stdout; failing commands report the exit code.
-	res, err = tool.Invoke(context.Background(), map[string]any{"command": "echo out; echo err 1>&2; exit 3"})
+	res, err = tool.Invoke(t.Context(), map[string]any{"command": "echo out; echo err 1>&2; exit 3"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +47,7 @@ func TestBashToolWorkdirAndStreams(t *testing.T) {
 	}
 
 	// Successful silent commands report a placeholder.
-	res, err = tool.Invoke(context.Background(), map[string]any{"command": "true"})
+	res, err = tool.Invoke(t.Context(), map[string]any{"command": "true"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +60,7 @@ func TestBashToolTimeout(t *testing.T) {
 	reg := NewRegistry(t.TempDir())
 	tool, _ := reg.Get("Bash")
 	start := time.Now()
-	res, err := tool.Invoke(context.Background(), map[string]any{"command": "sleep 5", "timeout_ms": 150})
+	res, err := tool.Invoke(t.Context(), map[string]any{"command": "sleep 5", "timeout_ms": 150})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +76,7 @@ func TestBashBackgroundStartFailure(t *testing.T) {
 	reg := NewRegistry(t.TempDir())
 	tool, _ := reg.Get("Bash")
 	// The background runner cannot chdir into a nonexistent workdir.
-	res, err := tool.Invoke(context.Background(), map[string]any{
+	res, err := tool.Invoke(t.Context(), map[string]any{
 		"command": "echo x", "workdir": "does-not-exist", "run_in_background": true,
 	})
 	if err != nil {
@@ -94,7 +93,7 @@ func TestBashOutputWithOutputAndKillShellEdges(t *testing.T) {
 	kill, _ := reg.Get("KillShell")
 
 	// Error listing on a manager with no shells yet renders "none".
-	res, _ := poll.Invoke(context.Background(), map[string]any{"shell_id": "404"})
+	res, _ := poll.Invoke(t.Context(), map[string]any{"shell_id": "404"})
 	if !strings.Contains(res.Content, "Error") || !strings.Contains(res.Content, "(started shells: none)") {
 		t.Fatalf("no shells = %q", res.Content)
 	}
@@ -107,7 +106,7 @@ func TestBashOutputWithOutputAndKillShellEdges(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		res, _ = poll.Invoke(context.Background(), map[string]any{"shell_id": "1"})
+		res, _ = poll.Invoke(t.Context(), map[string]any{"shell_id": "1"})
 		if strings.Contains(res.Content, "partial-output") && strings.Contains(res.Content, "done (exit code 0)") {
 			break
 		}
@@ -121,11 +120,11 @@ func TestBashOutputWithOutputAndKillShellEdges(t *testing.T) {
 	}
 
 	// Killing an unknown shell errors; killing a finished one is a no-op.
-	res, _ = kill.Invoke(context.Background(), map[string]any{"shell_id": "404"})
+	res, _ = kill.Invoke(t.Context(), map[string]any{"shell_id": "404"})
 	if !strings.Contains(res.Content, "Error") {
 		t.Fatalf("KillShell unknown = %q", res.Content)
 	}
-	res, _ = kill.Invoke(context.Background(), map[string]any{"shell_id": "1"})
+	res, _ = kill.Invoke(t.Context(), map[string]any{"shell_id": "1"})
 	if !strings.Contains(res.Content, "already finished") {
 		t.Fatalf("KillShell finished = %q", res.Content)
 	}

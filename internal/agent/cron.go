@@ -198,7 +198,7 @@ func parseCron(spec string) (cronMatcher, error) {
 
 func parseCronField(field string, min, max int) (map[int]bool, error) {
 	set := map[int]bool{}
-	for _, part := range strings.Split(field, ",") {
+	for part := range strings.SplitSeq(field, ",") {
 		step := 1
 		if idx := strings.IndexByte(part, '/'); idx >= 0 {
 			n, err := strconv.Atoi(part[idx+1:])

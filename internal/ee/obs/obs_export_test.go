@@ -1,7 +1,6 @@
 package obs
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -28,7 +27,7 @@ func TestSetupExportsTracesOverOTLP(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	o, err := Setup(context.Background(), Config{
+	o, err := Setup(t.Context(), Config{
 		ServiceName:  "probe",
 		OTLPEndpoint: srv.URL,
 		OTLPInsecure: true,
@@ -36,7 +35,7 @@ func TestSetupExportsTracesOverOTLP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = o.Shutdown(context.Background()) }()
+	defer func() { _ = o.Shutdown(t.Context()) }()
 
 	sink := o.Sink()
 	if sink == nil {
@@ -46,11 +45,11 @@ func TestSetupExportsTracesOverOTLP(t *testing.T) {
 	// Debug: is a span created through the sink's tracer even recorded and
 	// sampled? (BatchSpanProcessor drops non-sampled spans silently.)
 	tr := o.tracer
-	_, span := tr.Start(context.Background(), "probe.span")
+	_, span := tr.Start(t.Context(), "probe.span")
 	t.Logf("recording=%v sampled=%v valid=%v", span.IsRecording(), span.SpanContext().IsSampled(), span.SpanContext().IsValid())
 	span.End()
 
-	ctx := telemetry.WithRun(context.Background(), "run-9", "sess-9")
+	ctx := telemetry.WithRun(t.Context(), "run-9", "sess-9")
 	sp := telemetry.Start(ctx, "chat", telemetry.KindLLM)
 	sp.Set(telemetry.AttrOperationName, "chat")
 	sp.End(ctx, nil)
@@ -72,7 +71,7 @@ func TestSetupExportsTracesOverOTLP(t *testing.T) {
 // silently dropping export.
 func TestSetupResolvesRegistryReference(t *testing.T) {
 	// Unreachable registry: Setup must fail.
-	if _, err := Setup(context.Background(), Config{
+	if _, err := Setup(t.Context(), Config{
 		ServiceName:  "probe",
 		OTLPEndpoint: "nacos://127.0.0.1:1/DEFAULT_GROUP/woca-obs.otlp",
 	}); err == nil {
@@ -90,12 +89,12 @@ func TestSetupResolvesRegistryReference(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	o, err := Setup(context.Background(), Config{
+	o, err := Setup(t.Context(), Config{
 		ServiceName:  "probe",
 		OTLPEndpoint: "nacos://" + srv.Listener.Addr().String() + "/DEFAULT_GROUP/woca-obs.otlp",
 	})
 	if err != nil {
 		t.Fatalf("registry reference resolution: %v", err)
 	}
-	_ = o.Shutdown(context.Background())
+	_ = o.Shutdown(t.Context())
 }

@@ -7,6 +7,7 @@ package console
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -58,12 +59,7 @@ func (c *Console) thinkingCmd(args []string) (Result, error) {
 }
 
 func containsLevel(levels []string, level string) bool {
-	for _, l := range levels {
-		if l == level {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(levels, level)
 }
 
 // parseThinkingBudget resolves a level name or raw token count to a budget.

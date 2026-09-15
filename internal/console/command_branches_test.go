@@ -61,7 +61,7 @@ func newGapConsole(t *testing.T, mutate func(*Deps)) (*Console, *settings.Store)
 }
 
 func TestSettingsUsageAndPersistenceErrors(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	t.Run("set usage", func(t *testing.T) {
@@ -130,7 +130,7 @@ func (e *emptyRecallEngine) Recall(ctx context.Context, q, ws string, k int) ([]
 }
 
 func TestMemoryCommandBranches(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("kv fallback without engine or agent", func(t *testing.T) {
 		c := New(Deps{Memory: store.NewMemory()})
@@ -176,7 +176,7 @@ func TestMemoryCommandBranches(t *testing.T) {
 }
 
 func TestAgentsCommandBranches(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -244,7 +244,7 @@ func TestAgentsCommandBranches(t *testing.T) {
 }
 
 func TestExportAndBranchFailures(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	hist := []messages.Message{
 		messages.System("plumbing"),
 		messages.Human("hello"),
@@ -344,7 +344,7 @@ func TestPreviewRendering(t *testing.T) {
 
 func TestTeamNoTeamOutput(t *testing.T) {
 	c, _ := newAgentConsole(t, nil)
-	res, err := c.Execute(context.Background(), "team", nil, &Session{})
+	res, err := c.Execute(t.Context(), "team", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,13 +358,13 @@ func TestModelSwitchFactoryError(t *testing.T) {
 	c.deps.ModelFactory = func(name string) (language.ChatModel, error) {
 		return nil, errBoom
 	}
-	if _, err := c.Execute(context.Background(), "model", []string{"ghost-model"}, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "model", []string{"ghost-model"}, &Session{}); err == nil {
 		t.Fatal("factory failure should surface")
 	}
 }
 
 func TestWebCommandLifecycle(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	c, _ := newAgentConsole(t, nil)
 	web := webgui.New(server.Config{Logger: zerolog.Nop()})
 	c.deps.Web = web
@@ -401,7 +401,7 @@ func TestWebCommandLifecycle(t *testing.T) {
 }
 
 func TestDebugLogRootlessAndPersistFailure(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	t.Run("empty root renders disabled marker", func(t *testing.T) {
@@ -455,7 +455,7 @@ func TestOutputStylePersistFailure(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
-	res, err := c.Execute(context.Background(), "output-style", []string{"explanatory"}, &Session{})
+	res, err := c.Execute(t.Context(), "output-style", []string{"explanatory"}, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestOutputStylePersistFailure(t *testing.T) {
 }
 
 func TestDoctorStorageAndHooks(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	t.Run("blocked session dir", func(t *testing.T) {
@@ -525,7 +525,7 @@ func TestDoctorStorageAndHooks(t *testing.T) {
 }
 
 func TestGoalCommandGapBranches(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	t.Run("budget without a goal", func(t *testing.T) {
@@ -537,7 +537,7 @@ func TestGoalCommandGapBranches(t *testing.T) {
 }
 
 func TestPluginsCommandBranches(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	t.Run("default root and load errors", func(t *testing.T) {
@@ -603,7 +603,7 @@ func TestPluginsCommandBranches(t *testing.T) {
 }
 
 func TestAgentctlErrorBranches(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	t.Run("thinking budget hook failure", func(t *testing.T) {

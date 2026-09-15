@@ -59,7 +59,7 @@ func newPermTestAgent(t *testing.T, hr hooks.CommandRunner) *Agent {
 func TestPermissionRequestHookPreApproves(t *testing.T) {
 	var seen []hooks.Event
 	a := newPermTestAgent(t, permHookRunner("allow", &seen))
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write it")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("write it")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestPermissionRequestHookPreApproves(t *testing.T) {
 func TestPermissionRequestHookPreDenies(t *testing.T) {
 	var seen []hooks.Event
 	a := newPermTestAgent(t, permHookRunner("deny", &seen))
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write it")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("write it")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestPostSamplingHookFiresAsynchronously(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t"); err != nil {
+	if _, err := a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 	// The hook runs in a goroutine: poll briefly for its arrival.
@@ -163,7 +163,7 @@ func TestSessionEndHook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.RunSessionEnd(context.Background(), "exit"); err != nil {
+	if err := a.RunSessionEnd(t.Context(), "exit"); err != nil {
 		t.Fatal(err)
 	}
 	if len(seen) != 1 || seen[0].StopReason != "exit" {

@@ -65,8 +65,7 @@ func newLSPPool(spawn func([]string) (lspTransport, error), init func(lspTranspo
 		stopCh:      make(chan struct{}),
 		idleTimeout: lspIdleTimeout,
 	}
-	p.wg.Add(1)
-	go p.reapLoop(lspReapInterval)
+	p.wg.Go(func() { p.reapLoop(lspReapInterval) })
 	return p
 }
 
@@ -196,7 +195,6 @@ func (p *lspPool) evict(key string, tr lspTransport) {
 }
 
 func (p *lspPool) reapLoop(interval time.Duration) {
-	defer p.wg.Done()
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {

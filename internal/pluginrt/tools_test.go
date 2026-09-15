@@ -1,7 +1,6 @@
 package pluginrt
 
 import (
-	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -95,7 +94,7 @@ func adoptedBrowser(t *testing.T, fake *fakePinch) *BrowserRuntime {
 
 func invoke(t *testing.T, tl coretools.Tool, args map[string]any) (string, error) {
 	t.Helper()
-	res, err := tl.Invoke(context.Background(), args)
+	res, err := tl.Invoke(t.Context(), args)
 	return res.Content, err
 }
 
@@ -104,7 +103,7 @@ func TestBrowserNavigateTool(t *testing.T) {
 	b := adoptedBrowser(t, fake)
 	tools := browserTools(b)
 	nav := toolByName(t, tools, "BrowserNavigate")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if _, err := nav.Invoke(ctx, map[string]any{"url": ""}); err == nil ||
 		!strings.Contains(err.Error(), "url is required") {
@@ -147,7 +146,7 @@ func TestBrowserNavigateToolAPIError(t *testing.T) {
 	fake := &fakePinch{fail: map[string]bool{"/navigate": true}}
 	b := adoptedBrowser(t, fake)
 	nav := toolByName(t, browserTools(b), "BrowserNavigate")
-	_, err := nav.Invoke(context.Background(), map[string]any{"url": "https://example.com"})
+	_, err := nav.Invoke(t.Context(), map[string]any{"url": "https://example.com"})
 	if err == nil || !strings.Contains(err.Error(), "endpoint exploding") {
 		t.Fatalf("navigate api error: %v", err)
 	}
@@ -204,7 +203,7 @@ func TestBrowserActionTool(t *testing.T) {
 	fake := &fakePinch{}
 	b := adoptedBrowser(t, fake)
 	action := toolByName(t, browserTools(b), "BrowserAction")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, bad := range []map[string]any{
 		{"kind": "click"},
@@ -241,7 +240,7 @@ func TestBrowserToolsRequireInstall(t *testing.T) {
 	// Without a binary the tools surface the not-installed sentinel.
 	b := NewBrowserRuntime(t.TempDir(), zerolog.Nop())
 	nav := toolByName(t, browserTools(b), "BrowserNavigate")
-	_, err := nav.Invoke(context.Background(), map[string]any{"url": "https://example.com"})
+	_, err := nav.Invoke(t.Context(), map[string]any{"url": "https://example.com"})
 	if err == nil || !strings.Contains(err.Error(), "not installed") {
 		t.Fatalf("err = %v, want not-installed guidance", err)
 	}
@@ -258,7 +257,7 @@ func fakePDFEnv(t *testing.T) *PythonRuntime {
 func TestPdfReadTool(t *testing.T) {
 	py := fakePDFEnv(t)
 	read := toolByName(t, pdfTools(py, t.TempDir()), "PdfRead")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if _, err := read.Invoke(ctx, map[string]any{"file": ""}); err == nil ||
 		!strings.Contains(err.Error(), "file is required") {
@@ -329,7 +328,7 @@ func TestPdfReadTool(t *testing.T) {
 func TestPdfWriteTool(t *testing.T) {
 	py := fakePDFEnv(t)
 	write := toolByName(t, pdfTools(py, t.TempDir()), "PdfWrite")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, bad := range []map[string]any{
 		{"op": "merge", "files": []any{"a.pdf"}},
@@ -423,7 +422,7 @@ func TestBrowserActionToolAPIError(t *testing.T) {
 	fake := &fakePinch{fail: map[string]bool{"/action": true}}
 	b := adoptedBrowser(t, fake)
 	action := toolByName(t, browserTools(b), "BrowserAction")
-	_, err := action.Invoke(context.Background(), map[string]any{"kind": "click", "ref": "e5"})
+	_, err := action.Invoke(t.Context(), map[string]any{"kind": "click", "ref": "e5"})
 	if err == nil || !strings.Contains(err.Error(), "endpoint exploding") {
 		t.Fatalf("action api error: %v", err)
 	}
@@ -435,13 +434,13 @@ func TestPdfToolsRunFailureWithoutDiagnostics(t *testing.T) {
 	t.Setenv("FAKE_PYTHON_MODE", "silent")
 	tools := pdfTools(py, t.TempDir())
 	read := toolByName(t, tools, "PdfRead")
-	if _, err := read.Invoke(context.Background(), map[string]any{"file": "doc.pdf"}); err == nil ||
+	if _, err := read.Invoke(t.Context(), map[string]any{"file": "doc.pdf"}); err == nil ||
 		!strings.Contains(err.Error(), "run pdf.py:") {
 		t.Fatalf("silent failure: %v", err)
 	}
 	write := toolByName(t, tools, "PdfWrite")
 	args := map[string]any{"op": "merge", "files": []any{"a.pdf", "b.pdf"}, "output": "o.pdf"}
-	if _, err := write.Invoke(context.Background(), args); err == nil ||
+	if _, err := write.Invoke(t.Context(), args); err == nil ||
 		!strings.Contains(err.Error(), "run pdf.py:") {
 		t.Fatalf("silent write failure: %v", err)
 	}
@@ -473,7 +472,7 @@ func lastInterpreterArgs(t *testing.T, path string, n int) []string {
 func TestOfficeReadTool(t *testing.T) {
 	py := fakeOfficeEnv(t)
 	read := toolByName(t, officeTools(py, t.TempDir()), "OfficeRead")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if _, err := read.Invoke(ctx, map[string]any{"file": ""}); err == nil ||
 		!strings.Contains(err.Error(), "file is required") {
@@ -532,7 +531,7 @@ func TestOfficeReadSchemaDriftDegrades(t *testing.T) {
 func TestDocxWriteTool(t *testing.T) {
 	py := fakeOfficeEnv(t)
 	write := toolByName(t, officeTools(py, t.TempDir()), "DocxWrite")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, bad := range []map[string]any{
 		{},
@@ -588,7 +587,7 @@ func TestDocxWriteTool(t *testing.T) {
 func TestXlsxWriteTool(t *testing.T) {
 	py := fakeOfficeEnv(t)
 	write := toolByName(t, officeTools(py, t.TempDir()), "XlsxWrite")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, bad := range []map[string]any{
 		{"path": "x.xlsx"},
@@ -627,7 +626,7 @@ func TestXlsxWriteTool(t *testing.T) {
 func TestPptxWriteTool(t *testing.T) {
 	py := fakeOfficeEnv(t)
 	write := toolByName(t, officeTools(py, t.TempDir()), "PptxWrite")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, bad := range []map[string]any{
 		{},

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -29,7 +28,7 @@ func TestWorkerBadLogLevel(t *testing.T) {
 }
 
 func TestServeProbesOff(t *testing.T) {
-	stop, err := serveProbes(context.Background(), "off", zerolog.Nop(), nil)
+	stop, err := serveProbes(t.Context(), "off", zerolog.Nop(), nil)
 	if err != nil {
 		t.Fatalf("serveProbes(off) err = %v", err)
 	}

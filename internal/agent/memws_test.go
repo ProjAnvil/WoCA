@@ -12,16 +12,16 @@ import (
 func TestMemoryWorkspaceCtxTiering(t *testing.T) {
 	// Bottom tier: workdir on a bare agent.
 	a := &Agent{workdir: "/ws/workdir"}
-	if got := a.memoryWorkspaceCtx(context.Background()); got != "/ws/workdir" {
+	if got := a.memoryWorkspaceCtx(t.Context()); got != "/ws/workdir" {
 		t.Fatalf("workdir tier = %q, want /ws/workdir", got)
 	}
 	// Middle tier: the agent field (TUI startup pin / fork inheritance).
 	a.SetMemoryWorkspace("/ws/field")
-	if got := a.memoryWorkspaceCtx(context.Background()); got != "/ws/field" {
+	if got := a.memoryWorkspaceCtx(t.Context()); got != "/ws/field" {
 		t.Fatalf("field tier = %q, want /ws/field", got)
 	}
 	// Top tier: the ctx value beats the field.
-	ctx := WithRunWorkspace(context.Background(), "/ws/ctx")
+	ctx := WithRunWorkspace(t.Context(), "/ws/ctx")
 	if got := a.memoryWorkspaceCtx(ctx); got != "/ws/ctx" {
 		t.Fatalf("ctx tier = %q, want /ws/ctx", got)
 	}
@@ -55,7 +55,7 @@ func TestRetainRunUsesCtxWorkspace(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws/workdir"}
 	a.SetMemoryWorkspace("/ws/field")
-	ctx := WithRunWorkspace(context.Background(), "/ws/ctx")
+	ctx := WithRunWorkspace(t.Context(), "/ws/ctx")
 	a.RetainRun(ctx,
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
 
@@ -72,7 +72,7 @@ func TestRetainRunCtxWorkspaceSurvivesCancellation(t *testing.T) {
 	// are preserved. Simulate the worst case: a fully cancelled run ctx.
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws/workdir"}
-	ctx, cancel := context.WithCancel(WithRunWorkspace(context.Background(), "/ws/ctx"))
+	ctx, cancel := context.WithCancel(WithRunWorkspace(t.Context(), "/ws/ctx"))
 	cancel()
 	a.RetainRun(context.WithoutCancel(ctx),
 		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
@@ -85,7 +85,7 @@ func TestRetainGoalUsesCtxWorkspace(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws/workdir"}
 	a.SetMemoryWorkspace("/ws/field")
-	ctx := WithRunWorkspace(context.Background(), "/ws/goal-ctx")
+	ctx := WithRunWorkspace(t.Context(), "/ws/goal-ctx")
 	a.RetainGoal(ctx, "objective", "complete", "summary", nil)
 	if calls := f.recordedRememberCalls(); len(calls) != 0 {
 		t.Fatalf("auto-retain must not write facts directly: %v", calls)
@@ -99,7 +99,7 @@ func TestPrefetchUsesCtxWorkspace(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws/workdir"}
 	a.SetMemoryWorkspace("/ws/field")
-	a.beginMemoryPrefetch(WithRunWorkspace(context.Background(), "/ws/ctx"),
+	a.beginMemoryPrefetch(WithRunWorkspace(t.Context(), "/ws/ctx"),
 		[]messages.Message{messages.Human("q")})
 	deadline := time.Now().Add(2 * time.Second)
 	for len(f.recordedRecalls()) == 0 && time.Now().Before(deadline) {
@@ -114,7 +114,7 @@ func TestRecordTaskEventUsesCtxWorkspace(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws/workdir"}
 	a.SetMemoryWorkspace("/ws/field")
-	ctx := WithRunWorkspace(context.Background(), "/ws/ctx")
+	ctx := WithRunWorkspace(t.Context(), "/ws/ctx")
 	a.recordTaskEvent(ctx, "explorer", "map the auth flow", "found 3 entry points", nil)
 	if wss := f.recordedEventWSs(); len(wss) != 1 || wss[0] != "/ws/ctx" {
 		t.Fatalf("eventWSs = %v, want [/ws/ctx]", wss)
@@ -125,7 +125,7 @@ func TestMemoryToolUsesCtxWorkspace(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws/workdir"}
 	a.SetMemoryWorkspace("/ws/field")
-	ctx := WithRunWorkspace(context.Background(), "/ws/ctx")
+	ctx := WithRunWorkspace(t.Context(), "/ws/ctx")
 	tool := toolsByName(a.memoryTools())["remember_fact"]
 	if _, err := tool.Invoke(ctx, map[string]any{"content": "prefers tabs"}); err != nil {
 		t.Fatal(err)

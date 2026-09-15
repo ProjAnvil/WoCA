@@ -14,7 +14,7 @@ import (
 
 func TestDoctorAndAgentctl(t *testing.T) {
 	c, _ := newFullConsole(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	res, err := c.Execute(ctx, "doctor", nil, s)
@@ -70,7 +70,7 @@ func TestDoctorAndAgentctl(t *testing.T) {
 }
 
 func TestDoctorFailureModes(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 	// Everything failing: no tools, no model, missing workdir, no settings,
 	// no skills, no MCP.
@@ -91,7 +91,7 @@ func TestDoctorFailureModes(t *testing.T) {
 func TestDoctorFullWiring(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	c, _ := newFullConsole(t)
 	c.deps.Memory = store.NewMemory()

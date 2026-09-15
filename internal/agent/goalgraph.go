@@ -266,8 +266,8 @@ func answerDanglingToolCalls(msgs []messages.Message) []messages.Message {
 // limit hit is a soft cycle boundary — the work done so far is salvaged and
 // evaluated — never a hard failure of the goal loop.
 func isRecursionLimit(err error) bool {
-	var rle *lgtypes.GraphRecursionError
-	return errors.As(err, &rle)
+	_, ok := errors.AsType[*lgtypes.GraphRecursionError](err)
+	return ok
 }
 
 // goalCycleStepBudget is the recursion (superstep) budget one goal execute

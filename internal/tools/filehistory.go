@@ -143,7 +143,7 @@ func (h *FileHistory) Pending(ctx context.Context) []FileChange {
 func (h *FileHistory) UndoSteps(ctx context.Context, n int) (int, string, error) {
 	applied := 0
 	var descs []string
-	for i := 0; i < n; i++ {
+	for range n {
 		desc, err := h.Undo(ctx)
 		if err != nil {
 			return applied, "", err

@@ -122,7 +122,7 @@ type Obs struct {
 	reqDur    metric.Float64Histogram
 	activeReq metric.Int64UpDownCounter
 
-	workerOnce    sync.Once
+	workerInit    func()
 	workerClaimed metric.Int64Counter
 	workerRuns    metric.Int64Counter
 	workerRunDur  metric.Float64Histogram
@@ -148,6 +148,12 @@ func Setup(ctx context.Context, cfg Config) (*Obs, error) {
 		cfg.OTLPEndpoint = ref
 	}
 	o := &Obs{serviceName: cfg.ServiceName, reg: prometheus.NewRegistry()}
+	o.workerInit = sync.OnceFunc(func() {
+		meter := otel.GetMeterProvider().Meter(scopeName)
+		o.workerClaimed, _ = meter.Int64Counter("woca.worker.claimed")
+		o.workerRuns, _ = meter.Int64Counter("woca.worker.runs")
+		o.workerRunDur, _ = meter.Float64Histogram("woca.worker.run.duration", metric.WithUnit("s"))
+	})
 
 	res, err := resource.Merge(resource.Default(), resource.NewWithAttributes(
 		semconv.SchemaURL, semconv.ServiceName(cfg.ServiceName)))
@@ -519,12 +525,7 @@ func (o *Obs) SetRunState(active, queued int64) {
 // Worker returns the worker instruments, bound to the meter provider the
 // Obs was set up with.
 func (o *Obs) Worker() *WorkerMetrics {
-	o.workerOnce.Do(func() {
-		meter := otel.GetMeterProvider().Meter(scopeName)
-		o.workerClaimed, _ = meter.Int64Counter("woca.worker.claimed")
-		o.workerRuns, _ = meter.Int64Counter("woca.worker.runs")
-		o.workerRunDur, _ = meter.Float64Histogram("woca.worker.run.duration", metric.WithUnit("s"))
-	})
+	o.workerInit()
 	if o.workerClaimed == nil {
 		return nil
 	}

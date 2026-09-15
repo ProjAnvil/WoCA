@@ -87,7 +87,7 @@ func TestRefreshExtraToolsRebindsNewTools(t *testing.T) {
 	}
 	boundBefore := model.bindCalls
 
-	if !a.refreshExtraTools(context.Background()) {
+	if !a.refreshExtraTools(t.Context()) {
 		t.Fatal("refresh did not report a change")
 	}
 	if _, ok := a.toolByName["extra_two"]; !ok {
@@ -98,7 +98,7 @@ func TestRefreshExtraToolsRebindsNewTools(t *testing.T) {
 	}
 	// An unchanged set reports no change and does not rebind.
 	boundNow := model.bindCalls
-	if a.refreshExtraTools(context.Background()) {
+	if a.refreshExtraTools(t.Context()) {
 		t.Fatal("unchanged set reported a change")
 	}
 	if model.bindCalls != boundNow {
@@ -150,13 +150,13 @@ func TestTaskSummaryPeriodicGeneration(t *testing.T) {
 	}
 	msgs := []messages.Message{messages.Human("refactor auth")}
 	// Rounds below the interval: no generation yet.
-	for i := 0; i < taskSummaryInterval-1; i++ {
-		a.maybeBeginTaskSummary(context.Background(), msgs)
+	for range taskSummaryInterval - 1 {
+		a.maybeBeginTaskSummary(t.Context(), msgs)
 	}
 	if summarizer.calls() != 0 {
 		t.Fatalf("summarizer called %d times before the interval", summarizer.calls())
 	}
-	a.maybeBeginTaskSummary(context.Background(), msgs)
+	a.maybeBeginTaskSummary(t.Context(), msgs)
 	deadline := time.Now().Add(3 * time.Second)
 	for a.TaskSummary() == "" && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -204,7 +204,7 @@ func (s *countingSummarizer) Capabilities() caps { return capsV }
 // matching the latest user message are prefetched and attached once.
 func TestMemoryPrefetchAttachments(t *testing.T) {
 	mem := store.NewMemory()
-	ctx := context.Background()
+	ctx := t.Context()
 	_ = mem.Put(ctx, "facts", "deploy-key", "the deploy uses bluegreen strategy")
 	_ = mem.Put(ctx, "docs", "deploy-runbook", `"see runbook before every deploy"`)
 	_ = mem.Put(ctx, "facts", "irrelevant", "completely unrelated content xyzzy")

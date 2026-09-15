@@ -67,7 +67,7 @@ func TestRouterSkipsNonRetryableErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t")
 	if err == nil || !strings.Contains(err.Error(), "400 bad request") {
 		t.Fatalf("err = %v", err)
 	}
@@ -90,7 +90,7 @@ func TestRouterRetriesTransientErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t")
 	if err == nil {
 		t.Fatal("expected the transient error to surface after retries")
 	}

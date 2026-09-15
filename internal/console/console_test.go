@@ -42,7 +42,7 @@ func newTestConsole(t *testing.T, factory func(name string) (language.ChatModel,
 
 func TestHelpListsCommands(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
-	res, err := c.Execute(context.Background(), "help", nil, &Session{})
+	res, err := c.Execute(t.Context(), "help", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestCommandsSortedAndComplete(t *testing.T) {
 func TestStatus(t *testing.T) {
 	c, cfg, _ := newTestConsole(t, nil)
 	cfg.Provider = "anthropic"
-	res, err := c.Execute(context.Background(), "status", nil, &Session{})
+	res, err := c.Execute(t.Context(), "status", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestStatus(t *testing.T) {
 func TestClearClearsSession(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 	s := &Session{History: []messages.Message{messages.Human("hi"), messages.AI("hello")}}
-	res, err := c.Execute(context.Background(), "clear", nil, s)
+	res, err := c.Execute(t.Context(), "clear", nil, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,13 +96,13 @@ func TestClearClearsSession(t *testing.T) {
 
 func TestPermissionsSet(t *testing.T) {
 	c, cfg, _ := newTestConsole(t, nil)
-	if _, err := c.Execute(context.Background(), "permissions", []string{"readOnly"}, &Session{}); err != nil {
+	if _, err := c.Execute(t.Context(), "permissions", []string{"readOnly"}, &Session{}); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.PermissionMode != config.ModeReadOnly {
 		t.Fatalf("cfg mode = %s", cfg.PermissionMode)
 	}
-	if _, err := c.Execute(context.Background(), "permissions", []string{"bogus"}, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "permissions", []string{"bogus"}, &Session{}); err == nil {
 		t.Fatal("bogus mode should error")
 	}
 }
@@ -132,14 +132,14 @@ func TestModelSwitch(t *testing.T) {
 	c, cfg, _ := newTestConsole(t, func(name string) (language.ChatModel, error) {
 		return language.NewFakeChatModel(language.WithResponses(messages.AI("switched"))), nil
 	})
-	res, err := c.Execute(context.Background(), "model", nil, &Session{})
+	res, err := c.Execute(t.Context(), "model", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(res.Output, "test-model") {
 		t.Fatalf("/model view = %q", res.Output)
 	}
-	if _, err := c.Execute(context.Background(), "model", []string{"gpt-4o"}, &Session{}); err != nil {
+	if _, err := c.Execute(t.Context(), "model", []string{"gpt-4o"}, &Session{}); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Model != "gpt-4o" {
@@ -148,7 +148,7 @@ func TestModelSwitch(t *testing.T) {
 
 	// Without a factory, switching errors but viewing still works.
 	c2, _, _ := newTestConsole(t, nil)
-	if _, err := c2.Execute(context.Background(), "model", []string{"x"}, &Session{}); err == nil {
+	if _, err := c2.Execute(t.Context(), "model", []string{"x"}, &Session{}); err == nil {
 		t.Fatal("switching without a factory should error")
 	}
 }
@@ -157,7 +157,7 @@ func TestWebLifecycle(t *testing.T) {
 	c, _, web := newTestConsole(t, nil)
 
 	// status: off
-	res, err := c.Execute(context.Background(), "web", []string{"status"}, &Session{})
+	res, err := c.Execute(t.Context(), "web", []string{"status"}, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestWebLifecycle(t *testing.T) {
 	}
 
 	// start on an ephemeral port (passing "0")
-	res, err = c.Execute(context.Background(), "web", []string{"0"}, &Session{})
+	res, err = c.Execute(t.Context(), "web", []string{"0"}, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestWebLifecycle(t *testing.T) {
 	}
 
 	// starting again on the same resolved target is reported, not restarted
-	res, err = c.Execute(context.Background(), "web", []string{"status"}, &Session{})
+	res, err = c.Execute(t.Context(), "web", []string{"status"}, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestWebLifecycle(t *testing.T) {
 	}
 
 	// stop
-	res, err = c.Execute(context.Background(), "web", []string{"off"}, &Session{})
+	res, err = c.Execute(t.Context(), "web", []string{"off"}, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestWebUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := New(Deps{Agent: a})
-	if _, err := c.Execute(context.Background(), "web", nil, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "web", nil, &Session{}); err == nil {
 		t.Fatal("/web without a manager should error")
 	}
 }
@@ -223,7 +223,7 @@ func TestContextAndLists(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 	s := &Session{History: []messages.Message{messages.Human("hello")}}
 
-	res, err := c.Execute(context.Background(), "context", nil, s)
+	res, err := c.Execute(t.Context(), "context", nil, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestContextAndLists(t *testing.T) {
 	}
 
 	for _, name := range []string{"todos", "tasks", "skills", "mcp"} {
-		res, err = c.Execute(context.Background(), name, nil, s)
+		res, err = c.Execute(t.Context(), name, nil, s)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -244,11 +244,11 @@ func TestContextAndLists(t *testing.T) {
 
 func TestUnknownCommandAndExit(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
-	if _, err := c.Execute(context.Background(), "nope", nil, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "nope", nil, &Session{}); err == nil {
 		t.Fatal("unknown command should error")
 	}
 	for _, name := range []string{"exit", "quit", "q"} {
-		res, err := c.Execute(context.Background(), name, nil, &Session{})
+		res, err := c.Execute(t.Context(), name, nil, &Session{})
 		if err != nil || !res.Exit {
 			t.Fatalf("/%s = %+v, %v; want Exit", name, res, err)
 		}
@@ -291,7 +291,7 @@ func TestCompactCommand(t *testing.T) {
 	// Without a summarizer there is nothing to compact.
 	c, _ := newAgentConsole(t, nil)
 	s := &Session{History: []messages.Message{messages.Human("hello"), messages.AI("hi")}}
-	res, err := c.Execute(context.Background(), "compact", nil, s)
+	res, err := c.Execute(t.Context(), "compact", nil, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestCompactCommand(t *testing.T) {
 		messages.AI("an equally long first answer explaining the build system in some detail"),
 		messages.Human("second question"),
 	}}
-	res, err = c.Execute(context.Background(), "compact", nil, s)
+	res, err = c.Execute(t.Context(), "compact", nil, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestContextReport(t *testing.T) {
 		messages.AI("hi"),
 		messages.Tool("t1", "tool result"),
 	}}
-	res, err := c.Execute(context.Background(), "context", nil, s)
+	res, err := c.Execute(t.Context(), "context", nil, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func TestUndoRedoCommands(t *testing.T) {
 
 	// Nothing recorded yet: friendly "nothing to" output, not an error.
 	for _, name := range []string{"undo", "redo"} {
-		res, err := c.Execute(context.Background(), name, nil, s)
+		res, err := c.Execute(t.Context(), name, nil, s)
 		if err != nil {
 			t.Fatalf("/%s: %v", name, err)
 		}
@@ -366,8 +366,8 @@ func TestUndoRedoCommands(t *testing.T) {
 	if err := os.WriteFile(path, []byte("new"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	c.deps.Agent.FileHistory().Record(context.Background(), path, []byte("old"), []byte("new"))
-	res, err := c.Execute(context.Background(), "undo", nil, s)
+	c.deps.Agent.FileHistory().Record(t.Context(), path, []byte("old"), []byte("new"))
+	res, err := c.Execute(t.Context(), "undo", nil, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestUndoRedoCommands(t *testing.T) {
 	if data, _ := os.ReadFile(path); string(data) != "old" {
 		t.Fatalf("file after undo = %q", data)
 	}
-	res, err = c.Execute(context.Background(), "redo", nil, s)
+	res, err = c.Execute(t.Context(), "redo", nil, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +402,7 @@ func TestListRenderings(t *testing.T) {
 		{Content: "done thing", Status: "completed"},
 		{Content: "dropped thing", Status: "cancelled"},
 	})
-	res, err := c.Execute(context.Background(), "todos", nil, &Session{})
+	res, err := c.Execute(t.Context(), "todos", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,7 +417,7 @@ func TestListRenderings(t *testing.T) {
 		{ID: "t1", Subject: "write tests", Status: agent.TaskRecordInProgress},
 		{ID: "t2", Subject: "ship it", Status: agent.TaskRecordPending},
 	})
-	res, err = c.Execute(context.Background(), "tasks", nil, &Session{})
+	res, err = c.Execute(t.Context(), "tasks", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +430,7 @@ func TestListRenderings(t *testing.T) {
 		{Name: "documented", Description: "does things"},
 		{Name: "bare"},
 	})
-	res, err = c.Execute(context.Background(), "skills", nil, &Session{})
+	res, err = c.Execute(t.Context(), "skills", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +439,7 @@ func TestListRenderings(t *testing.T) {
 	}
 
 	// MCP tools group by server.
-	res, err = c.Execute(context.Background(), "mcp", nil, &Session{})
+	res, err = c.Execute(t.Context(), "mcp", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestListRenderings(t *testing.T) {
 	}
 
 	// No team spawned yet.
-	res, err = c.Execute(context.Background(), "team", nil, &Session{})
+	res, err = c.Execute(t.Context(), "team", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,25 +465,25 @@ func TestStatusWebRunningAndTaskSummary(t *testing.T) {
 		acfg.Summarizer = language.NewFakeChatModel(language.WithResponses(messages.AI("polishing the console tests")))
 	})
 	c.deps.Web = web
-	if _, err := c.Execute(context.Background(), "web", []string{"0"}, &Session{}); err != nil {
+	if _, err := c.Execute(t.Context(), "web", []string{"0"}, &Session{}); err != nil {
 		t.Fatal(err)
 	}
 
-	res, err := c.Execute(context.Background(), "status", nil, &Session{})
+	res, err := c.Execute(t.Context(), "status", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(res.Output, "web gui=http://") {
 		t.Fatalf("status web line missing:\n%s", res.Output)
 	}
-	if _, err := c.Execute(context.Background(), "web", []string{"off"}, &Session{}); err != nil {
+	if _, err := c.Execute(t.Context(), "web", []string{"off"}, &Session{}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestPermissionsView(t *testing.T) {
 	c, _ := newAgentConsole(t, nil)
-	res, err := c.Execute(context.Background(), "permissions", nil, &Session{})
+	res, err := c.Execute(t.Context(), "permissions", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -498,7 +498,7 @@ func TestModelSwitchErrors(t *testing.T) {
 	c.deps.ModelFactory = func(name string) (language.ChatModel, error) {
 		return nil, errors.New("unknown model")
 	}
-	if _, err := c.Execute(context.Background(), "model", []string{"nope"}, &Session{}); err == nil ||
+	if _, err := c.Execute(t.Context(), "model", []string{"nope"}, &Session{}); err == nil ||
 		!strings.Contains(err.Error(), "unknown model") {
 		t.Fatalf("factory error = %v", err)
 	}
@@ -506,7 +506,7 @@ func TestModelSwitchErrors(t *testing.T) {
 	// A factory returning nil fails at the agent boundary.
 	c2, _ := newAgentConsole(t, nil)
 	c2.deps.ModelFactory = func(name string) (language.ChatModel, error) { return nil, nil }
-	if _, err := c2.Execute(context.Background(), "model", []string{"void"}, &Session{}); err == nil {
+	if _, err := c2.Execute(t.Context(), "model", []string{"void"}, &Session{}); err == nil {
 		t.Fatal("nil model should fail SetModel")
 	}
 }
@@ -530,13 +530,13 @@ func TestWebRestartScenarios(t *testing.T) {
 	c.deps.OpenBrowser = func(url string) { opened = url }
 
 	// Stopping before a start is a no-op message.
-	res, err := c.Execute(context.Background(), "web", []string{"off"}, &Session{})
+	res, err := c.Execute(t.Context(), "web", []string{"off"}, &Session{})
 	if err != nil || !strings.Contains(res.Output, "not running") {
 		t.Fatalf("web off before start = %q, %v", res.Output, err)
 	}
 
 	// Start on an ephemeral port; the browser hook is invoked with the URL.
-	res, err = c.Execute(context.Background(), "web", []string{"0"}, &Session{})
+	res, err = c.Execute(t.Context(), "web", []string{"0"}, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,20 +547,20 @@ func TestWebRestartScenarios(t *testing.T) {
 
 	// Starting on the same resolved address is reported, not restarted.
 	port := strings.Split(addr, ":")[1]
-	res, err = c.Execute(context.Background(), "web", []string{port}, &Session{})
+	res, err = c.Execute(t.Context(), "web", []string{port}, &Session{})
 	if err != nil || !strings.Contains(res.Output, "already running") {
 		t.Fatalf("same-addr restart = %q, %v", res.Output, err)
 	}
 
 	// Starting on a different address restarts the server.
-	res, err = c.Execute(context.Background(), "web", []string{"0"}, &Session{})
+	res, err = c.Execute(t.Context(), "web", []string{"0"}, &Session{})
 	if err != nil || !strings.Contains(res.Output, "started") {
 		t.Fatalf("different-addr restart = %q, %v", res.Output, err)
 	}
 	if newAddr, _ := c.deps.Web.Running(); newAddr == addr || newAddr == "127.0.0.1:0" {
 		t.Fatalf("restart addr = %q (was %q)", newAddr, addr)
 	}
-	if _, err := c.Execute(context.Background(), "web", []string{"off"}, &Session{}); err != nil {
+	if _, err := c.Execute(t.Context(), "web", []string{"off"}, &Session{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -571,14 +571,14 @@ func TestWebRestartScenarios(t *testing.T) {
 	}
 	defer ln.Close()
 	taken := strings.Split(ln.Addr().String(), ":")[1]
-	if _, err := c.Execute(context.Background(), "web", []string{taken}, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "web", []string{taken}, &Session{}); err == nil {
 		t.Fatal("binding a taken port should error")
 	}
 }
 
 func TestConsoleSmallBranches(t *testing.T) {
 	c, _ := newFullConsole(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	// /output-style list and set.
@@ -619,7 +619,7 @@ func TestConsoleSmallBranches(t *testing.T) {
 
 func TestToolsCommandListsRegisteredTool(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
-	res, err := c.Execute(context.Background(), "tools", nil, &Session{})
+	res, err := c.Execute(t.Context(), "tools", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -634,7 +634,7 @@ func TestToolsCommandListsRegisteredTool(t *testing.T) {
 
 func TestHooksCommandReportsNoneConfigured(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
-	res, err := c.Execute(context.Background(), "hooks", nil, &Session{})
+	res, err := c.Execute(t.Context(), "hooks", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}

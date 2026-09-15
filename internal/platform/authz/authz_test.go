@@ -1,7 +1,6 @@
 package authz
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -49,7 +48,7 @@ func TestLocal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := a.Authorize(context.Background(), tt.tc, tt.scope)
+			err := a.Authorize(t.Context(), tt.tc, tt.scope)
 			if tt.wantErr {
 				if !errors.Is(err, ErrForbidden) {
 					t.Fatalf("Authorize error = %v, want ErrForbidden", err)

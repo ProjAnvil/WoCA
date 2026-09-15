@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -55,7 +54,7 @@ func TestNotebookEditByCellID(t *testing.T) {
 	nbPath := filepath.Join(dir, "nb.ipynb")
 	writeNotebook(t, nbPath)
 
-	res, err := tool.Invoke(context.Background(), map[string]any{
+	res, err := tool.Invoke(t.Context(), map[string]any{
 		"notebook_path": "nb.ipynb", "cell_id": "beta", "new_source": "# hello\nworld",
 	})
 	if err != nil {
@@ -71,10 +70,10 @@ func TestNotebookEditByCellID(t *testing.T) {
 	if srcs[0] != `["print(1)\n"]` || srcs[1] != `["# hello\n","world"]` {
 		t.Fatalf("sources after edit = %v", srcs)
 	}
-	if undo, redo := reg.FileHistory().Counts(context.Background()); undo != 1 || redo != 0 {
+	if undo, redo := reg.FileHistory().Counts(t.Context()); undo != 1 || redo != 0 {
 		t.Fatalf("history counts = %d/%d, want 1/0", undo, redo)
 	}
-	if msg, err := reg.FileHistory().Undo(context.Background()); err != nil || !strings.Contains(msg, "nb.ipynb") {
+	if msg, err := reg.FileHistory().Undo(t.Context()); err != nil || !strings.Contains(msg, "nb.ipynb") {
 		t.Fatalf("undo after notebook edit = %q, %v", msg, err)
 	}
 	if srcs := notebookSources(t, nbPath); srcs[1] != `["# hi\n"]` {
@@ -89,7 +88,7 @@ func TestNotebookEditByCellIndex(t *testing.T) {
 	nbPath := filepath.Join(dir, "nb.ipynb")
 	writeNotebook(t, nbPath)
 
-	res, err := tool.Invoke(context.Background(), map[string]any{
+	res, err := tool.Invoke(t.Context(), map[string]any{
 		"notebook_path": "nb.ipynb", "cell_index": 0, "new_source": "x=1\n",
 	})
 	if err != nil {
@@ -147,7 +146,7 @@ func TestNotebookEditErrors(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			_, err := tool.Invoke(context.Background(), c.args)
+			_, err := tool.Invoke(t.Context(), c.args)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("NotebookEdit error = %v, want %q", err, c.want)
 			}
@@ -169,7 +168,7 @@ func TestNotebookEditWriteFailure(t *testing.T) {
 	}
 	reg := NewRegistry(dir)
 	tool, _ := reg.Get("NotebookEdit")
-	if _, err := tool.Invoke(context.Background(), map[string]any{
+	if _, err := tool.Invoke(t.Context(), map[string]any{
 		"notebook_path": "nb.ipynb", "cell_index": 0, "new_source": "x",
 	}); err == nil || !strings.Contains(err.Error(), "write notebook nb.ipynb") {
 		t.Fatalf("read-only notebook write = %v", err)

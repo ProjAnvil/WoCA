@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,7 +20,7 @@ func TestReadToolSlicesAndTruncates(t *testing.T) {
 	}
 
 	tool, _ := reg.Get("Read")
-	res, err := tool.Invoke(context.Background(), map[string]any{"file_path": "ten.txt", "offset": 2, "limit": 3})
+	res, err := tool.Invoke(t.Context(), map[string]any{"file_path": "ten.txt", "offset": 2, "limit": 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +32,7 @@ func TestReadToolSlicesAndTruncates(t *testing.T) {
 	}
 
 	// offset past EOF yields the empty tail with no truncation note.
-	res, err = tool.Invoke(context.Background(), map[string]any{"file_path": "ten.txt", "offset": 50})
+	res, err = tool.Invoke(t.Context(), map[string]any{"file_path": "ten.txt", "offset": 50})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +41,7 @@ func TestReadToolSlicesAndTruncates(t *testing.T) {
 	}
 
 	// limit reaching past EOF is clamped to the last line.
-	res, err = tool.Invoke(context.Background(), map[string]any{"file_path": "ten.txt", "offset": 8, "limit": 10})
+	res, err = tool.Invoke(t.Context(), map[string]any{"file_path": "ten.txt", "offset": 8, "limit": 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +51,7 @@ func TestReadToolSlicesAndTruncates(t *testing.T) {
 	}
 
 	// negative offset is clamped to 0
-	res, err = tool.Invoke(context.Background(), map[string]any{"file_path": "ten.txt", "offset": -5, "limit": 1})
+	res, err = tool.Invoke(t.Context(), map[string]any{"file_path": "ten.txt", "offset": -5, "limit": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +59,7 @@ func TestReadToolSlicesAndTruncates(t *testing.T) {
 		t.Fatalf("clamped offset = %q", res.Content)
 	}
 
-	if _, err := tool.Invoke(context.Background(), map[string]any{"file_path": "missing.txt"}); err == nil ||
+	if _, err := tool.Invoke(t.Context(), map[string]any{"file_path": "missing.txt"}); err == nil ||
 		!strings.Contains(err.Error(), "read missing.txt") {
 		t.Fatalf("missing file error = %v", err)
 	}
@@ -73,7 +72,7 @@ func TestReadToolBrokenImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool, _ := reg.Get("Read")
-	res, err := tool.Invoke(context.Background(), map[string]any{"file_path": "broken.png"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"file_path": "broken.png"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +90,7 @@ func TestWriteToolErrorPaths(t *testing.T) {
 	tool, _ := reg.Get("Write")
 
 	// Parent path component is a regular file: MkdirAll fails.
-	if _, err := tool.Invoke(context.Background(), map[string]any{"file_path": "plain/sub/x.txt", "content": "x"}); err == nil ||
+	if _, err := tool.Invoke(t.Context(), map[string]any{"file_path": "plain/sub/x.txt", "content": "x"}); err == nil ||
 		!strings.Contains(err.Error(), "write plain/sub/x.txt") {
 		t.Fatalf("mkdir error = %v", err)
 	}
@@ -105,7 +104,7 @@ func TestWriteToolErrorPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(ro, 0o700) })
-	if _, err := tool.Invoke(context.Background(), map[string]any{"file_path": "ro/x.txt", "content": "x"}); err == nil ||
+	if _, err := tool.Invoke(t.Context(), map[string]any{"file_path": "ro/x.txt", "content": "x"}); err == nil ||
 		!strings.Contains(err.Error(), "write ro/x.txt") {
 		t.Fatalf("writefile error = %v", err)
 	}
@@ -120,20 +119,20 @@ func TestEditToolBranches(t *testing.T) {
 	}
 	tool, _ := reg.Get("Edit")
 
-	if _, err := tool.Invoke(context.Background(), map[string]any{"file_path": "missing.txt", "old_string": "a", "new_string": "b"}); err == nil ||
+	if _, err := tool.Invoke(t.Context(), map[string]any{"file_path": "missing.txt", "old_string": "a", "new_string": "b"}); err == nil ||
 		!strings.Contains(err.Error(), "edit missing.txt") {
 		t.Fatalf("missing file error = %v", err)
 	}
-	if _, err := tool.Invoke(context.Background(), map[string]any{"file_path": "multi.txt", "old_string": "zzz", "new_string": "b"}); err == nil ||
+	if _, err := tool.Invoke(t.Context(), map[string]any{"file_path": "multi.txt", "old_string": "zzz", "new_string": "b"}); err == nil ||
 		!strings.Contains(err.Error(), "old_string not found") {
 		t.Fatalf("not-found error = %v", err)
 	}
-	if _, err := tool.Invoke(context.Background(), map[string]any{"file_path": "multi.txt", "old_string": "x", "new_string": "y"}); err == nil ||
+	if _, err := tool.Invoke(t.Context(), map[string]any{"file_path": "multi.txt", "old_string": "x", "new_string": "y"}); err == nil ||
 		!strings.Contains(err.Error(), "appears 3 times") {
 		t.Fatalf("ambiguous error = %v", err)
 	}
 
-	res, err := tool.Invoke(context.Background(), map[string]any{
+	res, err := tool.Invoke(t.Context(), map[string]any{
 		"file_path": "multi.txt", "old_string": "x", "new_string": "Y", "replace_all": true,
 	})
 	if err != nil {
@@ -160,7 +159,7 @@ func TestEditToolBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(locked, 0o644) })
-	if _, err := tool.Invoke(context.Background(), map[string]any{
+	if _, err := tool.Invoke(t.Context(), map[string]any{
 		"file_path": "locked.txt", "old_string": "keep", "new_string": "drop",
 	}); err == nil || !strings.Contains(err.Error(), "edit locked.txt") {
 		t.Fatalf("edit of read-only file = %v", err)
@@ -170,7 +169,7 @@ func TestEditToolBranches(t *testing.T) {
 	if err := os.WriteFile(path, []byte("one mark\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, err = tool.Invoke(context.Background(), map[string]any{
+	res, err = tool.Invoke(t.Context(), map[string]any{
 		"file_path": "multi.txt", "old_string": "mark", "new_string": "MARK", "replace_all": true,
 	})
 	if err != nil {

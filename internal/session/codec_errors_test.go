@@ -54,7 +54,7 @@ func TestDecodeRejectsMalformedJSON(t *testing.T) {
 }
 
 func TestBlobHelpersSurfaceStoreErrors(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	boom := errors.New("blob down")
 
 	if err := SaveBlob(ctx, &fakeBlob{putErr: boom}, "k", unmarshalableMessages()); err == nil {

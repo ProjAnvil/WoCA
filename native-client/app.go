@@ -64,7 +64,7 @@ type App struct {
 	storeKey      keySink
 	enroller      *enroller
 	onShutdown    func()
-	shutdownOnce  sync.Once
+	shutdownOnce  func()
 
 	preferenceMu      sync.Mutex
 	preferenceCalls   sync.WaitGroup
@@ -84,15 +84,8 @@ func newAppWithCancellation(
 	cancellations requestCancellationRegistry,
 	onShutdown func(),
 ) *App {
-	return &App{bridge: service, cancellations: cancellations, onShutdown: onShutdown}
-}
-
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-}
-
-func (a *App) shutdown(context.Context) {
-	a.shutdownOnce.Do(func() {
+	a := &App{bridge: service, cancellations: cancellations, onShutdown: onShutdown}
+	a.shutdownOnce = sync.OnceFunc(func() {
 		a.preferenceMu.Lock()
 		a.preferenceClosing = true
 		a.preferenceMu.Unlock()
@@ -104,6 +97,17 @@ func (a *App) shutdown(context.Context) {
 			a.onShutdown()
 		}
 	})
+	return a
+}
+
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+}
+
+func (a *App) shutdown(context.Context) {
+	if a.shutdownOnce != nil {
+		a.shutdownOnce()
+	}
 }
 
 // CancelRequest bridges AbortController to the request context created by the

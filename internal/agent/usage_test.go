@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/language"
@@ -31,10 +30,10 @@ func TestUsageAccumulatesAcrossCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("a")}, "t"); err != nil {
+	if _, err := a.Invoke(t.Context(), []messages.Message{messages.Human("a")}, "t"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("b")}, "t"); err != nil {
+	if _, err := a.Invoke(t.Context(), []messages.Message{messages.Human("b")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 	u := a.Usage()
@@ -64,7 +63,7 @@ func TestUsageZeroWhenProviderOmits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t"); err != nil {
+	if _, err := a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t"); err != nil {
 		t.Fatal(err)
 	}
 	if u := a.Usage(); u.Requests != 0 {

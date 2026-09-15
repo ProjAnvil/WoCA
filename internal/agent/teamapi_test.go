@@ -31,15 +31,15 @@ func TestEnsureTeamIsIdempotent(t *testing.T) {
 func TestTeamSpawnValidation(t *testing.T) {
 	lead, _ := newTeamLead(t, language.NewFakeChatModel(language.WithResponses(messages.AI("idle"))))
 	team := lead.ensureTeam()
-	if err := team.Spawn(context.Background(), "", "p", nil); err == nil {
+	if err := team.Spawn(t.Context(), "", "p", nil); err == nil {
 		t.Fatal("empty name must fail")
 	}
-	if err := team.Spawn(context.Background(), LeadName, "p", nil); err == nil {
+	if err := team.Spawn(t.Context(), LeadName, "p", nil); err == nil {
 		t.Fatal("lead name must be reserved")
 	}
 	// A failing subagent build surfaces the factory error.
 	lead.subagentModel = nil // New() rejects a nil model
-	if err := team.Spawn(context.Background(), "broken", "p", nil); err == nil {
+	if err := team.Spawn(t.Context(), "broken", "p", nil); err == nil {
 		t.Fatal("factory failure must propagate")
 	}
 }
@@ -48,22 +48,22 @@ func TestTeamToolsViaExecute(t *testing.T) {
 	lead, _ := newTeamLead(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ack"))))
 
 	// No team yet: the status/stop tools report it.
-	if res := lead.execute(context.Background(), "TeamStatus", map[string]any{}); !strings.Contains(res.Content, "No team spawned yet") {
+	if res := lead.execute(t.Context(), "TeamStatus", map[string]any{}); !strings.Contains(res.Content, "No team spawned yet") {
 		t.Fatalf("TeamStatus = %q", res.Content)
 	}
-	if res := lead.execute(context.Background(), "TeamStop", map[string]any{"name": "x"}); !strings.Contains(res.Content, "No team spawned yet") {
+	if res := lead.execute(t.Context(), "TeamStop", map[string]any{"name": "x"}); !strings.Contains(res.Content, "No team spawned yet") {
 		t.Fatalf("TeamStop = %q", res.Content)
 	}
 	// Spawn validation through the tool.
-	if res := lead.execute(context.Background(), "TeamSpawn", map[string]any{"name": "", "prompt": "p"}); !strings.Contains(res.Content, "requires name and prompt") {
+	if res := lead.execute(t.Context(), "TeamSpawn", map[string]any{"name": "", "prompt": "p"}); !strings.Contains(res.Content, "requires name and prompt") {
 		t.Fatalf("TeamSpawn = %q", res.Content)
 	}
-	if res := lead.execute(context.Background(), "TeamSpawn", map[string]any{"name": "n", "prompt": "p", "subagent_type": "nope"}); !strings.Contains(res.Content, "unknown subagent_type") {
+	if res := lead.execute(t.Context(), "TeamSpawn", map[string]any{"name": "n", "prompt": "p", "subagent_type": "nope"}); !strings.Contains(res.Content, "unknown subagent_type") {
 		t.Fatalf("TeamSpawn type = %q", res.Content)
 	}
 
 	// A real spawn registers the member and re-scopes the task tools.
-	if res := lead.execute(context.Background(), "TeamSpawn", map[string]any{"name": "bob", "prompt": "help out"}); !strings.Contains(res.Content, "Spawned teammate bob") {
+	if res := lead.execute(t.Context(), "TeamSpawn", map[string]any{"name": "bob", "prompt": "help out"}); !strings.Contains(res.Content, "Spawned teammate bob") {
 		t.Fatalf("TeamSpawn = %q", res.Content)
 	}
 	team := lead.currentTeam()
@@ -74,13 +74,13 @@ func TestTeamToolsViaExecute(t *testing.T) {
 		return m != nil && m.status == teammateIdle
 	}, "bob idle after spawn")
 
-	if res := lead.execute(context.Background(), "TeamStatus", map[string]any{}); !strings.Contains(res.Content, "bob") {
+	if res := lead.execute(t.Context(), "TeamStatus", map[string]any{}); !strings.Contains(res.Content, "bob") {
 		t.Fatalf("TeamStatus = %q", res.Content)
 	}
-	if res := lead.execute(context.Background(), "TeamStop", map[string]any{"name": "ghost"}); !strings.Contains(res.Content, "no teammate") {
+	if res := lead.execute(t.Context(), "TeamStop", map[string]any{"name": "ghost"}); !strings.Contains(res.Content, "no teammate") {
 		t.Fatalf("TeamStop unknown = %q", res.Content)
 	}
-	if res := lead.execute(context.Background(), "TeamStop", map[string]any{"name": "bob", "reason": "done"}); !strings.Contains(res.Content, "Stopping teammate bob") {
+	if res := lead.execute(t.Context(), "TeamStop", map[string]any{"name": "bob", "reason": "done"}); !strings.Contains(res.Content, "Stopping teammate bob") {
 		t.Fatalf("TeamStop = %q", res.Content)
 	}
 	waitFor(t, 10*time.Second, func() bool {
@@ -95,7 +95,7 @@ func TestTeamSpawnWithDefinition(t *testing.T) {
 	def := agents.Definition{Name: "coder", Prompt: "code things"}
 	lead, _ := newTeamLead(t, mate)
 	team := lead.ensureTeam()
-	if err := team.Spawn(context.Background(), "carol", "build it", &def); err != nil {
+	if err := team.Spawn(t.Context(), "carol", "build it", &def); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, func() bool {
@@ -111,7 +111,7 @@ func TestTeammateProcessesInboxMessage(t *testing.T) {
 	// consumes the <team-message> block.
 	lead, _ := newTeamLead(t, language.NewFakeChatModel(language.WithResponses(messages.AI("message handled"))))
 	team := lead.ensureTeam()
-	if err := team.Spawn(context.Background(), "dana", "stand by", nil); err != nil {
+	if err := team.Spawn(t.Context(), "dana", "stand by", nil); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, func() bool {
@@ -170,7 +170,7 @@ func TestTeammateTurnErrorRecordsNote(t *testing.T) {
 	team := lead.ensureTeam()
 	// Give the teammate a claimable task so its turn runs immediately.
 	team.list.CreateDeps("job", "do it", "", nil)
-	if err := team.Spawn(context.Background(), "erin", "work", nil); err != nil {
+	if err := team.Spawn(t.Context(), "erin", "work", nil); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, func() bool {
@@ -251,7 +251,7 @@ func TestTeamStatusInboxTruncates(t *testing.T) {
 func TestTeamCloseCancelsMembers(t *testing.T) {
 	lead, _ := newTeamLead(t, language.NewFakeChatModel(language.WithResponses(messages.AI("idle"))))
 	team := lead.ensureTeam()
-	if err := team.Spawn(context.Background(), "henry", "wait", nil); err != nil {
+	if err := team.Spawn(t.Context(), "henry", "wait", nil); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, func() bool {

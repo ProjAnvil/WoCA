@@ -1,7 +1,6 @@
 package hooks
 
 import (
-	"context"
 	"testing"
 )
 
@@ -11,7 +10,7 @@ func TestSessionEndPassesReason(t *testing.T) {
 	r := NewRunner(cfg, "/tmp", "s1", WithCommandRunner(fakeRunner(
 		map[string]CommandResult{"cleanup": {Stdout: "cleaned"}}, &seen,
 	)))
-	out, err := r.SessionEnd(context.Background(), "exit")
+	out, err := r.SessionEnd(t.Context(), "exit")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +42,7 @@ func TestPermissionRequestDecisions(t *testing.T) {
 			r := NewRunner(cfg, "/tmp", "s1", WithCommandRunner(fakeRunner(
 				map[string]CommandResult{"decide": tc.result}, &seen,
 			)))
-			d, err := r.PermissionRequest(context.Background(), "Bash", map[string]any{"command": "ls"})
+			d, err := r.PermissionRequest(t.Context(), "Bash", map[string]any{"command": "ls"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -64,7 +63,7 @@ func TestPermissionRequestMatcherScopes(t *testing.T) {
 		map[string]CommandResult{"ok": {Stdout: "allow"}}, &seen,
 	)))
 	// Matching command pre-approved.
-	d, err := r.PermissionRequest(context.Background(), "Bash", map[string]any{"command": "git push"})
+	d, err := r.PermissionRequest(t.Context(), "Bash", map[string]any{"command": "git push"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +71,7 @@ func TestPermissionRequestMatcherScopes(t *testing.T) {
 		t.Fatalf("git push should be pre-approved: %+v", d)
 	}
 	// Non-matching command: hook not even run.
-	d, err = r.PermissionRequest(context.Background(), "Bash", map[string]any{"command": "curl example.com"})
+	d, err = r.PermissionRequest(t.Context(), "Bash", map[string]any{"command": "curl example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +84,7 @@ func TestPostSamplingReceivesResponse(t *testing.T) {
 	cfg := Config{PostSampling: []Entry{{Hooks: []Hook{{Type: "command", Command: "log"}}}}}
 	var seen []Event
 	r := NewRunner(cfg, "/tmp", "s1", WithCommandRunner(fakeRunner(nil, &seen)))
-	if err := r.PostSampling(context.Background(), "the model said this"); err != nil {
+	if err := r.PostSampling(t.Context(), "the model said this"); err != nil {
 		t.Fatal(err)
 	}
 	if len(seen) != 1 || seen[0].Message != "the model said this" {

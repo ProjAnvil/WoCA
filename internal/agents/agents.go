@@ -94,7 +94,7 @@ func parseDefinition(defaultName string, data []byte) Definition {
 	if strings.HasPrefix(text, "---") {
 		parts := strings.SplitN(text, "---", 3)
 		if len(parts) == 3 {
-			for _, line := range strings.Split(parts[1], "\n") {
+			for line := range strings.SplitSeq(parts[1], "\n") {
 				k, v, ok := strings.Cut(line, ":")
 				if !ok {
 					continue
@@ -122,7 +122,7 @@ func parseDefinition(defaultName string, data []byte) Definition {
 // entries.
 func splitTools(v string) []string {
 	var out []string
-	for _, s := range strings.Split(v, ",") {
+	for s := range strings.SplitSeq(v, ",") {
 		if s = strings.TrimSpace(s); s != "" {
 			out = append(out, s)
 		}

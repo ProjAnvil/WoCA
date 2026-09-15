@@ -171,7 +171,7 @@ func (t *backgroundTask) appendOutput(line string) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, part := range strings.Split(line, "\n") {
+	for part := range strings.SplitSeq(line, "\n") {
 		if part != "" {
 			t.output = append(t.output, part)
 		}
@@ -575,8 +575,8 @@ func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Messag
 			}
 			msgs, err = sub.Resume(subCtx, thread, "y")
 		}
-		var gi *lgtypes.GraphInterrupt
-		if !errors.As(err, &gi) {
+		gi, ok := errors.AsType[*lgtypes.GraphInterrupt](err)
+		if !ok {
 			if err == nil {
 				_ = a.saver.DeleteThread(context.WithoutCancel(ctx), thread)
 				return lastAIText(msgs), nil

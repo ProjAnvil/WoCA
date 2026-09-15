@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,7 +30,7 @@ func TestNativeAuthEndToEnd(t *testing.T) {
 	if baseURL == "" || apiKey == "" {
 		t.Skip("WOCA_M2_E2E_URL / WOCA_M2_E2E_KEY not set")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	store, err := configstore.Open(filepath.Join(t.TempDir(), "client.db"))
 	if err != nil {

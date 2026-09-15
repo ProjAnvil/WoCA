@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/language"
@@ -30,7 +31,7 @@ func TestSetModelSwapsRuntimeModel(t *testing.T) {
 		t.Fatalf("SetModel: %v", err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("hi")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,13 +64,7 @@ func TestToolNamesAndSkills(t *testing.T) {
 			t.Fatalf("ToolNames not sorted: %v", names)
 		}
 	}
-	found := false
-	for _, n := range names {
-		if n == "Read" {
-			found = true
-		}
-	}
-	if !found {
+	if !slices.Contains(names, "Read") {
 		t.Fatalf("ToolNames missing Read: %v", names)
 	}
 	if a.CompactThreshold() != 0 {
@@ -109,7 +104,7 @@ func newCompactAgent(t *testing.T, summarizer language.ChatModel) *Agent {
 
 func bigHistory() []messages.Message {
 	out := make([]messages.Message, 0, 8)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		out = append(out, messages.Human("this is a fairly long line of text to push the token estimate up "+string(rune('a'+i))))
 	}
 	return out
@@ -121,7 +116,7 @@ func TestCompactBreakerTripsAndForces(t *testing.T) {
 
 	// Each failing auto-compact increments the failure count.
 	for i := 1; i <= maxCompactFails; i++ {
-		a.CompactHistory(context.Background(), history)
+		a.CompactHistory(t.Context(), history)
 		if got := a.compactFails; got != i {
 			t.Fatalf("compactFails = %d after %d failures, want %d", got, i, i)
 		}
@@ -129,7 +124,7 @@ func TestCompactBreakerTripsAndForces(t *testing.T) {
 
 	// Breaker tripped: auto-compaction is now a no-op even though the
 	// summarizer would be invoked again.
-	a.CompactHistory(context.Background(), history)
+	a.CompactHistory(t.Context(), history)
 	if a.compactFails != maxCompactFails {
 		t.Fatalf("compactFails = %d, breaker should hold at %d", a.compactFails, maxCompactFails)
 	}
@@ -138,12 +133,12 @@ func TestCompactBreakerTripsAndForces(t *testing.T) {
 func TestForceCompactIgnoresBreaker(t *testing.T) {
 	a := newCompactAgent(t, failingSummarizer{language.NewFakeChatModel()})
 	history := bigHistory()
-	for i := 0; i < maxCompactFails; i++ {
-		a.CompactHistory(context.Background(), history)
+	for range maxCompactFails {
+		a.CompactHistory(t.Context(), history)
 	}
 
 	// ForceCompact still attempts (and fails) without growing the counter.
-	out := a.ForceCompact(context.Background(), history)
+	out := a.ForceCompact(t.Context(), history)
 	if len(out) != len(history) {
 		t.Fatalf("ForceCompact on failure should return history unchanged")
 	}
@@ -156,15 +151,15 @@ func TestCompactResetsBreakerOnSuccess(t *testing.T) {
 	good := language.NewFakeChatModel(language.WithResponses(messages.AI("summary of the conversation")))
 	a := newCompactAgent(t, failingSummarizer{language.NewFakeChatModel()})
 	history := bigHistory()
-	a.CompactHistory(context.Background(), history)
-	a.CompactHistory(context.Background(), history)
+	a.CompactHistory(t.Context(), history)
+	a.CompactHistory(t.Context(), history)
 	if a.compactFails != 2 {
 		t.Fatalf("compactFails = %d, want 2", a.compactFails)
 	}
 
 	// Swap in a working summarizer; success resets the breaker.
 	a2 := newCompactAgent(t, good)
-	out := a2.CompactHistory(context.Background(), history)
+	out := a2.CompactHistory(t.Context(), history)
 	if len(out) >= len(history) {
 		t.Fatalf("successful compaction should shrink history: %d -> %d", len(history), len(out))
 	}

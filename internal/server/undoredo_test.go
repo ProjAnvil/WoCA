@@ -60,7 +60,7 @@ func newUndoServer(t *testing.T, dir string) *httptest.Server {
 // concatenated delta text.
 func driveCommandRun(t *testing.T, url, runID string) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url+"/api/runs/"+runID+"/events", nil)
 	if err != nil {

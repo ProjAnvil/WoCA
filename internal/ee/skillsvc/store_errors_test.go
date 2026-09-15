@@ -3,7 +3,6 @@ package skillsvc
 // Gap tests: constructor validation, migration failure, and read misses.
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -36,7 +35,7 @@ func TestReadMissesOnUnknownAsset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if _, err := st.GetAsset(ctx, "ghost"); err == nil {
 		t.Fatal("GetAsset on unknown id should fail")

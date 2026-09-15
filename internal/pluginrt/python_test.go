@@ -1,7 +1,6 @@
 package pluginrt
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -178,7 +177,7 @@ func TestPythonReadyVariants(t *testing.T) {
 func TestPythonRunProtocol(t *testing.T) {
 	py := NewPythonRuntime(t.TempDir(), t.TempDir(), zerolog.Nop())
 	stampPythonEnv(t, py, "pdf", nil)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Unknown plugin and undeclared script are rejected before anything runs.
 	if _, _, err := py.Run(ctx, "ghost", "scripts/pdf.py", nil, ".", time.Second); err == nil ||
@@ -305,7 +304,7 @@ func TestPythonInstallWithFakeUV(t *testing.T) {
 		py := NewPythonRuntime(t.TempDir(), t.TempDir(), zerolog.Nop())
 		writeFakeUV(t, py)
 		var lines []string
-		if err := py.Install(context.Background(), mustBuiltin(t, "pdf"), func(line string) {
+		if err := py.Install(t.Context(), mustBuiltin(t, "pdf"), func(line string) {
 			lines = append(lines, line)
 		}); err != nil {
 			t.Fatalf("install: %v", err)
@@ -318,7 +317,7 @@ func TestPythonInstallWithFakeUV(t *testing.T) {
 		}
 		// Re-run skips venv creation (interpreter already there).
 		lines = nil
-		if err := py.Install(context.Background(), mustBuiltin(t, "pdf"), func(line string) {
+		if err := py.Install(t.Context(), mustBuiltin(t, "pdf"), func(line string) {
 			lines = append(lines, line)
 		}); err != nil {
 			t.Fatalf("reinstall: %v", err)
@@ -335,7 +334,7 @@ func TestPythonInstallWithFakeUV(t *testing.T) {
 			t.Fatal(err)
 		}
 		py := NewPythonRuntime(filepath.Join(blocker, "rt"), t.TempDir(), zerolog.Nop())
-		if err := py.Install(context.Background(), mustBuiltin(t, "pdf"), nil); err == nil {
+		if err := py.Install(t.Context(), mustBuiltin(t, "pdf"), nil); err == nil {
 			t.Fatal("install under a file must fail")
 		}
 	})
@@ -344,7 +343,7 @@ func TestPythonInstallWithFakeUV(t *testing.T) {
 		py := NewPythonRuntime(t.TempDir(), t.TempDir(), zerolog.Nop())
 		writeFakeUV(t, py)
 		t.Setenv("FAKE_UV_PYTHON_RC", "7")
-		err := py.Install(context.Background(), mustBuiltin(t, "pdf"), nil)
+		err := py.Install(t.Context(), mustBuiltin(t, "pdf"), nil)
 		if err == nil || !strings.Contains(err.Error(), "uv python install") {
 			t.Fatalf("err = %v", err)
 		}
@@ -354,7 +353,7 @@ func TestPythonInstallWithFakeUV(t *testing.T) {
 		py := NewPythonRuntime(t.TempDir(), t.TempDir(), zerolog.Nop())
 		writeFakeUV(t, py)
 		t.Setenv("FAKE_UV_VENV_RC", "6")
-		err := py.Install(context.Background(), mustBuiltin(t, "pdf"), nil)
+		err := py.Install(t.Context(), mustBuiltin(t, "pdf"), nil)
 		if err == nil || !strings.Contains(err.Error(), "uv venv") {
 			t.Fatalf("err = %v", err)
 		}
@@ -364,7 +363,7 @@ func TestPythonInstallWithFakeUV(t *testing.T) {
 		py := NewPythonRuntime(t.TempDir(), t.TempDir(), zerolog.Nop())
 		writeFakeUV(t, py)
 		t.Setenv("FAKE_UV_SYNC_RC", "5")
-		err := py.Install(context.Background(), mustBuiltin(t, "pdf"), nil)
+		err := py.Install(t.Context(), mustBuiltin(t, "pdf"), nil)
 		if err == nil || !strings.Contains(err.Error(), "uv pip sync") {
 			t.Fatalf("err = %v", err)
 		}
@@ -374,7 +373,7 @@ func TestPythonInstallWithFakeUV(t *testing.T) {
 		py := NewPythonRuntime(t.TempDir(), t.TempDir(), zerolog.Nop())
 		writeFakeUV(t, py)
 		t.Setenv("FAKE_UV_VERSION", "9.9.9")
-		err := py.Install(context.Background(), mustBuiltin(t, "pdf"), nil)
+		err := py.Install(t.Context(), mustBuiltin(t, "pdf"), nil)
 		if err == nil || !strings.Contains(err.Error(), "download uv") {
 			t.Fatalf("err = %v", err)
 		}
@@ -385,7 +384,7 @@ func TestPythonInstallWithFakeUV(t *testing.T) {
 		if err := os.MkdirAll(py.uvBin(), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		err := py.Install(context.Background(), mustBuiltin(t, "pdf"), nil)
+		err := py.Install(t.Context(), mustBuiltin(t, "pdf"), nil)
 		if err == nil || !strings.Contains(err.Error(), "download uv") {
 			t.Fatalf("err = %v", err)
 		}
@@ -395,7 +394,7 @@ func TestPythonInstallWithFakeUV(t *testing.T) {
 		py := NewPythonRuntime(t.TempDir(), t.TempDir(), zerolog.Nop())
 		writeFakeUV(t, py)
 		t.Setenv("FAKE_UV_MAKE_PYTHON", "0")
-		if err := py.Install(context.Background(), mustBuiltin(t, "pdf"), nil); err != nil {
+		if err := py.Install(t.Context(), mustBuiltin(t, "pdf"), nil); err != nil {
 			t.Fatalf("install: %v", err)
 		}
 		if py.Ready("pdf") {
@@ -451,14 +450,14 @@ func TestLimitWriterCapsOutput(t *testing.T) {
 
 func TestPythonNotInstalledSentinel(t *testing.T) {
 	py := NewPythonRuntime(t.TempDir(), t.TempDir(), zerolog.Nop())
-	_, _, err := py.Run(context.Background(), "pdf", "scripts/pdf.py", nil, ".", time.Second)
+	_, _, err := py.Run(t.Context(), "pdf", "scripts/pdf.py", nil, ".", time.Second)
 	if !errors.Is(err, ErrNotInstalled) {
 		t.Fatalf("err = %v, want ErrNotInstalled", err)
 	}
 }
 
 func TestPythonInstallLateFailures(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// A plugin without an embedded lock fails after the shared steps.
 	py := NewPythonRuntime(t.TempDir(), t.TempDir(), zerolog.Nop())

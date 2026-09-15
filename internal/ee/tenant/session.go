@@ -82,7 +82,7 @@ func (s *Store) IssueSession(_ context.Context, tenantID, userID, deviceID, thum
 	}
 
 	now := nowMilli()
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := range 5 {
 		prefix, err := randomHex(sessionPrefixLen / 2)
 		if err != nil {
 			return NativeSession{}, "", err

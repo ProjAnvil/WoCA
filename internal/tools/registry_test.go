@@ -1,9 +1,9 @@
 package tools
 
 import (
-	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -81,14 +81,7 @@ func TestRegistryDefaultWorkdirAndAccessors(t *testing.T) {
 		t.Fatalf("All()[0] = %q, want Bash", names[0])
 	}
 	for _, want := range []string{"Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "TodoWrite", "WebFetch", "WebSearch", "LSP"} {
-		found := false
-		for _, n := range names {
-			if n == want {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slices.Contains(names, want) {
 			t.Errorf("default registry missing %q (has %v)", want, names)
 		}
 	}
@@ -115,18 +108,18 @@ func TestRegistryRegisterAndExecute(t *testing.T) {
 	}
 
 	// Unknown tools and tool-level errors become result content, not errors.
-	res := reg.Execute(context.Background(), "NoSuchTool", nil)
+	res := reg.Execute(t.Context(), "NoSuchTool", nil)
 	if !strings.Contains(res.Content, `Error: unknown tool "NoSuchTool"`) {
 		t.Fatalf("unknown tool = %q", res.Content)
 	}
-	res = reg.Execute(context.Background(), "Read", map[string]any{"file_path": "definitely-missing.txt"})
+	res = reg.Execute(t.Context(), "Read", map[string]any{"file_path": "definitely-missing.txt"})
 	if !strings.Contains(res.Content, "Error:") || !strings.Contains(res.Content, "definitely-missing.txt") {
 		t.Fatalf("tool error content = %q", res.Content)
 	}
 	if err := os.WriteFile(filepath.Join(reg.Dir().Base(), "ok.txt"), []byte("fine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res = reg.Execute(context.Background(), "Read", map[string]any{"file_path": "ok.txt"})
+	res = reg.Execute(t.Context(), "Read", map[string]any{"file_path": "ok.txt"})
 	if strings.Contains(res.Content, "Error") {
 		t.Fatalf("successful execute = %q", res.Content)
 	}
@@ -144,11 +137,11 @@ func TestDirEmptyWorkdirAndEnter(t *testing.T) {
 		t.Fatalf("NewDir(\"\").Base() = %q, want .", got)
 	}
 	// Entering an empty worktree is a no-op.
-	d.Enter(context.Background(), "")
-	if got := d.For(context.Background()); got != "." {
+	d.Enter(t.Context(), "")
+	if got := d.For(t.Context()); got != "." {
 		t.Fatalf("For after empty Enter = %q", got)
 	}
-	if _, ok := d.Exit(context.Background()); ok {
+	if _, ok := d.Exit(t.Context()); ok {
 		t.Fatal("Exit without Enter reported a worktree")
 	}
 }
@@ -183,7 +176,7 @@ func TestGrepUnreadableEntriesSkipped(t *testing.T) {
 	})
 	// Unreadable files and dirs are skipped, not fatal.
 	reg := NewRegistry(dir)
-	res := reg.Execute(context.Background(), "Grep", map[string]any{"pattern": "matchme", "path": "."})
+	res := reg.Execute(t.Context(), "Grep", map[string]any{"pattern": "matchme", "path": "."})
 	if strings.Contains(res.Content, "matchme") {
 		t.Fatalf("unreadable entries were searched: %q", res.Content)
 	}

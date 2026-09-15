@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +12,7 @@ import (
 func TestAgentsAndPluginsCommands(t *testing.T) {
 	c, _ := newFullConsole(t)
 	home := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	res, err := c.Execute(ctx, "agents", nil, s)
@@ -95,7 +94,7 @@ func TestAgentsAndPluginsCommands(t *testing.T) {
 
 func TestAgentsCommandDetails(t *testing.T) {
 	c, _ := newFullConsole(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	// /agents <name> renders the definition; unknown names error.

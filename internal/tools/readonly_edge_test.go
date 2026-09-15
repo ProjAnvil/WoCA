@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -152,7 +151,7 @@ func TestImageEdgeCases(t *testing.T) {
 
 func TestFileHistoryRestoreFailurePaths(t *testing.T) {
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Redo whose target directory has become a regular file fails at MkdirAll.
 	h := NewFileHistory()

@@ -160,7 +160,7 @@ func (s *Store) ActiveProfile(ctx context.Context) (Profile, bool, error) {
 	profile, err := scanProfile(s.db.QueryRowContext(ctx, `
 		SELECT id, base_url, created_at, updated_at
 		FROM connection_profiles WHERE active = 1`))
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return Profile{}, false, nil
 	}
 	if err != nil {
@@ -254,7 +254,7 @@ func (s *Store) ProfileByID(ctx context.Context, id int64) (Profile, bool, error
 	profile, err := scanProfile(s.db.QueryRowContext(ctx, `
 		SELECT id, base_url, created_at, updated_at
 		FROM connection_profiles WHERE id = ?`, id))
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return Profile{}, false, nil
 	}
 	if err != nil {
@@ -305,7 +305,7 @@ func (s *Store) DeleteProfile(ctx context.Context, id int64) (bool, error) {
 	defer tx.Rollback()
 	var baseURL string
 	err = tx.QueryRowContext(ctx, `SELECT base_url FROM connection_profiles WHERE id = ?`, id).Scan(&baseURL)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
@@ -326,7 +326,7 @@ func (s *Store) DeleteProfile(ctx context.Context, id int64) (bool, error) {
 func (s *Store) Preference(ctx context.Context, key string) (string, bool, error) {
 	var value string
 	err := s.db.QueryRowContext(ctx, `SELECT value FROM preferences WHERE key = ?`, key).Scan(&value)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {
@@ -381,7 +381,7 @@ func (s *Store) PutPreferenceVersioned(ctx context.Context, key, value string, r
 	err = conn.QueryRowContext(ctx, `
 		SELECT epoch, revision FROM preference_versions WHERE key = ?`, key).
 		Scan(&appliedEpoch, &appliedRevision)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, fmt.Errorf("read applied preference version: %w", err)
 	}
 	if err == nil {
@@ -567,7 +567,7 @@ func rejectApplicationObjects(ctx context.Context, tx *sql.Tx) error {
 	const query = `SELECT name FROM sqlite_master WHERE lower(name) IN ('connection_profiles', 'preferences', 'native_sessions', 'one_active_profile', 'preference_epoch', 'preference_versions') LIMIT 1`
 	var name string
 	err := tx.QueryRowContext(ctx, query).Scan(&name)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
@@ -647,7 +647,7 @@ func validateVersionOneSchema(ctx context.Context, tx *sql.Tx) error {
 
 	var indexSQL sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'index' AND lower(name) = 'one_active_profile'`).Scan(&indexSQL); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("incompatible schema: missing one_active_profile index")
 		}
 		return fmt.Errorf("read one_active_profile index: %w", err)
@@ -734,7 +734,7 @@ func validatePreferenceVersionForeignKey(ctx context.Context, tx *sql.Tx) error 
 func validatePreferenceOrderingState(ctx context.Context, tx *sql.Tx) error {
 	var epoch int64
 	if err := tx.QueryRowContext(ctx, `SELECT epoch FROM preference_epoch WHERE singleton = 1`).Scan(&epoch); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("incompatible schema: preference epoch singleton is missing")
 		}
 		return fmt.Errorf("read preference epoch: %w", err)
@@ -818,7 +818,7 @@ func validateNativeSessionForeignKey(ctx context.Context, tx *sql.Tx) error {
 func sqliteObjectSQL(ctx context.Context, tx *sql.Tx, objectType, name string) (string, error) {
 	var definition sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = ? AND lower(name) = lower(?)`, objectType, name).Scan(&definition); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return "", fmt.Errorf("incompatible schema: missing %s %s", objectType, name)
 		}
 		return "", fmt.Errorf("read %s %s: %w", objectType, name, err)

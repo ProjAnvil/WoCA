@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"image"
 	"image/color"
 	"image/png"
@@ -23,8 +22,8 @@ import (
 func TestReadImageAttachesContentBlock(t *testing.T) {
 	dir := t.TempDir()
 	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
-	for x := 0; x < 10; x++ {
-		for y := 0; y < 10; y++ {
+	for x := range 10 {
+		for y := range 10 {
 			img.Set(x, y, color.RGBA{R: 255, A: 255})
 		}
 	}
@@ -54,7 +53,7 @@ func TestReadImageAttachesContentBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("what color?")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("what color?")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}

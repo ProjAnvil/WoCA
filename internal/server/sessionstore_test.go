@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,22 +17,22 @@ import (
 func TestSessionStoreLoadFromDisk(t *testing.T) {
 	dir := t.TempDir()
 	st := newSessionStore(dir)
-	if err := st.save(context.Background(), "s1", []messages.Message{messages.Human("hi")}, ""); err != nil {
+	if err := st.save(t.Context(), "s1", []messages.Message{messages.Human("hi")}, ""); err != nil {
 		t.Fatal(err)
 	}
 	// A fresh store (server restart) resolves the transcript from disk and
 	// caches it.
 	st2 := newSessionStore(dir)
-	got := st2.load(context.Background(), "s1")
+	got := st2.load(t.Context(), "s1")
 	if len(got) != 1 || got[0].Content != "hi" {
 		t.Fatalf("disk load = %+v", got)
 	}
 	// Missing sessions and unpersisted stores return nil.
-	if st2.load(context.Background(), "missing") != nil {
+	if st2.load(t.Context(), "missing") != nil {
 		t.Fatal("missing session should load nil")
 	}
 	memOnly := newSessionStore("")
-	if memOnly.load(context.Background(), "s1") != nil {
+	if memOnly.load(t.Context(), "s1") != nil {
 		t.Fatal("mem-only store should not resolve unknown ids")
 	}
 }
@@ -41,7 +40,7 @@ func TestSessionStoreLoadFromDisk(t *testing.T) {
 func TestSessionStoreSaveErrors(t *testing.T) {
 	// Persistence disabled: saves stay in memory and never error.
 	mem := newSessionStore("")
-	if err := mem.save(context.Background(), "a", []messages.Message{messages.Human("x")}, ""); err != nil {
+	if err := mem.save(t.Context(), "a", []messages.Message{messages.Human("x")}, ""); err != nil {
 		t.Fatal(err)
 	}
 	// A session dir whose parent is a regular file cannot be created.
@@ -50,7 +49,7 @@ func TestSessionStoreSaveErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := newSessionStore(filepath.Join(blocker, "sessions"))
-	if err := bad.save(context.Background(), "a", []messages.Message{messages.Human("x")}, ""); err == nil {
+	if err := bad.save(t.Context(), "a", []messages.Message{messages.Human("x")}, ""); err == nil {
 		t.Fatal("save under a file parent should error")
 	}
 }
@@ -74,7 +73,7 @@ func TestSessionStoreIndexVariants(t *testing.T) {
 	// Recording metadata for a session that already has workspace metadata
 	// but whose new entry carries none keeps the previous workspace.
 	// (recordMeta locks internally — no caller-side lock.)
-	if err := st.save(context.Background(), "s", []messages.Message{messages.Human("x")}, "/ws/one"); err != nil {
+	if err := st.save(t.Context(), "s", []messages.Message{messages.Human("x")}, "/ws/one"); err != nil {
 		t.Fatal(err)
 	}
 	st.recordMeta(sessionMeta{ID: "s"})
@@ -84,7 +83,7 @@ func TestSessionStoreIndexVariants(t *testing.T) {
 	}
 
 	// delete() drops the index entry too.
-	st.delete(context.Background(), "s")
+	st.delete(t.Context(), "s")
 	if _, ok := st.loadIndex()["s"]; ok {
 		t.Fatal("index entry survived delete")
 	}
@@ -93,11 +92,11 @@ func TestSessionStoreIndexVariants(t *testing.T) {
 func TestSessionStoreDeleteVariants(t *testing.T) {
 	// Mem-only delete: no disk work, but the tombstone still applies.
 	mem := newSessionStore("")
-	if err := mem.save(context.Background(), "a", []messages.Message{messages.Human("x")}, ""); err != nil {
+	if err := mem.save(t.Context(), "a", []messages.Message{messages.Human("x")}, ""); err != nil {
 		t.Fatal(err)
 	}
-	mem.delete(context.Background(), "a")
-	if mem.load(context.Background(), "a") != nil {
+	mem.delete(t.Context(), "a")
+	if mem.load(t.Context(), "a") != nil {
 		t.Fatal("mem delete should drop the transcript")
 	}
 
@@ -192,12 +191,12 @@ func TestSessionStoreListVariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A transcript with no human message falls back to the default title.
-	if err := st.save(context.Background(), "only-ai", []messages.Message{messages.AI("hi")}, "/ws/one"); err != nil {
+	if err := st.save(t.Context(), "only-ai", []messages.Message{messages.AI("hi")}, "/ws/one"); err != nil {
 		t.Fatal(err)
 	}
 	// A long first human message truncates for the title.
 	long := strings.Repeat("很长的会话标题", 12) // 60 runes > 40
-	if err := st.save(context.Background(), "long-title", []messages.Message{messages.Human(long)}, "/ws/one"); err != nil {
+	if err := st.save(t.Context(), "long-title", []messages.Message{messages.Human(long)}, "/ws/one"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -230,7 +229,7 @@ func TestSessionStoreListReadsIndexOnly(t *testing.T) {
 		{Role: messages.RoleHuman, Content: "hello world"},
 		{Role: messages.RoleAI, Content: "hi"},
 	}
-	if err := s.save(context.Background(), "sess-a", msgs, "/tmp/ws-a"); err != nil {
+	if err := s.save(t.Context(), "sess-a", msgs, "/tmp/ws-a"); err != nil {
 		t.Fatal(err)
 	}
 	// Delete the transcript file: the old list() implementation would drop
@@ -254,13 +253,11 @@ func TestSessionStoreConcurrentSave(t *testing.T) {
 	dir := t.TempDir()
 	s := newSessionStore(dir)
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+	for i := range 8 {
+		wg.Go(func() {
 			id := fmt.Sprintf("sess-%d", i%3)
-			_ = s.save(context.Background(), id, []messages.Message{{Role: messages.RoleHuman, Content: "x"}}, "/tmp/ws")
-		}(i)
+			_ = s.save(t.Context(), id, []messages.Message{{Role: messages.RoleHuman, Content: "x"}}, "/tmp/ws")
+		})
 	}
 	wg.Wait()
 	list, err := s.list()
@@ -293,10 +290,10 @@ func TestSessionStoreStartupReconcile(t *testing.T) {
 func TestSessionStoreStartupReconcilePrunesZombies(t *testing.T) {
 	dir := t.TempDir()
 	s := newSessionStore(dir)
-	if err := s.save(context.Background(), "keep", []messages.Message{{Role: messages.RoleHuman, Content: "alive"}}, "/ws"); err != nil {
+	if err := s.save(t.Context(), "keep", []messages.Message{{Role: messages.RoleHuman, Content: "alive"}}, "/ws"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.save(context.Background(), "zombie", []messages.Message{{Role: messages.RoleHuman, Content: "dead"}}, "/ws"); err != nil {
+	if err := s.save(t.Context(), "zombie", []messages.Message{{Role: messages.RoleHuman, Content: "dead"}}, "/ws"); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate the crash window: index.json already records both sessions,
@@ -312,7 +309,7 @@ func TestSessionStoreStartupReconcilePrunesZombies(t *testing.T) {
 	if len(list) != 1 || list[0].ID != "keep" {
 		t.Fatalf("list = %+v, want only the session with a live transcript", list)
 	}
-	if s2.load(context.Background(), "zombie") != nil {
+	if s2.load(t.Context(), "zombie") != nil {
 		t.Fatal("zombie session should not resolve")
 	}
 	// The index is cleaned up (written back to disk).

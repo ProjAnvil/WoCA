@@ -1,7 +1,6 @@
 package pluginrt
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -10,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -99,7 +99,7 @@ func TestPythonRuntimeNotReady(t *testing.T) {
 	if py.Ready("pdf") {
 		t.Fatal("empty home must not be ready")
 	}
-	_, _, err := py.Run(context.Background(), "pdf", "scripts/pdf.py", nil, ".", time.Second)
+	_, _, err := py.Run(t.Context(), "pdf", "scripts/pdf.py", nil, ".", time.Second)
 	if err != ErrNotInstalled {
 		t.Fatalf("Run without install: err = %v, want ErrNotInstalled", err)
 	}
@@ -169,14 +169,14 @@ func TestFetchVerifiedChecksSha(t *testing.T) {
 
 	sum := sha256.Sum256(payload)
 	good := hex.EncodeToString(sum[:])
-	if err := fetchVerified(context.Background(), srv.URL, good, dest); err != nil {
+	if err := fetchVerified(t.Context(), srv.URL, good, dest); err != nil {
 		t.Fatalf("verified download failed: %v", err)
 	}
 	got, _ := os.ReadFile(dest)
 	if string(got) != string(payload) {
 		t.Fatal("downloaded content mismatch")
 	}
-	if err := fetchVerified(context.Background(), srv.URL, strings.Repeat("0", 64), dest+".bad"); err == nil {
+	if err := fetchVerified(t.Context(), srv.URL, strings.Repeat("0", 64), dest+".bad"); err == nil {
 		t.Fatal("mismatched checksum must fail")
 	} else if !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("unexpected error: %v", err)
@@ -210,35 +210,29 @@ func TestPinchClientAPI(t *testing.T) {
 	defer srv.Close()
 	c := &pinchClient{base: srv.URL, token: "tok"}
 
-	if err := c.health(context.Background()); err != nil {
+	if err := c.health(t.Context()); err != nil {
 		t.Fatalf("health: %v", err)
 	}
 	if gotAuth != "Bearer tok" {
 		t.Fatalf("auth header = %q", gotAuth)
 	}
-	nav, err := c.navigate(context.Background(), "https://example.com")
+	nav, err := c.navigate(t.Context(), "https://example.com")
 	if err != nil || nav.TabID != "t1" || nav.Title != "Example" {
 		t.Fatalf("navigate: %+v err=%v", nav, err)
 	}
-	text, err := c.text(context.Background(), 100, false)
+	text, err := c.text(t.Context(), 100, false)
 	if err != nil || text.Text != "body" {
 		t.Fatalf("text: %+v err=%v", text, err)
 	}
-	snap, err := c.snapshot(context.Background())
+	snap, err := c.snapshot(t.Context())
 	if err != nil || !strings.Contains(snap, "[e5]") {
 		t.Fatalf("snapshot: %q err=%v", snap, err)
 	}
-	if err := c.action(context.Background(), map[string]string{"kind": "click", "ref": "e5"}); err != nil {
+	if err := c.action(t.Context(), map[string]string{"kind": "click", "ref": "e5"}); err != nil {
 		t.Fatalf("action: %v", err)
 	}
 	for _, want := range []string{"/health", "/navigate", "/text", "/snapshot", "/action"} {
-		found := false
-		for _, p := range gotPaths {
-			if p == want {
-				found = true
-			}
-		}
-		if !found {
+		if !slices.Contains(gotPaths, want) {
 			t.Fatalf("expected request to %s, saw %v", want, gotPaths)
 		}
 	}
@@ -251,7 +245,7 @@ func TestPinchClientNavigateErrorPayload(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := &pinchClient{base: srv.URL, token: "tok"}
-	_, err := c.navigate(context.Background(), "https://example.com")
+	_, err := c.navigate(t.Context(), "https://example.com")
 	if err == nil || !strings.Contains(err.Error(), "blocked private/internal IP") {
 		t.Fatalf("navigate error not surfaced: %v", err)
 	}
@@ -274,14 +268,14 @@ func TestManagerStatusesAndInstallGuards(t *testing.T) {
 		t.Fatal("browser should not be enabled")
 	}
 
-	if err := m.Install(context.Background(), "ghost"); err == nil {
+	if err := m.Install(t.Context(), "ghost"); err == nil {
 		t.Fatal("unknown plugin install must fail")
 	}
 	// The real installers hit the network; avoid that by racing the guard
 	// through a plugin whose install we can make fail fast — pdf downloads
 	// uv, so instead assert the double-install guard via a stub run.
 	m.runs["pdf"] = &installRun{state: StateInstalling, done: make(chan struct{})}
-	if err := m.Install(context.Background(), "pdf"); err == nil {
+	if err := m.Install(t.Context(), "pdf"); err == nil {
 		t.Fatal("double install must fail")
 	}
 }
@@ -337,18 +331,16 @@ func TestAssetNameMapping(t *testing.T) {
 
 func TestBrowserClientStopSemantics(t *testing.T) {
 	b := NewBrowserRuntime(t.TempDir(), zerolog.Nop())
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Concurrent Client calls on the missing-binary path must stay quick and
 	// consistent (the slow path runs under startMu, mu only guards reads).
 	var wg sync.WaitGroup
 	errs := make([]error, 8)
 	for i := range errs {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+		wg.Go(func() {
 			_, errs[i] = b.Client(ctx)
-		}(i)
+		})
 	}
 	wg.Wait()
 	for i, err := range errs {

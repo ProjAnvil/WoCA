@@ -247,7 +247,7 @@ func Counts(ops []Op) (added, removed int) {
 }
 
 func countUpTo(ops []Op, idx int) (a, b int) {
-	for i := 0; i < idx; i++ {
+	for i := range idx {
 		switch ops[i].Kind {
 		case '=':
 			a++

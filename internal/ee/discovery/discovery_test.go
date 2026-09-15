@@ -1,7 +1,6 @@
 package discovery
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -18,7 +17,7 @@ func TestPlainValuesPassThrough(t *testing.T) {
 		"sqlite:/home/u/.woca/woca.db",
 		"/plain/path",
 	} {
-		got, err := Resolve(context.Background(), v)
+		got, err := Resolve(t.Context(), v)
 		if err != nil {
 			t.Fatalf("Resolve(%q): %v", v, err)
 		}
@@ -55,7 +54,7 @@ func TestNacosResolution(t *testing.T) {
 	t.Setenv("WOCA_DISCOVERY_USERNAME", "nacos")
 	t.Setenv("WOCA_DISCOVERY_PASSWORD", "nacos")
 	ref := "nacos://" + srv.Listener.Addr().String() + "/DEFAULT_GROUP/woca-db.dsn?namespace=prod"
-	got, err := Resolve(context.Background(), ref)
+	got, err := Resolve(t.Context(), ref)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -81,7 +80,7 @@ func TestNacosNoCredentialsSkipsLogin(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("WOCA_DISCOVERY_USERNAME", "")
 
-	got, err := Resolve(context.Background(), "nacos://"+srv.Listener.Addr().String()+"/g/d")
+	got, err := Resolve(t.Context(), "nacos://"+srv.Listener.Addr().String()+"/g/d")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -109,7 +108,7 @@ func TestNacosErrors(t *testing.T) {
 	cases[1].ref = "nacos://" + srv.Listener.Addr().String() + "/g/d"
 
 	for _, c := range cases {
-		_, err := Resolve(context.Background(), c.ref)
+		_, err := Resolve(t.Context(), c.ref)
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want containing %q", c.name, err, c.want)
 		}
@@ -128,7 +127,7 @@ func TestConsulResolution(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("WOCA_DISCOVERY_TOKEN", "consul-token")
 
-	got, err := Resolve(context.Background(), "consul://"+srv.Listener.Addr().String()+"/config/woca/db")
+	got, err := Resolve(t.Context(), "consul://"+srv.Listener.Addr().String()+"/config/woca/db")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -145,11 +144,11 @@ func TestConsulMissingKey(t *testing.T) {
 		http.Error(w, "not found", http.StatusNotFound)
 	}))
 	defer srv.Close()
-	if _, err := Resolve(context.Background(), "consul://"+srv.Listener.Addr().String()+"/missing"); err == nil ||
+	if _, err := Resolve(t.Context(), "consul://"+srv.Listener.Addr().String()+"/missing"); err == nil ||
 		!strings.Contains(err.Error(), "not found") {
 		t.Errorf("err = %v, want missing-key error", err)
 	}
-	if _, err := Resolve(context.Background(), "consul://"+srv.Listener.Addr().String()+"/"); err == nil {
+	if _, err := Resolve(t.Context(), "consul://"+srv.Listener.Addr().String()+"/"); err == nil {
 		t.Error("empty key should error")
 	}
 }

@@ -148,7 +148,7 @@ func (c *Client) Listen(ctx context.Context, group, dataID, md5 string, timeout 
 	if err != nil {
 		decoded = string(body) // raw control characters — same layout
 	}
-	for _, entry := range strings.Split(decoded, "\x01") {
+	for entry := range strings.SplitSeq(decoded, "\x01") {
 		parts := strings.Split(entry, "\x02")
 		if parts[0] == dataID && (len(parts) < 2 || parts[1] == group) {
 			return true, nil

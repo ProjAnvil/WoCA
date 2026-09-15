@@ -25,7 +25,7 @@ func TestWalkWorkspaceDepthCap(t *testing.T) {
 	root := t.TempDir()
 	// Chain one dir deeper than workspaceMaxDepth.
 	deep := root
-	for i := 0; i < workspaceMaxDepth+3; i++ {
+	for range workspaceMaxDepth + 3 {
 		deep = filepath.Join(deep, "d")
 	}
 	if err := os.MkdirAll(filepath.Join(deep, "beyond"), 0o755); err != nil {
@@ -45,7 +45,7 @@ func TestWalkWorkspaceDepthCap(t *testing.T) {
 
 func TestWalkWorkspaceEntryCap(t *testing.T) {
 	dir := t.TempDir()
-	for i := 0; i < workspaceMaxEntries+50; i++ {
+	for i := range workspaceMaxEntries + 50 {
 		p := filepath.Join(dir, fmt.Sprintf("f%04d", i))
 		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
 			t.Fatal(err)

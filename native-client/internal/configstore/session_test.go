@@ -1,7 +1,6 @@
 package configstore
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 )
@@ -18,7 +17,7 @@ func openSessionStore(t *testing.T) *Store {
 
 func TestNativeSessionUpsertReadDelete(t *testing.T) {
 	s := openSessionStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	profile, err := s.SaveProfile(ctx, "https://enterprise.example.com")
 	if err != nil {
@@ -59,14 +58,14 @@ func TestNativeSessionUpsertReadDelete(t *testing.T) {
 
 func TestSaveNativeSessionRejectsUnknownProfile(t *testing.T) {
 	s := openSessionStore(t)
-	if err := s.SaveNativeSession(context.Background(), 999, "d", []byte("c"), 1); err == nil {
+	if err := s.SaveNativeSession(t.Context(), 999, "d", []byte("c"), 1); err == nil {
 		t.Fatal("session saved for unknown profile")
 	}
 }
 
 func TestTouchNativeSession(t *testing.T) {
 	s := openSessionStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	profile, err := s.SaveProfile(ctx, "https://enterprise.example.com")
 	if err != nil {
 		t.Fatal(err)

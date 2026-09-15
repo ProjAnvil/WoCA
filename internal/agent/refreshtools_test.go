@@ -22,7 +22,7 @@ func TestMaybeRefreshToolsNonBlocking(t *testing.T) {
 	}
 
 	done := make(chan struct{})
-	go func() { a.maybeRefreshTools(context.Background()); close(done) }()
+	go func() { a.maybeRefreshTools(t.Context()); close(done) }()
 	select {
 	case <-done: // must return immediately, not blocked by refreshTools
 	case <-time.After(2 * time.Second):
@@ -37,7 +37,7 @@ func TestMaybeRefreshToolsNonBlocking(t *testing.T) {
 	}, "first refresh completes")
 
 	// Within the TTL: not triggered again
-	a.maybeRefreshTools(context.Background())
+	a.maybeRefreshTools(t.Context())
 	time.Sleep(50 * time.Millisecond)
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("calls within TTL = %d, want 1", n)
@@ -50,8 +50,8 @@ func TestRefreshToolsNowBypassesTTL(t *testing.T) {
 	var calls atomic.Int32
 	a := newRunAgent(t, t.TempDir(), nil)
 	a.refreshTools = func(ctx context.Context) []coretools.Tool { calls.Add(1); return nil }
-	a.RefreshToolsNow(context.Background())
-	a.RefreshToolsNow(context.Background())
+	a.RefreshToolsNow(t.Context())
+	a.RefreshToolsNow(t.Context())
 	if n := calls.Load(); n != 2 {
 		t.Fatalf("RefreshToolsNow calls = %d, want 2 (TTL bypassed)", n)
 	}
@@ -71,11 +71,11 @@ func TestMaybeRefreshToolsFlightTimeout(t *testing.T) {
 		close(unblocked)
 		return nil
 	}
-	a.maybeRefreshTools(context.Background())
+	a.maybeRefreshTools(t.Context())
 	// The synchronous path joins the in-flight hung flight: it must be
 	// released by the same timeout, not blocked forever.
 	nowDone := make(chan struct{})
-	go func() { a.RefreshToolsNow(context.Background()); close(nowDone) }()
+	go func() { a.RefreshToolsNow(t.Context()); close(nowDone) }()
 	select {
 	case <-unblocked:
 	case <-time.After(2 * time.Second):

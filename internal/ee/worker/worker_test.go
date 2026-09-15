@@ -55,7 +55,7 @@ func enqueueRun(t *testing.T, ledger *runstate.Ledger, runID, sessionID, prompt 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ledger.Enqueue(context.Background(), runstate.Run{
+	if err := ledger.Enqueue(t.Context(), runstate.Run{
 		RunID: runID, SessionID: sessionID, ThreadID: "th-" + runID,
 		ConfigSnapshot: snap,
 	}); err != nil {
@@ -69,11 +69,11 @@ func TestWorkerClaimsAndExecutes(t *testing.T) {
 	w, ledger, _ := newWorkerFixture(t, "worker reply")
 	enqueueRun(t, ledger, "r1", "s1", "hello")
 
-	if err := w.Step(context.Background()); err != nil {
+	if err := w.Step(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
-	row, ok, err := ledger.Row(context.Background(), "r1")
+	row, ok, err := ledger.Row(t.Context(), "r1")
 	if err != nil || !ok {
 		t.Fatalf("row = ok=%v err=%v", ok, err)
 	}
@@ -88,7 +88,7 @@ func TestWorkerClaimsAndExecutes(t *testing.T) {
 // Step on an empty queue returns nil (nothing to do).
 func TestWorkerStepOnEmptyQueue(t *testing.T) {
 	w, _, _ := newWorkerFixture(t, "x")
-	if err := w.Step(context.Background()); err != nil {
+	if err := w.Step(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -99,13 +99,13 @@ func TestWorkerStepsThroughQueue(t *testing.T) {
 	enqueueRun(t, ledger, "r1", "s1", "one")
 	enqueueRun(t, ledger, "r2", "s2", "two")
 
-	for i := 0; i < 2; i++ {
-		if err := w.Step(context.Background()); err != nil {
+	for range 2 {
+		if err := w.Step(t.Context()); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, id := range []string{"r1", "r2"} {
-		row, ok, _ := ledger.Row(context.Background(), id)
+		row, ok, _ := ledger.Row(t.Context(), id)
 		if !ok || row.Status != "done" {
 			t.Fatalf("%s = %+v ok=%v", id, row, ok)
 		}
@@ -117,7 +117,7 @@ func TestWorkerRunLoop(t *testing.T) {
 	w, ledger, _ := newWorkerFixture(t, "loop reply")
 	enqueueRun(t, ledger, "r1", "s1", "hi")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	// Run the loop until the run completes, then cancel.
 	done := make(chan struct{})
@@ -128,7 +128,7 @@ func TestWorkerRunLoop(t *testing.T) {
 	// Wait for the run to finish, then cancel the loop.
 	deadline := time.After(5 * time.Second)
 	for {
-		row, ok, _ := ledger.Row(context.Background(), "r1")
+		row, ok, _ := ledger.Row(t.Context(), "r1")
 		if ok && row.Status == "done" {
 			cancel()
 			<-done
@@ -146,10 +146,10 @@ func TestWorkerRunLoop(t *testing.T) {
 func TestWorkerMirrorsEvents(t *testing.T) {
 	w, ledger, _ := newWorkerFixture(t, "mirror reply")
 	enqueueRun(t, ledger, "r1", "s1", "hello")
-	if err := w.Step(context.Background()); err != nil {
+	if err := w.Step(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	events, err := ledger.Replay(context.Background(), "r1", 0, 100)
+	events, err := ledger.Replay(t.Context(), "r1", 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,10 +171,10 @@ func TestWorkerHeartbeatDuringExecution(t *testing.T) {
 	w, ledger, _ := newWorkerFixture(t, "slow reply")
 	enqueueRun(t, ledger, "r1", "s1", "hello")
 	// The run completes; the heartbeat ticker runs during Step.
-	if err := w.Step(context.Background()); err != nil {
+	if err := w.Step(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	row, _, _ := ledger.Row(context.Background(), "r1")
+	row, _, _ := ledger.Row(t.Context(), "r1")
 	if row.LeaseExpiresAt != 0 {
 		t.Fatalf("lease not released at finish: %+v", row)
 	}

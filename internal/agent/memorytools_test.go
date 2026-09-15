@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -50,7 +49,7 @@ func TestRecallMemoryToolInvokesEngine(t *testing.T) {
 	f := &fakeEngine{hits: []memory.Hit{{ID: "h1", Layer: "L2_semantic", Type: "fact", Summary: "JWT", Score: 0.9}}}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	tool := toolsByName(a.memoryTools())["recall_memory"]
-	res, err := tool.Invoke(context.Background(), map[string]any{"query": "auth"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"query": "auth"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +66,7 @@ func TestRememberFactToolUsesWorkspaceAndSource(t *testing.T) {
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.SetMemoryWorkspace("/ws/tool")
 	tool := toolsByName(a.memoryTools())["remember_fact"]
-	res, err := tool.Invoke(context.Background(), map[string]any{"content": "prefers tabs", "tags": []any{"pref"}})
+	res, err := tool.Invoke(t.Context(), map[string]any{"content": "prefers tabs", "tags": []any{"pref"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +82,7 @@ func TestRememberFactToolUsesWorkspaceAndSource(t *testing.T) {
 	}
 	// recall_memory threads the same workspace.
 	tool2 := toolsByName(a.memoryTools())["recall_memory"]
-	if _, err := tool2.Invoke(context.Background(), map[string]any{"query": "x"}); err != nil {
+	if _, err := tool2.Invoke(t.Context(), map[string]any{"query": "x"}); err != nil {
 		t.Fatal(err)
 	}
 	recalls := f.recordedRecalls()
@@ -96,7 +95,7 @@ func TestRememberFactDroppedByGate(t *testing.T) {
 	f := &fakeEngine{drop: true}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	tool := toolsByName(a.memoryTools())["remember_fact"]
-	res, err := tool.Invoke(context.Background(), map[string]any{"content": "duplicate"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"content": "duplicate"})
 	if err != nil {
 		t.Fatal(err)
 	}

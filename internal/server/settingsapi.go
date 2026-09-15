@@ -361,7 +361,7 @@ func ftoa(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
 // modelAllowed reports whether model is listed in the comma-separated
 // whitelist.
 func modelAllowed(model, whitelist string) bool {
-	for _, m := range strings.Split(whitelist, ",") {
+	for m := range strings.SplitSeq(whitelist, ",") {
 		if strings.TrimSpace(m) == model {
 			return true
 		}

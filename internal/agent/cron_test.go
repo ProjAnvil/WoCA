@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -114,7 +113,7 @@ func TestScheduleCronToolLifecycle(t *testing.T) {
 		t.Fatal("ScheduleCron tool not registered")
 	}
 
-	res, err := tool.Invoke(context.Background(), map[string]any{
+	res, err := tool.Invoke(t.Context(), map[string]any{
 		"prompt": "run the checks", "cron": "*/10 * * * *", "name": "checks",
 	})
 	if err != nil {
@@ -124,21 +123,21 @@ func TestScheduleCronToolLifecycle(t *testing.T) {
 		t.Fatalf("create = %q", res.Content)
 	}
 
-	res, err = tool.Invoke(context.Background(), map[string]any{"list": true})
+	res, err = tool.Invoke(t.Context(), map[string]any{"list": true})
 	if err != nil || !strings.Contains(res.Content, "cron-1") || !strings.Contains(res.Content, "checks") {
 		t.Fatalf("list = %q err=%v", res.Content, err)
 	}
 
-	res, _ = tool.Invoke(context.Background(), map[string]any{"delete_id": "cron-1"})
+	res, _ = tool.Invoke(t.Context(), map[string]any{"delete_id": "cron-1"})
 	if !strings.Contains(res.Content, "Deleted") {
 		t.Fatalf("delete = %q", res.Content)
 	}
-	res, _ = tool.Invoke(context.Background(), map[string]any{"delete_id": "cron-1"})
+	res, _ = tool.Invoke(t.Context(), map[string]any{"delete_id": "cron-1"})
 	if !strings.Contains(res.Content, "Error") {
 		t.Fatalf("second delete = %q", res.Content)
 	}
 
-	res, _ = tool.Invoke(context.Background(), map[string]any{"prompt": "x", "cron": "bogus"})
+	res, _ = tool.Invoke(t.Context(), map[string]any{"prompt": "x", "cron": "bogus"})
 	if !strings.Contains(res.Content, "Error") {
 		t.Fatalf("bad spec = %q", res.Content)
 	}

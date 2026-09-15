@@ -281,8 +281,8 @@ func (b *BrowserRuntime) call(ctx context.Context, fn func(*pinchClient) error) 
 // isTransportError reports whether err is a connection-level failure rather
 // than a pinchtab API response.
 func isTransportError(err error) bool {
-	var ue *url.Error
-	return errors.As(err, &ue)
+	_, ok := errors.AsType[*url.Error](err)
+	return ok
 }
 
 // spawn starts `pinchtab server` with the isolated config and waits for

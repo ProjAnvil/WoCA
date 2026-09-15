@@ -60,7 +60,7 @@ func TestBackgroundTaskOutputBuffering(t *testing.T) {
 	}
 	// The ring keeps only the last 200 lines.
 	var b strings.Builder
-	for i := 0; i < 250; i++ {
+	for range 250 {
 		b.WriteString("fill\n")
 	}
 	bt.appendOutput(b.String())
@@ -94,7 +94,7 @@ func TestBackgroundTaskFinalStateTransitions(t *testing.T) {
 
 func TestBackgroundTaskStopCancels(t *testing.T) {
 	bt := &backgroundTask{status: TaskRunning}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	bt.setCancel(cancel)
 	bt.stop()
 	select {
@@ -147,7 +147,7 @@ func TestTaskManagerStartGetList(t *testing.T) {
 
 func TestRunTaskRequiresDescriptionOrPrompt(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
-	if _, err := a.runTask(context.Background(), taskArgs{}); err == nil {
+	if _, err := a.runTask(t.Context(), taskArgs{}); err == nil {
 		t.Fatal("empty task args must error")
 	}
 }
@@ -205,7 +205,7 @@ func TestRunTaskBackgroundLifecycle(t *testing.T) {
 	sub := &gatedModel{FakeChatModel: language.NewFakeChatModel(), gate: gate}
 	a := newBackgroundTaskAgent(t, sub)
 
-	res, err := a.runTask(context.Background(), taskArgs{Description: "slow work", RunInBackground: true})
+	res, err := a.runTask(t.Context(), taskArgs{Description: "slow work", RunInBackground: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestRunTaskBackgroundLifecycle(t *testing.T) {
 	}
 
 	// While the subagent is blocked the task reports running without output.
-	out, err := a.taskOutput(context.Background(), taskOutputArgs{TaskID: "task-1"})
+	out, err := a.taskOutput(t.Context(), taskOutputArgs{TaskID: "task-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,15 +224,15 @@ func TestRunTaskBackgroundLifecycle(t *testing.T) {
 
 	close(gate)
 	waitFor(t, 10*time.Second, func() bool {
-		out, err := a.taskOutput(context.Background(), taskOutputArgs{TaskID: "task-1"})
+		out, err := a.taskOutput(t.Context(), taskOutputArgs{TaskID: "task-1"})
 		return err == nil && out.Content == "gated report"
 	}, "background task completion")
 
 	// Unknown ids error on both endpoints.
-	if _, err := a.taskOutput(context.Background(), taskOutputArgs{TaskID: "nope"}); err == nil {
+	if _, err := a.taskOutput(t.Context(), taskOutputArgs{TaskID: "nope"}); err == nil {
 		t.Fatal("taskOutput on unknown id must error")
 	}
-	if _, err := a.taskStop(context.Background(), taskStopArgs{TaskID: "nope"}); err == nil {
+	if _, err := a.taskStop(t.Context(), taskStopArgs{TaskID: "nope"}); err == nil {
 		t.Fatal("taskStop on unknown id must error")
 	}
 }
@@ -241,17 +241,17 @@ func TestTaskStopReportsStopped(t *testing.T) {
 	gate := make(chan struct{})
 	sub := &gatedModel{FakeChatModel: language.NewFakeChatModel(), gate: gate}
 	a := newBackgroundTaskAgent(t, sub)
-	if _, err := a.runTask(context.Background(), taskArgs{Description: "x", RunInBackground: true}); err != nil {
+	if _, err := a.runTask(t.Context(), taskArgs{Description: "x", RunInBackground: true}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := a.taskStop(context.Background(), taskStopArgs{TaskID: "task-1"})
+	res, err := a.taskStop(t.Context(), taskStopArgs{TaskID: "task-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(res.Content, "Stopped task task-1") {
 		t.Fatalf("stop result = %q", res.Content)
 	}
-	out, err := a.taskOutput(context.Background(), taskOutputArgs{TaskID: "task-1"})
+	out, err := a.taskOutput(t.Context(), taskOutputArgs{TaskID: "task-1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,16 +281,16 @@ func TestRunTaskSubagentErrors(t *testing.T) {
 	a := newBackgroundTaskAgent(t, sub)
 
 	// Foreground: the error propagates.
-	if _, err := a.runSubagent(context.Background(), []messages.Message{messages.Human("x")}, nil, nil); err == nil {
+	if _, err := a.runSubagent(t.Context(), []messages.Message{messages.Human("x")}, nil, nil); err == nil {
 		t.Fatal("subagent error must propagate")
 	}
 
 	// Background: the error becomes the task's final report.
-	if _, err := a.runTask(context.Background(), taskArgs{Description: "boom", RunInBackground: true}); err != nil {
+	if _, err := a.runTask(t.Context(), taskArgs{Description: "boom", RunInBackground: true}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, func() bool {
-		out, err := a.taskOutput(context.Background(), taskOutputArgs{TaskID: "task-1"})
+		out, err := a.taskOutput(t.Context(), taskOutputArgs{TaskID: "task-1"})
 		return err == nil && strings.Contains(out.Content, "Error: subagent exploded")
 	}, "failed background task report")
 }
@@ -328,7 +328,7 @@ func TestBackgroundSubagentInterruptStaysError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	intrs, _ := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("do it")}, "thread-bg-relay"))
 	if len(intrs) != 0 {
 		t.Fatalf("parent paused on a background subagent's permission: %v", DecodeInterruptValue(intrs[0].Value))
@@ -357,11 +357,11 @@ func TestRunSubagentStreamsProgressToCallback(t *testing.T) {
 		),
 	)
 	a := newBackgroundTaskAgent(t, subModel)
-	if _, err := a.runTask(context.Background(), taskArgs{Description: "streamy", RunInBackground: true}); err != nil {
+	if _, err := a.runTask(t.Context(), taskArgs{Description: "streamy", RunInBackground: true}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, 10*time.Second, func() bool {
-		out, err := a.taskOutput(context.Background(), taskOutputArgs{TaskID: "task-1"})
+		out, err := a.taskOutput(t.Context(), taskOutputArgs{TaskID: "task-1"})
 		return err == nil && out.Content == "streamed final report"
 	}, "streamed subagent final report")
 }
@@ -401,7 +401,7 @@ func TestRunTaskForkUsesTranscript(t *testing.T) {
 		messages.System("parent system"),
 		messages.Human("earlier context"),
 	})
-	res, err := a.runTask(context.Background(), taskArgs{Description: "continue in parallel", Fork: true})
+	res, err := a.runTask(t.Context(), taskArgs{Description: "continue in parallel", Fork: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,11 +427,11 @@ func TestRunTaskDefToolsRestriction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	def, ok := agents.Find(a.agentsFor(context.Background()), "reader")
+	def, ok := agents.Find(a.agentsFor(t.Context()), "reader")
 	if !ok {
 		t.Fatal("reader definition missing")
 	}
-	sub, err := a.newSubagent(context.Background(), &def)
+	sub, err := a.newSubagent(t.Context(), &def)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +440,7 @@ func TestRunTaskDefToolsRestriction(t *testing.T) {
 			t.Fatalf("unexpected tool %q in restricted subagent: %v", name, sub.ToolNames())
 		}
 	}
-	report, err := a.runSubagent(context.Background(), []messages.Message{messages.Human("x")}, nil, &def)
+	report, err := a.runSubagent(t.Context(), []messages.Message{messages.Human("x")}, nil, &def)
 	if err != nil || report != "restricted report" {
 		t.Fatalf("runSubagent = %q, %v", report, err)
 	}
@@ -452,14 +452,14 @@ func TestSkillToolLookupAndList(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("skill tool list = %d", len(list))
 	}
-	res, err := list[0].Invoke(context.Background(), map[string]any{"skill": "greet", "args": map[string]any{"who": "you"}})
+	res, err := list[0].Invoke(t.Context(), map[string]any{"skill": "greet", "args": map[string]any{"who": "you"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(res.Content, "Say hello to you.") {
 		t.Fatalf("expand result = %q", res.Content)
 	}
-	if _, err := list[0].Invoke(context.Background(), map[string]any{"skill": "missing"}); err == nil {
+	if _, err := list[0].Invoke(t.Context(), map[string]any{"skill": "missing"}); err == nil {
 		t.Fatal("unknown skill must error")
 	}
 	// No skills and no loader: the tool is omitted.
@@ -481,41 +481,41 @@ func TestTaskListToolEndpoints(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
 
 	// Empty list renders the placeholder.
-	res, err := a.runTaskList(context.Background(), taskListArgs{})
+	res, err := a.runTaskList(t.Context(), taskListArgs{})
 	if err != nil || res.Content != "(no tasks)" {
 		t.Fatalf("empty list = %q, %v", res.Content, err)
 	}
 
 	// Create two tasks; the second depends on the first.
-	if _, err := a.taskCreate(context.Background(), taskCreateArgs{Subject: "first", Description: "d1"}); err != nil {
+	if _, err := a.taskCreate(t.Context(), taskCreateArgs{Subject: "first", Description: "d1"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.taskCreate(context.Background(), taskCreateArgs{Subject: "second", DependsOn: []string{"task-1"}}); err != nil {
+	if _, err := a.taskCreate(t.Context(), taskCreateArgs{Subject: "second", DependsOn: []string{"task-1"}}); err != nil {
 		t.Fatal(err)
 	}
-	res, err = a.runTaskList(context.Background(), taskListArgs{})
+	res, err = a.runTaskList(t.Context(), taskListArgs{})
 	if err != nil || !strings.Contains(res.Content, "[task-1] pending: first") {
 		t.Fatalf("list = %q, %v", res.Content, err)
 	}
 
 	// Get formats a record; unknown ids error.
-	res, err = a.taskGet(context.Background(), taskGetArgs{TaskID: "task-1"})
+	res, err = a.taskGet(t.Context(), taskGetArgs{TaskID: "task-1"})
 	if err != nil || !strings.Contains(res.Content, "first") {
 		t.Fatalf("get = %q, %v", res.Content, err)
 	}
-	if _, err := a.taskGet(context.Background(), taskGetArgs{TaskID: "zzz"}); err == nil {
+	if _, err := a.taskGet(t.Context(), taskGetArgs{TaskID: "zzz"}); err == nil {
 		t.Fatal("get on unknown id must error")
 	}
 
 	// Update mutates status/subject/description; unknown ids error.
-	res, err = a.taskUpdate(context.Background(), taskUpdateArgs{TaskID: "task-1", Status: "completed", Subject: "first!", Description: "done d"})
+	res, err = a.taskUpdate(t.Context(), taskUpdateArgs{TaskID: "task-1", Status: "completed", Subject: "first!", Description: "done d"})
 	if err != nil || !strings.Contains(res.Content, "completed") {
 		t.Fatalf("update = %q, %v", res.Content, err)
 	}
 	if rec, _ := a.currentTaskList().Get("task-1"); rec.Subject != "first!" || rec.Description != "done d" {
 		t.Fatalf("update did not persist: %+v", rec)
 	}
-	if _, err := a.taskUpdate(context.Background(), taskUpdateArgs{TaskID: "zzz"}); err == nil {
+	if _, err := a.taskUpdate(t.Context(), taskUpdateArgs{TaskID: "zzz"}); err == nil {
 		t.Fatal("update on unknown id must error")
 	}
 
@@ -534,7 +534,7 @@ func TestTaskCreateWakesTeamMembers(t *testing.T) {
 	team.mu.Lock()
 	team.order = []string{"alice"}
 	team.mu.Unlock()
-	if _, err := lead.taskCreate(context.Background(), taskCreateArgs{Subject: "new work"}); err != nil {
+	if _, err := lead.taskCreate(t.Context(), taskCreateArgs{Subject: "new work"}); err != nil {
 		t.Fatal(err)
 	}
 	// The poke channel for the (not spawned) member was signaled.
@@ -560,10 +560,10 @@ func TestSendMessageViaBusWithoutTeam(t *testing.T) {
 	if a.sendMessageTool() == nil {
 		t.Fatal("bus-wired agent should expose SendMessage")
 	}
-	if _, err := a.sendMessage(context.Background(), sendMessageArgs{Content: "hi"}); err == nil {
+	if _, err := a.sendMessage(t.Context(), sendMessageArgs{Content: "hi"}); err == nil {
 		t.Fatal("empty recipient must error")
 	}
-	res, err := a.sendMessage(context.Background(), sendMessageArgs{Recipient: "web", Content: "hello"})
+	res, err := a.sendMessage(t.Context(), sendMessageArgs{Recipient: "web", Content: "hello"})
 	if err != nil || !strings.Contains(res.Content, "Sent message to web.") {
 		t.Fatalf("send = %q, %v", res.Content, err)
 	}
@@ -587,7 +587,7 @@ func TestRunTaskDescriptionFallsBackToPrompt(t *testing.T) {
 	subModel := language.NewFakeChatModel(language.WithResponses(messages.AI("report")))
 	a := newBackgroundTaskAgent(t, subModel)
 	// Prompt empty -> description becomes the prompt; no subagent_type.
-	res, err := a.runTask(context.Background(), taskArgs{Description: "only description"})
+	res, err := a.runTask(t.Context(), taskArgs{Description: "only description"})
 	if err != nil || res.Content != "report" {
 		t.Fatalf("runTask = %q, %v", res.Content, err)
 	}
@@ -595,7 +595,7 @@ func TestRunTaskDescriptionFallsBackToPrompt(t *testing.T) {
 
 func TestTaskManagerCap(t *testing.T) {
 	m := newTaskManager()
-	for i := 0; i < maxBackgroundTasks; i++ {
+	for i := range maxBackgroundTasks {
 		if _, err := m.start("s", "d"); err != nil {
 			t.Fatalf("start %d: %v", i, err)
 		}

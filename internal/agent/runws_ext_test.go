@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -65,7 +64,7 @@ func TestSkillsFollowRunWorkspace(t *testing.T) {
 	}
 
 	// A run in workspace ws resolves and expands that workspace's skill.
-	ctx := runws.With(context.Background(), ws)
+	ctx := runws.With(t.Context(), ws)
 	res, err := skill.Invoke(ctx, map[string]any{"skill": "skill-of-" + ws})
 	if err != nil {
 		t.Fatal(err)
@@ -75,10 +74,10 @@ func TestSkillsFollowRunWorkspace(t *testing.T) {
 	}
 
 	// The base run keeps its own skill; the other workspace's is unknown.
-	if _, err := skill.Invoke(context.Background(), map[string]any{"skill": "skill-of-" + ws}); err == nil {
+	if _, err := skill.Invoke(t.Context(), map[string]any{"skill": "skill-of-" + ws}); err == nil {
 		t.Fatal("base run must not see the other workspace's skill")
 	}
-	if _, err := skill.Invoke(context.Background(), map[string]any{"skill": "skill-of-" + base}); err != nil {
+	if _, err := skill.Invoke(t.Context(), map[string]any{"skill": "skill-of-" + base}); err != nil {
 		t.Fatalf("base run must keep its startup skill: %v", err)
 	}
 
@@ -98,12 +97,12 @@ func TestAgentDefinitionsFollowRunWorkspace(t *testing.T) {
 			return []agents.Definition{{Name: "reviewer-" + dir, Prompt: "review " + dir}}
 		}
 	})
-	ctx := runws.With(context.Background(), ws)
+	ctx := runws.With(t.Context(), ws)
 	defs := a.agentsFor(ctx)
 	if len(defs) != 1 || defs[0].Name != "reviewer-"+ws {
 		t.Fatalf("agentsFor(ws) = %+v, want the ws definition", defs)
 	}
-	if defs := a.agentsFor(context.Background()); len(defs) != 1 || defs[0].Name != "reviewer-base" {
+	if defs := a.agentsFor(t.Context()); len(defs) != 1 || defs[0].Name != "reviewer-base" {
 		t.Fatalf("agentsFor(base) = %+v, want the startup set", defs)
 	}
 }
@@ -116,7 +115,7 @@ func TestHooksFollowRunWorkspace(t *testing.T) {
 			return hooks.NewRunner(hooks.Config{}, dir, "woca")
 		}
 	})
-	ctx := runws.With(context.Background(), ws)
+	ctx := runws.With(t.Context(), ws)
 
 	// Each workspace resolves its own runner (cwd is the discriminator).
 	h1 := a.hooksFor(ctx)
@@ -124,7 +123,7 @@ func TestHooksFollowRunWorkspace(t *testing.T) {
 	if h1 != h2 {
 		t.Fatal("hooks for one workspace must be cached (same pointer)")
 	}
-	hb := a.hooksFor(context.Background())
+	hb := a.hooksFor(t.Context())
 	if h1 == hb {
 		t.Fatal("workspace runner must differ from the base runner")
 	}
@@ -146,7 +145,7 @@ func TestSystemPromptTracksModelName(t *testing.T) {
 	hist := []messages.Message{messages.Human("hi")}
 
 	sys := func() string {
-		return MessagesFrom(a.NewState(context.Background(), hist))[0].Content
+		return MessagesFrom(a.NewState(t.Context(), hist))[0].Content
 	}
 	if got := sys(); got != "PROMPT:fake@undefined-model@"+base && !strings.HasPrefix(got, "PROMPT:") {
 		t.Fatalf("initial prompt = %q", got)

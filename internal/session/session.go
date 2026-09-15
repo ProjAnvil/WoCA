@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -43,7 +44,7 @@ func Decode(data []byte) ([]messages.Message, error) {
 	for {
 		var m messages.Message
 		if err := dec.Decode(&m); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return out, nil
 			}
 			return nil, err

@@ -31,14 +31,14 @@ func TestMcpAuthTool(t *testing.T) {
 	if !ok {
 		t.Fatal("McpAuth tool not registered when flow wired")
 	}
-	res, err := tool.Invoke(context.Background(), map[string]any{"server": "acme"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"server": "acme"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if authorized != "acme" || !strings.Contains(res.Content, "Authorized MCP server acme") {
 		t.Fatalf("result = %q authorized = %q", res.Content, authorized)
 	}
-	res, _ = tool.Invoke(context.Background(), map[string]any{})
+	res, _ = tool.Invoke(t.Context(), map[string]any{})
 	if !strings.Contains(res.Content, "Error") {
 		t.Fatalf("missing server = %q", res.Content)
 	}

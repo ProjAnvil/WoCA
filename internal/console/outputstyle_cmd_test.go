@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
@@ -22,7 +21,7 @@ func TestOutputStyleSaveKeepsLadyMBools(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := c.Execute(context.Background(), "output-style", []string{"explanatory"}, sess)
+	res, err := c.Execute(t.Context(), "output-style", []string{"explanatory"}, sess)
 	if err != nil {
 		t.Fatal(err)
 	}

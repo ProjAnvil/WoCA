@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"strings"
@@ -25,10 +24,10 @@ func TestToolClosuresAfterClose(t *testing.T) {
 		}
 	})
 	client := NewClient("gone", w, r, nil)
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	tools, err := client.ListTools(context.Background())
+	tools, err := client.ListTools(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,16 +39,16 @@ func TestToolClosuresAfterClose(t *testing.T) {
 		_ = closer.Close()
 	}
 
-	if _, err := core[0].Invoke(context.Background(), map[string]any{}); err == nil {
+	if _, err := core[0].Invoke(t.Context(), map[string]any{}); err == nil {
 		t.Error("expected invoke error after close")
 	}
 	for _, tool := range resTools {
-		if _, err := tool.Invoke(context.Background(), map[string]any{"uri": "x"}); err == nil {
+		if _, err := tool.Invoke(t.Context(), map[string]any{"uri": "x"}); err == nil {
 			t.Error("expected resource tool error after close")
 		}
 	}
 	for _, tool := range promptTools {
-		if _, err := tool.Invoke(context.Background(), map[string]any{"name": "x"}); err == nil {
+		if _, err := tool.Invoke(t.Context(), map[string]any{"name": "x"}); err == nil {
 			t.Error("expected prompt tool error after close")
 		}
 	}
@@ -70,16 +69,16 @@ func TestEmptyResourceAndPromptLists(t *testing.T) {
 	})
 	client := NewClient("empty", w, r, nil)
 	defer client.Close()
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	resTools := client.AsResourceTools("empty")
-	out, err := resTools[0].Invoke(context.Background(), map[string]any{})
+	out, err := resTools[0].Invoke(t.Context(), map[string]any{})
 	if err != nil || out.Content != "(no resources)" {
 		t.Fatalf("empty resources = %+v %v", out, err)
 	}
 	promptTools := client.AsPromptTools("empty")
-	out2, err := promptTools[0].Invoke(context.Background(), map[string]any{})
+	out2, err := promptTools[0].Invoke(t.Context(), map[string]any{})
 	if err != nil || !strings.Contains(out2.Content, "(no prompts") {
 		t.Fatalf("empty prompts = %+v %v", out2, err)
 	}
@@ -102,10 +101,10 @@ func TestAsToolNonObjectSchema(t *testing.T) {
 	})
 	client := NewClient("loose", w, r, nil)
 	defer client.Close()
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	tools, err := client.ListTools(context.Background())
+	tools, err := client.ListTools(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +112,7 @@ func TestAsToolNonObjectSchema(t *testing.T) {
 	if len(core) != 1 {
 		t.Fatalf("tools = %d", len(core))
 	}
-	res, err := core[0].Invoke(context.Background(), map[string]any{})
+	res, err := core[0].Invoke(t.Context(), map[string]any{})
 	if err != nil || res.Content != "ok" {
 		t.Fatalf("invoke = %+v %v", res, err)
 	}

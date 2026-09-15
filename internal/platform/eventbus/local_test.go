@@ -14,8 +14,8 @@ import (
 func publishN(t *testing.T, b Bus, topic string, n int) []int64 {
 	t.Helper()
 	seqs := make([]int64, 0, n)
-	for i := 0; i < n; i++ {
-		seq, err := b.Publish(context.Background(), topic, Event{Type: "delta", Data: fmt.Sprintf("e%d", i)})
+	for i := range n {
+		seq, err := b.Publish(t.Context(), topic, Event{Type: "delta", Data: fmt.Sprintf("e%d", i)})
 		if err != nil {
 			t.Fatalf("Publish(%q) error: %v", topic, err)
 		}
@@ -55,8 +55,8 @@ func TestPublishAssignsMonotonicSeq(t *testing.T) {
 
 	// Publish must ignore the caller-supplied Seq.
 	seqs := make([]int64, 0, 3)
-	for i := 0; i < 3; i++ {
-		seq, err := bus.Publish(context.Background(), "run-1", Event{Type: "delta", Seq: 99})
+	for range 3 {
+		seq, err := bus.Publish(t.Context(), "run-1", Event{Type: "delta", Seq: 99})
 		if err != nil {
 			t.Fatalf("Publish error: %v", err)
 		}
@@ -68,7 +68,7 @@ func TestPublishAssignsMonotonicSeq(t *testing.T) {
 		}
 	}
 
-	sub, err := bus.Subscribe(context.Background(), "run-1", 0)
+	sub, err := bus.Subscribe(t.Context(), "run-1", 0)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -93,12 +93,12 @@ func TestTopicsAreIsolated(t *testing.T) {
 		t.Fatalf("topic b seqs = %v, want [1 2 3]", seqsB)
 	}
 
-	subA, err := bus.Subscribe(context.Background(), "a", 0)
+	subA, err := bus.Subscribe(t.Context(), "a", 0)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
 	defer subA.Unsubscribe()
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		ev := recv(t, subA)
 		if ev.Data != fmt.Sprintf("e%d", i) {
 			t.Fatalf("topic a event %d data = %v, want e%d", i, ev.Data, i)
@@ -124,7 +124,7 @@ func TestSubscribeReplaysHistory(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sub, err := bus.Subscribe(context.Background(), "run-1", tt.sinceSeq)
+			sub, err := bus.Subscribe(t.Context(), "run-1", tt.sinceSeq)
 			if err != nil {
 				t.Fatalf("Subscribe error: %v", err)
 			}
@@ -143,7 +143,7 @@ func TestSubscribeReceivesLiveEvents(t *testing.T) {
 	bus := NewLocal()
 	defer bus.Close()
 
-	sub, err := bus.Subscribe(context.Background(), "run-1", 0)
+	sub, err := bus.Subscribe(t.Context(), "run-1", 0)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestSubscribeLiveOnlySkipsHistory(t *testing.T) {
 	publishN(t, bus, "run-1", 3)
 
 	// sinceSeq < 0 subscribes live-only: no history is replayed.
-	sub, err := bus.Subscribe(context.Background(), "run-1", -1)
+	sub, err := bus.Subscribe(t.Context(), "run-1", -1)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestSubscribeLiveOnlyReceivesNewEvents(t *testing.T) {
 	defer bus.Close()
 	publishN(t, bus, "run-1", 2)
 
-	sub, err := bus.Subscribe(context.Background(), "run-1", -1)
+	sub, err := bus.Subscribe(t.Context(), "run-1", -1)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestRetentionTruncatesHistory(t *testing.T) {
 	publishN(t, bus, "run-1", 5)
 
 	// Only the newest 3 events survive the retention cap.
-	sub, err := bus.Subscribe(context.Background(), "run-1", 0)
+	sub, err := bus.Subscribe(t.Context(), "run-1", 0)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestRetentionBoundary(t *testing.T) {
 			defer bus.Close()
 			publishN(t, bus, "run-1", tt.publish)
 
-			sub, err := bus.Subscribe(context.Background(), "run-1", 0)
+			sub, err := bus.Subscribe(t.Context(), "run-1", 0)
 			if err != nil {
 				t.Fatalf("Subscribe error: %v", err)
 			}
@@ -252,7 +252,7 @@ func TestRetentionUnboundedByDefault(t *testing.T) {
 			defer bus.Close()
 			publishN(t, bus, "run-1", 10)
 
-			sub, err := bus.Subscribe(context.Background(), "run-1", 0)
+			sub, err := bus.Subscribe(t.Context(), "run-1", 0)
 			if err != nil {
 				t.Fatalf("Subscribe error: %v", err)
 			}
@@ -271,7 +271,7 @@ func TestUnsubscribe(t *testing.T) {
 	defer bus.Close()
 
 	publishN(t, bus, "run-1", 1)
-	sub, err := bus.Subscribe(context.Background(), "run-1", 0)
+	sub, err := bus.Subscribe(t.Context(), "run-1", 0)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestSlowSubscriberDropsWithoutBlockingPublish(t *testing.T) {
 	defer bus.Close()
 
 	// Empty history at subscribe time: buffer is exactly defaultBuffer.
-	sub, err := bus.Subscribe(context.Background(), "run-1", 0)
+	sub, err := bus.Subscribe(t.Context(), "run-1", 0)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestSlowSubscriberDropsWithoutBlockingPublish(t *testing.T) {
 	expectNoEvent(t, sub)
 
 	// A fresh subscriber can replay everything, including the dropped tail.
-	replay, err := bus.Subscribe(context.Background(), "run-1", 0)
+	replay, err := bus.Subscribe(t.Context(), "run-1", 0)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestSlowSubscriberDropsWithoutBlockingPublish(t *testing.T) {
 func TestClose(t *testing.T) {
 	bus := NewLocal()
 	publishN(t, bus, "run-1", 1)
-	sub, err := bus.Subscribe(context.Background(), "run-1", 0)
+	sub, err := bus.Subscribe(t.Context(), "run-1", 0)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -351,10 +351,10 @@ func TestClose(t *testing.T) {
 		t.Fatal("active subscription channel should be closed on Close")
 	}
 
-	if _, err := bus.Publish(context.Background(), "run-1", Event{Type: "delta"}); !errors.Is(err, ErrClosed) {
+	if _, err := bus.Publish(t.Context(), "run-1", Event{Type: "delta"}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Publish after Close = %v, want ErrClosed", err)
 	}
-	if _, err := bus.Subscribe(context.Background(), "run-1", 0); !errors.Is(err, ErrClosed) {
+	if _, err := bus.Subscribe(t.Context(), "run-1", 0); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Subscribe after Close = %v, want ErrClosed", err)
 	}
 	if err := bus.Close(); err != nil {
@@ -367,7 +367,7 @@ func TestClose(t *testing.T) {
 func TestCanceledContext(t *testing.T) {
 	bus := NewLocal()
 	defer bus.Close()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	if _, err := bus.Publish(ctx, "run-1", Event{Type: "delta"}); !errors.Is(err, context.Canceled) {
@@ -390,7 +390,7 @@ func TestConcurrentPublishSubscribe(t *testing.T) {
 
 	// One long-lived reader keeps draining so the race detector sees real
 	// fanout traffic.
-	reader, err := bus.Subscribe(context.Background(), "run-1", 0)
+	reader, err := bus.Subscribe(t.Context(), "run-1", 0)
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -414,39 +414,35 @@ func TestConcurrentPublishSubscribe(t *testing.T) {
 
 	seqCh := make(chan int64, publishers*eventsPerPub)
 	var wg sync.WaitGroup
-	for p := 0; p < publishers; p++ {
-		wg.Add(1)
-		go func(p int) {
-			defer wg.Done()
-			for i := 0; i < eventsPerPub; i++ {
-				seq, err := bus.Publish(context.Background(), "run-1", Event{Type: "delta", Data: p})
+	for p := range publishers {
+		wg.Go(func() {
+			for range eventsPerPub {
+				seq, err := bus.Publish(t.Context(), "run-1", Event{Type: "delta", Data: p})
 				if err != nil {
 					t.Errorf("Publish error: %v", err)
 					return
 				}
 				seqCh <- seq
 			}
-		}(p)
+		})
 	}
 	// Concurrent subscribe/unsubscribe churn.
-	for s := 0; s < subscriberChurns; s++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sub, err := bus.Subscribe(context.Background(), "run-1", 0)
+	for range subscriberChurns {
+		wg.Go(func() {
+			sub, err := bus.Subscribe(t.Context(), "run-1", 0)
 			if err != nil {
 				t.Errorf("Subscribe error: %v", err)
 				return
 			}
 			sub.Unsubscribe()
-		}()
+		})
 	}
 	wg.Wait()
 	close(stop)
 	readerWG.Wait()
 
 	seqs := make([]int64, 0, publishers*eventsPerPub)
-	for i := 0; i < publishers*eventsPerPub; i++ {
+	for range publishers * eventsPerPub {
 		seqs = append(seqs, <-seqCh)
 	}
 	slices.Sort(seqs)

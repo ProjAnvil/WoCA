@@ -97,38 +97,39 @@ func main() {
 `
 
 var (
-	helperOnce sync.Once
-	helperDir  string
-	helperBin  string
-	helperErr  error
+	helperDir string
+	helperBin string
+	helperErr error
 )
+
+var buildHelperOnce = sync.OnceFunc(func() {
+	var err error
+	helperDir, err = os.MkdirTemp("", "pluginrt-pinchtab-helper-*")
+	if err != nil {
+		helperErr = err
+		return
+	}
+	src := filepath.Join(helperDir, "main.go")
+	if err := os.WriteFile(src, []byte(helperMain), 0o644); err != nil {
+		helperErr = err
+		return
+	}
+	bin := filepath.Join(helperDir, "pinchtab-helper")
+	cmd := exec.Command("go", "build", "-o", bin, src)
+	cmd.Env = append(os.Environ(),
+		"HTTP_PROXY=", "HTTPS_PROXY=", "http_proxy=", "https_proxy=", "GOPROXY=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		helperErr = fmt.Errorf("build helper: %v: %s", err, out)
+		return
+	}
+	helperBin = bin
+})
 
 // pinchtabHelper builds (once) and returns the helper binary path. The build
 // runs with proxies stripped so it can never reach the network.
 func pinchtabHelper(t *testing.T) string {
 	t.Helper()
-	helperOnce.Do(func() {
-		var err error
-		helperDir, err = os.MkdirTemp("", "pluginrt-pinchtab-helper-*")
-		if err != nil {
-			helperErr = err
-			return
-		}
-		src := filepath.Join(helperDir, "main.go")
-		if err := os.WriteFile(src, []byte(helperMain), 0o644); err != nil {
-			helperErr = err
-			return
-		}
-		bin := filepath.Join(helperDir, "pinchtab-helper")
-		cmd := exec.Command("go", "build", "-o", bin, src)
-		cmd.Env = append(os.Environ(),
-			"HTTP_PROXY=", "HTTPS_PROXY=", "http_proxy=", "https_proxy=", "GOPROXY=off")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			helperErr = fmt.Errorf("build helper: %v: %s", err, out)
-			return
-		}
-		helperBin = bin
-	})
+	buildHelperOnce()
 	if helperErr != nil {
 		t.Fatal(helperErr)
 	}
@@ -198,16 +199,16 @@ func TestBrowserClientAdoptsRunningServer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err := b.Client(context.Background())
+	c, err := b.Client(t.Context())
 	if err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
-	nav, err := c.navigate(context.Background(), "https://example.com")
+	nav, err := c.navigate(t.Context(), "https://example.com")
 	if err != nil || nav.Title != "" {
 		t.Fatalf("navigate via adopted server: %+v %v", nav, err)
 	}
 	// Second call takes the fast path with the identical client.
-	c2, err := b.Client(context.Background())
+	c2, err := b.Client(t.Context())
 	if err != nil || c2 != c {
 		t.Fatalf("fast path: %v (client changed: %v)", err, c2 != c)
 	}
@@ -233,7 +234,7 @@ func TestBrowserCallRestartsDeadServer(t *testing.T) {
 	writeBrowserConfig(t, root, port, "tok")
 	installHelperBinary(t, b)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// First call adopts the fake server; force a transport failure by
 	// tearing it down, then the retry must spawn the helper binary.
 	var calls atomic.Int32
@@ -279,7 +280,7 @@ func TestBrowserSpawnFailureExitsDuringStartup(t *testing.T) {
 	if err := os.WriteFile(b.binaryPath(), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := b.Client(context.Background())
+	_, err := b.Client(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "exited during startup") {
 		t.Fatalf("err = %v, want exited during startup", err)
 	}
@@ -302,7 +303,7 @@ func TestBrowserSpawnContextCanceled(t *testing.T) {
 	if err := os.WriteFile(b.binaryPath(), []byte("#!/bin/sh\nexec sleep 300\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 1200*time.Millisecond)
 	defer cancel()
 	start := time.Now()
 	_, err := b.Client(ctx)
@@ -327,7 +328,7 @@ func TestBrowserStopRacesSpawn(t *testing.T) {
 
 	res := make(chan error, 1)
 	go func() {
-		_, err := b.Client(context.Background())
+		_, err := b.Client(t.Context())
 		res <- err
 	}()
 	// Wait until the spawn is actually underway (it creates the server log),
@@ -362,7 +363,7 @@ func TestBrowserStopKillsSpawnedServer(t *testing.T) {
 	writeBrowserConfig(t, root, reservePort(t), "tok")
 	installHelperBinary(t, b)
 
-	c, err := b.Client(context.Background())
+	c, err := b.Client(t.Context())
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
@@ -371,10 +372,10 @@ func TestBrowserStopKillsSpawnedServer(t *testing.T) {
 		t.Fatal("spawned process not recorded")
 	}
 	b.Stop()
-	if err := c.health(context.Background()); err == nil {
+	if err := c.health(t.Context()); err == nil {
 		t.Fatal("server must be dead after Stop")
 	}
-	if _, err := b.Client(context.Background()); !errors.Is(err, ErrBrowserStopped) {
+	if _, err := b.Client(t.Context()); !errors.Is(err, ErrBrowserStopped) {
 		t.Fatalf("post-stop client: %v", err)
 	}
 }
@@ -391,7 +392,7 @@ func TestBrowserInstallPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	var lines []string
-	if err := b.Install(context.Background(), func(line string) { lines = append(lines, line) }); err != nil {
+	if err := b.Install(t.Context(), func(line string) { lines = append(lines, line) }); err != nil {
 		t.Fatalf("idempotent install: %v", err)
 	}
 	if len(lines) == 0 || !strings.Contains(lines[0], "already present") {
@@ -401,7 +402,7 @@ func TestBrowserInstallPaths(t *testing.T) {
 	// Missing binary: the pinned GitHub download is refused by the dead
 	// proxy pinned in TestMain, so the failure path runs without network.
 	fresh := NewBrowserRuntime(t.TempDir(), zerolog.Nop())
-	err := fresh.Install(context.Background(), nil)
+	err := fresh.Install(t.Context(), nil)
 	if err == nil || !strings.Contains(err.Error(), "download pinchtab") {
 		t.Fatalf("err = %v, want download pinchtab failure", err)
 	}
@@ -459,7 +460,7 @@ func TestPinchErrorPayloads(t *testing.T) {
 }
 
 func TestPinchClientDoErrorPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Malformed base URL: request construction fails.
 	bad := &pinchClient{base: "http://bad\x7fhost", token: "t"}
@@ -527,7 +528,7 @@ func TestPinchClientDoErrorPaths(t *testing.T) {
 func TestBrowserInstallUnsupportedPlatform(t *testing.T) {
 	pinPlatform(t, "plan9", "mips")
 	b := NewBrowserRuntime(t.TempDir(), zerolog.Nop())
-	err := b.Install(context.Background(), nil)
+	err := b.Install(t.Context(), nil)
 	if err == nil || !strings.Contains(err.Error(), "unsupported platform plan9-mips for pinchtab") {
 		t.Fatalf("err = %v", err)
 	}
@@ -558,7 +559,7 @@ func TestBrowserClientConcurrentAdoption(t *testing.T) {
 
 	first := make(chan *pinchClient, 1)
 	go func() {
-		c, err := b.Client(context.Background())
+		c, err := b.Client(t.Context())
 		if err != nil {
 			t.Error(err)
 		}
@@ -568,7 +569,7 @@ func TestBrowserClientConcurrentAdoption(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	second := make(chan *pinchClient, 1)
 	go func() {
-		c, err := b.Client(context.Background())
+		c, err := b.Client(t.Context())
 		if err != nil {
 			t.Error(err)
 		}
@@ -597,7 +598,7 @@ func TestBrowserClientConfigUnwritable(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "config.json"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Client(context.Background()); err == nil {
+	if _, err := b.Client(t.Context()); err == nil {
 		t.Fatal("unwritable config must fail Client")
 	}
 }
@@ -620,7 +621,7 @@ func TestBrowserCallRestartFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := b.Client(ctx); err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
@@ -653,7 +654,7 @@ func TestBrowserSpawnCannotOpenLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
-	_, err := b.Client(context.Background())
+	_, err := b.Client(t.Context())
 	if err == nil {
 		t.Fatal("spawn without a writable log must fail")
 	}
@@ -687,7 +688,7 @@ func TestPinchClientReadBodyReset(t *testing.T) {
 	defer srv.Close()
 	c := &pinchClient{base: srv.URL, token: "t"}
 	var payload struct{ Status string }
-	if err := c.do(context.Background(), http.MethodGet, "/health", nil, &payload); err == nil {
+	if err := c.do(t.Context(), http.MethodGet, "/health", nil, &payload); err == nil {
 		t.Fatal("reset mid-body must fail the read")
 	}
 }

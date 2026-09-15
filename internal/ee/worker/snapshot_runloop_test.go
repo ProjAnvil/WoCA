@@ -29,16 +29,16 @@ func TestNewDefaultsWorkerID(t *testing.T) {
 
 func TestWorkerExecutesPromptFromSnapshot(t *testing.T) {
 	w, ledger, _ := newWorkerFixture(t, "worker-reply")
-	if err := ledger.Enqueue(context.Background(), runstate.Run{
+	if err := ledger.Enqueue(t.Context(), runstate.Run{
 		RunID: "r-prompt", SessionID: "s-prompt", ThreadID: "th-prompt",
 		ConfigSnapshot: `{"prompt":"say something"}`,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.Step(context.Background()); err != nil {
+	if err := w.Step(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	events, err := ledger.Replay(context.Background(), "r-prompt", 0, 100)
+	events, err := ledger.Replay(t.Context(), "r-prompt", 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestEmitAndMirrorDegradedPaths(t *testing.T) {
 	w := New(Config{Ledger: ledger, Logger: zerolog.Nop(), ID: "w"})
 	// Unmarshalable payload degrades to {}; the append targets an unknown
 	// run, so the mirror failure is logged without crashing.
-	w.emitAndMirror(context.Background(), "no-such-run", "delta", map[string]any{"ch": make(chan int)})
+	w.emitAndMirror(t.Context(), "no-such-run", "delta", map[string]any{"ch": make(chan int)})
 }
 
 func TestRunLoopBacksOffOnStepError(t *testing.T) {
@@ -104,7 +104,7 @@ func TestRunLoopBacksOffOnStepError(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := New(Config{Ledger: ledger, Agent: a, Logger: zerolog.Nop(), ID: "w"})
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(1500*time.Millisecond, cancel)
 	start := time.Now()
 	if err := w.Run(ctx); err != nil {

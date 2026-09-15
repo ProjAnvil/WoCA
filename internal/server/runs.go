@@ -160,14 +160,14 @@ func (s *Server) trackRunLease(run *Run, sid string) {
 	stop := make(chan struct{})
 	// Chain the ledger finish onto the terminal event exactly once.
 	prev := run.onFinish
-	var once sync.Once
+	finishOnce := sync.OnceFunc(func() {
+		close(stop)
+		if s.ledger != nil {
+			_ = s.ledger.Finish(context.WithoutCancel(run.ctx), run.id, s.workerID, run.finishType())
+		}
+	})
 	run.onFinish = func() {
-		once.Do(func() {
-			close(stop)
-			if s.ledger != nil {
-				_ = s.ledger.Finish(context.WithoutCancel(run.ctx), run.id, s.workerID, run.finishType())
-			}
-		})
+		finishOnce()
 		if prev != nil {
 			prev()
 		}

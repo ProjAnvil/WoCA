@@ -10,7 +10,6 @@ package worker
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -76,10 +75,11 @@ func sseEvents(t *testing.T, url string) []string {
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
 		line := sc.Text()
-		if !strings.HasPrefix(line, "event:") {
+		rest, ok := strings.CutPrefix(line, "event:")
+		if !ok {
 			continue
 		}
-		ev := strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		ev := strings.TrimSpace(rest)
 		events = append(events, ev)
 		if ev == "done" {
 			break
@@ -118,7 +118,7 @@ func TestDispatchServerWorkerEndToEnd(t *testing.T) {
 		Ledger: ledger, Agent: e2eAgent(t, "worker executed this"),
 		Bus: bus, Logger: zerolog.Nop(), ID: "w-e2e",
 	})
-	go func() { _ = w.Step(context.Background()) }()
+	go func() { _ = w.Step(t.Context()) }()
 
 	events := sseEvents(t, srv.URL+"/api/runs/"+out.RunID+"/events")
 	var delta, done bool
@@ -133,7 +133,7 @@ func TestDispatchServerWorkerEndToEnd(t *testing.T) {
 	if !delta || !done {
 		t.Fatalf("events = delta:%v done:%v (%v)", delta, done, events)
 	}
-	row, _, _ := ledger.Row(context.Background(), out.RunID)
+	row, _, _ := ledger.Row(t.Context(), out.RunID)
 	if row.Status != "done" || row.Owner != "w-e2e" {
 		t.Fatalf("terminal row = %+v", row)
 	}

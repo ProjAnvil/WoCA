@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
@@ -52,12 +51,12 @@ func TestFormatTodos(t *testing.T) {
 func TestTodoWriteMergeMode(t *testing.T) {
 	reg := NewRegistry(t.TempDir())
 	tool, _ := reg.Get("TodoWrite")
-	if _, err := tool.Invoke(context.Background(), map[string]any{
+	if _, err := tool.Invoke(t.Context(), map[string]any{
 		"todos": []map[string]any{{"content": "a"}, {"content": "b"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := tool.Invoke(context.Background(), map[string]any{
+	res, err := tool.Invoke(t.Context(), map[string]any{
 		"todos": []map[string]any{{"content": "b", "status": "completed"}, {"content": "c"}},
 		"merge": true,
 	})

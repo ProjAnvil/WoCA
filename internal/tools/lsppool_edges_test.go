@@ -2,7 +2,6 @@ package tools
 
 import (
 	"bufio"
-	"context"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -30,7 +29,7 @@ func TestLSPPoolClosedGuards(t *testing.T) {
 	p.Close() // second Close must be a no-op, not panic
 
 	ws, cmd := poolKeyForTest()
-	err := p.call(context.Background(), ws, cmd, func(lspTransport) error { return nil })
+	err := p.call(t.Context(), ws, cmd, func(lspTransport) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "pool closed") {
 		t.Fatalf("call after Close = %v, want pool closed error", err)
 	}
@@ -48,7 +47,7 @@ func TestLSPPoolRestartAcquireFails(t *testing.T) {
 	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
-	err := p.call(context.Background(), ws, cmd, func(lspTransport) error {
+	err := p.call(t.Context(), ws, cmd, func(lspTransport) error {
 		return errors.New("call failed") // force evict and retry
 	})
 	if err == nil || !strings.Contains(err.Error(), "spawn broke") {
@@ -66,7 +65,7 @@ func TestLSPPoolRestartFailsAgainEvicts(t *testing.T) {
 	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
-	if err := p.call(context.Background(), ws, cmd, func(lspTransport) error {
+	if err := p.call(t.Context(), ws, cmd, func(lspTransport) error {
 		return errors.New("still failing")
 	}); err == nil {
 		t.Fatal("second failure should be returned")
@@ -74,7 +73,7 @@ func TestLSPPoolRestartFailsAgainEvicts(t *testing.T) {
 	if n := spawns.Load(); n != 2 {
 		t.Fatalf("spawns = %d, want 2", n)
 	}
-	if err := p.call(context.Background(), ws, cmd, func(lspTransport) error { return nil }); err != nil {
+	if err := p.call(t.Context(), ws, cmd, func(lspTransport) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if n := spawns.Load(); n != 3 {
@@ -112,9 +111,9 @@ func TestLSPPoolConcurrentSpawnKeepsFirstTransport(t *testing.T) {
 
 	ws, cmd := poolKeyForTest()
 	done := make(chan error, 2)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		go func() {
-			done <- p.call(context.Background(), ws, cmd, func(lspTransport) error { return nil })
+			done <- p.call(t.Context(), ws, cmd, func(lspTransport) error { return nil })
 		}()
 	}
 	<-arrived
@@ -146,8 +145,8 @@ func TestLSPPoolStatsReportsBroken(t *testing.T) {
 	}, nil)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
-	for i := 0; i < lspMaxSpawnFailures; i++ {
-		_ = p.call(context.Background(), ws, cmd, func(lspTransport) error { return nil })
+	for range lspMaxSpawnFailures {
+		_ = p.call(t.Context(), ws, cmd, func(lspTransport) error { return nil })
 	}
 	active, broken := p.stats()
 	if active != 0 || broken != 1 {

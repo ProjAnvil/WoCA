@@ -67,29 +67,29 @@ func TestMemoryCmdEngineSubcommands(t *testing.T) {
 		MemoryWorkspace: func() string { return "/ws" },
 	})
 	sess := &Session{}
-	res, err := c.Execute(context.Background(), "memory", []string{"recall", "auth"}, sess)
+	res, err := c.Execute(t.Context(), "memory", []string{"recall", "auth"}, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(res.Output, "[0.80|L2_semantic|fact] JWT fact") {
 		t.Fatalf("recall output = %q", res.Output)
 	}
-	res, err = c.Execute(context.Background(), "memory", []string{"stats"}, sess)
+	res, err = c.Execute(t.Context(), "memory", []string{"stats"}, sess)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(res.Output, "ladym fake.db") || !strings.Contains(res.Output, "L2_semantic") || !strings.Contains(res.Output, "total: 3") {
 		t.Fatalf("stats output = %q", res.Output)
 	}
-	res, err = c.Execute(context.Background(), "memory", []string{"remember", "prefers tabs"}, sess)
+	res, err = c.Execute(t.Context(), "memory", []string{"remember", "prefers tabs"}, sess)
 	if err != nil || !strings.Contains(res.Output, "stored") {
 		t.Fatalf("remember = %q, %v", res.Output, err)
 	}
-	res, err = c.Execute(context.Background(), "memory", []string{"consolidate"}, sess)
+	res, err = c.Execute(t.Context(), "memory", []string{"consolidate"}, sess)
 	if err != nil || !strings.Contains(res.Output, "cycle done") {
 		t.Fatalf("consolidate = %q, %v", res.Output, err)
 	}
-	res, err = c.Execute(context.Background(), "memory", []string{"list"}, sess)
+	res, err = c.Execute(t.Context(), "memory", []string{"list"}, sess)
 	if err != nil || !strings.Contains(res.Output, "JWT fact") {
 		t.Fatalf("list = %q, %v", res.Output, err)
 	}
@@ -97,7 +97,7 @@ func TestMemoryCmdEngineSubcommands(t *testing.T) {
 
 func TestMemoryCmdEngineNilFallsBackToKVMessage(t *testing.T) {
 	c := New(Deps{}) // no engine, no KV store
-	_, err := c.Execute(context.Background(), "memory", []string{"list"}, &Session{})
+	_, err := c.Execute(t.Context(), "memory", []string{"list"}, &Session{})
 	if err == nil || !strings.Contains(err.Error(), "memory") {
 		t.Fatalf("expected helpful error, got %v", err)
 	}
@@ -105,7 +105,7 @@ func TestMemoryCmdEngineNilFallsBackToKVMessage(t *testing.T) {
 
 func TestMemoryEngineCommandSurface(t *testing.T) {
 	c, eng := newFullConsole(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	exec := func(args ...string) (string, error) {
@@ -169,7 +169,7 @@ func TestMemoryKVCommandSurface(t *testing.T) {
 	// No engine wired: the KV store is the surface.
 	c, _ := newAgentConsole(t, nil)
 	c.deps.Memory = store.NewMemory()
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 
 	res, err := c.Execute(ctx, "memory", []string{"list"}, s)
@@ -232,7 +232,7 @@ func TestMemoryEngineErrorPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := New(Deps{Agent: a, Cfg: &config.Config{Model: "m", WorkDir: home}})
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 	for _, args := range [][]string{
 		{"list"}, {"recall", "q"}, {"remember", "x"}, {"stats"}, {"forget", "id"},
@@ -261,7 +261,7 @@ func TestMemoryKVErrorPaths(t *testing.T) {
 	c, _ := newAgentConsole(t, nil)
 	mem := store.NewMemory()
 	c.deps.Memory = mem
-	ctx := context.Background()
+	ctx := t.Context()
 	s := &Session{}
 	// Seed one entry, then close the backend so every op errors.
 	if err := mem.Put(ctx, "ns", "k", "v"); err != nil {

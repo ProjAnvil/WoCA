@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -606,7 +607,7 @@ func (r *replLoop) Loop(ctx context.Context) error {
 	for {
 		line, err := r.editor.ReadLine()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			continue // Ctrl-C: reprompt

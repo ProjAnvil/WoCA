@@ -27,7 +27,7 @@ func TestEdgeAuthEnforcement(t *testing.T) {
 	core := newFakeCore(t)
 	edge := newEdge(t, core)
 	access := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runTunnel(ctx, t, core, edge.URL, access, echoBridge("br_auth"))
 
@@ -91,7 +91,7 @@ func TestEdgeCoreOutageGrace(t *testing.T) {
 	core := newFakeCore(t)
 	edge := newEdge(t, core)
 	access := enroll(t, core)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runTunnel(ctx, t, core, edge.URL, access, echoBridge("br_grace"))
 

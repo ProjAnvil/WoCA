@@ -18,7 +18,7 @@ func TestThinkingCommand(t *testing.T) {
 	c.deps.SetThinkingBudget = func(b int) error { set = b; return nil }
 
 	// View.
-	res, err := c.Execute(context.Background(), "thinking", nil, &Session{})
+	res, err := c.Execute(t.Context(), "thinking", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestThinkingCommand(t *testing.T) {
 		"low": config.ThinkingBudgetLow, "medium": config.ThinkingBudgetMedium,
 		"high": config.MaxThinkingBudget, "off": 0, "4096": 4096,
 	} {
-		res, err := c.Execute(context.Background(), "thinking", []string{arg}, &Session{})
+		res, err := c.Execute(t.Context(), "thinking", []string{arg}, &Session{})
 		if err != nil {
 			t.Fatalf("thinking %s: %v", arg, err)
 		}
@@ -44,10 +44,10 @@ func TestThinkingCommand(t *testing.T) {
 	}
 
 	// Invalid input is rejected.
-	if _, err := c.Execute(context.Background(), "thinking", []string{"ultrathink"}, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "thinking", []string{"ultrathink"}, &Session{}); err == nil {
 		t.Fatal("invalid level accepted")
 	}
-	if _, err := c.Execute(context.Background(), "thinking", []string{"100"}, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "thinking", []string{"100"}, &Session{}); err == nil {
 		t.Fatal("too-small budget accepted")
 	}
 
@@ -55,14 +55,14 @@ func TestThinkingCommand(t *testing.T) {
 	c.deps.CfgLive = func() config.Config {
 		return config.Config{Provider: config.ProviderOpenAI, Model: "gpt-4o"}
 	}
-	if _, err := c.Execute(context.Background(), "thinking", []string{"low"}, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "thinking", []string{"low"}, &Session{}); err == nil {
 		t.Fatal("gpt-4o thinking accepted")
 	}
 	// …while the OpenAI reasoning family accepts the switch.
 	c.deps.CfgLive = func() config.Config {
 		return config.Config{Provider: config.ProviderOpenAI, Model: "o3"}
 	}
-	if _, err := c.Execute(context.Background(), "thinking", []string{"low"}, &Session{}); err != nil {
+	if _, err := c.Execute(t.Context(), "thinking", []string{"low"}, &Session{}); err != nil {
 		t.Fatalf("o3 thinking low: %v", err)
 	}
 
@@ -71,10 +71,10 @@ func TestThinkingCommand(t *testing.T) {
 		return config.Config{Provider: config.ProviderOpenAI, Model: "o3"}
 	}
 	c.deps.SetThinkingBudget = nil
-	if _, err := c.Execute(context.Background(), "thinking", []string{"low"}, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "thinking", []string{"low"}, &Session{}); err == nil {
 		t.Fatal("switching without callback accepted")
 	}
-	res, err = c.Execute(context.Background(), "thinking", nil, &Session{})
+	res, err = c.Execute(t.Context(), "thinking", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestQuotaCommand(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 
 	// No callback: helpful message, not an error.
-	res, err := c.Execute(context.Background(), "quota", nil, &Session{})
+	res, err := c.Execute(t.Context(), "quota", nil, &Session{})
 	if err != nil || !strings.Contains(res.Output, "not available") {
 		t.Fatalf("quota without dep: res=%+v err=%v", res, err)
 	}
@@ -97,7 +97,7 @@ func TestQuotaCommand(t *testing.T) {
 			{Kind: "5h", UsedPercent: 42},
 		}}, nil
 	}
-	res, err = c.Execute(context.Background(), "quota", nil, &Session{})
+	res, err = c.Execute(t.Context(), "quota", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}

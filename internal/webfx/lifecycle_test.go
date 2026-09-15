@@ -38,7 +38,7 @@ func TestServeWaitsForInFlightRequestDuringGrace(t *testing.T) {
 	}))
 
 	ln := listenEphemeral(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- r.Serve(ctx, ln) }()
@@ -79,7 +79,7 @@ func TestServeGraceCutsOffHungHandler(t *testing.T) {
 	r.GET("/hang", func(c *Ctx) { <-block; c.Status(200) })
 
 	ln := listenEphemeral(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- r.Serve(ctx, ln) }()
@@ -106,7 +106,7 @@ func TestRunBindsAddrAndServes(t *testing.T) {
 
 	r := New(Options{Addr: addr})
 	r.GET("/ping", func(c *Ctx) { c.Status(200) })
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() { errCh <- r.Run(ctx) }()
@@ -193,10 +193,8 @@ func TestSwapConcurrentLoadsUnderRace(t *testing.T) {
 	swap := NewSwap(mk("a"))
 	done := make(chan struct{})
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 8 {
+		wg.Go(func() {
 			for {
 				select {
 				case <-done:
@@ -211,9 +209,9 @@ func TestSwapConcurrentLoadsUnderRace(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		swap.Store(mk("a"))
 		swap.Store(mk("b"))
 	}

@@ -29,14 +29,14 @@ func TestFetchHTTPSuccessAndHTTPStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := fetchHTTP(context.Background(), srv.URL)
+	got, err := fetchHTTP(t.Context(), srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "<html><body>hello web</body></html>" {
 		t.Fatalf("fetchHTTP body = %q", got)
 	}
-	if got, err := fetchHTTP(context.Background(), srv.URL+"/missing"); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+	if got, err := fetchHTTP(t.Context(), srv.URL+"/missing"); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatalf("non-200 = %q, %v; want HTTP 404 error", got, err)
 	}
 }
@@ -44,7 +44,7 @@ func TestFetchHTTPSuccessAndHTTPStatus(t *testing.T) {
 func TestFetchHTTPInvalidURL(t *testing.T) {
 	withPermissiveWebURL(t)
 	// A control character makes http.NewRequest fail before any dialing.
-	if _, err := fetchHTTP(context.Background(), "http://127.0.0.1:1/\x7f"); err == nil {
+	if _, err := fetchHTTP(t.Context(), "http://127.0.0.1:1/\x7f"); err == nil {
 		t.Fatal("fetchHTTP(invalid URL) = nil error")
 	}
 }
@@ -56,7 +56,7 @@ func TestFetchHTTPTruncatedBody(t *testing.T) {
 		w.Write([]byte("short")) // fewer bytes than declared: read fails mid-body
 	}))
 	defer srv.Close()
-	if _, err := fetchHTTP(context.Background(), srv.URL); err == nil {
+	if _, err := fetchHTTP(t.Context(), srv.URL); err == nil {
 		t.Fatal("fetchHTTP(truncated body) = nil error, want read failure")
 	}
 }
@@ -64,7 +64,7 @@ func TestFetchHTTPTruncatedBody(t *testing.T) {
 func TestFetchHTTPConnectionRefused(t *testing.T) {
 	withPermissiveWebURL(t)
 	// Port 1 on loopback is closed; the dial fails without leaving the host.
-	if _, err := fetchHTTP(context.Background(), "http://127.0.0.1:1/"); err == nil {
+	if _, err := fetchHTTP(t.Context(), "http://127.0.0.1:1/"); err == nil {
 		t.Fatal("fetchHTTP to closed port = nil error, want connection failure")
 	}
 }
@@ -104,7 +104,7 @@ func TestWebFetchTool(t *testing.T) {
 	if !ok {
 		t.Fatal("WebFetch tool missing")
 	}
-	res, err := tool.Invoke(context.Background(), map[string]any{"url": srv.URL + "/page"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"url": srv.URL + "/page"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestWebFetchTool(t *testing.T) {
 		t.Fatalf("WebFetch page = %q", res.Content)
 	}
 
-	res, err = tool.Invoke(context.Background(), map[string]any{"url": srv.URL + "/empty"})
+	res, err = tool.Invoke(t.Context(), map[string]any{"url": srv.URL + "/empty"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func TestWebFetchTool(t *testing.T) {
 	// Fetch failures surface as tool errors: with the real validator restored
 	// mid-test, the loopback test server is SSRF-blocked before any request.
 	webURLValidate = orig
-	if _, err := tool.Invoke(context.Background(), map[string]any{"url": srv.URL}); err == nil || !strings.Contains(err.Error(), "fetch") {
+	if _, err := tool.Invoke(t.Context(), map[string]any{"url": srv.URL}); err == nil || !strings.Contains(err.Error(), "fetch") {
 		t.Fatalf("WebFetch blocked = %v, want fetch error", err)
 	}
 }
@@ -152,7 +152,7 @@ func TestWebSearchToolViaTestServer(t *testing.T) {
 	if !ok {
 		t.Fatal("WebSearch tool missing")
 	}
-	res, err := tool.Invoke(context.Background(), map[string]any{"query": "golang"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"query": "golang"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestWebSearchToolViaTestServer(t *testing.T) {
 		}
 	}
 
-	res, err = tool.Invoke(context.Background(), map[string]any{"query": "no-results-query"})
+	res, err = tool.Invoke(t.Context(), map[string]any{"query": "no-results-query"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,14 +179,14 @@ func TestWebSearchToolFetchError(t *testing.T) {
 
 	reg := NewRegistry(t.TempDir())
 	tool, _ := reg.Get("WebSearch")
-	if _, err := tool.Invoke(context.Background(), map[string]any{"query": "x"}); err == nil || !strings.Contains(err.Error(), `search "x"`) {
+	if _, err := tool.Invoke(t.Context(), map[string]any{"query": "x"}); err == nil || !strings.Contains(err.Error(), `search "x"`) {
 		t.Fatalf("WebSearch fetch error = %v, want search error wrapping", err)
 	}
 }
 
 func TestParseDuckDuckGoLimitsResults(t *testing.T) {
 	var b strings.Builder
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		b.WriteString(`<a class="result__a" href="https://example.com/` + string(rune('a'+i)) + `">Result ` + string(rune('0'+i)) + `</a>`)
 		if i > 4 { // results 6+ have no matching snippet entries
 			continue
@@ -237,21 +237,21 @@ func TestWebSearchToolWithBackend(t *testing.T) {
 		}
 		return "1. result\n   https://example.com", nil
 	})
-	res, err := tool.Invoke(context.Background(), map[string]any{"query": "go"})
+	res, err := tool.Invoke(t.Context(), map[string]any{"query": "go"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Content != "1. result\n   https://example.com" {
 		t.Fatalf("backend result = %q", res.Content)
 	}
-	res, err = tool.Invoke(context.Background(), map[string]any{"query": "empty"})
+	res, err = tool.Invoke(t.Context(), map[string]any{"query": "empty"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Content != "No results found." {
 		t.Fatalf("empty backend = %q", res.Content)
 	}
-	if _, err := tool.Invoke(context.Background(), map[string]any{"query": "boom"}); err == nil ||
+	if _, err := tool.Invoke(t.Context(), map[string]any{"query": "boom"}); err == nil ||
 		!strings.Contains(err.Error(), `search "boom"`) || !strings.Contains(err.Error(), "deadline") {
 		t.Fatalf("backend error = %v, want wrapped search error", err)
 	}

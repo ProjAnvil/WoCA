@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -11,7 +10,7 @@ import (
 
 func TestMemoryBackendCRUD(t *testing.T) {
 	s := NewMemory()
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := s.Put(ctx, "prefs", "theme", "dark"); err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +37,7 @@ func TestSQLiteBackendRoundTrip(t *testing.T) {
 	}
 	defer db.Close()
 	s := NewSQL(db.DB, string(db.Dialect), db.Path)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if err := s.Put(ctx, "facts", "user-name", "yuhao"); err != nil {
 		t.Fatal(err)
@@ -90,14 +89,14 @@ func TestNilStoreDisabled(t *testing.T) {
 	if s.Backend() != "none" {
 		t.Fatal("nil store backend should be none")
 	}
-	if err := s.Put(context.Background(), "a", "b", "c"); err == nil {
+	if err := s.Put(t.Context(), "a", "b", "c"); err == nil {
 		t.Fatal("nil store Put should fail")
 	}
 }
 
 func TestStructuredValues(t *testing.T) {
 	s := NewMemory()
-	ctx := context.Background()
+	ctx := t.Context()
 	type fact struct {
 		Topic string `json:"topic"`
 		N     int    `json:"n"`
@@ -145,16 +144,16 @@ func TestStoreAccessorsAndBackendNames(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := sql.Put(context.Background(), "ns", "k", map[string]any{"a": 1}); err == nil {
+	if err := sql.Put(t.Context(), "ns", "k", map[string]any{"a": 1}); err == nil {
 		t.Error("closed Put should fail")
 	}
-	if _, ok, err := sql.Get(context.Background(), "ns", "k"); ok || err == nil {
+	if _, ok, err := sql.Get(t.Context(), "ns", "k"); ok || err == nil {
 		t.Error("closed Get should miss with an error")
 	}
-	if got, _ := sql.List(context.Background(), "ns", ""); len(got) != 0 {
+	if got, _ := sql.List(t.Context(), "ns", ""); len(got) != 0 {
 		t.Errorf("closed List = %v", got)
 	}
-	if err := sql.Delete(context.Background(), "ns", "k"); err == nil {
+	if err := sql.Delete(t.Context(), "ns", "k"); err == nil {
 		t.Error("closed Delete should fail")
 	}
 }
@@ -197,7 +196,7 @@ func TestPostgresPlaceholderRewrite(t *testing.T) {
 
 func TestNilStoreAllOpsRefuse(t *testing.T) {
 	var s *Store
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, _, err := s.Get(ctx, "ns", "k"); err == nil {
 		t.Error("nil store Get should fail")
 	}
@@ -211,14 +210,14 @@ func TestNilStoreAllOpsRefuse(t *testing.T) {
 
 func TestPutMarshalFailure(t *testing.T) {
 	s := NewMemory()
-	if err := s.Put(context.Background(), "ns", "k", make(chan int)); err == nil {
+	if err := s.Put(t.Context(), "ns", "k", make(chan int)); err == nil {
 		t.Fatal("unmarshalable value should fail Put")
 	}
 }
 
 func TestMemoryListFilters(t *testing.T) {
 	s := NewMemory()
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, e := range []struct{ ns, key string }{
 		{"alpha", "k1"}, {"alpha", "k2"}, {"beta", "k1"},
 	} {
@@ -253,7 +252,7 @@ func TestSQLListFilteringAndScanFailure(t *testing.T) {
 	}
 	defer db.Close()
 	s := NewSQL(db.DB, string(db.Dialect), db.Path)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if err := s.Put(ctx, "facts", "keep-1", 1); err != nil {
 		t.Fatal(err)
@@ -293,7 +292,7 @@ func TestPostgresTenantBeginErrors(t *testing.T) {
 		t.Cleanup(func() { db.Close() })
 		return NewSQL(db.DB, "postgres", db.Path), db
 	}
-	tenant := tenancy.NewContext(context.Background(), tenancy.Context{TenantID: "t_pg", UserID: "u"})
+	tenant := tenancy.NewContext(t.Context(), tenancy.Context{TenantID: "t_pg", UserID: "u"})
 
 	t.Run("closed pool", func(t *testing.T) {
 		s, db := newPg(t)
@@ -342,7 +341,7 @@ func TestStoreClosedDBSweep(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := NewSQL(db.DB, string(db.Dialect), "")
-	ctx := context.Background()
+	ctx := t.Context()
 	_ = s.Put(ctx, "ns", "k", "v")
 	_ = db.Close()
 

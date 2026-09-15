@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -263,11 +264,7 @@ func pdfTools(py *PythonRuntime, workdir string) []coretools.Tool {
 				}
 				if meta, ok := payload["metadata"].(map[string]any); ok && len(meta) > 0 {
 					b.WriteString("\n")
-					keys := make([]string, 0, len(meta))
-					for k := range meta {
-						keys = append(keys, k)
-					}
-					slices.Sort(keys)
+					keys := slices.Sorted(maps.Keys(meta))
 					for _, k := range keys {
 						fmt.Fprintf(&b, "  %s: %v\n", k, meta[k])
 					}

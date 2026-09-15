@@ -4,7 +4,6 @@ package tenantcmd
 // tables, unknown tenants, and revoke/keys failure surfacing.
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -82,7 +81,7 @@ func TestTenantCmdRevokeLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tenants, err := st.ListTenants(context.Background())
+	tenants, err := st.ListTenants(t.Context())
 	if err != nil {
 		closeDB()
 		t.Fatal(err)
@@ -101,7 +100,7 @@ func TestTenantCmdRevokeLifecycle(t *testing.T) {
 		closeDB()
 		t.Fatal(err)
 	}
-	keys, _, err := st.ListKeys(context.Background(), tid, "", "", "", 200, 0)
+	keys, _, err := st.ListKeys(t.Context(), tid, "", "", "", 200, 0)
 	if err != nil || len(keys) != 1 {
 		closeDB()
 		t.Fatalf("keys = %v %v", keys, err)

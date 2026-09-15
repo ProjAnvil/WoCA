@@ -18,7 +18,7 @@ func TestEmitAssignsMonotonicSeq(t *testing.T) {
 
 func TestSubscribeSinceReplaysTail(t *testing.T) {
 	r := &Run{id: "test", subs: map[*subscriber]struct{}{}}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		r.emit(Event{Type: "delta", Data: map[string]any{"i": i}})
 	}
 	sub, gap := r.subscribeSince(2)
@@ -57,7 +57,7 @@ func TestParkTimesOut(t *testing.T) {
 	parkedRunTTL = 50 * time.Millisecond
 	defer func() { parkedRunTTL = old }()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	r := &Run{id: "test", ctx: ctx, cancel: cancel, subs: map[*subscriber]struct{}{}}
 	done := make(chan error, 1)

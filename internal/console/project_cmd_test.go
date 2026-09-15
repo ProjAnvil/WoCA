@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +21,7 @@ import (
 func TestInitReturnsPrompt(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 	s := &Session{}
-	res, err := c.Execute(context.Background(), "init", nil, s)
+	res, err := c.Execute(t.Context(), "init", nil, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +42,7 @@ func TestInitPrefersExistingClaudeMD(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	res, err := c.Execute(context.Background(), "init", nil, &Session{})
+	res, err := c.Execute(t.Context(), "init", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +77,7 @@ func newUsageConsole(t *testing.T, um messages.UsageMetadata, model string) *Con
 	fake := language.NewFakeChatModel(language.WithResponses(resp))
 	c, cfg, _ := newTestConsoleWithModel(t, fake)
 	cfg.Model = model
-	if _, err := c.deps.Agent.Invoke(context.Background(), nil, "t"); err != nil {
+	if _, err := c.deps.Agent.Invoke(t.Context(), nil, "t"); err != nil {
 		t.Fatal(err)
 	}
 	return c
@@ -86,7 +85,7 @@ func newUsageConsole(t *testing.T, um messages.UsageMetadata, model string) *Con
 
 func TestCostEmptyAndAccumulated(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
-	res, err := c.Execute(context.Background(), "cost", nil, &Session{})
+	res, err := c.Execute(t.Context(), "cost", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +101,7 @@ func TestCostEmptyAndAccumulated(t *testing.T) {
 			CacheReadInputTokens: 60000,
 		},
 	}, "claude-sonnet-4-5")
-	res, err = c.Execute(context.Background(), "cost", nil, &Session{})
+	res, err = c.Execute(t.Context(), "cost", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +118,7 @@ func TestCostEmptyAndAccumulated(t *testing.T) {
 
 func TestCostUnknownModel(t *testing.T) {
 	c := newUsageConsole(t, messages.UsageMetadata{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}, "mystery-model")
-	res, err := c.Execute(context.Background(), "cost", nil, &Session{})
+	res, err := c.Execute(t.Context(), "cost", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,10 +129,10 @@ func TestCostUnknownModel(t *testing.T) {
 
 func TestCostSurvivesClear(t *testing.T) {
 	c := newUsageConsole(t, messages.UsageMetadata{InputTokens: 10, OutputTokens: 5, TotalTokens: 15}, "claude-sonnet-4-5")
-	if _, err := c.Execute(context.Background(), "clear", nil, &Session{History: []messages.Message{messages.Human("x")}}); err != nil {
+	if _, err := c.Execute(t.Context(), "clear", nil, &Session{History: []messages.Message{messages.Human("x")}}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := c.Execute(context.Background(), "cost", nil, &Session{})
+	res, err := c.Execute(t.Context(), "cost", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +152,7 @@ func TestRewindListsAndTruncates(t *testing.T) {
 		messages.AI("second answer"),
 	}}
 
-	res, err := c.Execute(context.Background(), "rewind", nil, s)
+	res, err := c.Execute(t.Context(), "rewind", nil, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +160,7 @@ func TestRewindListsAndTruncates(t *testing.T) {
 		t.Fatalf("rewind list = %q", res.Output)
 	}
 
-	res, err = c.Execute(context.Background(), "rewind", []string{"2"}, s)
+	res, err = c.Execute(t.Context(), "rewind", []string{"2"}, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,10 +173,10 @@ func TestRewindListsAndTruncates(t *testing.T) {
 
 	// Out of range is an error; tagged attachments don't count as turns.
 	s.History = append(s.History, messages.Human("<queued-user-input>\nx\n</queued-user-input>"))
-	if _, err := c.Execute(context.Background(), "rewind", []string{"3"}, s); err == nil {
+	if _, err := c.Execute(t.Context(), "rewind", []string{"3"}, s); err == nil {
 		t.Fatal("rewind 3 should fail (only 2 real turns)")
 	}
-	res, _ = c.Execute(context.Background(), "rewind", nil, s)
+	res, _ = c.Execute(t.Context(), "rewind", nil, s)
 	if strings.Contains(res.Output, "queued-user-input") {
 		t.Fatalf("tagged attachments must not be listed:\n%s", res.Output)
 	}
@@ -186,7 +185,7 @@ func TestRewindListsAndTruncates(t *testing.T) {
 func TestRewindToStartClears(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 	s := &Session{History: []messages.Message{messages.Human("only"), messages.AI("reply")}}
-	res, err := c.Execute(context.Background(), "rewind", []string{"1"}, s)
+	res, err := c.Execute(t.Context(), "rewind", []string{"1"}, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +198,7 @@ func TestBranchSavesResumableSession(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 	c.deps.SessionDir = filepath.Join(t.TempDir(), "sessions")
 	s := &Session{History: []messages.Message{messages.Human("hello"), messages.AI("hi")}}
-	res, err := c.Execute(context.Background(), "branch", []string{"experiment"}, s)
+	res, err := c.Execute(t.Context(), "branch", []string{"experiment"}, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +224,7 @@ func TestBranchSavesResumableSession(t *testing.T) {
 func TestBranchEmptyFails(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 	c.deps.SessionDir = filepath.Join(t.TempDir(), "sessions")
-	if _, err := c.Execute(context.Background(), "branch", nil, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "branch", nil, &Session{}); err == nil {
 		t.Fatal("branch on an empty conversation should fail")
 	}
 }

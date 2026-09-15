@@ -195,10 +195,11 @@ func (t *httpTransport) listen(ctx context.Context) error {
 	sc := bufio.NewScanner(resp.Body)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
-		if !strings.HasPrefix(line, "data:") {
+		rest, ok := strings.CutPrefix(line, "data:")
+		if !ok {
 			continue
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		data := strings.TrimSpace(rest)
 		if data == "" || data == "[DONE]" {
 			continue
 		}
@@ -228,12 +229,13 @@ func (t *httpTransport) listen(ctx context.Context) error {
 // parseSSE extracts the JSON-RPC response matching id from an SSE body,
 // dispatching notifications through notifier.
 func parseSSE(body []byte, id int64, notifier func(string, json.RawMessage)) (rpcResponse, error) {
-	for _, line := range strings.Split(string(body), "\n") {
+	for line := range strings.SplitSeq(string(body), "\n") {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data:") {
+		rest, ok := strings.CutPrefix(line, "data:")
+		if !ok {
 			continue
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		data := strings.TrimSpace(rest)
 		if data == "" || data == "[DONE]" {
 			continue
 		}

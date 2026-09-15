@@ -34,7 +34,7 @@ func TestExec(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("tests use POSIX shell commands")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	e := NewLocal()
 	tmp := t.TempDir()
 
@@ -124,7 +124,7 @@ func TestExecContextCancel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("tests use POSIX shell commands")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	res, err := NewLocal().Exec(ctx, ExecRequest{Name: "sleep", Args: []string{"5"}})
 	if err == nil {
@@ -136,7 +136,7 @@ func TestExecContextCancel(t *testing.T) {
 }
 
 func TestReadFile(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := NewLocal()
 	tmp := t.TempDir()
 	p := writeTestFile(t, tmp, "a.txt", "content-a")
@@ -156,7 +156,7 @@ func TestReadFile(t *testing.T) {
 }
 
 func TestWriteFileAndReadBack(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := NewLocal()
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "sub", "w.txt")
@@ -185,7 +185,7 @@ func TestWriteFileAndReadBack(t *testing.T) {
 }
 
 func TestMkdirAllAndStat(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := NewLocal()
 	tmp := t.TempDir()
 	dir := filepath.Join(tmp, "x", "y", "z")
@@ -223,7 +223,7 @@ func TestMkdirAllAndStat(t *testing.T) {
 }
 
 func TestGlob(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := NewLocal()
 	tmp := t.TempDir()
 	writeTestFile(t, tmp, "a.go", "")
@@ -256,7 +256,7 @@ func TestGlob(t *testing.T) {
 }
 
 func TestGrep(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	e := NewLocal()
 	tmp := t.TempDir()
 	writeTestFile(t, tmp, "one.txt", "alpha\nneedle one\nomega\n")
@@ -322,7 +322,7 @@ func TestGrepSkipsUnreadableAndLongLines(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission bits are unreliable on windows")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	e := NewLocal()
 	tmp := t.TempDir()
 
@@ -348,7 +348,7 @@ func TestGrepSkipsUnreadableFiles(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root bypasses permission bits")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	e := NewLocal()
 	tmp := t.TempDir()
 
@@ -375,7 +375,7 @@ func TestGrepSkipsUnreadableFiles(t *testing.T) {
 }
 
 func TestContextCanceled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	e := NewLocal()
 	tmp := t.TempDir()
@@ -408,7 +408,7 @@ func TestStartRoundTripsStdio(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("tests use POSIX shell commands")
 	}
-	p, err := NewLocal().Start(context.Background(),
+	p, err := NewLocal().Start(t.Context(),
 		ExecRequest{Name: "sh", Args: []string{"-c", "read line; echo \"got:$line\"; echo err >&2"}},
 		StartOptions{Stderr: io.Discard})
 	if err != nil {
@@ -434,7 +434,7 @@ func TestStartRedirectsOutput(t *testing.T) {
 		t.Skip("tests use POSIX shell commands")
 	}
 	var buf bytes.Buffer
-	p, err := NewLocal().Start(context.Background(),
+	p, err := NewLocal().Start(t.Context(),
 		ExecRequest{Name: "sh", Args: []string{"-c", "echo one; echo two >&2; exit 3"}},
 		StartOptions{Stdout: &buf, Stderr: &buf})
 	if err != nil {
@@ -444,8 +444,8 @@ func TestStartRedirectsOutput(t *testing.T) {
 		t.Fatal("redirected stdout must not expose a pipe")
 	}
 	waitErr := p.Wait()
-	var ee *ExitError
-	if !errors.As(waitErr, &ee) || ee.Code != 3 {
+	ee, ok := errors.AsType[*ExitError](waitErr)
+	if !ok || ee.Code != 3 {
 		t.Fatalf("wait error = %v, want exit status 3", waitErr)
 	}
 	if ee.Error() != "exit status 3" {
@@ -460,7 +460,7 @@ func TestStartKillTerminatesAndWaitReaps(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("tests use POSIX shell commands")
 	}
-	p, err := NewLocal().Start(context.Background(),
+	p, err := NewLocal().Start(t.Context(),
 		ExecRequest{Name: "sh", Args: []string{"-c", "sleep 30"}},
 		StartOptions{})
 	if err != nil {
@@ -473,8 +473,7 @@ func TestStartKillTerminatesAndWaitReaps(t *testing.T) {
 	if waitErr == nil {
 		t.Fatal("killed process must report a non-nil wait error")
 	}
-	var ee *ExitError
-	if errors.As(waitErr, &ee) && ee.Code == 0 {
+	if ee, ok := errors.AsType[*ExitError](waitErr); ok && ee.Code == 0 {
 		t.Fatal("killed process must not report exit code 0")
 	}
 	// A second kill of the reaped process reports an error callers may ignore.
@@ -484,7 +483,7 @@ func TestStartKillTerminatesAndWaitReaps(t *testing.T) {
 }
 
 func TestStartStartupFailure(t *testing.T) {
-	if _, err := NewLocal().Start(context.Background(),
+	if _, err := NewLocal().Start(t.Context(),
 		ExecRequest{Name: "definitely-not-a-real-binary-xyz"}, StartOptions{}); err == nil {
 		t.Fatal("missing binary must fail at Start")
 	}
@@ -494,7 +493,7 @@ func TestStartContextCancelKillsProcess(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("tests use POSIX shell commands")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	p, err := NewLocal().Start(ctx, ExecRequest{Name: "sh", Args: []string{"-c", "sleep 30"}}, StartOptions{})
 	if err != nil {
 		t.Fatal(err)

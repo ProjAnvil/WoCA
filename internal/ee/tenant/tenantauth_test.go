@@ -3,7 +3,6 @@
 package tenant_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -204,7 +203,7 @@ func TestLocalModeUnchanged(t *testing.T) {
 // default-deny posture, a "local" tenant key maps to the machine tenant
 // with its granted scopes.
 func TestTenantAPIKeyProviderE2E(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	st := openTenantStoreForTest(t)
 
 	ten, err := st.CreateTenant(ctx, "acme")

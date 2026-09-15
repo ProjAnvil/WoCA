@@ -60,7 +60,7 @@ func TestGatewayClientEnrollPullApply(t *testing.T) {
 		"model-whitelist":   "gpt-test,gpt-mini",
 		"anthropic-api-key": "sk-ant-managed",
 	})
-	enroll, err := store.IssueEnrollment(context.Background(), entrygw.EnrollmentTTL)
+	enroll, err := store.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,10 +70,10 @@ func TestGatewayClientEnrollPullApply(t *testing.T) {
 		StatePath: filepath.Join(home, "bridge-gateway.json"),
 	}, zerolog.Nop())
 
-	if err := g.Enroll(context.Background(), enroll); err != nil {
+	if err := g.Enroll(t.Context(), enroll); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := g.Pull(context.Background())
+	cfg, err := g.Pull(t.Context())
 	if err != nil || cfg == nil {
 		t.Fatalf("pull = %v %v", cfg, err)
 	}
@@ -129,7 +129,7 @@ func TestGatewayClientStorageMemoryDelivery(t *testing.T) {
 		"ladym-api-password":     "lm-secret",
 		"builtin-plugins":        `["browser","pdf"]`,
 	})
-	enroll, err := store.IssueEnrollment(context.Background(), entrygw.EnrollmentTTL)
+	enroll, err := store.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,10 +137,10 @@ func TestGatewayClientStorageMemoryDelivery(t *testing.T) {
 		URL: url, EnrollmentToken: enroll,
 		StatePath: filepath.Join(home, "bridge-gateway.json"),
 	}, zerolog.Nop())
-	if err := g.Enroll(context.Background(), enroll); err != nil {
+	if err := g.Enroll(t.Context(), enroll); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := g.Pull(context.Background())
+	cfg, err := g.Pull(t.Context())
 	if err != nil || cfg == nil {
 		t.Fatalf("pull = %v %v", cfg, err)
 	}
@@ -191,15 +191,15 @@ func TestGatewayClientStaleKeepsCache(t *testing.T) {
 	// Enroll against the live gateway, then resume the same state against
 	// a dead endpoint: pulls fail, STALE is flagged, and the managed
 	// overlay (the cache) survives untouched.
-	enroll, err := store.IssueEnrollment(context.Background(), entrygw.EnrollmentTTL)
+	enroll, err := store.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	live := NewGatewayClient(GatewayConfig{URL: url, EnrollmentToken: enroll, StatePath: state}, zerolog.Nop())
-	if err := live.Enroll(context.Background(), enroll); err != nil {
+	if err := live.Enroll(t.Context(), enroll); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := live.Pull(context.Background())
+	cfg, err := live.Pull(t.Context())
 	if err != nil || cfg == nil {
 		t.Fatalf("live pull = %v %v", cfg, err)
 	}
@@ -208,7 +208,7 @@ func TestGatewayClientStaleKeepsCache(t *testing.T) {
 	}
 
 	dead := NewGatewayClient(GatewayConfig{URL: "http://127.0.0.1:1", StatePath: state}, zerolog.Nop())
-	if _, err := dead.Pull(context.Background()); err == nil {
+	if _, err := dead.Pull(t.Context()); err == nil {
 		t.Fatal("dead gateway pull succeeded")
 	}
 	if !dead.Status().Stale {
@@ -249,7 +249,7 @@ func TestGatewayClientInsecureSelfSigned(t *testing.T) {
 	ts.StartTLS()
 	defer ts.Close()
 
-	enroll, err := store.IssueEnrollment(context.Background(), entrygw.EnrollmentTTL)
+	enroll, err := store.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,12 +260,12 @@ func TestGatewayClientInsecureSelfSigned(t *testing.T) {
 	}
 
 	// Verified client: the self-signed handshake fails.
-	if err := NewGatewayClient(cfg, zerolog.Nop()).Enroll(context.Background(), enroll); err == nil {
+	if err := NewGatewayClient(cfg, zerolog.Nop()).Enroll(t.Context(), enroll); err == nil {
 		t.Fatal("self-signed gateway accepted with verification on")
 	}
 
 	// 联调 posture: a fresh token and the insecure toggle enroll fine.
-	enroll2, err := store.IssueEnrollment(context.Background(), entrygw.EnrollmentTTL)
+	enroll2, err := store.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,10 +273,10 @@ func TestGatewayClientInsecureSelfSigned(t *testing.T) {
 	g := NewGatewayClient(cfg, zerolog.Nop())
 	g.cfg.Insecure = true
 	g.hc = insecureClient()
-	if err := g.Enroll(context.Background(), enroll); err != nil {
+	if err := g.Enroll(t.Context(), enroll); err != nil {
 		t.Fatalf("insecure enroll: %v", err)
 	}
-	if pulled, err := g.Pull(context.Background()); err != nil || pulled == nil {
+	if pulled, err := g.Pull(t.Context()); err != nil || pulled == nil {
 		t.Fatalf("insecure pull = %v %v", pulled, err)
 	}
 }

@@ -1,7 +1,6 @@
 package bridge
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -23,23 +22,23 @@ func TestProfilesSortsLiveSessionsFirstAndReportsState(t *testing.T) {
 	st := openVaultStore(t)
 	vault := newVault(t, st)
 	// A: live session. B: expired session. C: never signed in.
-	if _, err := NewService(st, liveActivator("wsess_a"), WithSessionVault(vault)).Connect(context.Background(), ConnectionInput{
+	if _, err := NewService(st, liveActivator("wsess_a"), WithSessionVault(vault)).Connect(t.Context(), ConnectionInput{
 		ServerURL: "https://a.example.com", APIKey: "k",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	profileB, err := st.SaveProfile(context.Background(), "https://b.example.com")
+	profileB, err := st.SaveProfile(t.Context(), "https://b.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.Save(context.Background(), profileB.ID, "wsess_b", time.Now().Add(-time.Minute).UnixMilli()); err != nil {
+	if err := vault.Save(t.Context(), profileB.ID, "wsess_b", time.Now().Add(-time.Minute).UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.SaveProfile(context.Background(), "https://c.example.com"); err != nil {
+	if _, err := st.SaveProfile(t.Context(), "https://c.example.com"); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := NewService(st, &fakeActivator{}, WithSessionVault(vault)).Profiles(context.Background())
+	got, err := NewService(st, &fakeActivator{}, WithSessionVault(vault)).Profiles(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,12 +67,12 @@ func TestProfilesSortsLiveSessionsFirstAndReportsState(t *testing.T) {
 func TestResumeProfileEntersAlongStoredSession(t *testing.T) {
 	st := openVaultStore(t)
 	vault := newVault(t, st)
-	if _, err := NewService(st, liveActivator("wsess_a"), WithSessionVault(vault)).Connect(context.Background(), ConnectionInput{
+	if _, err := NewService(st, liveActivator("wsess_a"), WithSessionVault(vault)).Connect(t.Context(), ConnectionInput{
 		ServerURL: "https://a.example.com", APIKey: "k",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	profileB, err := st.SaveProfile(context.Background(), "https://b.example.com")
+	profileB, err := st.SaveProfile(t.Context(), "https://b.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,20 +80,20 @@ func TestResumeProfileEntersAlongStoredSession(t *testing.T) {
 
 	// Without a stored session the resume activates the profile but lands
 	// on the key form, URL prefilled.
-	state, err := svc.ResumeProfile(context.Background(), profileB.ID)
+	state, err := svc.ResumeProfile(t.Context(), profileB.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if state.State != StateAuthorizationNeeded || state.ServerURL != "https://b.example.com" {
 		t.Fatalf("ResumeProfile(no session) = %#v", state)
 	}
-	if active, ok, _ := st.ActiveProfile(context.Background()); !ok || active.BaseURL != "https://b.example.com" {
+	if active, ok, _ := st.ActiveProfile(t.Context()); !ok || active.BaseURL != "https://b.example.com" {
 		t.Fatalf("ActiveProfile() = %#v ok=%v, want b", active, ok)
 	}
 
 	// Back to the profile with the live session: straight to ready.
-	profileA, _, _ := st.ProfileByID(context.Background(), mustActiveID(t, st, "https://a.example.com"))
-	state, err = svc.ResumeProfile(context.Background(), profileA.ID)
+	profileA, _, _ := st.ProfileByID(t.Context(), mustActiveID(t, st, "https://a.example.com"))
+	state, err = svc.ResumeProfile(t.Context(), profileA.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +104,7 @@ func TestResumeProfileEntersAlongStoredSession(t *testing.T) {
 
 func mustActiveID(t *testing.T, st *configstore.Store, baseURL string) int64 {
 	t.Helper()
-	rows, err := st.ListProfiles(context.Background())
+	rows, err := st.ListProfiles(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +119,7 @@ func mustActiveID(t *testing.T, st *configstore.Store, baseURL string) int64 {
 
 func TestResumeProfileRejectsUnknownID(t *testing.T) {
 	svc := NewService(openTestStore(t), &fakeActivator{})
-	if _, err := svc.ResumeProfile(context.Background(), 9999); err == nil {
+	if _, err := svc.ResumeProfile(t.Context(), 9999); err == nil {
 		t.Fatal("ResumeProfile(unknown) error = nil")
 	}
 }
@@ -129,10 +128,10 @@ func TestDeleteProfileRevokesCascadesAndReports(t *testing.T) {
 	st := openVaultStore(t)
 	var revokePath atomic.Pointer[string]
 	vault, bffURL := newRevokingVault(t, st, &revokePath)
-	if err := st.SetProfileBridge(context.Background(), bffURL, "br_target"); err != nil {
+	if err := st.SetProfileBridge(t.Context(), bffURL, "br_target"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewService(st, liveActivator("wsess_del"), WithSessionVault(vault)).Connect(context.Background(), ConnectionInput{
+	if _, err := NewService(st, liveActivator("wsess_del"), WithSessionVault(vault)).Connect(t.Context(), ConnectionInput{
 		ServerURL: bffURL, APIKey: "k",
 	}); err != nil {
 		t.Fatal(err)
@@ -140,7 +139,7 @@ func TestDeleteProfileRevokesCascadesAndReports(t *testing.T) {
 	id := mustActiveID(t, st, bffURL)
 	svc := NewService(st, &fakeActivator{}, WithSessionVault(vault))
 
-	out, err := svc.DeleteProfile(context.Background(), id)
+	out, err := svc.DeleteProfile(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,11 +149,11 @@ func TestDeleteProfileRevokesCascadesAndReports(t *testing.T) {
 	if p := revokePath.Load(); p == nil || *p != "/api/native/session" {
 		t.Fatalf("revoke path = %v", p)
 	}
-	rows, err := st.ListProfiles(context.Background())
+	rows, err := st.ListProfiles(t.Context())
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("ListProfiles() after delete = %#v err=%v", rows, err)
 	}
-	if pin := st.ProfileBridge(context.Background(), bffURL); pin != "" {
+	if pin := st.ProfileBridge(t.Context(), bffURL); pin != "" {
 		t.Fatalf("bridge pin survived delete: %q", pin)
 	}
 }
@@ -169,7 +168,7 @@ func TestDeleteProfileStillDeletesLocallyWhenRevocationFails(t *testing.T) {
 	deadURL := dead.URL
 	dead.Close() // revocation target unreachable — deletion must proceed
 	vault := NewDeviceSessionVault(st, material, &http.Client{Timeout: 2 * time.Second})
-	if _, err := NewService(st, liveActivator("wsess_dead"), WithSessionVault(vault)).Connect(context.Background(), ConnectionInput{
+	if _, err := NewService(st, liveActivator("wsess_dead"), WithSessionVault(vault)).Connect(t.Context(), ConnectionInput{
 		ServerURL: deadURL, APIKey: "k",
 	}); err != nil {
 		t.Fatal(err)
@@ -177,7 +176,7 @@ func TestDeleteProfileStillDeletesLocallyWhenRevocationFails(t *testing.T) {
 	id := mustActiveID(t, st, deadURL)
 	svc := NewService(st, &fakeActivator{}, WithSessionVault(vault))
 
-	out, err := svc.DeleteProfile(context.Background(), id)
+	out, err := svc.DeleteProfile(t.Context(), id)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -68,7 +68,7 @@ func TestRunOAuthFullFlow(t *testing.T) {
 		OpenBrowser: func(authURL string) error { _, err := auth.Client().Get(authURL); return err },
 		SaveToken:   func(tok string) error { saved = tok; return nil },
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	if err := RunOAuth(ctx, flow); err != nil {
 		t.Fatal(err)
@@ -95,7 +95,7 @@ func TestRunOAuthDenied(t *testing.T) {
 		Client:      srv.Client(),
 		OpenBrowser: func(authURL string) error { _, err := srv.Client().Get(authURL); return err },
 	}
-	err := RunOAuth(context.Background(), flow)
+	err := RunOAuth(t.Context(), flow)
 	if err == nil || !strings.Contains(err.Error(), "denied") {
 		t.Fatalf("expected denial error, got %v", err)
 	}
@@ -148,7 +148,7 @@ func TestResolveRef(t *testing.T) {
 }
 
 func TestAuthHelpersErrors(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	client := &http.Client{Timeout: 2 * time.Second}
 
 	// fetchJSON: non-200 and undecodable responses.
@@ -239,15 +239,15 @@ func TestAuthHelpersErrors(t *testing.T) {
 
 func TestRunOAuthErrorPaths(t *testing.T) {
 	// An unparsable endpoint fails immediately.
-	if err := RunOAuth(context.Background(), OAuthFlow{ServerName: "x", Endpoint: "http://[::1]:namedport"}); err == nil {
+	if err := RunOAuth(t.Context(), OAuthFlow{ServerName: "x", Endpoint: "http://[::1]:namedport"}); err == nil {
 		t.Fatal("expected parse error")
 	}
 	// Unreachable discovery fails.
-	if err := RunOAuth(context.Background(), OAuthFlow{ServerName: "x", Endpoint: "http://127.0.0.1:1/mcp"}); err == nil {
+	if err := RunOAuth(t.Context(), OAuthFlow{ServerName: "x", Endpoint: "http://127.0.0.1:1/mcp"}); err == nil {
 		t.Fatal("expected discovery error")
 	}
 	// A cancelled context aborts.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := RunOAuth(ctx, OAuthFlow{ServerName: "x", Endpoint: "http://127.0.0.1:1/mcp"}); err == nil {
 		t.Fatal("expected ctx error")
@@ -288,7 +288,7 @@ func TestRunOAuthAuthServerSelectionAndSaveError(t *testing.T) {
 		OpenBrowser: func(authURL string) error { _, err := mcp.Client().Get(authURL); return err },
 		SaveToken:   func(tok string) error { saved = tok; return nil },
 	}
-	if err := RunOAuth(context.Background(), flow); err != nil {
+	if err := RunOAuth(t.Context(), flow); err != nil {
 		t.Fatal(err)
 	}
 	if saved != "tok-ok" {
@@ -298,7 +298,7 @@ func TestRunOAuthAuthServerSelectionAndSaveError(t *testing.T) {
 	// A failing SaveToken surfaces as an error.
 	flow2 := flow
 	flow2.SaveToken = func(tok string) error { return fmt.Errorf("disk full") }
-	if err := RunOAuth(context.Background(), flow2); err == nil || !strings.Contains(err.Error(), "disk full") {
+	if err := RunOAuth(t.Context(), flow2); err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("save error = %v", err)
 	}
 
@@ -312,7 +312,7 @@ func TestRunOAuthAuthServerSelectionAndSaveError(t *testing.T) {
 		Endpoint:   bad.URL + "/mcp",
 		Client:     bad.Client(),
 	}
-	if err := RunOAuth(context.Background(), flow3); err == nil || !strings.Contains(err.Error(), "incomplete") {
+	if err := RunOAuth(t.Context(), flow3); err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("incomplete metadata = %v", err)
 	}
 }
@@ -338,7 +338,7 @@ func TestRunOAuthStateMismatchAndExchangeFailure(t *testing.T) {
 		Client:      srv.Client(),
 		OpenBrowser: func(authURL string) error { _, err := srv.Client().Get(authURL); return err },
 	}
-	if err := RunOAuth(context.Background(), flow); err == nil || !strings.Contains(err.Error(), "state mismatch") {
+	if err := RunOAuth(t.Context(), flow); err == nil || !strings.Contains(err.Error(), "state mismatch") {
 		t.Fatalf("state mismatch = %v", err)
 	}
 
@@ -358,7 +358,7 @@ func TestRunOAuthStateMismatchAndExchangeFailure(t *testing.T) {
 		Client:      srv2.Client(),
 		OpenBrowser: func(authURL string) error { _, err := srv2.Client().Get(authURL); return err },
 	}
-	if err := RunOAuth(context.Background(), flow2); err == nil {
+	if err := RunOAuth(t.Context(), flow2); err == nil {
 		t.Fatal("expected missing-code error")
 	}
 
@@ -380,7 +380,7 @@ func TestRunOAuthStateMismatchAndExchangeFailure(t *testing.T) {
 		Client:      srv3.Client(),
 		OpenBrowser: func(authURL string) error { _, err := srv3.Client().Get(authURL); return err },
 	}
-	if err := RunOAuth(context.Background(), flow3); err == nil || !strings.Contains(err.Error(), "token exchange") {
+	if err := RunOAuth(t.Context(), flow3); err == nil || !strings.Contains(err.Error(), "token exchange") {
 		t.Fatalf("exchange failure = %v", err)
 	}
 }
@@ -392,7 +392,7 @@ func TestRunOAuthRegistrationAndPortFailures(t *testing.T) {
 	}))
 	defer srv.Close()
 	flow := OAuthFlow{ServerName: "regfail", Endpoint: srv.URL + "/mcp", Client: srv.Client()}
-	if err := RunOAuth(context.Background(), flow); err == nil || !strings.Contains(err.Error(), "registration") {
+	if err := RunOAuth(t.Context(), flow); err == nil || !strings.Contains(err.Error(), "registration") {
 		t.Fatalf("registration failure = %v", err)
 	}
 
@@ -408,12 +408,12 @@ func TestRunOAuthRegistrationAndPortFailures(t *testing.T) {
 	}))
 	defer srv2.Close()
 	flow2 := OAuthFlow{ServerName: "busy", Endpoint: srv2.URL + "/mcp", Client: srv2.Client(), CallbackPort: port}
-	if err := RunOAuth(context.Background(), flow2); err == nil || !strings.Contains(err.Error(), "callback listener") {
+	if err := RunOAuth(t.Context(), flow2); err == nil || !strings.Contains(err.Error(), "callback listener") {
 		t.Fatalf("busy port = %v", err)
 	}
 
 	// No OpenBrowser: the flow waits and the context times out.
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel()
 	flow3 := OAuthFlow{ServerName: "nobrowser", Endpoint: srv2.URL + "/mcp", Client: srv2.Client()}
 	if err := RunOAuth(ctx, flow3); err == nil {
@@ -427,7 +427,7 @@ func TestRunOAuthRegistrationAndPortFailures(t *testing.T) {
 		Client:      srv2.Client(),
 		OpenBrowser: func(u string) error { return fmt.Errorf("no display") },
 	}
-	if err := RunOAuth(context.Background(), flow4); err == nil || !strings.Contains(err.Error(), "open browser") {
+	if err := RunOAuth(t.Context(), flow4); err == nil || !strings.Contains(err.Error(), "open browser") {
 		t.Fatalf("open failure = %v", err)
 	}
 }

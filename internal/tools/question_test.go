@@ -1,14 +1,13 @@
 package tools
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
 
 func TestAskUserQuestionTool(t *testing.T) {
 	tool := AskUserQuestionTool()
-	res, err := tool.Invoke(context.Background(), map[string]any{
+	res, err := tool.Invoke(t.Context(), map[string]any{
 		"questions": []map[string]any{{"question": "Which library?"}},
 	})
 	if err != nil {
@@ -17,7 +16,7 @@ func TestAskUserQuestionTool(t *testing.T) {
 	if !strings.Contains(res.Content, "handled by the harness") {
 		t.Fatalf("AskUserQuestion = %q", res.Content)
 	}
-	if _, err := tool.Invoke(context.Background(), map[string]any{"questions": []map[string]any{}}); err == nil ||
+	if _, err := tool.Invoke(t.Context(), map[string]any{"questions": []map[string]any{}}); err == nil ||
 		!strings.Contains(err.Error(), "at least one question") {
 		t.Fatalf("empty questions error = %v", err)
 	}
@@ -25,7 +24,7 @@ func TestAskUserQuestionTool(t *testing.T) {
 
 func TestPlanModeTools(t *testing.T) {
 	enter := EnterPlanModeTool()
-	res, err := enter.Invoke(context.Background(), map[string]any{})
+	res, err := enter.Invoke(t.Context(), map[string]any{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +32,7 @@ func TestPlanModeTools(t *testing.T) {
 		t.Fatalf("EnterPlanMode = %q", res.Content)
 	}
 	exit := ExitPlanModeTool()
-	res, err = exit.Invoke(context.Background(), map[string]any{"plan": "do it"})
+	res, err = exit.Invoke(t.Context(), map[string]any{"plan": "do it"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -82,7 +83,7 @@ func postGoal(t *testing.T, base, sid, command string) (goal *agent.Goal, runID 
 // types seen until done/error.
 func streamUntilDone(t *testing.T, base, runID string) []string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/runs/"+runID+"/events", nil)
 	resp, err := http.DefaultClient.Do(req)
@@ -124,15 +125,7 @@ func TestGoalAPIFullCycle(t *testing.T) {
 	}
 
 	types := streamUntilDone(t, ts.URL, runID)
-	hasGoal, hasDelta := false, false
-	for _, ty := range types {
-		if ty == "goal" {
-			hasGoal = true
-		}
-		if ty == "delta" {
-			hasDelta = true
-		}
-	}
+	hasGoal, hasDelta := slices.Contains(types, "goal"), slices.Contains(types, "delta")
 	if !hasGoal || !hasDelta {
 		t.Fatalf("goal run events = %v (want goal + delta)", types)
 	}
@@ -177,7 +170,7 @@ func TestGoalAPIFullCycle(t *testing.T) {
 // every event with its data payload until done/error.
 func streamGoalEventsUntilDone(t *testing.T, base, runID string) map[string][]string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/runs/"+runID+"/events", nil)
 	resp, err := http.DefaultClient.Do(req)

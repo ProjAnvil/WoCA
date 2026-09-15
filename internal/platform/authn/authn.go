@@ -47,8 +47,7 @@ func (e *Error) Unwrap() error { return e.Err }
 // CodeOf extracts the enumerated failure code from err; anything without
 // one is a plain CodeUnauthorized.
 func CodeOf(err error) string {
-	var e *Error
-	if errors.As(err, &e) && e.Code != "" {
+	if e, ok := errors.AsType[*Error](err); ok && e.Code != "" {
 		return e.Code
 	}
 	return CodeUnauthorized

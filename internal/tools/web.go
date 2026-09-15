@@ -129,7 +129,7 @@ func parseDuckDuckGo(html string) string {
 		n = 8
 	}
 	var b strings.Builder
-	for i := 0; i < n; i++ {
+	for i := range n {
 		href := cleanDuckDuckGoURL(links[i][1])
 		title := ddgFormRe.ReplaceAllString(links[i][2], "")
 		title = strings.TrimSpace(title)

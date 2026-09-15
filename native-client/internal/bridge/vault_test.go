@@ -74,7 +74,7 @@ func TestConnectPersistsSessionAndBootstrapReopens(t *testing.T) {
 	}}
 	svc := NewService(st, activator, WithSessionVault(vault))
 
-	state, err := svc.Connect(context.Background(), ConnectionInput{
+	state, err := svc.Connect(t.Context(), ConnectionInput{
 		ServerURL: "https://enterprise.example.com",
 		APIKey:    "woca_test_key",
 	})
@@ -84,7 +84,7 @@ func TestConnectPersistsSessionAndBootstrapReopens(t *testing.T) {
 
 	// A fresh service (process restart) reopens from the stored session.
 	restarted := NewService(st, &fakeActivator{}, WithSessionVault(vault))
-	boot, err := restarted.Bootstrap(context.Background())
+	boot, err := restarted.Bootstrap(t.Context())
 	if err != nil || boot.State != StateReady {
 		t.Fatalf("Bootstrap after restart = %+v err=%v", boot, err)
 	}
@@ -100,14 +100,14 @@ func TestExpiredSessionRequiresAuthorization(t *testing.T) {
 		Ready: true, SessionID: "wsess_expired", ExpiresAt: time.Now().Add(-time.Minute).UnixMilli(),
 	}}
 	svc := NewService(st, activator, WithSessionVault(vault))
-	if _, err := svc.Connect(context.Background(), ConnectionInput{
+	if _, err := svc.Connect(t.Context(), ConnectionInput{
 		ServerURL: "https://enterprise.example.com", APIKey: "k",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	restarted := NewService(st, &fakeActivator{}, WithSessionVault(vault))
-	boot, err := restarted.Bootstrap(context.Background())
+	boot, err := restarted.Bootstrap(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,13 +124,13 @@ func TestLogoutRevokesRemotelyAndDeletesLocally(t *testing.T) {
 		Ready: true, SessionID: "wsess_logout", ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
 	}}
 	svc := NewService(st, activator, WithSessionVault(vault))
-	if _, err := svc.Connect(context.Background(), ConnectionInput{
+	if _, err := svc.Connect(t.Context(), ConnectionInput{
 		ServerURL: bffURL, APIKey: "k",
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	out, err := svc.Logout(context.Background())
+	out, err := svc.Logout(t.Context())
 	if err != nil || out.State != StateAuthorizationNeeded {
 		t.Fatalf("Logout = %+v err=%v", out, err)
 	}
@@ -138,7 +138,7 @@ func TestLogoutRevokesRemotelyAndDeletesLocally(t *testing.T) {
 		t.Fatalf("revoke path = %v", p)
 	}
 	restarted := NewService(st, &fakeActivator{}, WithSessionVault(vault))
-	boot, _ := restarted.Bootstrap(context.Background())
+	boot, _ := restarted.Bootstrap(t.Context())
 	if boot.State != StateAuthorizationNeeded {
 		t.Fatalf("session survived logout: %s", boot.State)
 	}
@@ -147,17 +147,17 @@ func TestLogoutRevokesRemotelyAndDeletesLocally(t *testing.T) {
 func TestVaultSealedSessionNeverStoresPlaintext(t *testing.T) {
 	st := openVaultStore(t)
 	vault := newVault(t, st)
-	profile, err := st.SaveProfile(context.Background(), "https://enterprise.example.com")
+	profile, err := st.SaveProfile(t.Context(), "https://enterprise.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := vault.Save(context.Background(), profile.ID, "wsess_secret_value", time.Now().Add(time.Hour).UnixMilli()); err != nil {
+	if err := vault.Save(t.Context(), profile.ID, "wsess_secret_value", time.Now().Add(time.Hour).UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
-	if id, ok := vault.Load(context.Background(), profile.ID); !ok || id != "wsess_secret_value" {
+	if id, ok := vault.Load(t.Context(), profile.ID); !ok || id != "wsess_secret_value" {
 		t.Fatalf("Load = %q ok=%v", id, ok)
 	}
-	sess, ok, err := st.NativeSession(context.Background(), profile.ID)
+	sess, ok, err := st.NativeSession(t.Context(), profile.ID)
 	if err != nil || !ok {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func bytesContains(b []byte, sub string) (bool, error) {
 func indexOf(b []byte, sub string) int {
 	for i := 0; i+len(sub) <= len(b); i++ {
 		match := true
-		for j := 0; j < len(sub); j++ {
+		for j := range sub {
 			if b[i+j] != sub[j] {
 				match = false
 				break

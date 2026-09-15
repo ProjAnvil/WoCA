@@ -43,12 +43,12 @@ func TestAdmissionFIFO(t *testing.T) {
 	}
 	granted := make(chan string, 2)
 	go func() {
-		if a.wait(context.Background(), "s1", w1) {
+		if a.wait(t.Context(), "s1", w1) {
 			granted <- "w1"
 		}
 	}()
 	go func() {
-		if a.wait(context.Background(), "s1", w2) {
+		if a.wait(t.Context(), "s1", w2) {
 			granted <- "w2"
 		}
 	}()
@@ -72,7 +72,7 @@ func TestAdmissionCancelWhileQueued(t *testing.T) {
 	a := newAdmission()
 	defer a.stop()
 	a.enter("s1", nil) // hold the gate
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	w, _, ok := a.enter("s1", nil)
 	if !ok || w == nil {
 		t.Fatalf("enter: ok=%v w=%v", ok, w)
@@ -91,7 +91,7 @@ func TestAdmissionQueueFull(t *testing.T) {
 	a := newAdmission()
 	defer a.stop()
 	a.enter("s1", nil)
-	for i := 0; i < maxQueuedPerSession; i++ {
+	for i := range maxQueuedPerSession {
 		if _, _, ok := a.enter("s1", nil); !ok {
 			t.Fatalf("enter %d rejected early", i)
 		}
@@ -113,7 +113,7 @@ func TestAdmissionIndependentSessions(t *testing.T) {
 // A run without interrupts: read SSE until done/error.
 func waitRunDone(t *testing.T, base, runID string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/runs/"+runID+"/events", nil)
 	if err != nil {
@@ -230,7 +230,7 @@ func TestSessionGateSerializesRuns(t *testing.T) {
 	}
 	waitRunDone(t, srv.URL, run1)
 	waitRunDone(t, srv.URL, run2)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		select {
 		case <-saved:
 		case <-time.After(10 * time.Second):
@@ -333,7 +333,7 @@ func TestSessionGateThreeRunsStatsMidFlight(t *testing.T) {
 	waitRunDone(t, srv.URL, run1)
 	waitRunDone(t, srv.URL, run2)
 	waitRunDone(t, srv.URL, run3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		select {
 		case <-saved:
 		case <-time.After(10 * time.Second):
@@ -410,7 +410,7 @@ func TestSessionGateQueueFull409(t *testing.T) {
 	defer srv.Close()
 
 	_, sid, _ := postRun(t, srv.URL, "", "hold")
-	for i := 0; i < maxQueuedPerSession; i++ {
+	for i := range maxQueuedPerSession {
 		if _, _, pos := postRun(t, srv.URL, sid, fmt.Sprintf("q%d", i)); pos != i+1 {
 			t.Fatalf("queued run %d position = %d, want %d", i, pos, i+1)
 		}

@@ -92,7 +92,7 @@ func TestAppDelegatesWithStartupContext(t *testing.T) {
 		logoutState:    bridge.BootstrapState{State: bridge.StateAuthorizationNeeded, ServerURL: "https://enterprise.example.com"},
 	}
 	app := NewApp(service)
-	startupCtx := context.WithValue(context.Background(), "source", "wails")
+	startupCtx := context.WithValue(t.Context(), "source", "wails")
 	app.startup(startupCtx)
 
 	if got, err := app.Bootstrap(); err != nil || got != service.bootstrapState {

@@ -163,8 +163,8 @@ func TestFileHistoryScopedPerRunWorkspace(t *testing.T) {
 	dirA := newHistoryDir(t)
 	dirB := newHistoryDir(t)
 	h := NewFileHistory()
-	ctxA := runws.With(context.Background(), dirA)
-	ctxB := runws.With(context.Background(), dirB)
+	ctxA := runws.With(t.Context(), dirA)
+	ctxB := runws.With(t.Context(), dirB)
 
 	pathA := filepath.Join(dirA, "a.txt")
 	pathB := filepath.Join(dirB, "b.txt")
@@ -198,7 +198,7 @@ func TestFileHistoryScopedPerRunWorkspace(t *testing.T) {
 	}
 
 	// The undecorated (default) scope stays separate from both.
-	if out, _ := h.Undo(context.Background()); out != "nothing to undo" {
+	if out, _ := h.Undo(t.Context()); out != "nothing to undo" {
 		t.Fatalf("default scope undo = %q, want nothing to undo", out)
 	}
 }

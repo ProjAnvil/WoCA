@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"testing"
@@ -31,7 +30,7 @@ func TestRemoteEngineAgainstLiveLadyM(t *testing.T) {
 	}
 	defer eng.Close()
 
-	ctx := tenancy.NewContext(context.Background(), tenancy.Context{
+	ctx := tenancy.NewContext(t.Context(), tenancy.Context{
 		TenantID: "t_e2e", UserID: "u_e2e", Scopes: []string{},
 	})
 	uniq := fmt.Sprintf("live probe %d", time.Now().UnixNano())

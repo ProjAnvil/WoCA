@@ -54,10 +54,10 @@ func TestStreamableHTTP(t *testing.T) {
 	var notified string
 	client.OnNotification = func(method string, params json.RawMessage) { notified = method }
 
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	tools, err := client.ListTools(context.Background())
+	tools, err := client.ListTools(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestStreamableHTTP(t *testing.T) {
 	if notified != "notifications/foo" {
 		t.Fatalf("notification = %q", notified)
 	}
-	out, err := client.CallTool(context.Background(), "echo", map[string]any{"m": "x"})
+	out, err := client.CallTool(t.Context(), "echo", map[string]any{"m": "x"})
 	if err != nil || out != "ok" {
 		t.Fatalf("call = %q err=%v", out, err)
 	}
@@ -129,7 +129,7 @@ func TestStreamableHTTPConcurrent(t *testing.T) {
 	defer srv.Close()
 
 	client := NewStreamableHTTP("woca", srv.URL+"/mcp")
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -139,12 +139,10 @@ func TestStreamableHTTPConcurrent(t *testing.T) {
 		listMu  sync.Mutex
 		listGot []string
 	)
-	for i := 0; i < N; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+	for i := range N {
+		wg.Go(func() {
 			if i%2 == 0 {
-				tools, err := client.ListTools(context.Background())
+				tools, err := client.ListTools(t.Context())
 				if err != nil {
 					errs[i] = err
 					return
@@ -158,7 +156,7 @@ func TestStreamableHTTPConcurrent(t *testing.T) {
 				listMu.Unlock()
 			} else {
 				name := fmt.Sprintf("call-%d", i)
-				out, err := client.CallTool(context.Background(), name, nil)
+				out, err := client.CallTool(t.Context(), name, nil)
 				if err != nil {
 					errs[i] = err
 					return
@@ -167,11 +165,11 @@ func TestStreamableHTTPConcurrent(t *testing.T) {
 					errs[i] = fmt.Errorf("CallTool = %q, want %q", out, want)
 				}
 			}
-		}(i)
+		})
 	}
 
 	// Wait for all N requests to arrive before releasing them.
-	for i := 0; i < N; i++ {
+	for i := range N {
 		select {
 		case <-arrived:
 		case <-time.After(5 * time.Second):
@@ -236,7 +234,7 @@ func TestStreamableAuthClientConstruction(t *testing.T) {
 	if client.Name() != "web" {
 		t.Fatalf("Name = %q", client.Name())
 	}
-	if err := client.Initialize(context.Background()); err == nil {
+	if err := client.Initialize(t.Context()); err == nil {
 		t.Fatal("expected initialize failure on closed port")
 	}
 	if err := client.Close(); err != nil {
@@ -265,7 +263,7 @@ func TestStreamableHTTPErrorPaths(t *testing.T) {
 	if c == nil {
 		t.Fatal("nil client")
 	}
-	if err := c.Initialize(context.Background()); err == nil {
+	if err := c.Initialize(t.Context()); err == nil {
 		t.Fatal("expected status error")
 	}
 	srv.Close()
@@ -276,7 +274,7 @@ func TestStreamableHTTPErrorPaths(t *testing.T) {
 	}))
 	defer srv2.Close()
 	c2 := NewStreamableHTTP("garbage", srv2.URL)
-	if err := c2.Initialize(context.Background()); err == nil {
+	if err := c2.Initialize(t.Context()); err == nil {
 		t.Fatal("expected decode error")
 	}
 	srv2.Close()
@@ -288,7 +286,7 @@ func TestStreamableHTTPErrorPaths(t *testing.T) {
 	}))
 	defer srv3.Close()
 	c3 := NewStreamableHTTP("listen-err", srv3.URL)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	// A cancelled context listen returns nil (clean shutdown).
 	_ = c3.Listen(ctx)
@@ -319,13 +317,13 @@ func TestStreamableListenSSE(t *testing.T) {
 		t.Fatal("nil client")
 	}
 	defer client.Close()
-	if err := client.Initialize(context.Background()); err != nil {
+	if err := client.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	client.OnNotification = func(method string, params json.RawMessage) {
 		notified <- method
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	errCh := make(chan error, 1)
 	go func() { errCh <- client.Listen(ctx) }()
 
@@ -353,7 +351,7 @@ func TestHTTPTransportCancelledAndSendError(t *testing.T) {
 	if tr == nil {
 		t.Fatal("nil transport")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := tr.roundTrip(ctx, 1, []byte(`{"id":1}`)); err == nil {
 		t.Fatal("expected request-build error on cancelled ctx")

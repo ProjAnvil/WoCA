@@ -47,7 +47,7 @@ func TestExecutorCommandRunnerRoutesThroughExecutor(t *testing.T) {
 	cfg := Config{PreToolUse: []Entry{{Hooks: []Hook{{Type: "command", Command: "policy check"}}}}}
 	r := NewRunner(cfg, "/work/dir", "sess-1", WithCommandRunner(ExecutorCommandRunner(fake)))
 
-	d, err := r.PreToolUse(context.Background(), "Bash", map[string]any{"command": "ls"})
+	d, err := r.PreToolUse(t.Context(), "Bash", map[string]any{"command": "ls"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestExecutorCommandRunnerDenyPassthrough(t *testing.T) {
 	cfg := Config{PreToolUse: []Entry{{Hooks: []Hook{{Type: "command", Command: "deny"}}}}}
 	r := NewRunner(cfg, "/tmp", "s1", WithCommandRunner(ExecutorCommandRunner(fake)))
 
-	d, err := r.PreToolUse(context.Background(), "Bash", map[string]any{"command": "rm"})
+	d, err := r.PreToolUse(t.Context(), "Bash", map[string]any{"command": "rm"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestExecutorCommandRunnerDenyPassthrough(t *testing.T) {
 func TestExecutorCommandRunnerErrorPassthrough(t *testing.T) {
 	fake := &recordingExecutor{err: errors.New("spawn failed")}
 	run := ExecutorCommandRunner(fake)
-	if _, err := run(context.Background(), "cmd", "stdin", "/tmp"); err == nil || !strings.Contains(err.Error(), "spawn failed") {
+	if _, err := run(t.Context(), "cmd", "stdin", "/tmp"); err == nil || !strings.Contains(err.Error(), "spawn failed") {
 		t.Fatalf("err = %v", err)
 	}
 }

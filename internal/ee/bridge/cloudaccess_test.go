@@ -47,11 +47,11 @@ type stack struct {
 // — the v1.8 client credential every /api request carries.
 func (s *stack) edgeLogin(t *testing.T, remark string) string {
 	t.Helper()
-	u, err := s.keys.CreateUser(context.Background(), "local", remark, "tenant-admin")
+	u, err := s.keys.CreateUser(t.Context(), "local", remark, "tenant-admin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, full, err := s.keys.IssueKey(context.Background(), "local", u.ID, remark, "tenant-admin")
+	_, full, err := s.keys.IssueKey(t.Context(), "local", u.ID, remark, "tenant-admin")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func newStack(t *testing.T) *stack {
 
 func (s *stack) enrollmentToken(t *testing.T) string {
 	t.Helper()
-	token, err := s.store.IssueEnrollment(context.Background(), entrygw.EnrollmentTTL)
+	token, err := s.store.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestCloudAccessLifecycle(t *testing.T) {
 	if err := ca.Configure(s.edge.URL, s.enrollmentToken(t)); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go ca.Run(ctx)
 
@@ -256,7 +256,7 @@ func TestCloudAccessTunnelE2E(t *testing.T) {
 	if err := ca.Configure(s.edge.URL, s.enrollmentToken(t)); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go ca.Run(ctx)
 
@@ -307,7 +307,7 @@ func TestCloudAccessTunnelGateOff(t *testing.T) {
 	if err := ca.Configure(s.edge.URL, s.enrollmentToken(t)); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go ca.Run(ctx)
 	waitForCond(t, 10*time.Second, func() bool { return ca.Snapshot().Enrolled })
@@ -360,7 +360,7 @@ func TestCloudAccessLegacyMigration(t *testing.T) {
 	if err := ca.Configure("https://edge.example.com", ""); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go ca.Run(ctx)
 	waitForCond(t, 5*time.Second, func() bool {
@@ -406,14 +406,14 @@ func TestSpkiTOFU(t *testing.T) {
 	ca := NewCloudAccess(st, zerolog.Nop())
 
 	edgeA, storeA := mkEdge(&certA)
-	tokA, err := storeA.IssueEnrollment(context.Background(), entrygw.EnrollmentTTL)
+	tokA, err := storeA.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := ca.Configure(edgeA.URL, tokA); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go ca.Run(ctx)
 	waitForCond(t, 5*time.Second, func() bool {
@@ -433,7 +433,7 @@ func TestSpkiTOFU(t *testing.T) {
 		Persist:   &settingsPersist{kv: NewLocalKV(st.DB()), st: st},
 		PinSource: func() string { return NewLocalKV(st.DB()).Get(KeyEdgeSPKIPin) },
 	}, zerolog.Nop())
-	if _, err := client.Pull(context.Background()); err == nil {
+	if _, err := client.Pull(t.Context()); err == nil {
 		t.Fatal("pin mismatch accepted")
 	} else if !strings.Contains(err.Error(), "pin mismatch") && !strings.Contains(err.Error(), "x509") {
 		// Insecure skip-verify makes the transport surface the
@@ -501,7 +501,7 @@ func TestEmptyConfigNeverClearsOverlay(t *testing.T) {
 	if err := ca.Configure(s.edge.URL, s.enrollmentToken(t)); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go ca.Run(ctx)
 	waitForCond(t, 10*time.Second, func() bool {
@@ -606,14 +606,14 @@ func TestPullWaitRidesPinnedTransport(t *testing.T) {
 
 	st := newBridgeSettings(t)
 	ca := NewCloudAccess(st, zerolog.Nop())
-	tok, err := store.IssueEnrollment(context.Background(), entrygw.EnrollmentTTL)
+	tok, err := store.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := ca.Configure(tsA.URL, tok); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go ca.Run(ctx)
 	waitForCond(t, 5*time.Second, func() bool {
@@ -696,7 +696,7 @@ func TestCloudAccessLegacyMigrationNewerFileSupersedesDeadIdentity(t *testing.T)
 	if err := ca.Configure("https://edge.example.com", ""); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go ca.Run(ctx)
 	waitForCond(t, 5*time.Second, func() bool {
@@ -756,7 +756,7 @@ func TestCloudAccessLegacyMigrationStaleFileLoses(t *testing.T) {
 	if err := ca.Configure("https://edge.example.com", ""); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go ca.Run(ctx)
 	waitForCond(t, 5*time.Second, func() bool {

@@ -11,7 +11,7 @@ import (
 // primary key).
 func TestRunIDsAreProcessUnique(t *testing.T) {
 	seen := map[string]bool{}
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		id := newRunID()
 		if !strings.HasPrefix(id, "run-") {
 			t.Fatalf("id %q lost the run- prefix", id)

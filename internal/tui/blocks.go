@@ -140,7 +140,7 @@ func (m *Model) reviewLinesWithStarts() ([]string, []int) {
 				out = append(out, marker+" "+dimStyle.Render(fmt.Sprintf("💭 thought (%d lines)", n))+"   "+dimStyle.Render("[enter] expand"))
 			} else {
 				out = append(out, marker+" "+dimStyle.Render("💭 thought")+"   "+dimStyle.Render("[enter] fold"))
-				for _, l := range strings.Split(b.text, "\n") {
+				for l := range strings.SplitSeq(b.text, "\n") {
 					out = append(out, "  "+dimStyle.Render(l))
 				}
 			}
@@ -166,7 +166,7 @@ func (m *Model) reviewLinesWithStarts() ([]string, []int) {
 				}
 				if b.hasRes {
 					out = append(out, "  "+dimStyle.Render("⎿"))
-					for _, l := range strings.Split(strings.TrimRight(b.result, "\n"), "\n") {
+					for l := range strings.SplitSeq(strings.TrimRight(b.result, "\n"), "\n") {
 						out = append(out, "  "+l)
 					}
 				}

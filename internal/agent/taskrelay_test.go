@@ -45,11 +45,11 @@ func TestDeriveSubagentThreadDeterministic(t *testing.T) {
 }
 
 func TestToolCallIDContextRoundTrip(t *testing.T) {
-	ctx := withToolCallID(context.Background(), "call_42")
+	ctx := withToolCallID(t.Context(), "call_42")
 	if got := toolCallIDFrom(ctx); got != "call_42" {
 		t.Fatalf("got %q", got)
 	}
-	if got := toolCallIDFrom(context.Background()); got != "" {
+	if got := toolCallIDFrom(t.Context()); got != "" {
 		t.Fatalf("empty ctx gave %q", got)
 	}
 }
@@ -159,7 +159,7 @@ func TestToolsNodeInterruptSkipsCompletedCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	thread := "thread-toolsnode-interrupt"
 	intrs, _ := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("run the tools")}, thread))
 	if len(intrs) != 1 {
@@ -225,7 +225,7 @@ func TestToolsNodeMemoReplayKeepsResumeAlignment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	thread := "thread-toolsnode-memo-replay"
 	stream := a.Stream(ctx, []messages.Message{messages.Human("go")}, thread)
 	pauses := 0
@@ -326,7 +326,7 @@ func TestToolsNodeMemoReplayCoversExecutionInterrupts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	thread := "thread-toolsnode-exec-replay"
 	wantPause := []string{"pause-x", "pause-y"}
 	answers := []string{"vx", "vy"}
@@ -477,7 +477,7 @@ func TestForegroundSubagentPermissionRelay(t *testing.T) {
 		writeCall("w1", "relay.txt", "hello"),
 		messages.AI("sub done"),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	thread := "thread-fg-relay"
 	intrs, _ := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread))
 	if len(intrs) != 1 {
@@ -519,7 +519,7 @@ func TestForegroundSubagentPermissionDenied(t *testing.T) {
 		writeCall("w1", "denied.txt", "nope"),
 		messages.AI("sub done"),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	thread := "thread-fg-deny"
 	intrs, _ := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread))
 	if len(intrs) != 1 {
@@ -547,7 +547,7 @@ func TestForegroundSubagentTwoSequentialPermissions(t *testing.T) {
 		writeCall("w2", "b.txt", "b"),
 		messages.AI("sub done"),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	thread := "thread-fg-two"
 	stream := a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread)
 	pauses := 0
@@ -598,7 +598,7 @@ func TestForegroundSubagentSequentialPermissionDenied(t *testing.T) {
 		writeCall("w2", "b.txt", "b"),
 		messages.AI("sub done"),
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	thread := "thread-fg-two-deny"
 	stream := a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread)
 	answers := []string{"y", "n"}
@@ -664,7 +664,7 @@ func TestResumePathsStoreLastThread(t *testing.T) {
 		}
 		return a
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Resume (also covers the ResumeCheckpoint alias).
 	a1 := build()
@@ -742,7 +742,7 @@ func TestSubagentRelayCrossProcess(t *testing.T) {
 		}
 		return a, saver
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	thread := "parent-thread-1"
 
 	// Process 1: run until the child's Write permission bubbles up.
@@ -796,10 +796,10 @@ func TestSubagentRelayCrossProcess(t *testing.T) {
 func TestParentThreadForPrefersCtxCarrier(t *testing.T) {
 	a := &Agent{}
 	a.lastThread.Store("global-thread")
-	if got := a.parentThreadFor(context.Background()); got != "global-thread" {
+	if got := a.parentThreadFor(t.Context()); got != "global-thread" {
 		t.Fatalf("no carrier: parentThreadFor = %q, want global-thread fallback", got)
 	}
-	ctx := withToolCallThread(context.Background(), "call_1", "ctx-thread")
+	ctx := withToolCallThread(t.Context(), "call_1", "ctx-thread")
 	if got := a.parentThreadFor(ctx); got != "ctx-thread" {
 		t.Fatalf("carrier present: parentThreadFor = %q, want ctx-thread", got)
 	}
@@ -807,7 +807,7 @@ func TestParentThreadForPrefersCtxCarrier(t *testing.T) {
 		t.Fatalf("derived thread = %q, want ctx-thread/sub-call_1- prefix", got)
 	}
 	// withToolCallID alone carries no thread: the global fallback applies.
-	if got := a.parentThreadFor(withToolCallID(context.Background(), "call_2")); got != "global-thread" {
+	if got := a.parentThreadFor(withToolCallID(t.Context(), "call_2")); got != "global-thread" {
 		t.Fatalf("id-only carrier: parentThreadFor = %q, want global-thread fallback", got)
 	}
 }

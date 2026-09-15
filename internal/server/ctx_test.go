@@ -37,7 +37,7 @@ func TestLoadBlobHonorsCallerContext(t *testing.T) {
 	s.blobs = blobs
 	s.dir = t.TempDir()
 
-	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), callerCtxKey{}, "caller"))
+	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), callerCtxKey{}, "caller"))
 	cancel()
 	if got := s.load(ctx, "sess-x"); got != nil {
 		t.Fatalf("load = %v, want nil for a missing blob", got)

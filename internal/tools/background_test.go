@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,7 +16,7 @@ func TestBackgroundShellLifecycle(t *testing.T) {
 	if !ok {
 		t.Fatal("Bash tool missing")
 	}
-	res, err := bash.Invoke(context.Background(), map[string]any{
+	res, err := bash.Invoke(t.Context(), map[string]any{
 		"command":           "echo started; sleep 1; echo done",
 		"run_in_background": true,
 	})
@@ -128,7 +127,7 @@ func TestBashOutputAndKillShellTools(t *testing.T) {
 	if _, err := bg.Start("sleep 5", "", "."); err != nil {
 		t.Fatal(err)
 	}
-	res, err := poll.Invoke(context.Background(), map[string]any{"shell_id": "1"})
+	res, err := poll.Invoke(t.Context(), map[string]any{"shell_id": "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +135,7 @@ func TestBashOutputAndKillShellTools(t *testing.T) {
 		t.Fatalf("BashOutput = %q", res.Content)
 	}
 
-	res, err = kill.Invoke(context.Background(), map[string]any{"shell_id": "1"})
+	res, err = kill.Invoke(t.Context(), map[string]any{"shell_id": "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,13 +144,13 @@ func TestBashOutputAndKillShellTools(t *testing.T) {
 	}
 
 	// Unknown IDs surface a helpful error, and a finished shell reports done.
-	res, _ = poll.Invoke(context.Background(), map[string]any{"shell_id": "99"})
+	res, _ = poll.Invoke(t.Context(), map[string]any{"shell_id": "99"})
 	if !strings.Contains(res.Content, "Error") {
 		t.Fatalf("BashOutput unknown id = %q", res.Content)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if res, _ = poll.Invoke(context.Background(), map[string]any{"shell_id": "1"}); strings.Contains(res.Content, "done") {
+		if res, _ = poll.Invoke(t.Context(), map[string]any{"shell_id": "1"}); strings.Contains(res.Content, "done") {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)

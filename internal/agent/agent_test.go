@@ -38,7 +38,7 @@ func TestAgentToolLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("read the file")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("read the file")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestAgentPermissionInterrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write a file")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("write a file")}, "t")
 	ie := interruptFromError(t, err)
 	req, ok := ie.Value.(PermissionRequest)
 	if !ok {
@@ -91,7 +91,7 @@ func TestAgentPermissionInterrupt(t *testing.T) {
 		t.Fatalf("interrupt tool = %q, want Write", req.ToolName)
 	}
 
-	out, err := a.Resume(context.Background(), "t", "y")
+	out, err := a.Resume(t.Context(), "t", "y")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestAgentAcceptEdits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write a file")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("write a file")}, "t")
 	if err != nil {
 		t.Fatalf("acceptEdits should not interrupt on Write: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestAgentPlanMode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("plan a feature")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("plan a feature")}, "t")
 	ie := interruptFromError(t, err)
 	req, ok := ie.Value.(PlanApprovalRequest)
 	if !ok {
@@ -164,7 +164,7 @@ func TestAgentPlanMode(t *testing.T) {
 		t.Fatal("should still be in plan mode before approval")
 	}
 
-	state, err := a.Resume(context.Background(), "t", "y")
+	state, err := a.Resume(t.Context(), "t", "y")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestAgentAskUserQuestion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("help")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("help")}, "t")
 	ie := interruptFromError(t, err)
 	req, ok := ie.Value.(AskUserRequest)
 	if !ok {
@@ -211,7 +211,7 @@ func TestAgentAskUserQuestion(t *testing.T) {
 		t.Fatalf("questions = %+v", req.Questions)
 	}
 
-	msgs, err := a.Resume(context.Background(), "t", AskUserAnswer{Answers: []string{"a"}})
+	msgs, err := a.Resume(t.Context(), "t", AskUserAnswer{Answers: []string{"a"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestAgentTaskSubagent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("delegate")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("delegate")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestAgentPreToolUseHookDenies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("run it")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("run it")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestAgentPermissionRulesAllow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("write")}, "t")
 	if err != nil {
 		t.Fatalf("allow rule should bypass the default ask: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestAgentPermissionRulesDeny(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("rm")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("rm")}, "t")
 	if err != nil {
 		t.Fatalf("deny rule should not interrupt: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestAgentTaskUnknownSubagentType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("delegate")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("delegate")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,10 +426,10 @@ func TestAgentResumeCheckpointPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("write")}, "t")
 	_ = interruptFromError(t, err)
 
-	out, err := a.ResumeCheckpoint(context.Background(), "t", "y")
+	out, err := a.ResumeCheckpoint(t.Context(), "t", "y")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,7 +458,7 @@ func TestAgentBashPolicyDeny(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := a.Invoke(context.Background(), []messages.Message{messages.Human("rm")}, "t")
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("rm")}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,7 +524,7 @@ func TestToolPanicBecomesErrorResult(t *testing.T) {
 	}
 
 	// pump mode: see agentapi_test.go
-	for _, err := range a.Stream(context.Background(), []messages.Message{messages.Human("go")}, "t") {
+	for _, err := range a.Stream(t.Context(), []messages.Message{messages.Human("go")}, "t") {
 		if err != nil {
 			t.Fatalf("stream error: %v", err)
 		}
@@ -576,9 +576,9 @@ func TestAgentTwoAsksInOneBatchConverge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.Invoke(context.Background(), []messages.Message{messages.Human("write two files")}, "t")
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("write two files")}, "t")
 	asked := map[string]int{}
-	for round := 0; round < 4; round++ {
+	for range 4 {
 		ie := interruptFromError(t, err)
 		req := ie.Value.(PermissionRequest)
 		file, _ := req.ToolArgs["file_path"].(string)
@@ -587,7 +587,7 @@ func TestAgentTwoAsksInOneBatchConverge(t *testing.T) {
 			t.Fatalf("asked about %s twice — livelock", file)
 		}
 		var out []messages.Message
-		out, err = a.Resume(context.Background(), "t", file == "x.txt") // approve x, deny y
+		out, err = a.Resume(t.Context(), "t", file == "x.txt") // approve x, deny y
 		if err == nil {
 			if got := out[len(out)-1].Content; got != "done" {
 				t.Fatalf("final = %q, want done", got)

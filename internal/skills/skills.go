@@ -152,7 +152,7 @@ func parseSkill(defaultName string, data []byte) Skill {
 		parts := strings.SplitN(text, "---", 3)
 		if len(parts) == 3 {
 			lines := strings.Split(parts[1], "\n")
-			for i := 0; i < len(lines); i++ {
+			for i := range lines {
 				line := strings.TrimSpace(lines[i])
 				k, v, ok := strings.Cut(line, ":")
 				if !ok {
@@ -184,7 +184,7 @@ func parseSkill(defaultName string, data []byte) Skill {
 // parseArgsString parses a comma-separated list of argument names.
 func parseArgsString(value string) []SkillArg {
 	var out []SkillArg
-	for _, part := range strings.Split(value, ",") {
+	for part := range strings.SplitSeq(value, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -126,7 +125,7 @@ func TestGoalManagerEdgeTransitions(t *testing.T) {
 	if g := a.Goal(); len(g.Notes) != 0 {
 		t.Fatalf("blank note recorded: %+v", g.Notes)
 	}
-	for i := 0; i < 25; i++ {
+	for range 25 {
 		a.goalAddNote("note")
 	}
 	if g := a.Goal(); len(g.Notes) != 20 {
@@ -189,7 +188,7 @@ func TestGoalRunBookkeeping(t *testing.T) {
 		t.Fatal("GoalRunID must be 0 when no run is in flight")
 	}
 	a.AbandonGoalRun(0) // no-op
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,12 +212,12 @@ func TestGoalRunBookkeeping(t *testing.T) {
 
 func TestGoalStreamGuardErrors(t *testing.T) {
 	a := newGoalAgent(t, messages.AI("ok"))
-	if _, err := a.GoalStream(context.Background(), nil); err == nil {
+	if _, err := a.GoalStream(t.Context(), nil); err == nil {
 		t.Fatal("GoalStream without a goal must error")
 	}
 	a.SetGoal("g", "", 2, 1000)
 	a.PauseGoal()
-	if _, err := a.GoalStream(context.Background(), nil); err == nil {
+	if _, err := a.GoalStream(t.Context(), nil); err == nil {
 		t.Fatal("GoalStream on a paused goal must error")
 	}
 	a.ResumeGoal()
@@ -227,7 +226,7 @@ func TestGoalStreamGuardErrors(t *testing.T) {
 	a.goal.running = true
 	a.goal.graph = a.buildGoalGraph(1)
 	a.goal.mu.Unlock()
-	if _, err := a.GoalStream(context.Background(), nil); err == nil {
+	if _, err := a.GoalStream(t.Context(), nil); err == nil {
 		t.Fatal("GoalStream while running must error")
 	}
 	// GoalResume without a live inner stream errors.
@@ -235,7 +234,7 @@ func TestGoalStreamGuardErrors(t *testing.T) {
 	a.goal.running = false
 	a.goal.graph = nil
 	a.goal.mu.Unlock()
-	if _, err := a.GoalResume(context.Background(), true); err == nil {
+	if _, err := a.GoalResume(t.Context(), true); err == nil {
 		t.Fatal("GoalResume without a run must error")
 	}
 }
@@ -249,7 +248,7 @@ func TestGoalBudgetLimitedByTokens(t *testing.T) {
 		messages.AI(`{"verdict":"continue","gaps":"more"}`),
 	)
 	a.SetGoal("tiny budget", "", 10, 50) // 50-token cap
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +273,7 @@ func TestGoalModelErrorEndsRun(t *testing.T) {
 	a.mu.Lock()
 	a.boundModel = erroringSubagentModel{nil}
 	a.mu.Unlock()
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +373,7 @@ func TestGoalFormattingHelpers(t *testing.T) {
 	}
 	// Only the last max messages are rendered.
 	var many []messages.Message
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		many = append(many, messages.Human("m"))
 	}
 	if got := goalMessageTail(many, 3, 10); strings.Count(got, "user: m") != 3 {
@@ -388,7 +387,7 @@ func TestGoalFormattingHelpers(t *testing.T) {
 		t.Fatalf("cycle slice = %+v", sliced)
 	}
 	var bulk []messages.Message
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		bulk = append(bulk, messages.Human("m"))
 	}
 	if got := goalCycleMessages(bulk); len(got) != 30 {
@@ -512,40 +511,40 @@ func TestGoalUpdateToolValidation(t *testing.T) {
 		{"action": "claim_complete", "evidence": "e"},
 		{"action": "blocked", "reason": "r"},
 	} {
-		res := a.execute(context.Background(), "UpdateGoal", args)
+		res := a.execute(t.Context(), "UpdateGoal", args)
 		if !strings.Contains(res.Content, "Error") {
 			t.Fatalf("UpdateGoal without goal = %q", res.Content)
 		}
 	}
 	a.SetGoal("toolful", "", 5, 1000)
 	// Field validation with an active goal.
-	if res := a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "progress"}); !strings.Contains(res.Content, "requires a note") {
+	if res := a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "progress"}); !strings.Contains(res.Content, "requires a note") {
 		t.Fatalf("progress without note = %q", res.Content)
 	}
-	if res := a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "claim_complete"}); !strings.Contains(res.Content, "requires evidence") {
+	if res := a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "claim_complete"}); !strings.Contains(res.Content, "requires evidence") {
 		t.Fatalf("claim without evidence = %q", res.Content)
 	}
-	if res := a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "blocked"}); !strings.Contains(res.Content, "requires a reason") {
+	if res := a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "blocked"}); !strings.Contains(res.Content, "requires a reason") {
 		t.Fatalf("blocked without reason = %q", res.Content)
 	}
 	// Blocked falls back to the note for its reason, then deactivates the goal.
-	if res := a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "blocked", "note": "via note"}); !strings.Contains(res.Content, "via note") {
+	if res := a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "blocked", "note": "via note"}); !strings.Contains(res.Content, "via note") {
 		t.Fatalf("blocked via note = %q", res.Content)
 	}
 	if g := a.Goal(); g.Status != GoalBlocked {
 		t.Fatalf("status = %q", g.Status)
 	}
 	// Further blocked actions on the inactive goal fail.
-	if res := a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "blocked", "reason": "again"}); !strings.Contains(res.Content, "not active") {
+	if res := a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "blocked", "reason": "again"}); !strings.Contains(res.Content, "not active") {
 		t.Fatalf("blocked on inactive = %q", res.Content)
 	}
 	// Case/whitespace-insensitive action matching.
 	a.SetGoal("again", "", 5, 1000)
-	if res := a.execute(context.Background(), "UpdateGoal", map[string]any{"action": "  PROGRESS ", "note": "n"}); !strings.Contains(res.Content, "Progress noted") {
+	if res := a.execute(t.Context(), "UpdateGoal", map[string]any{"action": "  PROGRESS ", "note": "n"}); !strings.Contains(res.Content, "Progress noted") {
 		t.Fatalf("progress = %q", res.Content)
 	}
 	// GetGoal renders the goal as JSON.
-	res := a.execute(context.Background(), "GetGoal", nil)
+	res := a.execute(t.Context(), "GetGoal", nil)
 	if !strings.Contains(res.Content, `"objective": "again"`) && !strings.Contains(res.Content, "again") {
 		t.Fatalf("GetGoal = %q", res.Content)
 	}
@@ -560,7 +559,7 @@ func TestGoalGraphWithObserver(t *testing.T) {
 		messages.AI(`{"verdict":"complete","evidence":"done"}`))
 	a.obs = obslog.New(t.TempDir(), false)
 	a.SetGoal("observed", "", 5, 1_000_000)
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,7 +579,7 @@ func TestGoalStampsAndZeroTurns(t *testing.T) {
 		messages.AI(`{"verdict":"complete","evidence":"ok"}`))
 	a.SetGoal("timing", "", 5, 1_000_000)
 	before := time.Now()
-	stream, err := a.GoalStream(context.Background(), nil)
+	stream, err := a.GoalStream(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

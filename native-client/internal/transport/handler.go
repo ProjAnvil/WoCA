@@ -210,7 +210,7 @@ func defaultTransport() *http.Transport {
 
 func stripUntrustedHeaders(headers http.Header) {
 	for _, value := range headers.Values("Connection") {
-		for _, name := range strings.Split(value, ",") {
+		for name := range strings.SplitSeq(value, ",") {
 			headers.Del(strings.TrimSpace(name))
 		}
 	}
@@ -288,7 +288,7 @@ func stripResponseCookies(headers http.Header) {
 		filteredValues := make([]string, 0, len(values))
 		for _, value := range values {
 			filteredNames := make([]string, 0, 1)
-			for _, trailerName := range strings.Split(value, ",") {
+			for trailerName := range strings.SplitSeq(value, ",") {
 				trailerName = strings.TrimSpace(trailerName)
 				if trailerName != "" && !strings.EqualFold(trailerName, "Set-Cookie") {
 					filteredNames = append(filteredNames, trailerName)
@@ -328,7 +328,7 @@ func isAPIPath(requestPath string) bool {
 	if requestPath != "/api" && !strings.HasPrefix(requestPath, "/api/") {
 		return false
 	}
-	for _, segment := range strings.Split(requestPath, "/") {
+	for segment := range strings.SplitSeq(requestPath, "/") {
 		if segment == "." || segment == ".." {
 			return false
 		}

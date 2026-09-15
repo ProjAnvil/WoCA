@@ -103,7 +103,7 @@ func TestTaskForkInheritsConversation(t *testing.T) {
 		messages.Human("earlier question about the parser"),
 		messages.AI("earlier answer: use recursion"),
 	}
-	out, err := a.Invoke(context.Background(), append(prior, messages.Human("please continue this in a fork")), "t")
+	out, err := a.Invoke(t.Context(), append(prior, messages.Human("please continue this in a fork")), "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestTaskWithoutForkBlankSlate(t *testing.T) {
 		messages.Human("earlier question about the parser"),
 		messages.AI("earlier answer: use recursion"),
 	}
-	if _, err := a.Invoke(context.Background(), append(prior, messages.Human("spawn a helper")), "t"); err != nil {
+	if _, err := a.Invoke(t.Context(), append(prior, messages.Human("spawn a helper")), "t"); err != nil {
 		t.Fatal(err)
 	}
 	got := subSpy.snapshot()

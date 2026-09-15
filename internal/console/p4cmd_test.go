@@ -1,7 +1,6 @@
 package console
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +24,7 @@ func TestOutputStyleCommand(t *testing.T) {
 	defer st.Close()
 	c.deps.Settings = st
 
-	res, err := c.Execute(context.Background(), "output-style", nil, nil)
+	res, err := c.Execute(t.Context(), "output-style", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +34,7 @@ func TestOutputStyleCommand(t *testing.T) {
 		}
 	}
 
-	if _, err := c.Execute(context.Background(), "output-style", []string{"explanatory"}, nil); err != nil {
+	if _, err := c.Execute(t.Context(), "output-style", []string{"explanatory"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(c.deps.Agent.SystemPrompt(), "Output style: Explanatory") {
@@ -46,7 +45,7 @@ func TestOutputStyleCommand(t *testing.T) {
 	}
 
 	// Back to default clears the persisted key and the prompt section.
-	if _, err := c.Execute(context.Background(), "output-style", []string{"default"}, nil); err != nil {
+	if _, err := c.Execute(t.Context(), "output-style", []string{"default"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(c.deps.Agent.SystemPrompt(), "Output style:") {
@@ -56,7 +55,7 @@ func TestOutputStyleCommand(t *testing.T) {
 		t.Fatalf("style not cleared: %q", got)
 	}
 
-	if _, err := c.Execute(context.Background(), "output-style", []string{"bogus"}, nil); err == nil {
+	if _, err := c.Execute(t.Context(), "output-style", []string{"bogus"}, nil); err == nil {
 		t.Fatal("unknown style should fail")
 	}
 }
@@ -67,7 +66,7 @@ func TestPluginsCommand(t *testing.T) {
 	c.deps.PluginsRoot = root
 
 	// Empty listing.
-	res, err := c.Execute(context.Background(), "plugins", nil, nil)
+	res, err := c.Execute(t.Context(), "plugins", nil, nil)
 	if err != nil || !strings.Contains(res.Output, "no plugins installed") {
 		t.Fatalf("empty = %q err=%v", res.Output, err)
 	}
@@ -81,7 +80,7 @@ func TestPluginsCommand(t *testing.T) {
 	os.WriteFile(filepath.Join(pdir, "plugin.json"), []byte(`{"name":"acme","version":"1.0.0","description":"test"}`), 0o644)
 	os.WriteFile(filepath.Join(pdir, "agents", "helper.md"), []byte("---\nname: helper\ndescription: Helps\n---\nHelp out.\n"), 0o644)
 
-	if _, err := c.Execute(context.Background(), "plugins", []string{"install", pdir}, nil); err != nil {
+	if _, err := c.Execute(t.Context(), "plugins", []string{"install", pdir}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// The plugin's agent is live immediately.
@@ -96,19 +95,19 @@ func TestPluginsCommand(t *testing.T) {
 		t.Fatalf("plugin agent not live: %+v", defs)
 	}
 
-	res, err = c.Execute(context.Background(), "plugins", nil, nil)
+	res, err = c.Execute(t.Context(), "plugins", nil, nil)
 	if err != nil || !strings.Contains(res.Output, "acme") || !strings.Contains(res.Output, "1 agent") {
 		t.Fatalf("list after install = %q err=%v", res.Output, err)
 	}
 
-	if _, err := c.Execute(context.Background(), "plugins", []string{"rm", "acme"}, nil); err != nil {
+	if _, err := c.Execute(t.Context(), "plugins", []string{"rm", "acme"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	res, _ = c.Execute(context.Background(), "plugins", nil, nil)
+	res, _ = c.Execute(t.Context(), "plugins", nil, nil)
 	if !strings.Contains(res.Output, "no plugins installed") {
 		t.Fatalf("list after rm = %q", res.Output)
 	}
-	if _, err := c.Execute(context.Background(), "plugins", []string{"bogus"}, nil); err == nil {
+	if _, err := c.Execute(t.Context(), "plugins", []string{"bogus"}, nil); err == nil {
 		t.Fatal("unknown subcommand should fail")
 	}
 }
@@ -116,7 +115,7 @@ func TestPluginsCommand(t *testing.T) {
 func TestDoctorReportsChecks(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 	c.deps.SessionDir = filepath.Join(t.TempDir(), "sessions")
-	res, err := c.Execute(context.Background(), "doctor", nil, &Session{})
+	res, err := c.Execute(t.Context(), "doctor", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +134,7 @@ func TestDoctorWarnsWithoutDBAndMemory(t *testing.T) {
 	c.deps.SessionDir = filepath.Join(t.TempDir(), "sessions")
 	c.deps.Settings = nil
 	c.deps.Memory = nil
-	res, err := c.Execute(context.Background(), "doctor", nil, &Session{})
+	res, err := c.Execute(t.Context(), "doctor", nil, &Session{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +153,7 @@ func TestExportMarkdown(t *testing.T) {
 		messages.AI("hi yourself"),
 	}}
 	dir := t.TempDir()
-	res, err := c.Execute(context.Background(), "export", []string{filepath.Join(dir, "out.md")}, s)
+	res, err := c.Execute(t.Context(), "export", []string{filepath.Join(dir, "out.md")}, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +179,7 @@ func TestExportJSONResumable(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
 	s := &Session{History: []messages.Message{messages.Human("q"), messages.AI("a")}}
 	path := filepath.Join(t.TempDir(), "out.json")
-	if _, err := c.Execute(context.Background(), "export", []string{path}, s); err != nil {
+	if _, err := c.Execute(t.Context(), "export", []string{path}, s); err != nil {
 		t.Fatal(err)
 	}
 	st, err := session.LoadState(path)
@@ -194,7 +193,7 @@ func TestExportJSONResumable(t *testing.T) {
 
 func TestExportEmptyFails(t *testing.T) {
 	c, _, _ := newTestConsole(t, nil)
-	if _, err := c.Execute(context.Background(), "export", nil, &Session{}); err == nil {
+	if _, err := c.Execute(t.Context(), "export", nil, &Session{}); err == nil {
 		t.Fatal("exporting an empty conversation should fail")
 	}
 }
@@ -204,7 +203,7 @@ func TestRenameCreatesNamedSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	c.deps.SessionDir = dir
 	s := &Session{History: []messages.Message{messages.Human("one"), messages.AI("two")}}
-	res, err := c.Execute(context.Background(), "rename", []string{"My Session!"}, s)
+	res, err := c.Execute(t.Context(), "rename", []string{"My Session!"}, s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +216,7 @@ func TestRenameCreatesNamedSnapshot(t *testing.T) {
 	}
 	// Renaming again replaces the same file.
 	s.History = append(s.History, messages.Human("three"))
-	if _, err := c.Execute(context.Background(), "rename", []string{"My Session!"}, s); err != nil {
+	if _, err := c.Execute(t.Context(), "rename", []string{"My Session!"}, s); err != nil {
 		t.Fatal(err)
 	}
 	st, _ = session.LoadState(filepath.Join(dir, "My-Session.json"))
@@ -235,21 +234,21 @@ func TestAgentsManagement(t *testing.T) {
 	c.deps.AgentsDir = filepath.Join(t.TempDir(), "agents")
 
 	// Empty listing.
-	res, err := c.Execute(context.Background(), "agents", nil, nil)
+	res, err := c.Execute(t.Context(), "agents", nil, nil)
 	if err != nil || !strings.Contains(res.Output, "no subagent definitions") {
 		t.Fatalf("empty list = %q err=%v", res.Output, err)
 	}
 
 	// Create from template; the live agent has no definitions loaded yet
 	// (they load at startup), so simulate a restart by re-registering deps:
-	if _, err := c.Execute(context.Background(), "agents", []string{"new", "reviewer", "Reviews code"}, nil); err != nil {
+	if _, err := c.Execute(t.Context(), "agents", []string{"new", "reviewer", "Reviews code"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(c.deps.AgentsDir, "reviewer.md")); err != nil {
 		t.Fatal(err)
 	}
 	// Duplicate create fails.
-	if _, err := c.Execute(context.Background(), "agents", []string{"new", "reviewer"}, nil); err == nil {
+	if _, err := c.Execute(t.Context(), "agents", []string{"new", "reviewer"}, nil); err == nil {
 		t.Fatal("duplicate create should fail")
 	}
 
@@ -263,24 +262,24 @@ func TestAgentsManagement(t *testing.T) {
 	}
 	c.deps.Agent.SetAgentDefinitions(defs)
 
-	res, err = c.Execute(context.Background(), "agents", nil, nil)
+	res, err = c.Execute(t.Context(), "agents", nil, nil)
 	if err != nil || !strings.Contains(res.Output, "reviewer") || !strings.Contains(res.Output, "Reviews code") {
 		t.Fatalf("list = %q err=%v", res.Output, err)
 	}
-	res, err = c.Execute(context.Background(), "agents", []string{"show", "reviewer"}, nil)
+	res, err = c.Execute(t.Context(), "agents", []string{"show", "reviewer"}, nil)
 	if err != nil || !strings.Contains(res.Output, "You are the reviewer subagent") {
 		t.Fatalf("show = %q err=%v", res.Output, err)
 	}
-	if _, err := c.Execute(context.Background(), "agents", []string{"rm", "reviewer"}, nil); err != nil {
+	if _, err := c.Execute(t.Context(), "agents", []string{"rm", "reviewer"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(c.deps.AgentsDir, "reviewer.md")); !os.IsNotExist(err) {
 		t.Fatal("definition file not removed")
 	}
-	if _, err := c.Execute(context.Background(), "agents", []string{"show", "reviewer"}, nil); err == nil {
+	if _, err := c.Execute(t.Context(), "agents", []string{"show", "reviewer"}, nil); err == nil {
 		t.Fatal("show after rm should fail")
 	}
-	if _, err := c.Execute(context.Background(), "agents", []string{"bogus"}, nil); err == nil {
+	if _, err := c.Execute(t.Context(), "agents", []string{"bogus"}, nil); err == nil {
 		t.Fatal("unknown subcommand should fail")
 	}
 }

@@ -2,7 +2,6 @@ package blobstore
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -22,7 +21,7 @@ func newTestStore(t *testing.T) *Local {
 
 func TestPutGetRoundTrip(t *testing.T) {
 	s := newTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	key := "tenant1/session1/transcript.jsonl"
 	data := []byte("hello blob")
 	if err := s.Put(ctx, key, data); err != nil {
@@ -48,7 +47,7 @@ func TestPutGetRoundTrip(t *testing.T) {
 
 func TestNestedKeyCreatesParents(t *testing.T) {
 	s := newTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	key := "a/b/c/d.txt"
 	if err := s.Put(ctx, key, []byte("deep")); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -60,7 +59,7 @@ func TestNestedKeyCreatesParents(t *testing.T) {
 
 func TestGetNotFound(t *testing.T) {
 	s := newTestStore(t)
-	_, err := s.Get(context.Background(), "missing/key")
+	_, err := s.Get(t.Context(), "missing/key")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get err = %v, want ErrNotFound", err)
 	}
@@ -68,7 +67,7 @@ func TestGetNotFound(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	s := newTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := s.Put(ctx, "k", []byte("v")); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -82,14 +81,14 @@ func TestDelete(t *testing.T) {
 
 func TestDeleteNotFound(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.Delete(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
+	if err := s.Delete(t.Context(), "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Delete err = %v, want ErrNotFound", err)
 	}
 }
 
 func TestListPrefixAndSort(t *testing.T) {
 	s := newTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	keys := []string{
 		"t2/s1/b.txt",
 		"t1/s2/y.txt",
@@ -125,7 +124,7 @@ func TestListPrefixAndSort(t *testing.T) {
 
 func TestInvalidKeys(t *testing.T) {
 	s := newTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	bad := []string{"../x", "/abs", "a/../../b", "", ".", ".."}
 	for _, op := range []struct {
 		name string
@@ -149,14 +148,12 @@ func TestInvalidKeys(t *testing.T) {
 
 func TestConcurrentAccess(t *testing.T) {
 	s := newTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
+	for i := range 8 {
+		wg.Go(func() {
 			key := fmt.Sprintf("t/s%d/item.txt", i%3)
-			for j := 0; j < 20; j++ {
+			for range 20 {
 				if err := s.Put(ctx, key, []byte("v")); err != nil {
 					t.Errorf("Put: %v", err)
 					return
@@ -176,14 +173,14 @@ func TestConcurrentAccess(t *testing.T) {
 					return
 				}
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 }
 
 func TestListWalkError(t *testing.T) {
 	s := newTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if err := s.Put(ctx, "locked/file", []byte("x")); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +208,7 @@ func TestNewLocalInvalidRoot(t *testing.T) {
 
 func TestFilesystemErrors(t *testing.T) {
 	s := newTestStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// "a" is a regular file, so creating parent dirs for "a/b" fails.
 	if err := s.Put(ctx, "a", []byte("x")); err != nil {
 		t.Fatal(err)

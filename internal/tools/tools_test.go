@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,7 +17,7 @@ func TestFileAndSearchTools(t *testing.T) {
 		if !ok {
 			t.Fatalf("tool %q not registered", name)
 		}
-		res, err := tool.Invoke(context.Background(), args)
+		res, err := tool.Invoke(t.Context(), args)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -53,7 +52,7 @@ func TestFileAndSearchTools(t *testing.T) {
 func TestTodoWrite(t *testing.T) {
 	reg := NewRegistry(t.TempDir())
 	tool, _ := reg.Get("TodoWrite")
-	res, err := tool.Invoke(context.Background(), map[string]any{
+	res, err := tool.Invoke(t.Context(), map[string]any{
 		"todos": []map[string]any{{"content": "do it", "status": "in_progress"}},
 	})
 	if err != nil {

@@ -62,13 +62,11 @@ func TestTakeMemoryAttachmentsConcurrentRuns(t *testing.T) {
 	lead.mem.prefetch.injected = map[string]bool{"seed": true}
 	lead.mem.mu.Unlock()
 	const rounds = 100
-	for i := 0; i < rounds; i++ {
+	for i := range rounds {
 		var wg sync.WaitGroup
-		for g := 0; g < 2; g++ {
-			wg.Add(1)
-			go func(g int) {
-				defer wg.Done()
-				ctx := WithMemoryScope(context.Background())
+		for g := range 2 {
+			wg.Go(func() {
+				ctx := WithMemoryScope(t.Context())
 				scope := memoryScopeFrom(ctx)
 				scope.mu.Lock()
 				scope.engineHits = []memory.Hit{{
@@ -81,7 +79,7 @@ func TestTakeMemoryAttachmentsConcurrentRuns(t *testing.T) {
 				if len(got) != 1 || !strings.Contains(got[0].Content, fmt.Sprintf("own-hit-run-%d", g)) {
 					t.Errorf("round %d run %d got %+v, want its own hit only", i, g, got)
 				}
-			}(g)
+			})
 		}
 		wg.Wait()
 	}
@@ -95,14 +93,14 @@ func TestSetModeConcurrentReaders(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 500; i++ {
+		for range 500 {
 			lead.SetMode(config.ModeAcceptEdits)
 			lead.SetMode(config.ModeBypass)
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 500; i++ {
+		for range 500 {
 			_ = lead.Mode()
 		}
 	}()
@@ -143,13 +141,13 @@ func TestRefreshToolsConcurrentReaders(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 200; i++ {
-			a.RefreshToolsNow(context.Background())
+		for range 200 {
+			a.RefreshToolsNow(t.Context())
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 200; i++ {
+		for range 200 {
 			_ = a.ToolNames()
 		}
 	}()
@@ -163,23 +161,22 @@ func TestClaimNextConcurrentAllClaimed(t *testing.T) {
 	lead, _ := newTeamLead(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
 	team := lead.ensureTeam()
 	const n = 8
-	for i := 0; i < n; i++ {
+	for i := range n {
 		team.list.Create(fmt.Sprintf("task %d", i), "", "")
 	}
 	var mu sync.Mutex
 	claimed := map[string]string{} // task ID -> owner
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(owner string) {
-			defer wg.Done()
+	for i := range n {
+		wg.Go(func() {
+			owner := fmt.Sprintf("mate-%d", i)
 			rec, ok := team.claimNext(owner)
 			if ok {
 				mu.Lock()
 				claimed[rec.ID] = owner
 				mu.Unlock()
 			}
-		}(fmt.Sprintf("mate-%d", i))
+		})
 	}
 	wg.Wait()
 	if len(claimed) != n {
@@ -222,18 +219,16 @@ func TestTeamStatusConcurrentUpdates(t *testing.T) {
 	team.mu.Unlock()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 500; i++ {
+	wg.Go(func() {
+		for i := range 500 {
 			team.mu.Lock()
 			m.status = teammateWorking
 			m.note = fmt.Sprintf("note %d", i)
 			m.turns = i
 			team.mu.Unlock()
 		}
-	}()
-	for i := 0; i < 500; i++ {
+	})
+	for range 500 {
 		_ = team.Status()
 	}
 	wg.Wait()
@@ -245,13 +240,13 @@ func TestTeamStatusConcurrentUpdates(t *testing.T) {
 func TestTeamSpawnStopConcurrent(t *testing.T) {
 	lead, _ := newTeamLead(t, teammateModelScript())
 	team := lead.ensureTeam()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			name := fmt.Sprintf("mate-%d", i)
 			if err := team.Spawn(ctx, name, "You do things.", nil); err != nil {
 				return // later iterations may race a duplicate; fine
@@ -260,7 +255,7 @@ func TestTeamSpawnStopConcurrent(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			_ = team.Stop(fmt.Sprintf("mate-%d", i), "")
 			_ = team.Status()
 		}
@@ -301,7 +296,7 @@ func TestAbandonGoalRunReleasesStuckRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	s1, err := lead.GoalStream(ctx, nil)
 	if err != nil {
 		t.Fatal(err)

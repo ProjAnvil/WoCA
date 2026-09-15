@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
@@ -55,7 +54,7 @@ func TestFetchHTTPBlocksSSRFBeforeNetwork(t *testing.T) {
 		"http://[::1]/",
 		"http://169.254.169.254/",
 	} {
-		_, err := fetchHTTP(context.Background(), rawurl)
+		_, err := fetchHTTP(t.Context(), rawurl)
 		if err == nil {
 			t.Fatalf("fetchHTTP(%q) = nil error, want blocked", rawurl)
 		}

@@ -66,12 +66,12 @@ func TestBuildOptionsConfiguresWindowAndLifecycle(t *testing.T) {
 	if opts.OnStartup == nil || opts.OnShutdown == nil {
 		t.Fatal("lifecycle callbacks not wired")
 	}
-	startupCtx := context.WithValue(context.Background(), "source", "test")
+	startupCtx := context.WithValue(t.Context(), "source", "test")
 	opts.OnStartup(startupCtx)
 	if app.ctx != startupCtx {
 		t.Fatal("OnStartup did not store the Wails context")
 	}
-	opts.OnShutdown(context.Background())
+	opts.OnShutdown(t.Context())
 	if !closed {
 		t.Fatal("OnShutdown did not close application resources")
 	}
