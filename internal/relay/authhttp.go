@@ -24,6 +24,9 @@ type AuthService struct {
 	limiter     *RateLimiter
 	behindProxy bool
 	log         zerolog.Logger
+	// Audit receives login success/failure events (design §5.4); nil is
+	// quiet (tests, skeleton).
+	Audit *AuditLog
 }
 
 // NewAuthService builds the auth surface; behindProxy is the explicit
@@ -66,6 +69,9 @@ func (a *AuthService) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		a.log.Warn().Str("ip", ip).Msg("relay: login failed")
+		if a.Audit != nil {
+			a.Audit.Event(AuditLoginFailed, "", ip)
+		}
 		WriteError(w, http.StatusUnauthorized, CodeUnauthorized, "invalid key")
 		return
 	}
@@ -73,6 +79,9 @@ func (a *AuthService) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		WriteError(w, http.StatusInternalServerError, CodeUnauthorized, "session unavailable")
 		return
+	}
+	if a.Audit != nil {
+		a.Audit.Event(AuditLoginOK, key.Name, ip)
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,

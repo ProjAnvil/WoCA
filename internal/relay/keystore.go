@@ -292,3 +292,30 @@ func (s *KeyStore) RevokeKey(ctx context.Context, name string) (Key, bool, error
 func (s *KeyStore) TouchKey(ctx context.Context, id int64) {
 	_, _ = s.db.ExecContext(ctx, `UPDATE keys SET last_used_at = ? WHERE id = ?`, time.Now().UTC(), id)
 }
+
+// ListRevokedKeys returns every revoked key (the revocation sweeper).
+func (s *KeyStore) ListRevokedKeys(ctx context.Context) ([]Key, error) {
+	rows, err := s.db.QueryContext(ctx, keySelect+` WHERE revoked_at IS NOT NULL ORDER BY revoked_at`)
+	if err != nil {
+		return nil, fmt.Errorf("relay: list revoked keys: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Key
+	for rows.Next() {
+		k, err := scanKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// KeyByID loads one key row by id (audit name resolution).
+func (s *KeyStore) KeyByID(ctx context.Context, id int64) (Key, error) {
+	k, err := scanKey(s.db.QueryRowContext(ctx, keySelect+` WHERE id = ?`, id))
+	if err != nil {
+		return Key{}, fmt.Errorf("relay: key %d: %w", id, err)
+	}
+	return k, nil
+}

@@ -43,6 +43,15 @@ func newServeCmd(dbPath *string) *cobra.Command {
 			}
 			rl := relay.NewRelay(keys, webdist.DistFS(), behindProxy, log)
 
+			// Revocation plane (design §5): the audit trail plus the sweep
+			// that turns CLI-issued revokes into the live cascade.
+			auditLog, err := relay.NewAuditLog(*dbPath + ".audit.log")
+			if err != nil {
+				return err
+			}
+			defer func() { _ = auditLog.Close() }()
+			revoker := rl.AttachRevocation(auditLog)
+
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
 				return fmt.Errorf("listen %s: %w", addr, err)
@@ -73,6 +82,7 @@ func newServeCmd(dbPath *string) *cobra.Command {
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			go revoker.Watch(ctx, time.Second)
 			fmt.Fprintf(os.Stderr, "woca-relay: %s://%s\n", scheme, ln.Addr())
 			return router.Serve(ctx, ln)
 		},

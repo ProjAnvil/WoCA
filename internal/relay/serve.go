@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"net"
@@ -78,6 +79,27 @@ func (rl *Relay) route(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rl.spa.ServeHTTP(w, r)
+}
+
+// AttachRevocation wires the revocation cascade + audit trail (design
+// §5): it returns the Revoker the serve command sweeps on an interval so
+// CLI-issued revokes take effect in the running relay, and hooks bridge
+// up/down plus login events into the audit log.
+func (rl *Relay) AttachRevocation(audit *AuditLog) *Revoker {
+	rl.audit = audit
+	rl.auth.Audit = audit
+	rl.tunnel.OnBridgeChange = func(keyID int64, up bool) {
+		name := ""
+		if k, err := rl.keys.KeyByID(context.Background(), keyID); err == nil {
+			name = k.Name
+		}
+		kind := AuditBridgeUp
+		if !up {
+			kind = AuditBridgeDown
+		}
+		audit.Event(kind, name, "")
+	}
+	return NewRevoker(rl.keys, rl.gens, rl.park, audit)
 }
 
 // CheckBind enforces the design §7.2 fail-closed red line: a public bind

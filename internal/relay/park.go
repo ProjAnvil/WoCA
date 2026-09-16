@@ -230,10 +230,17 @@ func (q *ParkingQueue) FailAll(keyID int64, err error) {
 		case item.result <- parkResult{err: err}:
 		default:
 		}
+		// Release the bridge's respond handler BEFORE closing the streamed
+		// body. streamDone lets HandleRespond return, and net/http's
+		// finishRequest then abortPendingRead — forcing the parked client's
+		// in-flight body Read (which holds http.body's internal mutex) to
+		// error out. Closing the body first deadlocks on that mutex: the
+		// Read holds it while blocked on the bridge's socket, which only
+		// the abort unsticks (Task 6 cascade verification).
+		item.closeStream()
 		if item.resp != nil && item.resp.Body != nil {
 			_ = item.resp.Body.Close()
 		}
-		item.closeStream()
 	}
 }
 

@@ -155,6 +155,16 @@ func (t *TunnelService) HandlePoll(w http.ResponseWriter, r *http.Request) {
 // otherwise), headers arrive base64-JSON in X-Woca-Relay-Headers with
 // hop-by-hop filtering, and the body streams to the parked client.
 func (t *TunnelService) HandleRespond(w http.ResponseWriter, r *http.Request) {
+	// The streamed body is consumed by the PARKED CLIENT's handler, not
+	// this one. Full-duplex tells net/http not to touch the request body
+	// when finalizing this response: without it, a revocation that
+	// releases this handler mid-stream deadlocks finishRequest on the
+	// body mutex (an in-flight Read by the parked client's streamChunks
+	// holds it while blocked on the bridge's socket), and the abort that
+	// unsticks that Read never runs. With it, handler return →
+	// abortPendingRead → the Read errors out and the client side injects
+	// the auth_revoked frame immediately (Task 6 cascade).
+	_ = http.NewResponseController(w).EnableFullDuplex()
 	key, ok := t.authenticate(w, r)
 	if !ok {
 		return
