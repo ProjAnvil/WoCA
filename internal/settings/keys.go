@@ -59,6 +59,7 @@ const (
 	KeyMsgPlaneSubject       = "msg-plane-subject"
 	KeyModelWhitelist        = "model-whitelist"
 	KeyOutputStyle           = "output-style"
+	KeyRelayURL              = "relay-url"
 )
 
 // DefaultMsgPlaneSubject is the default run-dispatch notification subject.
@@ -415,6 +416,11 @@ func Apply(cfg *Settings, key, value string) error {
 		cfg.MemoryPGDB = value
 	case KeyMemoryPGUser:
 		cfg.MemoryPGUser = value
+	case KeyRelayURL:
+		if value != "" && !strings.Contains(value, "://") {
+			return fmt.Errorf("relay-url must be scheme://host, got %q", value)
+		}
+		cfg.RelayURL = value
 	default:
 		return fmt.Errorf("unknown settings key %q", key)
 	}
@@ -563,6 +569,8 @@ func KeyValue(cfg Settings, key string) string {
 		return cfg.MemoryPGDB
 	case KeyMemoryPGUser:
 		return cfg.MemoryPGUser
+	case KeyRelayURL:
+		return cfg.RelayURL
 	}
 	return ""
 }

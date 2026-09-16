@@ -76,6 +76,7 @@ const (
 	SecretLadyMAPIPassword     = "ladym_api_password"
 	SecretCheckpointPGPassword = "checkpoint_pg_password"
 	SecretMemoryPGPassword     = "memory_pg_password"
+	SecretRelayKey             = "relay_key"
 )
 
 // Settings is the persisted configuration. Secrets (API keys, the postgres
@@ -115,6 +116,10 @@ type Settings struct {
 	// model ids; empty means unrestricted). Managed-only: the bridge
 	// validates model choices against it (product design §3.1).
 	ModelWhitelist string `json:"model_whitelist"`
+	// RelayURL is the personal remote relay base URL persisted by
+	// `woca relay connect` (the key lives in the secrets table under
+	// SecretRelayKey). Empty = local-only.
+	RelayURL string `json:"relay_url"`
 	// Message plane (run dispatch): "pg" (default) keeps the PG queue
 	// alone; "pg+nats" adds NATS dispatch notifications on top. Live
 	// reload — resolved per operation by internal/ee/msgplane.
@@ -437,6 +442,9 @@ func applyPairs(out *Settings, pairs map[string]string) {
 	if v, ok := pairs["model_whitelist"]; ok {
 		out.ModelWhitelist = v
 	}
+	if v, ok := pairs["relay_url"]; ok {
+		out.RelayURL = v
+	}
 	if v, ok := pairs["checkpoint_pg_host"]; ok {
 		out.CheckpointPGHost = v
 	}
@@ -544,6 +552,7 @@ func (s *Store) Save(cfg Settings) error {
 		field{"msg_plane_nats_url", cfg.MsgPlaneNATSURL},
 		field{"msg_plane_subject", orDefaultStr(cfg.MsgPlaneSubject, DefaultMsgPlaneSubject)},
 		field{"model_whitelist", cfg.ModelWhitelist},
+		field{"relay_url", cfg.RelayURL},
 		field{"checkpoint_pg_host", cfg.CheckpointPGHost},
 		field{"checkpoint_pg_port", orDefaultStr(cfg.CheckpointPGPort, "5432")},
 		field{"checkpoint_pg_db", orDefaultStr(cfg.CheckpointPGDB, "woca")},

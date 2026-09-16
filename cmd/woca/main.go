@@ -43,8 +43,10 @@ import (
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/mcp"
 	"github.com/projanvil/woca/internal/oauth"
+	"github.com/projanvil/woca/internal/platform/authn"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/plugins"
+	"github.com/projanvil/woca/internal/relayclient"
 	"github.com/projanvil/woca/internal/repl"
 	"github.com/projanvil/woca/internal/runner"
 	"github.com/projanvil/woca/internal/sdkout"
@@ -120,7 +122,26 @@ func newRootCmd() *cobra.Command {
 
 	// The personal edition ships the chat UI with its serve path; headless
 	// API roles inject a nil Static instead (servefront.Edition.Static).
-	root.AddCommand(servefront.NewServeCmdWithEdition(opts, servefront.Edition{Static: webdist.DistFS()}))
+	// The personal remote relay (design 2026-09-17-personal-relay): the
+	// tunnel executes against the fully-built server handler — the same
+	// code path as local web traffic — and starts with the serve context
+	// when a relay is configured (settings or WOCA_RELAY_URL/KEY).
+	relaySvc := relayclient.NewService()
+	root.AddCommand(servefront.NewServeCmdWithEdition(opts, servefront.Edition{
+		Static:  webdist.DistFS(),
+		Handler: relaySvc.SetHandler,
+		// Local status surface (design §3.2): loopback-trust local
+		// posture — these routes mount with the server's extras.
+		Routes: func(mux *http.ServeMux, _ authn.Provider) {
+			mux.Handle("GET /api/relay/status", relaySvc.StatusHandler())
+			mux.Handle("POST /api/relay/disconnect", relaySvc.DisconnectHandler())
+		},
+		OnSettings: relaySvc.SetSettings,
+		Start: func(ctx context.Context, _ servefront.Observability, st *settings.Store, log zerolog.Logger) {
+			relaySvc.Run(ctx, st, log)
+		},
+	}))
+	root.AddCommand(newRelayCmd(relaySvc))
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newPluginCmd())
 	root.AddCommand(newMcpAuthCmd())
@@ -323,6 +344,153 @@ func newConfigCmd() *cobra.Command {
 	}
 	cmd.AddCommand(setCmd)
 	return cmd
+}
+
+// newRelayCmd builds `woca relay connect|status|disconnect` (design §3.2):
+// connect persists the relay coordinates (key encrypted via the settings
+// secrets mechanism), serve picks them up automatically; status reads the
+// local status API; disconnect stops the live tunnel and clears the
+// configuration.
+func newRelayCmd(svc *relayclient.Service) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "relay",
+		Short: "Manage the personal remote relay (connect | status | disconnect)",
+	}
+	// Same --db/WOCA_DB pattern as `woca config` (parsed at Execute time).
+	open := func(cmd *cobra.Command) (*settings.Store, error) {
+		dbTarget, _ := cmd.Flags().GetString("db")
+		if dbTarget == "" {
+			dbTarget = os.Getenv("WOCA_DB")
+		}
+		st, err := settings.Open(dbTarget)
+		if err != nil {
+			return nil, err
+		}
+		if st == nil {
+			return nil, fmt.Errorf("settings database disabled (--db none)")
+		}
+		return st, nil
+	}
+	serverFlag := func(sub *cobra.Command) {
+		sub.Flags().String("server", "http://"+webgui.DefaultAddr, "local woca serve base URL for live status/disconnect")
+	}
+
+	connect := &cobra.Command{
+		Use:   "connect",
+		Short: "Connect this machine's woca to a woca-relay (persists --url and --key)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			url, _ := cmd.Flags().GetString("url")
+			key, _ := cmd.Flags().GetString("key")
+			if url == "" || key == "" {
+				return fmt.Errorf("relay connect requires --url and --key")
+			}
+			if !strings.HasPrefix(key, relayclient.KeyPrefix) {
+				return fmt.Errorf("relay keys start with %q", relayclient.KeyPrefix)
+			}
+			st, err := open(cmd)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+			if err := relayclient.SaveConfig(st, url, key); err != nil {
+				return err
+			}
+			fmt.Println("relay configured — `woca serve` connects automatically (restart a running serve)")
+			return nil
+		},
+	}
+	connect.Flags().String("url", os.Getenv(relayclient.EnvRelayURL), "relay base URL, e.g. https://relay.example.com (env WOCA_RELAY_URL)")
+	connect.Flags().String("key", os.Getenv(relayclient.EnvRelayKey), "wcr_ rendezvous key (env WOCA_RELAY_KEY)")
+	cmd.AddCommand(connect)
+
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Show the relay tunnel status (live when serve is running)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			addr, _ := cmd.Flags().GetString("server")
+			if live, err := fetchRelayStatus(addr); err == nil {
+				printRelayStatus(live)
+				return nil
+			}
+			// Serve is not running (or older): fall back to the persisted
+			// configuration so the answer is still useful.
+			st, err := open(cmd)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+			svc.SetSettings(st)
+			printRelayStatus(svc.Status())
+			return nil
+		},
+	}
+	serverFlag(status)
+	cmd.AddCommand(status)
+
+	disconnect := &cobra.Command{
+		Use:   "disconnect",
+		Short: "Stop the relay tunnel and clear the persisted configuration",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			st, err := open(cmd)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = st.Close() }()
+			if err := relayclient.ClearConfig(st); err != nil {
+				return err
+			}
+			// Best effort: stop the live tunnel too (serve may not run).
+			addr, _ := cmd.Flags().GetString("server")
+			req, err := http.NewRequest(http.MethodPost, addr+"/api/relay/disconnect", nil)
+			if err == nil {
+				if resp, err := http.DefaultClient.Do(req); err == nil {
+					_ = resp.Body.Close()
+				}
+			}
+			fmt.Println("relay disconnected")
+			return nil
+		},
+	}
+	serverFlag(disconnect)
+	cmd.AddCommand(disconnect)
+	return cmd
+}
+
+// fetchRelayStatus reads the live status from a running local serve.
+func fetchRelayStatus(server string) (relayclient.Status, error) {
+	var st relayclient.Status
+	resp, err := http.Get(server + "/api/relay/status")
+	if err != nil {
+		return st, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return st, fmt.Errorf("status API: HTTP %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		return st, err
+	}
+	return st, nil
+}
+
+// printRelayStatus renders the status for terminals.
+func printRelayStatus(st relayclient.Status) {
+	fmt.Printf("configured: %v\n", st.Configured)
+	if st.KeyPrefix != "" {
+		fmt.Printf("key_prefix: %s\n", st.KeyPrefix)
+	}
+	fmt.Printf("connected: %v\n", st.Connected)
+	if st.Generation != "" {
+		fmt.Printf("generation: %s\n", st.Generation)
+	}
+	fmt.Printf("revoked: %v\n", st.Revoked)
+	if st.LastError != "" {
+		fmt.Printf("last_error: %s\n", st.LastError)
+	}
+	fmt.Printf("served: %d\n", st.Served)
 }
 
 // login runs the OAuth device flow and saves the token.
