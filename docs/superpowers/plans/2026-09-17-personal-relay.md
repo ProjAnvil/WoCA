@@ -29,6 +29,20 @@
 - Hop-by-hop headers stripped on respond: `Connection` (plus its named tokens), `Keep-Alive`, `Transfer-Encoding`, `TE`, `Trailer`, `Upgrade`; `X-Accel-Buffering: no` set on event-stream responses.
 - `Cookie`/`Authorization` stripped before parking; all `X-Woca-*` headers stripped before bridge execution; `X-Woca-Relay-Remote: 1` injected by the bridge process only.
 
+## Assumptions / Deviations
+
+Places where this plan resolves a spec ambiguity or deliberately deviates from a literal spec reading. Each is also marked at the point of implementation.
+
+1. **CLI revoke is cross-process; "instant" means ≤ 1 s.** `woca-relay key revoke` is a separate OS process from `woca-relay serve`, so it cannot cancel in-memory polls directly. The CLI writes `revoked_at` in sqlite; the serve process runs `Revoker.Watch` on a 1 s interval, observes the row, and runs the live cascade (Task 6). In-process (API-driven, future) revokes cascade in the same call. "立即" in spec §5 therefore reads as: immediate within the relay process, ≤ 1 s for CLI-issued revokes.
+2. **Post-revoke session handling: tombstone, not delete (deviation from spec §5.2's "删除").** The cascade deliberately does NOT call `DeleteSessionsForKey`. Deleting the rows would make post-revoke requests resolve to `ErrSessionUnknown` → 401 `{"code":"unauthorized"}`, indistinguishable from logged-out — and the SPA's revoked notice (WocaApp.vue:137) only fires on code `"revoked"`. Tombstoned rows can never authenticate: `ResolveSession`'s keys join returns `ErrKeyRevoked` before any expiry check, so every post-revoke request (cookie or Bearer) determinably gets 401 `{"code":"revoked"}`. Expired tombstones are lazily purged by `ResolveSession`'s existing delete-on-expiry path; `DeleteSessionsForKey` remains as store API for maintenance (see Task 2 comment and Task 6 `Revoker.Revoke`).
+3. **`woca-relay key list` "bridge online" is derived cross-process.** The generation registry is in-memory in the serve process, so the CLI cannot read it. Tunnel poll/respond stamp `keys.last_used_at` (`TouchKey`); the CLI renders "online" when `last_used_at` is within the 45 s lease window (`GenerationStaleAfter`). Tunnel auth is the only `TouchKey` caller, so the semantics stay "bridge activity", not client activity.
+4. **`user_id` = first 8 hex chars of the stored SHA-256 key hash** (spec §3.3's "哈希前 8 位"), computed as `Key.UserID()` / in `ResolveSession` — stable, and derived from the hash rather than the raw key.
+5. **e2e uses `GET /api/events` instead of launching a real run.** A run needs a configured model provider, which loopback CI does not have; the e2e script still exercises create key → connect → login → tunneled API → SSE headers (`Content-Type`, `X-Accel-Buffering`, hop-by-hop filtering) → revoke → both-side errors. Frame-level SSE fidelity through the tunnel (chunk immediacy, heartbeat, content-type survival) is covered by `TestTunnelSSE` (Task 5) and `TestFullChain` (Task 7).
+6. **`expires_at` is Unix milliseconds** in the login body (edgegw precedent, edgegw/auth.go's `time.UnixMilli(out.ExpiresAt)`; `web/src/api/bridge.ts:9` types it as a plain number).
+7. **Task 3's skeleton test assertion changes in Task 5 (404 → 401).** In the skeleton, `GET /api/models` 404s through `webfx.SPA`; once Task 5 attaches the tunnel plane, every `/api/` path is session-gated first, so the same request returns 401. Task 5 carries this as its own discrete edit block (Step 4, edit (b)).
+8. **`internal/relayclient/integration_test.go` imports `internal/relay` — test-only.** `go list -deps ./cmd/woca` excludes other packages' test imports, so the personal dependency baseline is unaffected; Task 9 verifies this with `make check-deps` and the `comm -13` zero-new-third-party check.
+9. **Spec §6.5/§9 "停放中 relay 重启 → client 请求 504" is reinterpreted.** A dead relay process cannot answer 504 to anyone — when the relay restarts, parked client requests see a connection reset/close, not an HTTP status. The SPA's existing reconnect/resync path (SSE Last-Event-ID, sse.go:45-59) and request retry behavior cover the client side; the bridge side behaves exactly as specified (respond POST failure → `CloseWithError` unsticks the handler goroutine; poll reconnects with a new generation). No relay-side compensation is implemented for the 504 row, and none is possible.
+
 ## File Structure
 
 ### New files
@@ -87,7 +101,7 @@
 | `Makefile:105-112` | Extend `deps-baseline` + `check-deps` for `./cmd/woca-relay` (Task 9) |
 | `Makefile:372` | `check-editions` scan: add `./cmd/woca-relay` (Task 9) |
 | `Makefile` (end, after :378) | `e2e-relay` target (Task 9) |
-| `internal/relay/keystore.go` | Task 5 adds `Revoked`; Task 6 adds `ListRevokedKeys` + `KeyByID` |
+| `internal/relay/keystore.go` | Task 6 adds `ListRevokedKeys` + `KeyByID` |
 | `internal/relay/serve.go` | Task 5 attaches tunnel plane + forwarding route; Task 6 adds `AttachRevocation` |
 | `internal/relay/authhttp.go` | Task 6 adds `Audit` field + login audit events |
 | `cmd/woca-relay/main.go` | Task 3 registers `serve` subcommand |
@@ -899,8 +913,8 @@ func TestSessionDeleteAndRevokeDelete(t *testing.T) {
 		t.Fatalf("deleted session: %v, want ErrSessionUnknown", err)
 	}
 
-	// Revocation deletes every derived session — cookie and native Bearer
-	// share this table (design §5.2).
+	// DeleteSessionsForKey (maintenance/logout-everywhere API — NOT the
+	// revocation path, which tombstones; Task 6) clears the whole key.
 	t1, _, err := ks.CreateSession(ctx, k.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -1243,8 +1257,12 @@ func (s *KeyStore) DeleteSession(ctx context.Context, token string) error {
 	return err
 }
 
-// DeleteSessionsForKey removes every session derived from keyID
-// (revocation, design §5.2).
+// DeleteSessionsForKey removes every session derived from keyID. Kept
+// as store API for maintenance paths (e.g. an operator-initiated
+// logout-everywhere); the revocation cascade deliberately does NOT call
+// it — revocation tombstones sessions so ResolveSession's keys join can
+// still answer ErrKeyRevoked (code "revoked") instead of the
+// indistinguishable-from-logged-out ErrSessionUnknown (Task 6).
 func (s *KeyStore) DeleteSessionsForKey(ctx context.Context, keyID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE key_id = ?`, keyID)
 	return err
@@ -2670,7 +2688,6 @@ git commit -m "relay: parking queue and generation lease registry"
 - Create: internal/relay/tunnel.go
 - Create: internal/relay/forward.go
 - Modify: internal/relay/serve.go (attach the tunnel plane in `NewRelay`; register tunnel routes in `Handler`; extend `route` with session-gated forwarding)
-- Modify: internal/relay/keystore.go (append `Revoked` method)
 - Test: internal/relay/tunnel_test.go
 
 **Interfaces:**
@@ -2682,7 +2699,6 @@ git commit -m "relay: parking queue and generation lease registry"
   - `func StripHopByHop(h http.Header)`, `func decodeHeaders(raw string) (http.Header, error)`
   - `type pollPayload struct { ID, Method, Path, Query, Client string; Headers map[string][]string; Body string }` (test-shared with Task 6)
   - `func (rl *Relay) forward(w, r, sess Session)`
-  - `func (s *KeyStore) Revoked(ctx, keyID int64) bool`
   - Test helpers (same package): `newTestRelay(t) *testRelay`, `(*testRelay).login(t) *http.Client`, `(*testRelay).pollOnce(t, gen, wait) (*http.Response, pollPayload)`, `(*testRelay).respond(t, gen, id, status, headers, body) *http.Response`, `sessionTokenOf(t, tr) string`
 
 - [ ] **Step 1: Write the failing tests**
@@ -3463,13 +3479,17 @@ func (rl *Relay) forward(w http.ResponseWriter, r *http.Request, sess Session) {
 	stopWatch := context.AfterFunc(r.Context(), func() { _ = resp.Body.Close() })
 	defer stopWatch()
 	_ = streamChunks(w, flusher, resp.Body)
-	// Revocation mid-stream: inject the error event before closing
-	// (design §5.2 — the SPA's streaming layer surfaces the revoked
-	// code). failCause is deterministic; read-error flavor is not.
+	// Revocation mid-stream: inject the revocation event before closing
+	// (design §5.2). The frame MUST use the SPA's own vocabulary —
+	// `event: auth_revoked` with {"code":"revoked"} — which is exactly
+	// what web/src/api/streaming.ts:151-159 switches on (constant
+	// EventAuthRevoked, internal/server/ssevents.go:23); any other event
+	// name and the revoked notice never fires. failCause is
+	// deterministic; read-error flavor is not.
 	select {
 	case cause := <-failed:
 		if eventStream && errors.Is(cause, ErrRevoked) {
-			_, _ = fmt.Fprint(w, "event: error\ndata: {\"code\":\"revoked\"}\n\n")
+			_, _ = fmt.Fprint(w, "event: auth_revoked\ndata: {\"code\":\"revoked\"}\n\n")
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -3573,35 +3593,52 @@ func (rl *Relay) route(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-Modify `internal/relay/keystore.go` — append:
+- [ ] **Step 4: Run tests, apply the skeleton-gate test edit, re-run**
 
-```go
-// Revoked reports whether keyID is currently revoked (the forwarding
-// plane's post-stream check).
-func (s *KeyStore) Revoked(ctx context.Context, keyID int64) bool {
-	var revokedAt sql.NullTime
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT revoked_at FROM keys WHERE id = ?`, keyID).Scan(&revokedAt); err != nil {
-		return false
-	}
-	return revokedAt.Valid
-}
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
+(a) First run — one expected failure:
 
 ```sh
 cd /Users/yuhaochen/Documents/codebase/projanvil/woca
 go test ./internal/relay/ -count=1
 ```
 
-Expected: `ok  	github.com/projanvil/woca/internal/relay` — all tests PASS, including `TestTunnelSSE` (chunk immediacy < 200ms) and `TestRelaySkeletonSurface` (whose `/api/models` assertion now returns **404 → 401** change: re-check — with the tunnel attached, `/api/models` is gated by session → **401**, so update that assertion in `serve_test.go` from `http.StatusNotFound` to `http.StatusUnauthorized` and rename the comment to "session gate: /api/ demands a session once the tunnel plane is attached"). Run once, apply that one-line test edit, re-run: PASS.
+Expected: every test passes EXCEPT `TestRelaySkeletonSurface` (Task 3), which now fails at its `/api/models` assertion — with the tunnel plane attached, that path is session-gated and returns 401 instead of the skeleton's SPA-miss 404.
+
+(b) Discrete edit in `internal/relay/serve_test.go` (inside `TestRelaySkeletonSurface`): replace
+
+```go
+	// An /api/ miss is a 404, never the app shell (webfx.SPA semantics —
+	// exactly what the relay wants).
+	if code, _, _ := get("/api/models"); code != http.StatusNotFound {
+		t.Fatalf("anonymous /api/models: %d, want 404 in the skeleton", code)
+	}
+```
+
+with
+
+```go
+	// The tunnel plane gates every /api/ path behind a session (design
+	// §7.2 — the whitelist is exactly SPA assets + /api/health +
+	// /api/auth/login).
+	if code, _, body := get("/api/models"); code != http.StatusUnauthorized ||
+		!strings.Contains(body, `"code":"unauthorized"`) {
+		t.Fatalf("anonymous /api/models: %d %s, want 401 with the session gate attached", code, body)
+	}
+```
+
+(c) Re-run:
+
+```sh
+go test ./internal/relay/ -count=1
+```
+
+Expected: `ok  	github.com/projanvil/woca/internal/relay` — all tests PASS, including `TestTunnelSSE` (chunk immediacy < 200ms, `auth_revoked` injection is Task 6) and the updated `TestRelaySkeletonSurface`.
 
 - [ ] **Step 5: Commit**
 
 ```sh
 cd /Users/yuhaochen/Documents/codebase/projanvil/woca
-git add internal/relay/tunnel.go internal/relay/forward.go internal/relay/serve.go internal/relay/keystore.go internal/relay/tunnel_test.go internal/relay/serve_test.go
+git add internal/relay/tunnel.go internal/relay/forward.go internal/relay/serve.go internal/relay/tunnel_test.go internal/relay/serve_test.go
 git commit -m "relay: tunnel endpoints and client request forwarding"
 ```
 
@@ -3619,7 +3656,7 @@ git commit -m "relay: tunnel endpoints and client request forwarding"
 - Test: internal/relay/revoke_test.go
 
 **Interfaces:**
-- Consumes: everything from Tasks 1-5, notably `KeyStore.RevokeKey` (T1), `DeleteSessionsForKey` (T2), `ParkingQueue.FailAll`, `GenerationRegistry.CancelPolls/Drop`, `ErrRevoked` (T4), `testRelay` helpers (T5), `TunnelService.OnBridgeChange` (T5).
+- Consumes: everything from Tasks 1-5, notably `KeyStore.RevokeKey` (T1), `ResolveSession`'s revoked-via-join behavior (T2 — the tombstone mechanism; `DeleteSessionsForKey` stays as API for maintenance but is deliberately NOT used by the cascade), `ParkingQueue.FailAll`, `GenerationRegistry.CancelPolls/Drop`, `ErrRevoked` (T4), `testRelay` helpers (T5), `TunnelService.OnBridgeChange` (T5).
 - Produces:
   - `const AuditLoginFailed = "login_failed"`, `AuditLoginOK = "login_ok"`, `AuditRevocation = "revocation"`, `AuditBridgeUp = "bridge_up"`, `AuditBridgeDown = "bridge_down"`
   - `func NewAuditLog(path string) (*AuditLog, error)`, `func (a *AuditLog) Event(kind, keyName, detail string)`, `func (a *AuditLog) Close() error`
@@ -3718,11 +3755,15 @@ func TestRevocationCascade(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("in-flight poll not woken by revocation")
 	}
-	// 2. The live SSE got the injected error event, then closed (the
-	// SPA's streaming layer surfaces code revoked).
+	// 2. The live SSE got the injected revocation event, then closed:
+	// the frame must be `event: auth_revoked` with {"code":"revoked"} —
+	// exactly what web/src/api/streaming.ts:151-159 switches on.
 	tail, err := io.ReadAll(sseResp.Body)
-	if err != nil || !strings.Contains(string(tail), `"code":"revoked"`) {
-		t.Fatalf("SSE tail: %q err=%v (revoked event must be injected)", tail, err)
+	if err != nil {
+		t.Fatalf("SSE tail read: %v", err)
+	}
+	if !strings.Contains(string(tail), "event: auth_revoked\ndata: {\"code\":\"revoked\"}") {
+		t.Fatalf("SSE tail: %q (auth_revoked frame must be injected)", tail)
 	}
 	// 3. The bridge's respond handler unblocked (no goroutine leak).
 	select {
@@ -3730,14 +3771,19 @@ func TestRevocationCascade(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("respond handler still blocked after revoke")
 	}
-	// 4. Sessions are gone: the client hits the login gate.
+	// 4. The revoked session now resolves to ErrKeyRevoked through the
+	// keys join (tombstoning — the session row stays so the code is
+	// determinable): 401 with the frontend-contract code, cookie and
+	// Bearer alike.
 	resp, err := client.Get(tr.srv.URL + "/api/sessions")
 	if err != nil {
 		t.Fatal(err)
 	}
+	body, _ := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("post-revoke API: %d, want 401", resp.StatusCode)
+	if resp.StatusCode != http.StatusUnauthorized ||
+		!strings.Contains(string(body), `"code":"revoked"`) {
+		t.Fatalf("post-revoke API: %d %s, want 401 + code revoked", resp.StatusCode, body)
 	}
 	// 5. New polls get 410 with the frontend contract code.
 	resp, _ = tr.pollOnce(t, "gen-2", 10*time.Millisecond)
@@ -3923,8 +3969,9 @@ import (
 )
 
 // Revoker performs the revocation cascade (design §5): wake in-flight
-// polls (instant 410), drop the generation lease, delete the key's
-// sessions (cookie and native Bearer share the table), drain parked
+// polls (instant 410), drop the generation lease, TOMBSTONE the key's
+// sessions (see Revoke below — rows stay so post-revoke requests resolve
+// to code "revoked", the SPA's revoked-notice contract), drain parked
 // requests with an error, and audit the event. It also sweeps the key
 // table so a revoke issued by a separate `woca-relay key revoke` process
 // takes effect in the running relay within the sweep interval.
@@ -3957,10 +4004,24 @@ func (rv *Revoker) Revoke(ctx context.Context, k Key) {
 	// §5.1), then the lease drops so no generation resurrects.
 	rv.gens.CancelPolls(k.ID, ErrRevoked)
 	rv.gens.Drop(k.ID)
-	// Client side: every derived session dies (design §5.2).
-	_ = rv.keys.DeleteSessionsForKey(ctx, k.ID)
+	// Client side: sessions are TOMBSTONED, not deleted (design §5.2's
+	// "delete" is about denying access, not about erasing rows):
+	// ResolveSession's keys join already returns ErrKeyRevoked before any
+	// expiry check, so every subsequent request with a revoked session —
+	// cookie or Bearer — determinably resolves to 401 {"code":"revoked"}
+	// and the SPA's revoked notice fires (WocaApp.vue:137). Deleting the
+	// rows would make those requests indistinguishable from logged-out
+	// (401 "unauthorized") and the notice would never fire.
+	//
+	// Tombstoned rows are inert and bounded: they can never authenticate,
+	// and ResolveSession already deletes any session row it finds expired
+	// (the 7d sliding / 30d absolute check runs for live keys). A lazy
+	// purge of expired tombstones rides the same path — a revoked key's
+	// session rows disappear on their last expiry touch or can be reaped
+	// by a future `DELETE FROM sessions WHERE touched_at < ?` maintenance
+	// sweep; neither is required for correctness.
 	// Parked but unpicked requests release with an error (design §5.3);
-	// in-flight streams get the fail cause (the SSE error injection).
+	// in-flight streams get the fail cause (the auth_revoked injection).
 	rv.park.FailAll(k.ID, ErrRevoked)
 	rv.audit.Event(AuditRevocation, k.Name, "key revoked")
 }
@@ -4360,11 +4421,14 @@ import (
 func testLogger() zerolog.Logger { return zerolog.Nop() }
 
 // fakeRelay is the scriptable relay double: polls answer from scripted
-// state, responds are captured for assertions.
+// state, responds are captured for assertions, and a hijack-close mode
+// simulates real transport failures (connection reset mid-poll).
 type fakeRelay struct {
 	t     *testing.T
 	srv   *httptest.Server
 	polls atomic.Int64
+
+	hijackClose atomic.Bool
 
 	mu       sync.Mutex
 	payload  *pollPayload
@@ -4386,6 +4450,24 @@ func newFakeRelay(t *testing.T) *fakeRelay {
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/tunnel/poll":
+			if f.hijackClose.Load() {
+				// Kill the TCP connection without any HTTP response:
+				// hc.Do sees a genuine transport error (unexpected EOF),
+				// which is what regeneration keys off — an answered HTTP
+				// 5xx deliberately does NOT rotate the generation (the
+				// relay is alive and still holds this generation's 45s
+				// lease; a fresh one would 409-collide with it).
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					http.Error(w, "hijack unsupported", http.StatusInternalServerError)
+					return
+				}
+				conn, _, err := hj.Hijack()
+				if err == nil {
+					_ = conn.Close()
+				}
+				return
+			}
 			f.polls.Add(1)
 			f.mu.Lock()
 			code := f.pollCode
@@ -4438,6 +4520,11 @@ func (f *fakeRelay) setPollCode(code int) {
 	f.mu.Lock()
 	f.pollCode = code
 	f.mu.Unlock()
+}
+
+// setHijackClose toggles the transport-failure simulation.
+func (f *fakeRelay) setHijackClose(on bool) {
+	f.hijackClose.Store(on)
 }
 
 func (f *fakeRelay) respondCount() int {
@@ -4566,13 +4653,44 @@ func TestClientTerminalOnUnauthorized(t *testing.T) {
 
 func TestClientReconnectsWithNewGeneration(t *testing.T) {
 	relay := newFakeRelay(t)
-	relay.setPollCode(http.StatusInternalServerError)
+	// Regeneration is triggered by a REAL transport failure (connection
+	// reset mid-poll), never by an answered HTTP 5xx: an answered 5xx
+	// means the relay is alive and still holds this generation's 45s
+	// lease, so rotating there would 409-collide the fresh generation
+	// with the bridge's own leased one — up to 45s dark (design §6.2's
+	// first-come-first-served rule). The implementation regenerates only
+	// on hc.Do errors; this test therefore uses the hijack-close mode.
+	relay.setHijackClose(true)
 	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler(), Workers: 1}, testLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go c.Run(ctx)
 	first := c.generation()
 	waitFor(t, "generation rotation", func() bool { return c.generation() != first })
+	// Once the transport heals, the SAME (rotated) generation resumes
+	// polling — retry, not terminal.
+	relay.setHijackClose(false)
+	waitFor(t, "recovery polls", func() bool { return relay.polls.Load() > 0 })
+	if st := c.Status(); st.Revoked {
+		t.Fatal("transport failure is retryable, not terminal")
+	}
+}
+
+func TestClient5xxKeepsGeneration(t *testing.T) {
+	relay := newFakeRelay(t)
+	// An answered HTTP 500 is a plain retry: the relay is alive and holds
+	// the lease — the generation must NOT rotate (it would 409-collide
+	// with the bridge's own live generation for up to 45s).
+	relay.setPollCode(http.StatusInternalServerError)
+	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler(), Workers: 1}, testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go c.Run(ctx)
+	first := c.generation()
+	waitFor(t, "retry polls", func() bool { return relay.polls.Load() >= 2 })
+	if got := c.generation(); got != first {
+		t.Fatalf("generation rotated on HTTP 5xx (%s → %s); rotation is transport-error-only", first, got)
+	}
 	if st := c.Status(); st.Revoked {
 		t.Fatal("5xx is retryable, not terminal")
 	}
@@ -5041,8 +5159,13 @@ type Client struct {
 	termCancel context.CancelFunc
 }
 
-// New builds the tunnel client.
+// New builds the tunnel client. The relay URL is normalized by trimming
+// trailing slashes: endpoints are joined as URL+"/tunnel/poll", and a
+// stored "https://relay.example.com/" would otherwise produce
+// "//tunnel/poll" — which net/http ServeMux answers with a 301 redirect
+// that breaks POST /tunnel/respond (a redirected POST re-issues as GET).
 func New(cfg Config, log zerolog.Logger) *Client {
+	cfg.URL = strings.TrimRight(cfg.URL, "/")
 	hc := cfg.HTTPClient
 	if hc == nil {
 		transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -5483,6 +5606,26 @@ func TestResolveNilStore(t *testing.T) {
 		t.Fatalf("nil store: %q / %q", url, key)
 	}
 }
+
+func TestTrailingSlashCanonicalized(t *testing.T) {
+	st := openTestSettings(t)
+	// A trailing slash must never persist: endpoints join as
+	// URL+"/tunnel/poll" and "//tunnel/poll" breaks POST respond through
+	// ServeMux redirects.
+	if err := SaveConfig(st, "https://relay.example.com/", "wcr_secret"); err != nil {
+		t.Fatal(err)
+	}
+	url, _ := ResolveConfig(st)
+	if url != "https://relay.example.com" {
+		t.Fatalf("stored url %q, want canonical no-trailing-slash form", url)
+	}
+	// The env path is canonicalized too.
+	t.Setenv(EnvRelayURL, "https://env.example.com//")
+	url, _ = ResolveConfig(st)
+	if url != "https://env.example.com" {
+		t.Fatalf("env url %q, want canonical form", url)
+	}
+}
 ```
 
 Write `internal/relayclient/service_test.go`:
@@ -5591,6 +5734,7 @@ package relayclient
 
 import (
 	"os"
+	"strings"
 
 	"github.com/projanvil/woca/internal/settings"
 )
@@ -5621,11 +5765,16 @@ func ResolveConfig(st *settings.Store) (url, key string) {
 	if key == "" {
 		key = st.GetSecret(settings.SecretRelayKey)
 	}
-	return url, key
+	// Canonical form: no trailing slashes (endpoints join as
+	// URL+"/tunnel/poll"; a double slash breaks POST respond through
+	// ServeMux redirects).
+	return strings.TrimRight(url, "/"), key
 }
 
 // SaveConfig persists the relay configuration (`woca relay connect`).
+// The URL is stored canonicalized (trailing slashes trimmed).
 func SaveConfig(st *settings.Store, url, key string) error {
+	url = strings.TrimRight(url, "/")
 	cfg := st.Load()
 	if err := settings.Apply(&cfg, settings.KeyRelayURL, url); err != nil {
 		return err
@@ -6083,9 +6232,18 @@ git commit -m "relayclient: woca relay CLI, local status API, serve lifecycle wi
 **Files:**
 - Create: native-client/internal/transport/relaycred.go
 - Create: native-client/internal/transport/relaycred_test.go
+- Create: native-client/internal/transport/relaylogin.go
+- Create: native-client/internal/transport/relaylogin_test.go
 - Create: native-client/internal/configstore/relaytoken_test.go
+- Create: native-client/internal/bridge/relayconnect_test.go
 - Modify: native-client/internal/configstore/store.go:176-214 (add `SetProfileRelayToken`/`ProfileRelayToken`/`profileRelayTokenKey` after `profileBridgeKey`)
 - Modify: native-client/internal/configstore/store.go:298-324 (`DeleteProfile`: also delete the relay-token preference row)
+- Modify: native-client/internal/bridge/service.go:67-78 (`nativeStore`: add the two relay-token methods)
+- Modify: native-client/internal/bridge/service.go:97-126 (`Service`: `relayLogin` field + `WithRelayLogin` option)
+- Modify: native-client/internal/bridge/service.go:128-153 (`Bootstrap`: stored relay token re-opens the app)
+- Modify: native-client/internal/bridge/service.go (append `ConnectRelay` after `ConnectLoopback`, :197-218)
+- Modify: native-client/app.go:130-144 (append `ConnectRelay` binding after `Connect`)
+- Modify: native-client/main.go:93-97 (wire `WithRelayLogin` over `pinnedClient`)
 - Modify: native-client/main.go:156-170 (credentials chain: relay profile branch)
 - Modify: Makefile:1 (`.PHONY`: add `build-relay e2e-relay`)
 - Modify: Makefile:31-33 (add `build-relay` target after `build`)
@@ -6096,13 +6254,19 @@ git commit -m "relayclient: woca relay CLI, local status API, serve lifecycle wi
 - Create: ci/deps-relay.txt (generated)
 - Create: ci/e2e-relay.sh
 - Test: native-client/internal/transport/relaycred_test.go
+- Test: native-client/internal/transport/relaylogin_test.go
 - Test: native-client/internal/configstore/relaytoken_test.go
+- Test: native-client/internal/bridge/relayconnect_test.go
 
 **Interfaces:**
-- Consumes: `transport.CredentialProvider` interface + `transport.Credentials{Scheme, Session, Proof}` (native-client/internal/transport/handler.go:23-31 — the Director sets `Authorization: <Scheme> <Session>` at :154-156), `configstore.NormalizeBaseURL` (store.go:935), the `preferences` table + `SetProfileBridge`/`ProfileBridge`/`profileBridgeKey` pattern (store.go:176-214), `configstore.Profile` (store.go:23-28), the production credentials closure (native-client/main.go:156-170); Makefile `SERVER_ARTIFACTS` (:271 — `woca-relay` must NOT join it), `check-editions` (:365-378), `deps-baseline`/`check-deps` (:105-112).
+- Consumes: `transport.CredentialProvider` interface + `transport.Credentials{Scheme, Session, Proof}` (native-client/internal/transport/handler.go:23-31 — the Director sets `Authorization: <Scheme> <Session>` at :154-156), `configstore.NormalizeBaseURL` (store.go:935), the `preferences` table + `SetProfileBridge`/`ProfileBridge`/`profileBridgeKey` pattern (store.go:176-214), `configstore.Profile` (store.go:23-28), `bridge.Service` + `ConnectionInput` + `BootstrapState`/`StateReady`/`StateAuthorizationNeeded` + `ConnectLoopback` pattern (internal/bridge/service.go:43-49,155-218), `bridge.NewService`/`ServiceOption` (service.go:109-126), `App.Connect` binding pattern (app.go:130-144), `openTestStore(t)` test helper (internal/bridge/service_test.go:381), the `pinnedClient` assembly (native-client/main.go:91-97), the production credentials closure (native-client/main.go:156-170); Makefile `SERVER_ARTIFACTS` (:271 — `woca-relay` must NOT join it), `check-editions` (:365-378), `deps-baseline`/`check-deps` (:105-112).
 - Produces:
   - `type transport.StaticBearer struct{ Token string }` implementing `CredentialProvider`
+  - `type transport.RelaySession struct { Token string; ExpiresAt int64 }`, `type transport.RelayLoginError struct { Status int; Code string }`
+  - `func transport.RelayLogin(ctx, client *http.Client, baseURL, apiKey string) (RelaySession, error)`
   - `func (s *Store) SetProfileRelayToken(ctx, rawURL, token string) error`, `func (s *Store) ProfileRelayToken(ctx, rawURL string) string`
+  - `func (s *Service) ConnectRelay(ctx, input ConnectionInput) (BootstrapState, error)`, `func WithRelayLogin(fn) ServiceOption`
+  - `func (a *App) ConnectRelay(input bridge.ConnectionInput) (bridge.BootstrapState, error)` (Wails binding)
   - Make targets: `build-relay`, `e2e-relay`; baseline `ci/deps-relay.txt`; gates cover `./cmd/woca-relay`
 
 - [ ] **Step 1: Write the failing tests**
@@ -6194,15 +6358,158 @@ func TestProfileRelayTokenRoundTrip(t *testing.T) {
 }
 ```
 
+Write `native-client/internal/transport/relaylogin_test.go`:
+
+```go
+package transport
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestRelayLoginSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/auth/login" || r.Method != http.MethodPost {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		var req struct {
+			APIKey string `json:"api_key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.APIKey != "wcr_test" {
+			t.Errorf("login body: api_key=%q err=%v", req.APIKey, err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": "sess-1", "expires_at": 1700000000000})
+	}))
+	t.Cleanup(srv.Close)
+	// A trailing slash on the profile URL must not break the join.
+	sess, err := RelayLogin(context.Background(), srv.Client(), srv.URL+"/", "wcr_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Token != "sess-1" || sess.ExpiresAt != 1700000000000 {
+		t.Fatalf("session: %+v", sess)
+	}
+}
+
+func TestRelayLoginRevoked(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code":"revoked","error":"key revoked"}`))
+	}))
+	t.Cleanup(srv.Close)
+	_, err := RelayLogin(context.Background(), srv.Client(), srv.URL, "wcr_dead")
+	var lerr *RelayLoginError
+	if !errors.As(err, &lerr) {
+		t.Fatalf("err %v, want *RelayLoginError", err)
+	}
+	if lerr.Code != "revoked" || lerr.Status != http.StatusUnauthorized {
+		t.Fatalf("login error: %+v", lerr)
+	}
+}
+
+func TestRelayLoginUnreachable(t *testing.T) {
+	// A transport failure is a plain error, never a RelayLoginError (the
+	// UI must not show "key revoked" for an offline relay).
+	_, err := RelayLogin(context.Background(), http.DefaultClient, "http://127.0.0.1:1", "wcr_x")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	var lerr *RelayLoginError
+	if errors.As(err, &lerr) {
+		t.Fatalf("transport failure misclassified as RelayLoginError: %v", err)
+	}
+}
+```
+
+Write `native-client/internal/bridge/relayconnect_test.go`:
+
+```go
+package bridge
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/projanvil/woca/native-client/internal/transport"
+)
+
+func TestConnectRelayStoresToken(t *testing.T) {
+	st := openTestStore(t)
+	svc := NewService(st, nil, WithRelayLogin(func(_ context.Context, baseURL, apiKey string) (transport.RelaySession, error) {
+		if baseURL != "https://relay.example.com" || apiKey != "wcr_key" {
+			t.Errorf("login args: %q %q", baseURL, apiKey)
+		}
+		return transport.RelaySession{Token: "sess-1", ExpiresAt: 1700000000000}, nil
+	}))
+	state, err := svc.ConnectRelay(t.Context(), ConnectionInput{ServerURL: "https://relay.example.com", APIKey: "wcr_key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != StateReady || state.ServerURL != "https://relay.example.com" {
+		t.Fatalf("state: %+v", state)
+	}
+	if got := st.ProfileRelayToken(t.Context(), "https://relay.example.com"); got != "sess-1" {
+		t.Fatalf("stored token: %q", got)
+	}
+	// The stored token re-opens the app after a restart (Bootstrap).
+	restarted := NewService(st, nil)
+	boot, err := restarted.Bootstrap(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if boot.State != StateReady {
+		t.Fatalf("bootstrap after restart: %+v, want StateReady", boot)
+	}
+}
+
+func TestConnectRelayFailureKeepsProfileUnauthorized(t *testing.T) {
+	st := openTestStore(t)
+	svc := NewService(st, nil, WithRelayLogin(func(context.Context, string, string) (transport.RelaySession, error) {
+		return transport.RelaySession{}, &transport.RelayLoginError{Status: 401, Code: "revoked"}
+	}))
+	state, err := svc.ConnectRelay(t.Context(), ConnectionInput{ServerURL: "https://relay.example.com", APIKey: "wcr_dead"})
+	if err == nil {
+		t.Fatal("revoked key accepted")
+	}
+	var lerr *transport.RelayLoginError
+	if !errors.As(err, &lerr) || lerr.Code != "revoked" {
+		t.Fatalf("err %v, want RelayLoginError with code revoked", err)
+	}
+	if state.State != StateAuthorizationNeeded {
+		t.Fatalf("state: %+v, want StateAuthorizationNeeded", state)
+	}
+	if got := st.ProfileRelayToken(t.Context(), "https://relay.example.com"); got != "" {
+		t.Fatalf("token stored on failed login: %q", got)
+	}
+}
+
+func TestConnectRelayRequiresKey(t *testing.T) {
+	st := openTestStore(t)
+	svc := NewService(st, nil)
+	if _, err := svc.ConnectRelay(t.Context(), ConnectionInput{ServerURL: "https://relay.example.com"}); err == nil {
+		t.Fatal("empty key accepted")
+	}
+}
+```
+
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```sh
 cd /Users/yuhaochen/Documents/codebase/projanvil/woca/native-client
-go test ./internal/transport/ -run TestStaticBearer -count=1
+go test ./internal/transport/ -run 'TestStaticBearer|TestRelayLogin' -count=1
 go test ./internal/configstore/ -run TestProfileRelayToken -count=1
+go test ./internal/bridge/ -run TestConnectRelay -count=1
 ```
 
-Expected failure: `undefined: StaticBearer` and `s.SetProfileRelayToken undefined (type *Store has no field or method SetProfileRelayToken)`.
+Expected failure: `undefined: StaticBearer`, `undefined: RelayLogin`, `undefined: RelayLoginError`, `s.SetProfileRelayToken undefined (type *Store has no field or method SetProfileRelayToken)`, `undefined: WithRelayLogin`, `svc.ConnectRelay undefined (type *Service has no field or method ConnectRelay)`.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -6292,7 +6599,227 @@ In `DeleteProfile` (:298-324), inside the transaction after the existing bridge-
 	}
 ```
 
-(c) Modify `native-client/main.go` — in the credentials closure (:156-170), insert the relay branch between the loopback check and the `bridgeKeys` check:
+(c) Write `native-client/internal/transport/relaylogin.go`:
+
+```go
+package transport
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+)
+
+// RelaySession is the relay login's body-token contract (design §3.3:
+// the login response carries the opaque session token the native client
+// stores via SetProfileRelayToken and later presents as a StaticBearer
+// credential).
+type RelaySession struct {
+	Token     string
+	ExpiresAt int64
+}
+
+// RelayLoginError carries the relay's enumerated failure code ("revoked"
+// is the frontend contract — the connect page surfaces it distinctly).
+type RelayLoginError struct {
+	Status int
+	Code   string
+}
+
+func (e *RelayLoginError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("relay login failed (HTTP %d): %s", e.Status, e.Code)
+	}
+	return fmt.Sprintf("relay login failed (HTTP %d)", e.Status)
+}
+
+// RelayLogin performs POST /api/auth/login against a woca-relay with the
+// wcr_ key and returns the body token. Transport failures are plain
+// errors; HTTP failures decode the relay's {"code": ...} envelope into
+// *RelayLoginError.
+func RelayLogin(ctx context.Context, client *http.Client, baseURL, apiKey string) (RelaySession, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	// Canonical join: a trailing-slash profile URL must never produce
+	// "//api/auth/login" (ServeMux 301s would re-issue the POST as GET).
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/auth/login"
+	body, err := json.Marshal(map[string]string{"api_key": apiKey})
+	if err != nil {
+		return RelaySession{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return RelaySession{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return RelaySession{}, fmt.Errorf("relay login: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		var envelope struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 8<<10)).Decode(&envelope)
+		return RelaySession{}, &RelayLoginError{Status: resp.StatusCode, Code: envelope.Code}
+	}
+	var out struct {
+		Token     string `json:"token"`
+		ExpiresAt int64  `json:"expires_at"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<10)).Decode(&out); err != nil {
+		return RelaySession{}, fmt.Errorf("relay login: decode: %w", err)
+	}
+	if out.Token == "" {
+		return RelaySession{}, fmt.Errorf("relay login: empty session token")
+	}
+	return RelaySession{Token: out.Token, ExpiresAt: out.ExpiresAt}, nil
+}
+```
+
+(d) Modify `native-client/internal/bridge/service.go`:
+
+In the `nativeStore` interface (:67-78), add:
+
+```go
+	SetProfileRelayToken(context.Context, string, string) error
+	ProfileRelayToken(context.Context, string) string
+```
+
+In the `Service` struct (:97-107), add the field:
+
+```go
+	// relayLogin performs the relay's POST /api/auth/login; injectable
+	// for tests and for the TOFU-pinned client (WithRelayLogin).
+	relayLogin func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error)
+```
+
+In `NewService` (:109-118), set the default and keep the option loop:
+
+```go
+func NewService(store nativeStore, activator auth.Activator, opts ...ServiceOption) *Service {
+	if activator == nil {
+		activator = auth.UnavailableActivator{}
+	}
+	s := &Service{
+		store:     store,
+		activator: activator,
+		now:       time.Now,
+		relayLogin: func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error) {
+			return transport.RelayLogin(ctx, nil, baseURL, apiKey)
+		},
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+```
+
+After `WithSessionVault` (:123-126), add:
+
+```go
+// WithRelayLogin overrides the relay login call — production wires the
+// TOFU-pinned client; tests inject a stub.
+func WithRelayLogin(fn func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error)) ServiceOption {
+	return func(s *Service) { s.relayLogin = fn }
+}
+```
+
+In `Bootstrap` (:128-153), after the vault re-open block, add:
+
+```go
+	// A stored relay session token re-opens the app: relay sessions live
+	// server-side (7d sliding + 30d absolute, same table as web
+	// sessions); the local copy is a plain preference row mirroring it.
+	if s.store.ProfileRelayToken(ctx, profile.BaseURL) != "" {
+		s.markReady(profile.BaseURL)
+		state.State = StateReady
+		return state, nil
+	}
+```
+
+Append after `ConnectLoopback` (:197-218):
+
+```go
+// ConnectRelay adopts a personal woca-relay profile (design §3.3): the
+// wcr_ key logs in at the relay's /api/auth/login, and the response's
+// body token is stored via SetProfileRelayToken — that token is what the
+// transport's StaticBearer then presents on every request. The key
+// itself is cleared from the input copy and never persisted.
+func (s *Service) ConnectRelay(ctx context.Context, input ConnectionInput) (BootstrapState, error) {
+	defer func() { input.APIKey = "" }()
+
+	if strings.TrimSpace(input.APIKey) == "" {
+		return BootstrapState{}, errors.New("relay key is required")
+	}
+	if s.store == nil {
+		return BootstrapState{}, errors.New("connection profile store is required")
+	}
+
+	// A newly selected URL must not inherit readiness from the prior profile.
+	s.clearReady()
+	profile, err := s.store.SaveProfile(ctx, input.ServerURL)
+	if err != nil {
+		return BootstrapState{}, err
+	}
+	// Relay profiles are their own target — no edge bridge routing.
+	if err := s.store.SetProfileBridge(ctx, input.ServerURL, ""); err != nil {
+		return BootstrapState{}, err
+	}
+	session, err := s.relayLogin(ctx, profile.BaseURL, input.APIKey)
+	if err != nil {
+		return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, err
+	}
+	if err := s.store.SetProfileRelayToken(ctx, profile.BaseURL, session.Token); err != nil {
+		return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, err
+	}
+	s.markReady(profile.BaseURL)
+	return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
+}
+```
+
+(`service.go` gains an import of `github.com/projanvil/woca/native-client/internal/transport`; all bridge tests use the real `configstore.Store` via `openTestStore`, which satisfies the extended interface — no test doubles to update.)
+
+(e) Modify `native-client/app.go` — append after `Connect` (:130-144):
+
+```go
+// ConnectRelay is the connection-page relay entry: ServerURL is the
+// woca-relay base URL, APIKey the wcr_ rendezvous key. Unlike Connect,
+// the key is never pushed into the bridge credential vault — the stored
+// relay session token (SetProfileRelayToken) is the only credential.
+func (a *App) ConnectRelay(input bridge.ConnectionInput) (bridge.BootstrapState, error) {
+	if a.bridge == nil {
+		return bridge.BootstrapState{}, errors.New("native bridge is required")
+	}
+	return a.bridge.ConnectRelay(a.context(), input)
+}
+```
+
+(f) Modify `native-client/main.go`:
+
+In the `bridge.NewService` assembly (:93-97), add the pinned relay login:
+
+```go
+	service := bridge.NewService(
+		store,
+		auth.NewHTTPActivator(pinnedClient, material),
+		bridge.WithSessionVault(vault),
+		// Relay logins ride the same TOFU-pinned client as every other
+		// remote credential exchange.
+		bridge.WithRelayLogin(func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error) {
+			return transport.RelayLogin(ctx, pinnedClient, baseURL, apiKey)
+		}),
+	)
+```
+
+And in the credentials closure (:156-170), insert the relay branch between the loopback check and the `bridgeKeys` check:
 
 ```go
 	credentials, err := configureCredentials(context.Background(), service, developmentURL, func() transport.CredentialProvider {
@@ -6320,7 +6847,7 @@ In `DeleteProfile` (:298-324), inside the transaction after the existing bridge-
 	})
 ```
 
-(d) Modify `Makefile`:
+(g) Modify `Makefile`:
 
 Line 1 `.PHONY` — append ` build-relay e2e-relay` to the list.
 
@@ -6380,7 +6907,7 @@ e2e-relay:
 	ci/e2e-relay.sh
 ```
 
-(e) Generate `ci/deps-relay.txt`:
+(h) Generate `ci/deps-relay.txt`:
 
 ```sh
 cd /Users/yuhaochen/Documents/codebase/projanvil/woca
@@ -6395,7 +6922,7 @@ comm -13 <(sort -u ci/deps-personal.txt) <(sort -u ci/deps-relay.txt)
 
 Expected: empty output (no relay dependency outside the personal baseline).
 
-(f) Write `ci/e2e-relay.sh`:
+(i) Write `ci/e2e-relay.sh`:
 
 ```bash
 #!/usr/bin/env bash
@@ -6503,8 +7030,8 @@ Expected, in order:
 
 ```sh
 cd /Users/yuhaochen/Documents/codebase/projanvil/woca
-git add native-client/internal/transport/relaycred.go native-client/internal/transport/relaycred_test.go native-client/internal/configstore/relaytoken_test.go native-client/internal/configstore/store.go native-client/main.go Makefile ci/deps-relay.txt ci/e2e-relay.sh ci/deps-personal.txt
-git commit -m "relay: native relay profile, build/CI gates, loopback e2e"
+git add native-client/internal/transport/relaycred.go native-client/internal/transport/relaycred_test.go native-client/internal/transport/relaylogin.go native-client/internal/transport/relaylogin_test.go native-client/internal/configstore/relaytoken_test.go native-client/internal/configstore/store.go native-client/internal/bridge/service.go native-client/internal/bridge/relayconnect_test.go native-client/app.go native-client/main.go Makefile ci/deps-relay.txt ci/e2e-relay.sh ci/deps-personal.txt
+git commit -m "relay: native relay profile + login, build/CI gates, loopback e2e"
 ```
 
 ---
