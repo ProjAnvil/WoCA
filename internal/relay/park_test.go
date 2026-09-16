@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 )
@@ -126,6 +127,100 @@ func TestTakeTimeout(t *testing.T) {
 	}
 	if time.Since(start) < 40*time.Millisecond {
 		t.Fatal("take returned before the wait window")
+	}
+}
+
+// TestDoneFailAllConcurrentNoDoubleClose fires the revocation-during-stream
+// race: a client's done() and a FailAll drain closing the same item's
+// streamDone concurrently must not panic with "close of closed channel"
+// (a panic in any goroutine crashes the test binary).
+func TestDoneFailAllConcurrentNoDoubleClose(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		q := NewParkingQueue(ParkCapacity)
+		ctx := context.Background()
+		parked := make(chan func(), 1)
+		go func() {
+			_, done, _, err := q.Park(ctx, 7, testRequest("r1"))
+			if err != nil {
+				parked <- nil
+				return
+			}
+			parked <- done
+		}()
+		if _, err := q.Take(ctx, 7, "gen-a", time.Second); err != nil {
+			t.Fatal(err)
+		}
+		streamDone, err := q.Complete(7, "gen-a", "r1", &ParkedResponse{Status: http.StatusOK})
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := <-parked
+		if done == nil {
+			t.Fatal("park failed")
+		}
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func() { defer wg.Done(); done() }()
+		}
+		for g := 0; g < 2; g++ {
+			wg.Add(1)
+			go func() { defer wg.Done(); q.FailAll(7, ErrRevoked) }()
+		}
+		wg.Wait()
+		select {
+		case <-streamDone:
+		default:
+			t.Fatal("streamDone not closed after done + FailAll")
+		}
+	}
+}
+
+// TestCompleteDuplicateIsNoOp covers a bridge responding more than once to
+// the same id: duplicates must be no-ops (nil error, the first respond
+// wins) instead of sending into the full result channel while holding the
+// queue mutex — which would freeze every Park/Take/Len.
+func TestCompleteDuplicateIsNoOp(t *testing.T) {
+	q := NewParkingQueue(ParkCapacity)
+	ctx := context.Background()
+	got := make(chan *ParkedResponse, 1)
+	go func() {
+		resp, _, _, err := q.Park(ctx, 7, testRequest("r1"))
+		if err != nil {
+			return
+		}
+		got <- resp
+	}()
+	if _, err := q.Take(ctx, 7, "gen-a", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	first := &ParkedResponse{Status: http.StatusOK}
+	if _, err := q.Complete(7, "gen-a", "r1", first); err != nil {
+		t.Fatal(err)
+	}
+	// The client consumed the first respond, so nothing ever receives from
+	// the item's result channel again. Duplicate responds must be no-ops
+	// (nil error, first wins) — on the unfixed code the first duplicate
+	// refills the result channel and the second blocks on it while holding
+	// the queue mutex, freezing every Park/Take/Len.
+	if resp := <-got; resp != first {
+		t.Fatalf("client received %+v, want the first respond to win", resp)
+	}
+	second := &ParkedResponse{Status: http.StatusTeapot}
+	for i := 0; i < 2; i++ {
+		blocked := make(chan error, 1)
+		go func() {
+			_, err := q.Complete(7, "gen-a", "r1", second)
+			blocked <- err
+		}()
+		select {
+		case err := <-blocked:
+			if err != nil {
+				t.Fatalf("duplicate complete #%d: %v, want nil (no-op)", i+1, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("duplicate complete #%d blocked on the full result channel (queue mutex frozen)", i+1)
+		}
 	}
 }
 

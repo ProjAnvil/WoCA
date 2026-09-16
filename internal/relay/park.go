@@ -59,10 +59,20 @@ type parkedItem struct {
 	result     chan parkResult
 	failCause  chan error // buffered 1: revocation cause for the stream consumer
 	streamDone chan struct{}
+	// closeOnce makes every streamDone close idempotent: done() and FailAll
+	// can race (revocation during streaming), and a check-then-close would
+	// panic with "close of closed channel".
+	closeOnce  sync.Once
 	inFlight   bool
 	generation string
 	voided     bool
+	completed  bool // set under q.mu: duplicate Complete is a no-op
 	resp       *ParkedResponse
+}
+
+// closeStream closes streamDone exactly once, whoever calls it.
+func (it *parkedItem) closeStream() {
+	it.closeOnce.Do(func() { close(it.streamDone) })
 }
 
 // ParkingQueue holds per-key parked client requests (design §6.2): a
@@ -109,18 +119,11 @@ func (q *ParkingQueue) Park(ctx context.Context, keyID int64, req ParkedRequest)
 	q.broadcastLocked()
 	q.mu.Unlock()
 
-	closeStream := func() {
-		select {
-		case <-item.streamDone:
-		default:
-			close(item.streamDone)
-		}
-	}
 	done := func() {
 		q.mu.Lock()
 		q.removeLocked(keyID, item)
 		q.mu.Unlock()
-		closeStream()
+		item.closeStream()
 	}
 
 	select {
@@ -141,7 +144,7 @@ func (q *ParkingQueue) Park(ctx context.Context, keyID int64, req ParkedRequest)
 			q.removeLocked(keyID, item)
 			q.mu.Unlock()
 		}
-		closeStream()
+		item.closeStream()
 		return nil, nil, nil, ctx.Err()
 	}
 }
@@ -193,6 +196,14 @@ func (q *ParkingQueue) Complete(keyID int64, generation, id string, resp *Parked
 			q.removeLocked(keyID, item)
 			return nil, ErrClientGone
 		}
+		if item.completed {
+			// Duplicate respond for an already-completed id (bridge retry):
+			// no-op — the first respond wins. Without this guard the send
+			// below blocks on the full result channel while holding q.mu,
+			// freezing every Park/Take/Len.
+			return item.streamDone, nil
+		}
+		item.completed = true
 		item.resp = resp
 		item.result <- parkResult{resp: resp}
 		return item.streamDone, nil
@@ -222,11 +233,7 @@ func (q *ParkingQueue) FailAll(keyID int64, err error) {
 		if item.resp != nil && item.resp.Body != nil {
 			_ = item.resp.Body.Close()
 		}
-		select {
-		case <-item.streamDone:
-		default:
-			close(item.streamDone)
-		}
+		item.closeStream()
 	}
 }
 
