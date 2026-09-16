@@ -256,6 +256,21 @@ func (s *Store) ProfileRelayToken(ctx context.Context, rawURL string) string {
 	return value
 }
 
+// DeleteProfileRelayToken removes the profile's relay session token row —
+// the standalone delete used by Logout and by the direct-bridge connect
+// paths (DeleteProfile already removes the row inside its transaction).
+// Deleting an unset row is a no-op.
+func (s *Store) DeleteProfileRelayToken(ctx context.Context, rawURL string) error {
+	baseURL, err := NormalizeBaseURL(rawURL)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM preferences WHERE key = ?`, profileRelayTokenKey(baseURL)); err != nil {
+		return fmt.Errorf("delete profile relay token: %w", err)
+	}
+	return nil
+}
+
 func profileRelayTokenKey(baseURL string) string {
 	return "connection.relay-token." + baseURL
 }

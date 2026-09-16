@@ -45,3 +45,27 @@ func TestProfileRelayTokenRoundTrip(t *testing.T) {
 		t.Fatalf("token survived profile deletion: %q", got)
 	}
 }
+
+func TestDeleteProfileRelayToken(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "config.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ctx := t.Context()
+
+	if err := s.SetProfileRelayToken(ctx, "https://relay.example.com", "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+	// Deleting an unset row is a no-op, not an error (logout is
+	// idempotent for direct-bridge profiles).
+	if err := s.DeleteProfileRelayToken(ctx, "https://other.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteProfileRelayToken(ctx, "https://relay.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.ProfileRelayToken(ctx, "https://relay.example.com"); got != "" {
+		t.Fatalf("token survived delete: %q", got)
+	}
+}

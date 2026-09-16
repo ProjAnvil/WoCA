@@ -72,6 +72,7 @@ type nativeStore interface {
 	ProfileBridge(context.Context, string) string
 	SetProfileRelayToken(context.Context, string, string) error
 	ProfileRelayToken(context.Context, string) string
+	DeleteProfileRelayToken(context.Context, string) error
 	ListProfiles(context.Context) ([]configstore.ProfileRow, error)
 	ProfileByID(context.Context, int64) (configstore.Profile, bool, error)
 	ActivateProfile(context.Context, int64) (configstore.Profile, bool, error)
@@ -110,6 +111,9 @@ type Service struct {
 	// relayLogin performs the relay's POST /api/auth/login; injectable
 	// for tests and for the TOFU-pinned client (WithRelayLogin).
 	relayLogin func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error)
+	// relayLogout performs the relay's best-effort POST /api/auth/logout
+	// before the local token row is deleted (WithRelayLogout).
+	relayLogout func(ctx context.Context, baseURL, token string) error
 }
 
 func NewService(store nativeStore, activator auth.Activator, opts ...ServiceOption) *Service {
@@ -122,6 +126,9 @@ func NewService(store nativeStore, activator auth.Activator, opts ...ServiceOpti
 		now:       time.Now,
 		relayLogin: func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error) {
 			return transport.RelayLogin(ctx, nil, baseURL, apiKey)
+		},
+		relayLogout: func(ctx context.Context, baseURL, token string) error {
+			return transport.RelayLogout(ctx, nil, baseURL, token)
 		},
 	}
 	for _, opt := range opts {
@@ -142,6 +149,12 @@ func WithSessionVault(v SessionVault) ServiceOption {
 // TOFU-pinned client; tests inject a stub.
 func WithRelayLogin(fn func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error)) ServiceOption {
 	return func(s *Service) { s.relayLogin = fn }
+}
+
+// WithRelayLogout overrides the relay logout call (best-effort remote
+// revocation); tests inject a stub.
+func WithRelayLogout(fn func(ctx context.Context, baseURL, token string) error) ServiceOption {
+	return func(s *Service) { s.relayLogout = fn }
 }
 
 func (s *Service) Bootstrap(ctx context.Context) (BootstrapState, error) {
@@ -200,6 +213,13 @@ func (s *Service) Connect(ctx context.Context, input ConnectionInput) (state Boo
 	if err := s.store.SetProfileBridge(ctx, input.ServerURL, input.BridgeID); err != nil {
 		return BootstrapState{}, err
 	}
+	// A direct-bridge connect supersedes any relay session stored for
+	// this URL: the credential chain prefers the relay token, so a stale
+	// row would shadow the fresh bridge credentials with 401s (mirrors
+	// ConnectRelay clearing the bridge pin).
+	if err := s.store.DeleteProfileRelayToken(ctx, input.ServerURL); err != nil {
+		return BootstrapState{}, err
+	}
 
 	result, err := s.activator.Activate(ctx, auth.ActivationRequest{
 		BaseURL:  profile.BaseURL,
@@ -238,6 +258,11 @@ func (s *Service) ConnectLoopback(ctx context.Context, baseURL string) (Bootstra
 	}
 	// The embedded bridge is its own target — no edge routing applies.
 	if err := s.store.SetProfileBridge(ctx, baseURL, ""); err != nil {
+		return BootstrapState{}, err
+	}
+	// Loopback is a direct-bridge path: drop any stale relay token for
+	// this URL (same shadowing hazard as Connect).
+	if err := s.store.DeleteProfileRelayToken(ctx, baseURL); err != nil {
 		return BootstrapState{}, err
 	}
 	s.markReady(profile.BaseURL)
@@ -330,6 +355,17 @@ func (s *Service) Logout(ctx context.Context) (BootstrapState, error) {
 			_ = s.vault.Revoke(ctx, profile.BaseURL, sessionID)
 		}
 		_ = s.vault.Delete(ctx, profile.ID)
+	}
+	// A relay profile carries no vault session — its credential is the
+	// relay-token preference row. Revoke it at the relay first (best
+	// effort, same contract as vault.Revoke), then delete the local row;
+	// otherwise the next Bootstrap silently re-opens with the
+	// still-server-valid token.
+	if token := s.store.ProfileRelayToken(ctx, profile.BaseURL); token != "" {
+		_ = s.relayLogout(ctx, profile.BaseURL, token)
+		if err := s.store.DeleteProfileRelayToken(ctx, profile.BaseURL); err != nil {
+			return BootstrapState{}, err
+		}
 	}
 	// The connect page's entry ① must survive logout — the embedded
 	// bridge is still running and re-adoptable.
