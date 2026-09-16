@@ -42,6 +42,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Always emit an initial frame: the relay tunnel's streamRecorder
+	// commits response headers at the first Write (design §6.3), so a run
+	// with no events yet must still write — an SSE comment is a no-op for
+	// EventSource but establishes the stream (and arms the heartbeat).
+	fmt.Fprint(w, ": connected\n\n")
+	_ = flusher.Flush()
+
 	// Last-Event-ID carries the last seq the client saw; resuming replays
 	// only the missed tail (or signals a gap outside the retention window).
 	lastSeq, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)

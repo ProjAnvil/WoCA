@@ -73,6 +73,38 @@ func TestResolveNilStore(t *testing.T) {
 	}
 }
 
+// TestPlainHTTPRefusedOffLoopback enforces the TLS fail-closed red line
+// (same spirit as internal/relay.CheckBind): the wcr_ key rides every
+// tunnel poll as a Bearer credential, so a plain-HTTP relay URL off
+// loopback would leak the entire trust credential in cleartext.
+func TestPlainHTTPRefusedOffLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		url     string
+		wantErr bool
+	}{
+		{"http public host refused", "http://relay.example.com", true},
+		{"http public IP refused", "http://203.0.113.10:8080", true},
+		{"http loopback IP allowed", "http://127.0.0.1:18443", false},
+		{"http IPv6 loopback allowed", "http://[::1]:18443", false},
+		{"http localhost allowed", "http://localhost:18443", false},
+		{"https public host allowed", "https://relay.example.com", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := openTestSettings(t)
+			err := SaveConfig(st, tc.url, "wcr_secret")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("SaveConfig(%q) err = %v, wantErr %v", tc.url, err, tc.wantErr)
+			}
+			if tc.wantErr {
+				if got := settings.KeyValue(st.Load(), settings.KeyRelayURL); got != "" {
+					t.Fatalf("refused URL still persisted: %q", got)
+				}
+			}
+		})
+	}
+}
+
 func TestTrailingSlashCanonicalized(t *testing.T) {
 	st := openTestSettings(t)
 	// A trailing slash must never persist: endpoints join as

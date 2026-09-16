@@ -55,6 +55,11 @@ for _ in $(seq 1 50); do
 done
 echo "${OUT:-}" | grep -q '\[' || { echo "FAIL: tunneled /api/sessions: ${OUT:-<empty>}"; exit 1; }
 
+# 5b. The bridge's loopback-trust local surface is NOT reachable through
+# the tunnel: a remote disconnect would kill the bridge's own tunnel.
+CODE="$(curl -s -o /dev/null -w '%{http_code}' -b "$TMP/cookies" -X POST "http://$RELAY_ADDR/api/relay/disconnect")"
+[ "$CODE" = "403" ] || { echo "FAIL: remote /api/relay/disconnect status $CODE, want 403"; exit 1; }
+
 # 6. SSE through the tunnel: event-stream content type survives the
 # flush-before-headers order, X-Accel-Buffering is set, hop-by-hop
 # Connection does not leak.

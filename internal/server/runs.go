@@ -701,14 +701,24 @@ func (s *Server) serveLedgerRunEvents(w http.ResponseWriter, r *http.Request) bo
 	if !ok {
 		return false
 	}
+	// Headers before the probe flush (same invariant as handleEvents: the
+	// flush commits the response head, so the stream's content-type must
+	// already be set).
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
 	flusher := http.NewResponseController(w)
 	if err := flusher.Flush(); err != nil {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return true
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	// Always emit an initial frame: the relay tunnel's streamRecorder
+	// commits response headers at the first Write (design §6.3), so a
+	// foreign run idling in the poll loop must still write — an SSE
+	// comment is a no-op for EventSource but establishes the stream (and
+	// arms the heartbeat).
+	fmt.Fprint(w, ": connected\n\n")
+	_ = flusher.Flush()
 
 	sinceSeq, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
 	terminal := row.Status != runstate.StatusQueued && row.Status != runstate.StatusRunning

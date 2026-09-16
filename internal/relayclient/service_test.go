@@ -77,3 +77,36 @@ func TestServiceStatusHandler(t *testing.T) {
 		}
 	}
 }
+
+// TestLocalSurfaceRejectsRemote guards the loopback-trust posture (design
+// §3.2/§6.4): the tunnel forwards every /api/* request to the full handler,
+// so without this check a session-authenticated remote client could POST
+// /api/relay/disconnect and kill the bridge's own tunnel. The marker header
+// is forgery-proof — execute() strips every X-Woca-* from parked requests
+// before injecting it itself.
+func TestLocalSurfaceRejectsRemote(t *testing.T) {
+	svc := NewService()
+
+	remoteGet := newGetRequest("/api/relay/status")
+	remoteGet.Header.Set(remoteHeader, "1")
+	rec := newRecorder()
+	svc.StatusHandler().ServeHTTP(rec, remoteGet)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("remote status: %d, want 403", rec.Code)
+	}
+
+	remotePost := httptest.NewRequest(http.MethodPost, "/api/relay/disconnect", nil)
+	remotePost.Header.Set(remoteHeader, "1")
+	rec = newRecorder()
+	svc.DisconnectHandler().ServeHTTP(rec, remotePost)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("remote disconnect: %d, want 403", rec.Code)
+	}
+
+	// Without the marker the local posture is unchanged.
+	rec = newRecorder()
+	svc.DisconnectHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/relay/disconnect", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("local disconnect: %d, want 204", rec.Code)
+	}
+}
