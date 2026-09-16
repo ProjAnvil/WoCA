@@ -137,6 +137,60 @@ func TestRevocationCascade(t *testing.T) {
 	}
 }
 
+// TestParkedClientRevokedGets410 covers design §5.3: a client request
+// parked (not yet picked by the bridge) when the key is revoked must be
+// released WITH the revoked signal — 410 {"code":"revoked"} — never the
+// bare 200 net/http auto-emits when a handler writes nothing.
+func TestParkedClientRevokedGets410(t *testing.T) {
+	tr := newTestRelay(t)
+	client := tr.login(t)
+	tr.claimGen(t, "gen-1")
+
+	// Park one client request; no bridge poll ever takes it.
+	type result struct {
+		code int
+		body string
+	}
+	parked := make(chan result, 1)
+	go func() {
+		resp, err := client.Get(tr.srv.URL + "/api/sessions")
+		if err != nil {
+			parked <- result{code: -1, body: err.Error()}
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, _ := io.ReadAll(resp.Body)
+		parked <- result{code: resp.StatusCode, body: string(body)}
+	}()
+	time.Sleep(100 * time.Millisecond) // let the request park
+	if n := tr.rl.park.Len(tr.key.ID); n != 1 {
+		t.Fatalf("parked requests: %d, want 1", n)
+	}
+
+	// Revoke and sweep: the parked item drains with ErrRevoked.
+	if _, ok, err := tr.ks.RevokeKey(t.Context(), "home-mac"); err != nil || !ok {
+		t.Fatal("revoke failed")
+	}
+	auditLog, err := NewAuditLog("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := NewRevoker(tr.ks, tr.rl.gens, tr.rl.park, auditLog).Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-parked:
+		if got.code != http.StatusGone ||
+			!strings.Contains(got.body, `"code":"revoked"`) {
+			t.Fatalf("parked client after revoke: %d %s, want 410 + code revoked (bare 200 hides the revocation)",
+				got.code, got.body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("parked client not released by revocation")
+	}
+}
+
 func TestAuditLogAppend(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
 	a, err := NewAuditLog(path)

@@ -51,8 +51,16 @@ func (rl *Relay) forward(w http.ResponseWriter, r *http.Request, sess Session) {
 		WriteError(w, http.StatusServiceUnavailable, CodeBridgeOffline, "bridge busy")
 		return
 	}
+	if errors.Is(err, ErrRevoked) {
+		// Parked when the key was revoked: the FailAll drain released the
+		// wait without a response — carry the revoked signal to the
+		// client (design §5.3) instead of letting net/http auto-emit a
+		// bare 200. No headers have been written yet on this path.
+		WriteError(w, http.StatusGone, CodeRevoked, "key revoked")
+		return
+	}
 	if err != nil {
-		// Client disconnect or revocation drain — nothing left to write.
+		// Client disconnect — nothing left to write.
 		return
 	}
 	defer done()
