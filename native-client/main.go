@@ -99,6 +99,11 @@ func runWith(
 		bridge.WithRelayLogin(func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error) {
 			return transport.RelayLogin(ctx, pinnedClient, baseURL, apiKey)
 		}),
+		// Relay logout revocation carries the live session token, so it
+		// rides the same TOFU-pinned client as the login.
+		bridge.WithRelayLogout(func(ctx context.Context, baseURL, token string) error {
+			return transport.RelayLogout(ctx, pinnedClient, baseURL, token)
+		}),
 	)
 	// The session source mirrors the bridge bootstrap decision: the active
 	// profile's stored session, if any.
