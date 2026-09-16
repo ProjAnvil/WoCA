@@ -32,6 +32,7 @@ func newRootCmd() *cobra.Command {
 	}
 	root.PersistentFlags().StringVar(&dbPath, "db", defaultDBPath(), "relay database path (env WOCA_RELAY_DB)")
 	root.AddCommand(newKeyCmd(&dbPath))
+	root.AddCommand(newServeCmd(&dbPath))
 	return root
 }
 
