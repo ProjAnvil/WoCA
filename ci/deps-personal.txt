@@ -83,6 +83,7 @@ github.com/projanvil/langchain-golang/core/security
 github.com/projanvil/langchain-golang/core/streamevents
 github.com/projanvil/langchain-golang/core/structuredoutput
 github.com/projanvil/langchain-golang/core/tools
+github.com/projanvil/langchain-golang/core/tracers
 github.com/projanvil/langchain-golang/core/utils
 github.com/projanvil/langchain-golang/core/vectorstores
 github.com/projanvil/langchain-golang/langchain/chatmodels
@@ -139,6 +140,7 @@ github.com/projanvil/woca/internal/plugins
 github.com/projanvil/woca/internal/prompt
 github.com/projanvil/woca/internal/promptref
 github.com/projanvil/woca/internal/quota
+github.com/projanvil/woca/internal/relayclient
 github.com/projanvil/woca/internal/repl
 github.com/projanvil/woca/internal/runner
 github.com/projanvil/woca/internal/runstate

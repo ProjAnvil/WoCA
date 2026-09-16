@@ -28,6 +28,10 @@ func (b *fatalLocalDataBridge) Connect(context.Context, bridge.ConnectionInput) 
 	return b.state, errFatalLocalData
 }
 
+func (b *fatalLocalDataBridge) ConnectRelay(context.Context, bridge.ConnectionInput) (bridge.BootstrapState, error) {
+	return b.state, errFatalLocalData
+}
+
 func (b *fatalLocalDataBridge) Logout(context.Context) (bridge.BootstrapState, error) {
 	return b.state, errFatalLocalData
 }

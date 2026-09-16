@@ -47,6 +47,12 @@ func (f *fakeBridgeAPI) Connect(ctx context.Context, input bridge.ConnectionInpu
 	return f.connectState, nil
 }
 
+func (f *fakeBridgeAPI) ConnectRelay(ctx context.Context, input bridge.ConnectionInput) (bridge.BootstrapState, error) {
+	f.connectCtx = ctx
+	f.connectInput = input
+	return f.connectState, nil
+}
+
 func (f *fakeBridgeAPI) ConnectEmbedded(ctx context.Context) (bridge.BootstrapState, error) {
 	f.connectCtx = ctx
 	return f.connectState, nil

@@ -213,6 +213,53 @@ func profileBridgeKey(baseURL string) string {
 	return "connection.bridge." + baseURL
 }
 
+// SetProfileRelayToken records the relay session token for a relay
+// profile (the relay login's body token; design §3.3). Stored as an
+// internal preference keyed by base URL, mirroring the bridge pin — no
+// schema change, the preferences table is generic.
+func (s *Store) SetProfileRelayToken(ctx context.Context, rawURL, token string) error {
+	baseURL, err := NormalizeBaseURL(rawURL)
+	if err != nil {
+		return err
+	}
+	if token == "" {
+		return fmt.Errorf("relay token is required")
+	}
+	if len(token) > 512 {
+		return fmt.Errorf("relay token too long")
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO preferences (key, value, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+		profileRelayTokenKey(baseURL), token, time.Now().Unix())
+	if err != nil {
+		return fmt.Errorf("set profile relay token: %w", err)
+	}
+	return nil
+}
+
+// ProfileRelayToken returns the profile's relay session token ("" when
+// unset — direct-bridge, embedded, and enterprise profiles).
+func (s *Store) ProfileRelayToken(ctx context.Context, rawURL string) string {
+	baseURL, err := NormalizeBaseURL(rawURL)
+	if err != nil {
+		return ""
+	}
+	var value string
+	err = s.db.QueryRowContext(ctx, `SELECT value FROM preferences WHERE key = ?`, profileRelayTokenKey(baseURL)).Scan(&value)
+	if err != nil {
+		return ""
+	}
+	if len(value) > 512 {
+		return ""
+	}
+	return value
+}
+
+func profileRelayTokenKey(baseURL string) string {
+	return "connection.relay-token." + baseURL
+}
+
 // ProfileRow is one profile plus its session/bookkeeping columns for the
 // connect page's saved-connection list (LEFT JOIN shape).
 type ProfileRow struct {
@@ -313,6 +360,9 @@ func (s *Store) DeleteProfile(ctx context.Context, id int64) (bool, error) {
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM preferences WHERE key = ?`, profileBridgeKey(baseURL)); err != nil {
 		return false, fmt.Errorf("delete profile bridge pin: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM preferences WHERE key = ?`, profileRelayTokenKey(baseURL)); err != nil {
+		return false, fmt.Errorf("delete profile relay token: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM connection_profiles WHERE id = ?`, id); err != nil {
 		return false, fmt.Errorf("delete connection profile: %w", err)
