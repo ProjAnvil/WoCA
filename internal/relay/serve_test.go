@@ -81,10 +81,12 @@ func TestRelaySkeletonSurface(t *testing.T) {
 		!strings.Contains(body, "console.log") {
 		t.Fatalf("spa asset: %d %s", code, body)
 	}
-	// An /api/ miss is a 404, never the app shell (webfx.SPA semantics —
-	// exactly what the relay wants).
-	if code, _, _ := get("/api/models"); code != http.StatusNotFound {
-		t.Fatalf("anonymous /api/models: %d, want 404 in the skeleton", code)
+	// The tunnel plane gates every /api/ path behind a session (design
+	// §7.2 — the whitelist is exactly SPA assets + /api/health +
+	// /api/auth/login).
+	if code, _, body := get("/api/models"); code != http.StatusUnauthorized ||
+		!strings.Contains(body, `"code":"unauthorized"`) {
+		t.Fatalf("anonymous /api/models: %d %s, want 401 with the session gate attached", code, body)
 	}
 	// Login is reachable anonymously; me/logout demand a session.
 	resp, err := http.Post(ts.URL+"/api/auth/login", "application/json",
