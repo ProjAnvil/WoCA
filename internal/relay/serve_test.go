@@ -4,9 +4,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 func testSPA() fstest.MapFS {
@@ -101,5 +104,56 @@ func TestRelaySkeletonSurface(t *testing.T) {
 	if code, _, body := get("/api/auth/me"); code != http.StatusUnauthorized ||
 		!strings.Contains(body, `"code":"unauthorized"`) {
 		t.Fatalf("anonymous me: %d %s", code, body)
+	}
+}
+
+func TestCheckBindBareHostname(t *testing.T) {
+	// A bind without a port parses as a bare host: public unless loopback.
+	if err := CheckBind("relay.example.com", false, false, false, testLogger()); err == nil {
+		t.Fatal("bare public hostname must refuse plain HTTP")
+	}
+	if err := CheckBind("localhost", false, false, false, testLogger()); err != nil {
+		t.Fatalf("bare localhost: %v", err)
+	}
+}
+
+func TestAttachRevocationAuditsBridgeChanges(t *testing.T) {
+	tr := newTestRelay(t)
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	auditLog, err := NewAuditLog(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoker := tr.rl.AttachRevocation(auditLog)
+	if revoker == nil {
+		t.Fatal("AttachRevocation returned no revoker")
+	}
+
+	// Bridge up: the first poll adopts the generation.
+	resp, _ := tr.pollOnce(t, "gen-1", 10*time.Millisecond)
+	_ = resp.Body.Close()
+
+	// Bridge down: a competing generation evicts the stale one (the
+	// registry clock is test-controlled so the lease expires instantly).
+	tr.rl.gens.mu.Lock()
+	base := tr.rl.gens.now
+	tr.rl.gens.now = func() time.Time { return base().Add(time.Minute) }
+	tr.rl.gens.mu.Unlock()
+	resp, _ = tr.pollOnce(t, "gen-2", 10*time.Millisecond)
+	_ = resp.Body.Close()
+
+	if err := auditLog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(data)
+	if !strings.Contains(out, `"event":"bridge_up"`) || !strings.Contains(out, `"key":"home-mac"`) {
+		t.Fatalf("bridge-up audit missing: %s", out)
+	}
+	if !strings.Contains(out, `"event":"bridge_down"`) {
+		t.Fatalf("bridge-down audit missing: %s", out)
 	}
 }

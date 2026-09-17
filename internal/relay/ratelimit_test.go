@@ -43,3 +43,29 @@ func TestRateLimiterBounded(t *testing.T) {
 		t.Fatalf("entries %d exceed maxEntries 50", n)
 	}
 }
+
+func TestRateLimiterEvictsIdleEntries(t *testing.T) {
+	now := time.Now()
+	l := NewRateLimiter(10, 2)
+	l.now = func() time.Time { return now }
+
+	l.Allow("10.0.0.1")
+	l.Allow("10.0.0.2")
+	// Both buckets idle past the ten-minute eviction horizon: a third key
+	// evicts them instead of trimming live entries.
+	now = now.Add(11 * time.Minute)
+	if !l.Allow("10.0.0.3") {
+		t.Fatal("fresh key denied after idle eviction")
+	}
+	l.mu.Lock()
+	_, stale1 := l.entries["10.0.0.1"]
+	_, stale2 := l.entries["10.0.0.2"]
+	n := len(l.entries)
+	l.mu.Unlock()
+	if stale1 || stale2 {
+		t.Fatal("idle buckets survived eviction")
+	}
+	if n != 1 {
+		t.Fatalf("entries %d, want just the fresh key", n)
+	}
+}

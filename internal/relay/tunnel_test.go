@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -437,5 +438,188 @@ func TestCredentialsStrippedBeforeParking(t *testing.T) {
 	}
 	if p.Client == "" {
 		t.Fatal("client IP not propagated to the bridge")
+	}
+}
+
+func TestPollMissingGenerationHeader(t *testing.T) {
+	tr := newTestRelay(t)
+	req, err := http.NewRequest(http.MethodGet, tr.srv.URL+"/tunnel/poll", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tr.rawKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("poll without generation: %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestPollClientHangup(t *testing.T) {
+	tr := newTestRelay(t)
+	// The bridge abandons the poll mid-wait: the handler returns without
+	// writing (the client observes a canceled request, not an answer).
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		tr.srv.URL+"/tunnel/poll?wait=5s", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+tr.rawKey)
+	req.Header.Set(GenerationHeader, "gen-1")
+	done := make(chan error, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		done <- err
+	}()
+	time.Sleep(150 * time.Millisecond) // let the poll park
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("canceled poll returned an answer")
+	}
+}
+
+func TestRespondValidationFailures(t *testing.T) {
+	tr := newTestRelay(t)
+	tr.claimGen(t, "gen-1")
+
+	respondRaw := func(gen, status, headersB64 string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, tr.srv.URL+"/tunnel/respond/req-x", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+tr.rawKey)
+		if gen != "" {
+			req.Header.Set(GenerationHeader, gen)
+		}
+		if status != "" {
+			req.Header.Set(StatusHeader, status)
+		}
+		if headersB64 != "" {
+			req.Header.Set(HeadersHeader, headersB64)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	// No generation header at all: not scoped to a live generation → 404.
+	resp := respondRaw("", "200", "")
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("generation-less respond: %d, want 404", resp.StatusCode)
+	}
+	// Unparseable / out-of-range status: 400.
+	for _, status := range []string{"abc", "42", "1000"} {
+		resp = respondRaw("gen-1", status, "")
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status %q: %d, want 400", status, resp.StatusCode)
+		}
+	}
+	// Undecodable header snapshot: 400.
+	resp = respondRaw("gen-1", "200", "!!!not-base64!!!")
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad headers blob: %d, want 400", resp.StatusCode)
+	}
+	resp = respondRaw("gen-1", "200", base64.StdEncoding.EncodeToString([]byte("{not json")))
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("non-JSON headers blob: %d, want 400", resp.StatusCode)
+	}
+	// A valid respond for an unknown id still 404s.
+	resp = respondRaw("gen-1", "200", "")
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown id: %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestRespondClientGone(t *testing.T) {
+	tr := newTestRelay(t)
+	client := tr.login(t)
+	tr.claimGen(t, "gen-1")
+
+	taken := make(chan pollPayload, 1)
+	go func() {
+		resp, p := tr.pollOnce(t, "gen-1", 5*time.Second)
+		_ = resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			taken <- p
+		}
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	// Park a client request, then hang it up before the bridge answers.
+	clientCtx, cancelClient := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(clientCtx, http.MethodGet, tr.srv.URL+"/api/ghost", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := make(chan struct{})
+	go func() {
+		resp, err := client.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		close(answered)
+	}()
+	var p pollPayload
+	select {
+	case p = <-taken:
+	case <-time.After(3 * time.Second):
+		t.Fatal("bridge never received the parked request")
+	}
+	cancelClient()
+	<-answered
+
+	// The respond for the disconnected client: 410 (design §6.1 matrix).
+	r := tr.respond(t, "gen-1", p.ID, 200, nil, strings.NewReader("{}"))
+	_ = r.Body.Close()
+	if r.StatusCode != http.StatusGone {
+		t.Fatalf("respond for gone client: %d, want 410", r.StatusCode)
+	}
+}
+
+func TestDecodeHeaders(t *testing.T) {
+	// Empty snapshot: empty header set, no error.
+	h, err := decodeHeaders("")
+	if err != nil || len(h) != 0 {
+		t.Fatalf("empty snapshot: %v %v", h, err)
+	}
+	if _, err := decodeHeaders("!!!not-base64!!!"); err == nil {
+		t.Fatal("bad base64 must fail")
+	}
+	if _, err := decodeHeaders(base64.StdEncoding.EncodeToString([]byte("{nope"))); err == nil {
+		t.Fatal("bad JSON must fail")
+	}
+	// Hop-by-hop headers are stripped; the Connection token's nominees too.
+	raw, _ := json.Marshal(map[string][]string{
+		"Content-Type": {"application/json"},
+		"Connection":   {"keep-alive, X-Trace"},
+		"Keep-Alive":   {"timeout=5"},
+		"X-Trace":      {"forged"},
+	})
+	h, err = decodeHeaders(base64.StdEncoding.EncodeToString(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("ordinary header lost: %q", got)
+	}
+	for _, gone := range []string{"Connection", "Keep-Alive", "X-Trace"} {
+		if h.Get(gone) != "" {
+			t.Fatalf("hop-by-hop header %s survived", gone)
+		}
 	}
 }

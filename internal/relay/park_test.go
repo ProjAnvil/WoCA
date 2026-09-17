@@ -252,3 +252,30 @@ func TestFailAll(t *testing.T) {
 		t.Fatalf("queue len %d after FailAll", n)
 	}
 }
+
+func TestCompleteWithoutTake(t *testing.T) {
+	q := NewParkingQueue(2)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	parked := make(chan error, 1)
+	go func() {
+		_, _, _, err := q.Park(ctx, 7, testRequest("r1"))
+		parked <- err
+	}()
+	deadline := time.After(time.Second)
+	for q.Len(7) < 1 {
+		select {
+		case <-deadline:
+			t.Fatal("request never parked")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	// The id exists but no generation took it: respond is still 404-shaped.
+	if _, err := q.Complete(7, "gen-1", "r1", &ParkedResponse{Status: 200}); !errors.Is(err, ErrUnknownParkedID) {
+		t.Fatalf("untaken complete: %v, want ErrUnknownParkedID", err)
+	}
+	cancel()
+	if err := <-parked; !errors.Is(err, context.Canceled) {
+		t.Fatalf("park release: %v, want context.Canceled", err)
+	}
+}

@@ -401,9 +401,19 @@ func (c *Client) execute(ctx context.Context, payload pollPayload) {
 	hb := newHeartbeatWriter(pw, ivl)
 	rec := newStreamRecorder(hb)
 	go func() {
-		defer rec.finish()
+		// The handler runs on its own goroutine, so execute's recover
+		// cannot catch its panic — without this guard a single panicking
+		// tunneled handler would crash the whole bridge process.
+		defer func() {
+			if r := recover(); r != nil {
+				c.log.Error().Any("panic", r).Str("path", payload.Path).Msg("relayclient: tunneled request panicked")
+				_ = pw.CloseWithError(fmt.Errorf("relayclient: handler panicked: %v", r))
+			} else {
+				_ = pw.Close()
+			}
+			rec.finish()
+		}()
 		c.cfg.Handler.ServeHTTP(rec, req)
-		_ = pw.Close()
 	}()
 	select {
 	case <-rec.ready:

@@ -124,3 +124,36 @@ func TestTrailingSlashCanonicalized(t *testing.T) {
 		t.Fatalf("env url %q, want canonical form", url)
 	}
 }
+
+func TestSaveConfigStoreError(t *testing.T) {
+	st := openTestSettings(t)
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveConfig(st, "https://relay.example.com", "wcr_secret"); err == nil {
+		t.Fatal("save against a closed store must fail")
+	}
+}
+
+func TestClearConfigStoreError(t *testing.T) {
+	st := openTestSettings(t)
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ClearConfig(st); err == nil {
+		t.Fatal("clear against a closed store must fail")
+	}
+}
+
+func TestResolveConfigPartialEnv(t *testing.T) {
+	// Only one half of the env pair set: the store fills the other.
+	st := openTestSettings(t)
+	if err := SaveConfig(st, "https://stored.example.com", "wcr_stored"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvRelayURL, "https://env.example.com")
+	url, key := ResolveConfig(st)
+	if url != "https://env.example.com" || key != "wcr_stored" {
+		t.Fatalf("partial env: %q / %q", url, key)
+	}
+}

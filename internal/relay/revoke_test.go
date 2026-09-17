@@ -269,3 +269,69 @@ func TestLoginAuditEvents(t *testing.T) {
 		t.Fatal("audit log leaked the full key (metadata only, design §4.1)")
 	}
 }
+
+func TestRevokerSweepStoreError(t *testing.T) {
+	ks := openTestKeyStore(t)
+	auditLog, err := NewAuditLog("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoker := NewRevoker(ks, NewGenerationRegistry(), NewParkingQueue(1), auditLog)
+	if err := ks.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := revoker.Sweep(context.Background()); err == nil {
+		t.Fatal("sweep against a closed store must fail")
+	}
+}
+
+func TestRevokerWatch(t *testing.T) {
+	ks := openTestKeyStore(t)
+	ctx := context.Background()
+	k, _, err := ks.CreateKey(ctx, "watched")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gens := NewGenerationRegistry()
+	park := NewParkingQueue(1)
+	auditLog, err := NewAuditLog("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoker := NewRevoker(ks, gens, park, auditLog)
+
+	watchCtx, stop := context.WithCancel(context.Background())
+	defer stop()
+	done := make(chan struct{})
+	go func() {
+		revoker.Watch(watchCtx, 5*time.Millisecond)
+		close(done)
+	}()
+
+	// A revoke written by a separate CLI process (only the row changes) is
+	// picked up by the sweeping relay.
+	if _, ok, err := ks.RevokeKey(ctx, "watched"); err != nil || !ok {
+		t.Fatalf("revoke setup: err=%v ok=%v", err, ok)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		revoker.mu.Lock()
+		handled := revoker.done[k.ID]
+		revoker.mu.Unlock()
+		if handled {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("watch never swept the revoked key")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	// Context cancellation ends the watch loop.
+	stop()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not stop on context cancel")
+	}
+}

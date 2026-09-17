@@ -3,9 +3,11 @@ package relay
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func openTestKeyStore(t *testing.T) *KeyStore {
@@ -121,5 +123,122 @@ func TestKeyStoreReopenPersists(t *testing.T) {
 	defer func() { _ = ks2.Close() }()
 	if _, err := ks2.LookupKey(context.Background(), raw); err != nil {
 		t.Fatalf("key lost across reopen: %v", err)
+	}
+}
+
+func TestKeyUserIDEmptyHash(t *testing.T) {
+	if got := (Key{}).UserID(); got != "" {
+		t.Fatalf("zero-hash UserID = %q, want empty", got)
+	}
+}
+
+func TestOpenKeyStoreErrors(t *testing.T) {
+	t.Run("empty path", func(t *testing.T) {
+		if _, err := OpenKeyStore(""); err == nil {
+			t.Fatal("empty path must fail")
+		}
+	})
+	t.Run("parent is a file", func(t *testing.T) {
+		blocker := filepath.Join(t.TempDir(), "blocker")
+		if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenKeyStore(filepath.Join(blocker, "relay.db")); err == nil {
+			t.Fatal("database directory creation must fail")
+		}
+	})
+	t.Run("path is a directory", func(t *testing.T) {
+		// sql.Open accepts the DSN; the ping surfaces the failure.
+		if _, err := OpenKeyStore(t.TempDir()); err == nil {
+			t.Fatal("directory path must fail at ping")
+		}
+	})
+	t.Run("unsupported schema version", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "relay.db")
+		ks := openTestKeyStoreAt(t, path)
+		if _, err := ks.db.Exec(
+			`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
+			currentSchemaVersion+1, time.Now().Unix()); err != nil {
+			t.Fatal(err)
+		}
+		if err := ks.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := OpenKeyStore(path); err == nil ||
+			!strings.Contains(err.Error(), "unsupported schema version") {
+			t.Fatalf("reopen at a newer schema: %v", err)
+		}
+	})
+}
+
+func openTestKeyStoreAt(t *testing.T, path string) *KeyStore {
+	t.Helper()
+	ks, err := OpenKeyStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ks.Close() })
+	return ks
+}
+
+func TestKeyStoreOpsOnClosedDB(t *testing.T) {
+	ks := openTestKeyStore(t)
+	ctx := context.Background()
+	if _, _, err := ks.CreateKey(ctx, "home-mac"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ks.CreateKey(ctx, "second"); err == nil {
+		t.Fatal("create on a closed store must fail")
+	}
+	if _, err := ks.ListKeys(ctx); err == nil {
+		t.Fatal("list on a closed store must fail")
+	}
+	if _, _, err := ks.RevokeKey(ctx, "home-mac"); err == nil {
+		t.Fatal("revoke on a closed store must fail")
+	}
+	if _, err := ks.ListRevokedKeys(ctx); err == nil {
+		t.Fatal("list-revoked on a closed store must fail")
+	}
+	if _, err := ks.KeyByID(ctx, 1); err == nil {
+		t.Fatal("key-by-id on a closed store must fail")
+	}
+	if _, _, err := ks.CreateSession(ctx, 1); err == nil {
+		t.Fatal("create-session on a closed store must fail")
+	}
+	if _, err := ks.ResolveSession(ctx, "tok"); err == nil || errors.Is(err, ErrSessionUnknown) {
+		t.Fatalf("resolve on a closed store: %v, want a store error", err)
+	}
+}
+
+func TestKeyByID(t *testing.T) {
+	ks := openTestKeyStore(t)
+	ctx := context.Background()
+	k, _, err := ks.CreateKey(ctx, "home-mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ks.KeyByID(ctx, k.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "home-mac" || got.ID != k.ID {
+		t.Fatalf("KeyByID returned %+v", got)
+	}
+	if _, err := ks.KeyByID(ctx, 9999); err == nil {
+		t.Fatal("unknown id must fail")
+	}
+}
+
+func TestCreateKeyNameValidation(t *testing.T) {
+	ks := openTestKeyStore(t)
+	ctx := context.Background()
+	if _, _, err := ks.CreateKey(ctx, ""); err == nil {
+		t.Fatal("empty name must fail")
+	}
+	if _, _, err := ks.CreateKey(ctx, strings.Repeat("n", 129)); err == nil {
+		t.Fatal("over-long name must fail")
 	}
 }

@@ -3,6 +3,7 @@ package relayclient
 import (
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -84,4 +85,59 @@ func TestHeartbeatStopIsIdempotent(t *testing.T) {
 	hb.arm()
 	hb.stop()
 	hb.stop() // must not panic (execute defers stop on every path)
+}
+
+func TestHeartbeatArmTwiceIsNoop(t *testing.T) {
+	pr, pw := io.Pipe()
+	hb := newHeartbeatWriter(pw, 80*time.Millisecond)
+	defer hb.stop()
+	hb.arm()
+	first := hb.timer
+	hb.arm() // re-arm must not replace the live timer
+	if hb.timer != first {
+		t.Fatal("second arm replaced the timer")
+	}
+	_ = pw.Close()
+	_, _ = io.ReadAll(pr)
+}
+
+// errWriter fails every write (the ping write-error path: no re-arm).
+type errWriter struct {
+	mu     sync.Mutex
+	writes int
+}
+
+func (w *errWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	w.writes++
+	w.mu.Unlock()
+	return 0, io.ErrClosedPipe
+}
+
+func (w *errWriter) count() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.writes
+}
+
+func TestHeartbeatPingWriteErrorStopsRearm(t *testing.T) {
+	w := &errWriter{}
+	hb := newHeartbeatWriter(w, 30*time.Millisecond)
+	defer hb.stop()
+	hb.arm()
+	// The first ping fails; the error return must not re-arm the timer.
+	waitFor(t, "first ping", func() bool { return w.count() == 1 })
+	time.Sleep(100 * time.Millisecond) // several intervals pass
+	if got := w.count(); got != 1 {
+		t.Fatalf("ping re-armed after a write error (%d writes)", got)
+	}
+}
+
+func TestHeartbeatPingAfterStop(t *testing.T) {
+	pr, pw := io.Pipe()
+	hb := newHeartbeatWriter(pw, 20*time.Millisecond)
+	hb.stop() // stopped before the timer ever fired
+	hb.ping() // must return without touching the (closed) pipe
+	_ = pw.Close()
+	_, _ = io.ReadAll(pr)
 }

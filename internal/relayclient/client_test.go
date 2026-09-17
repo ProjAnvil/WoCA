@@ -32,7 +32,10 @@ type fakeRelay struct {
 	mu       sync.Mutex
 	payload  *pollPayload
 	pollCode int
-	responds []capturedRespond
+	// respondCode overrides the respond endpoint's 200 (410/404 rejection
+	// tests).
+	respondCode int
+	responds    []capturedRespond
 }
 
 type capturedRespond struct {
@@ -87,6 +90,31 @@ func newFakeRelay(t *testing.T) *fakeRelay {
 				w.WriteHeader(http.StatusNoContent)
 			}
 		case strings.HasPrefix(r.URL.Path, "/tunnel/respond/"):
+			f.mu.Lock()
+			code := f.respondCode
+			f.mu.Unlock()
+			if code != 0 {
+				// Reject mid-stream like the real relay does for a
+				// superseded generation: answer immediately and close the
+				// connection, so the client's respond upload returns NOW
+				// and its CloseWithError unsticks the handler's next pipe
+				// write (design §6.5). A plain early 404 without the close
+				// is absorbed by net/http until body EOF.
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					w.WriteHeader(code)
+					return
+				}
+				conn, bufrw, err := hj.Hijack()
+				if err != nil {
+					w.WriteHeader(code)
+					return
+				}
+				_, _ = bufrw.Writer.WriteString(fmt.Sprintf("HTTP/1.1 %d Rejected\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", code))
+				_ = bufrw.Flush()
+				_ = conn.Close()
+				return
+			}
 			body, _ := io.ReadAll(r.Body)
 			var headers map[string][]string
 			raw, _ := base64.StdEncoding.DecodeString(r.Header.Get(headersHeader))
@@ -318,5 +346,282 @@ func TestBackoffBounds(t *testing.T) {
 	}
 	if d := backoff(3); d < 6*time.Second+400*time.Millisecond || d > 9*time.Second+600*time.Millisecond {
 		t.Fatalf("attempt 3: %v outside ±20%% of 8s", d)
+	}
+}
+
+func (f *fakeRelay) setRespondCode(code int) {
+	f.mu.Lock()
+	f.respondCode = code
+	f.mu.Unlock()
+}
+
+func TestClientRunRequiresConfig(t *testing.T) {
+	// No handler / URL / key: Run is an immediate no-op (serve wires it
+	// unconditionally; the tunnel only runs when fully configured).
+	for _, cfg := range []Config{
+		{},
+		{URL: "http://127.0.0.1:1", Key: "wcr_x"},
+		{Handler: http.NotFoundHandler()},
+	} {
+		done := make(chan struct{})
+		go func() {
+			New(cfg, testLogger()).Run(context.Background())
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("unconfigured Run blocked: %+v", cfg)
+		}
+	}
+}
+
+func TestClientStatusKeyPrefixTruncation(t *testing.T) {
+	c := New(Config{URL: "http://127.0.0.1:1", Key: "wcr_abcdefghijklmnop", Handler: http.NotFoundHandler()}, testLogger())
+	st := c.Status()
+	if st.KeyPrefix != "wcr_abcd" {
+		t.Fatalf("key prefix %q, want the first 8 chars", st.KeyPrefix)
+	}
+	if !st.Configured {
+		t.Fatal("configured tunnel reports unconfigured")
+	}
+	if st.Generation == "" {
+		t.Fatal("New must mint the generation synchronously")
+	}
+}
+
+func TestPollOnceInvalidURL(t *testing.T) {
+	c := New(Config{URL: "http://bad\nurl", Key: "wcr_test", Handler: http.NotFoundHandler()}, testLogger())
+	// pollOnce outside Run: provide the termination context Run would set.
+	c.term, c.termCancel = context.WithCancel(context.Background())
+	defer c.termCancel()
+	if got := c.pollOnce(context.Background()); got != outcomeTerminal {
+		t.Fatalf("invalid URL: %v, want terminal", got)
+	}
+	if st := c.Status(); st.LastError != "invalid relay URL" {
+		t.Fatalf("status: %+v", st)
+	}
+}
+
+func TestPollOnceBare200EmptyBody(t *testing.T) {
+	// A bare 200 with an empty body is the relay's mid-poll-hangup wake:
+	// treated like 204 (immediate re-poll), never a decode error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(Config{URL: srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler()}, testLogger())
+	if got := c.pollOnce(context.Background()); got != outcomeTimeout {
+		t.Fatalf("bare 200: %v, want timeout-equivalent", got)
+	}
+	if st := c.Status(); st.LastError != "" {
+		t.Fatalf("bare 200 recorded an error: %+v", st)
+	}
+}
+
+func TestPollOnceDecodeErrorRetries(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{truncated"))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(Config{URL: srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler()}, testLogger())
+	if got := c.pollOnce(context.Background()); got != outcomeRetry {
+		t.Fatalf("undecodable 200: %v, want retry", got)
+	}
+	if st := c.Status(); !strings.Contains(st.LastError, "poll decode") {
+		t.Fatalf("status: %+v", st)
+	}
+}
+
+func TestPollOnceConflict(t *testing.T) {
+	relay := newFakeRelay(t)
+	relay.setPollCode(http.StatusConflict)
+	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler()}, testLogger())
+	if got := c.pollOnce(context.Background()); got != outcomeConflict {
+		t.Fatalf("409: %v, want conflict", got)
+	}
+	// A conflict is neither terminal nor an error on the status surface.
+	if st := c.Status(); st.Revoked || st.LastError != "" {
+		t.Fatalf("conflict status: %+v", st)
+	}
+}
+
+func TestWorkerConflictBacksOffUntilCancel(t *testing.T) {
+	relay := newFakeRelay(t)
+	relay.setPollCode(http.StatusConflict)
+	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler(), Workers: 1}, testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		c.Run(ctx)
+		close(done)
+	}()
+	waitFor(t, "conflict polls", func() bool { return relay.polls.Load() >= 1 })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker stuck in conflict backoff after cancel")
+	}
+}
+
+func TestRequestHopByHopConnectionNominees(t *testing.T) {
+	hop := requestHopByHop(map[string][]string{
+		"Connection": {"keep-alive, X-Trace"},
+		"X-Trace":    {"abc"},
+		"Accept":     {"text/plain"},
+	})
+	for _, name := range []string{"connection", "keep-alive", "x-trace", "te", "upgrade"} {
+		if !hop[name] {
+			t.Fatalf("hop nominee %q missing", name)
+		}
+	}
+	if hop["accept"] {
+		t.Fatal("ordinary header marked hop-by-hop")
+	}
+}
+
+func TestExecuteDefaultsAndHopStrip(t *testing.T) {
+	relay := newFakeRelay(t)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// No Client on the payload: the placeholder remote address.
+		if r.RemoteAddr != "relay:0" {
+			t.Errorf("RemoteAddr %q, want relay:0", r.RemoteAddr)
+		}
+		// The Connection nominee rides the tunnel but must not be
+		// re-injected into the in-process request (design §6.4).
+		if got := r.Header.Get("X-Trace"); got != "" {
+			t.Errorf("connection-nominated header reached the handler: %q", got)
+		}
+		if got := r.Header.Get("Connection"); got != "" {
+			t.Errorf("connection header reached the handler: %q", got)
+		}
+		_, _ = w.Write([]byte("ok"))
+	})
+	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: handler}, testLogger())
+	c.execute(context.Background(), pollPayload{
+		ID:     "req-hop",
+		Method: "GET",
+		Path:   "/api/x",
+		Headers: map[string][]string{
+			"Connection": {"X-Trace"},
+			"X-Trace":    {"forged"},
+		},
+	})
+	waitFor(t, "respond upload", func() bool { return relay.respondCount() > 0 })
+	if got := relay.lastRespond(); got.id != "req-hop" {
+		t.Fatalf("respond: %+v", got)
+	}
+}
+
+func TestExecutePanicsAreRecovered(t *testing.T) {
+	relay := newFakeRelay(t)
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })
+	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: handler}, testLogger())
+	// A panicking tunneled handler must not take the worker down.
+	c.execute(context.Background(), pollPayload{ID: "req-panic", Method: "GET", Path: "/api/x"})
+}
+
+func TestExecuteBadPayloadBody(t *testing.T) {
+	c := New(Config{URL: "http://127.0.0.1:1", Key: "wcr_test", Handler: http.NotFoundHandler()}, testLogger())
+	c.execute(context.Background(), pollPayload{ID: "req-1", Method: "POST", Path: "/api/x", Body: "!!!not-base64"})
+	if st := c.Status(); !strings.Contains(st.LastError, "payload body") {
+		t.Fatalf("status: %+v", st)
+	}
+}
+
+func TestExecuteBadMethod(t *testing.T) {
+	c := New(Config{URL: "http://127.0.0.1:1", Key: "wcr_test", Handler: http.NotFoundHandler()}, testLogger())
+	c.execute(context.Background(), pollPayload{ID: "req-1", Method: "BAD\nMETHOD", Path: "/api/x"})
+	if st := c.Status(); !strings.Contains(st.LastError, "payload request") {
+		t.Fatalf("status: %+v", st)
+	}
+}
+
+func TestExecuteCancelBeforeReady(t *testing.T) {
+	// The handler never writes: a cancel before the first byte releases
+	// execute (shutdown during a hanging handler).
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // never writes; released by the cancel
+	})
+	c := New(Config{URL: "http://127.0.0.1:1", Key: "wcr_test", Handler: handler}, testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		c.execute(ctx, pollPayload{ID: "req-1", Method: "GET", Path: "/api/x"})
+		close(done)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("execute did not release on cancel before ready")
+	}
+}
+
+func TestRespondRejectedByRelay(t *testing.T) {
+	relay := newFakeRelay(t)
+	// The relay rejects the respond (superseded generation): the handler's
+	// pipe writes fail fast instead of hanging (design §6.5).
+	relay.setRespondCode(http.StatusNotFound)
+	writeErr := make(chan error, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		for i := 0; i < 200 && err == nil; i++ {
+			_, err = w.Write([]byte("x"))
+			time.Sleep(10 * time.Millisecond)
+		}
+		writeErr <- err
+	})
+	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: handler}, testLogger())
+	c.execute(context.Background(), pollPayload{ID: "req-rej", Method: "GET", Path: "/api/x"})
+	select {
+	case err := <-writeErr:
+		if err == nil {
+			t.Fatal("handler kept writing after the relay rejected the respond")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler goroutine stuck after a rejected respond")
+	}
+}
+
+func TestRespondTransportError(t *testing.T) {
+	// The relay dies mid-respond: the error surfaces on the status page
+	// and the handler's pipe is closed (design §6.5).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	url := srv.URL
+	srv.Close() // dead before execute runs
+	c := New(Config{URL: url, Key: "wcr_test", Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("x"))
+	})}, testLogger())
+	c.execute(context.Background(), pollPayload{ID: "req-dead", Method: "GET", Path: "/api/x"})
+	if st := c.Status(); !strings.Contains(st.LastError, "respond:") {
+		t.Fatalf("status: %+v", st)
+	}
+}
+
+func TestRespondInvalidRequestID(t *testing.T) {
+	// A parked id that cannot form a request URL: respond aborts, the pipe
+	// closes, the handler unblocks.
+	relay := newFakeRelay(t)
+	writeErr := make(chan error, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := w.Write([]byte("first"))
+		if err == nil {
+			_, err = w.Write([]byte("second"))
+		}
+		writeErr <- err
+	})
+	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: handler}, testLogger())
+	c.execute(context.Background(), pollPayload{ID: "bad\nid", Method: "GET", Path: "/api/x"})
+	select {
+	case err := <-writeErr:
+		if err == nil {
+			t.Fatal("handler kept writing after the respond request failed to build")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("handler goroutine stuck after an unbuildable respond")
 	}
 }
