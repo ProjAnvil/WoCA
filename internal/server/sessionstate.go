@@ -241,6 +241,11 @@ func (s *Server) handleGlobalEvents(w http.ResponseWriter, r *http.Request) {
 	for _, st := range rows {
 		writeSSE(w, s.sessionStateEvent(st.SessionID, st.Status, st.RunID))
 	}
+	// Always emit an initial frame: the relay tunnel's streamRecorder
+	// commits response headers at the first Write (design §6.3), so an
+	// empty snapshot must still write — an SSE comment is a no-op for
+	// EventSource but establishes the stream (and arms the heartbeat).
+	fmt.Fprint(w, ": connected\n\n")
 	_ = flusher.Flush()
 
 	ctx := r.Context()

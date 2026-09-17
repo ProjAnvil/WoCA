@@ -94,6 +94,16 @@ func runWith(
 		store,
 		auth.NewHTTPActivator(pinnedClient, material),
 		bridge.WithSessionVault(vault),
+		// Relay logins ride the same TOFU-pinned client as every other
+		// remote credential exchange.
+		bridge.WithRelayLogin(func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error) {
+			return transport.RelayLogin(ctx, pinnedClient, baseURL, apiKey)
+		}),
+		// Relay logout revocation carries the live session token, so it
+		// rides the same TOFU-pinned client as the login.
+		bridge.WithRelayLogout(func(ctx context.Context, baseURL, token string) error {
+			return transport.RelayLogout(ctx, pinnedClient, baseURL, token)
+		}),
 	)
 	// The session source mirrors the bridge bootstrap decision: the active
 	// profile's stored session, if any.
@@ -156,6 +166,14 @@ func runWith(
 	credentials, err := configureCredentials(context.Background(), service, developmentURL, func() transport.CredentialProvider {
 		if profile, ok, _ := store.ActiveProfile(context.Background()); ok && isLoopbackProfileURL(profile.BaseURL) {
 			return loopbackCredentials{}
+		}
+		// Relay profiles authenticate with the stored session token from
+		// the relay login's body (design §3.3 — the direct SSE path needs
+		// an explicit Bearer; cookies never reach it).
+		if profile, ok, _ := store.ActiveProfile(context.Background()); ok {
+			if token := store.ProfileRelayToken(context.Background(), profile.BaseURL); token != "" {
+				return transport.StaticBearer{Token: token}
+			}
 		}
 		if profile, ok, _ := store.ActiveProfile(context.Background()); ok && bridgeKeys != nil {
 			base := profile.BaseURL

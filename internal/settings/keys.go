@@ -3,6 +3,8 @@ package settings
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -59,6 +61,7 @@ const (
 	KeyMsgPlaneSubject       = "msg-plane-subject"
 	KeyModelWhitelist        = "model-whitelist"
 	KeyOutputStyle           = "output-style"
+	KeyRelayURL              = "relay-url"
 )
 
 // DefaultMsgPlaneSubject is the default run-dispatch notification subject.
@@ -415,10 +418,47 @@ func Apply(cfg *Settings, key, value string) error {
 		cfg.MemoryPGDB = value
 	case KeyMemoryPGUser:
 		cfg.MemoryPGUser = value
+	case KeyRelayURL:
+		if value != "" {
+			if !strings.Contains(value, "://") {
+				return fmt.Errorf("relay-url must be scheme://host, got %q", value)
+			}
+			if err := checkRelayURLTLS(value); err != nil {
+				return err
+			}
+		}
+		cfg.RelayURL = value
 	default:
 		return fmt.Errorf("unknown settings key %q", key)
 	}
 	return nil
+}
+
+// checkRelayURLTLS enforces the TLS fail-closed red line for the personal
+// relay (same spirit as internal/relay.CheckBind): the wcr_ key rides
+// every tunnel poll as a Bearer credential, so a plain-HTTP relay URL on a
+// non-loopback host would send the entire trust credential in cleartext.
+// Loopback http stays legal for development. Enforced here — the Apply
+// choke point — so `woca relay connect`, `woca config set relay-url`, and
+// the web settings API all refuse it. (The WOCA_RELAY_URL environment
+// path bypasses Apply by design: an explicit operator choice, like
+// --insecure.)
+func checkRelayURLTLS(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("relay-url %q: %w", raw, err)
+	}
+	if u.Scheme != "http" {
+		return nil
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("relay-url %q is plain HTTP on a non-loopback host: the relay key would travel in cleartext — use https:// (TLS)", raw)
 }
 
 // Describe renders the settings for terminals: one line per key, secrets
@@ -563,6 +603,8 @@ func KeyValue(cfg Settings, key string) string {
 		return cfg.MemoryPGDB
 	case KeyMemoryPGUser:
 		return cfg.MemoryPGUser
+	case KeyRelayURL:
+		return cfg.RelayURL
 	}
 	return ""
 }

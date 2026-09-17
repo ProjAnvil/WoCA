@@ -16,6 +16,7 @@ import (
 
 	"github.com/projanvil/woca/native-client/internal/auth"
 	"github.com/projanvil/woca/native-client/internal/configstore"
+	"github.com/projanvil/woca/native-client/internal/transport"
 )
 
 type State string
@@ -69,6 +70,9 @@ type nativeStore interface {
 	ActiveProfile(context.Context) (configstore.Profile, bool, error)
 	SetProfileBridge(context.Context, string, string) error
 	ProfileBridge(context.Context, string) string
+	SetProfileRelayToken(context.Context, string, string) error
+	ProfileRelayToken(context.Context, string) string
+	DeleteProfileRelayToken(context.Context, string) error
 	ListProfiles(context.Context) ([]configstore.ProfileRow, error)
 	ProfileByID(context.Context, int64) (configstore.Profile, bool, error)
 	ActivateProfile(context.Context, int64) (configstore.Profile, bool, error)
@@ -104,13 +108,29 @@ type Service struct {
 	embeddedURL  string
 	// now stamps session-expiry comparisons; tests shrink the clock.
 	now func() time.Time
+	// relayLogin performs the relay's POST /api/auth/login; injectable
+	// for tests and for the TOFU-pinned client (WithRelayLogin).
+	relayLogin func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error)
+	// relayLogout performs the relay's best-effort POST /api/auth/logout
+	// before the local token row is deleted (WithRelayLogout).
+	relayLogout func(ctx context.Context, baseURL, token string) error
 }
 
 func NewService(store nativeStore, activator auth.Activator, opts ...ServiceOption) *Service {
 	if activator == nil {
 		activator = auth.UnavailableActivator{}
 	}
-	s := &Service{store: store, activator: activator, now: time.Now}
+	s := &Service{
+		store:     store,
+		activator: activator,
+		now:       time.Now,
+		relayLogin: func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error) {
+			return transport.RelayLogin(ctx, nil, baseURL, apiKey)
+		},
+		relayLogout: func(ctx context.Context, baseURL, token string) error {
+			return transport.RelayLogout(ctx, nil, baseURL, token)
+		},
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -123,6 +143,18 @@ type ServiceOption func(*Service)
 // WithSessionVault enables persistent opaque sessions.
 func WithSessionVault(v SessionVault) ServiceOption {
 	return func(s *Service) { s.vault = v }
+}
+
+// WithRelayLogin overrides the relay login call — production wires the
+// TOFU-pinned client; tests inject a stub.
+func WithRelayLogin(fn func(ctx context.Context, baseURL, apiKey string) (transport.RelaySession, error)) ServiceOption {
+	return func(s *Service) { s.relayLogin = fn }
+}
+
+// WithRelayLogout overrides the relay logout call (best-effort remote
+// revocation); tests inject a stub.
+func WithRelayLogout(fn func(ctx context.Context, baseURL, token string) error) ServiceOption {
+	return func(s *Service) { s.relayLogout = fn }
 }
 
 func (s *Service) Bootstrap(ctx context.Context) (BootstrapState, error) {
@@ -148,6 +180,14 @@ func (s *Service) Bootstrap(ctx context.Context) (BootstrapState, error) {
 			return state, nil
 		}
 	}
+	// A stored relay session token re-opens the app: relay sessions live
+	// server-side (7d sliding + 30d absolute, same table as web
+	// sessions); the local copy is a plain preference row mirroring it.
+	if s.store.ProfileRelayToken(ctx, profile.BaseURL) != "" {
+		s.markReady(profile.BaseURL)
+		state.State = StateReady
+		return state, nil
+	}
 	state.State = StateAuthorizationNeeded
 	return state, nil
 }
@@ -171,6 +211,13 @@ func (s *Service) Connect(ctx context.Context, input ConnectionInput) (state Boo
 		return BootstrapState{}, err
 	}
 	if err := s.store.SetProfileBridge(ctx, input.ServerURL, input.BridgeID); err != nil {
+		return BootstrapState{}, err
+	}
+	// A direct-bridge connect supersedes any relay session stored for
+	// this URL: the credential chain prefers the relay token, so a stale
+	// row would shadow the fresh bridge credentials with 401s (mirrors
+	// ConnectRelay clearing the bridge pin).
+	if err := s.store.DeleteProfileRelayToken(ctx, input.ServerURL); err != nil {
 		return BootstrapState{}, err
 	}
 
@@ -213,11 +260,50 @@ func (s *Service) ConnectLoopback(ctx context.Context, baseURL string) (Bootstra
 	if err := s.store.SetProfileBridge(ctx, baseURL, ""); err != nil {
 		return BootstrapState{}, err
 	}
+	// Loopback is a direct-bridge path: drop any stale relay token for
+	// this URL (same shadowing hazard as Connect).
+	if err := s.store.DeleteProfileRelayToken(ctx, baseURL); err != nil {
+		return BootstrapState{}, err
+	}
 	s.markReady(profile.BaseURL)
 	return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
 }
 
-// SetEmbeddedBaseURL records the embedded bridge's current base URL (the
+// ConnectRelay adopts a personal woca-relay profile (design §3.3): the
+// wcr_ key logs in at the relay's /api/auth/login, and the response's
+// body token is stored via SetProfileRelayToken — that token is what the
+// transport's StaticBearer then presents on every request. The key
+// itself is cleared from the input copy and never persisted.
+func (s *Service) ConnectRelay(ctx context.Context, input ConnectionInput) (BootstrapState, error) {
+	defer func() { input.APIKey = "" }()
+
+	if strings.TrimSpace(input.APIKey) == "" {
+		return BootstrapState{}, errors.New("relay key is required")
+	}
+	if s.store == nil {
+		return BootstrapState{}, errors.New("connection profile store is required")
+	}
+
+	// A newly selected URL must not inherit readiness from the prior profile.
+	s.clearReady()
+	profile, err := s.store.SaveProfile(ctx, input.ServerURL)
+	if err != nil {
+		return BootstrapState{}, err
+	}
+	// Relay profiles are their own target — no edge bridge routing.
+	if err := s.store.SetProfileBridge(ctx, input.ServerURL, ""); err != nil {
+		return BootstrapState{}, err
+	}
+	session, err := s.relayLogin(ctx, profile.BaseURL, input.APIKey)
+	if err != nil {
+		return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, err
+	}
+	if err := s.store.SetProfileRelayToken(ctx, profile.BaseURL, session.Token); err != nil {
+		return BootstrapState{State: StateAuthorizationNeeded, ServerURL: profile.BaseURL}, err
+	}
+	s.markReady(profile.BaseURL)
+	return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
+}
 // connect page's entry ① needs it whenever the user re-connects).
 func (s *Service) SetEmbeddedBaseURL(rawURL string) {
 	s.mu.Lock()
@@ -269,6 +355,17 @@ func (s *Service) Logout(ctx context.Context) (BootstrapState, error) {
 			_ = s.vault.Revoke(ctx, profile.BaseURL, sessionID)
 		}
 		_ = s.vault.Delete(ctx, profile.ID)
+	}
+	// A relay profile carries no vault session — its credential is the
+	// relay-token preference row. Revoke it at the relay first (best
+	// effort, same contract as vault.Revoke), then delete the local row;
+	// otherwise the next Bootstrap silently re-opens with the
+	// still-server-valid token.
+	if token := s.store.ProfileRelayToken(ctx, profile.BaseURL); token != "" {
+		_ = s.relayLogout(ctx, profile.BaseURL, token)
+		if err := s.store.DeleteProfileRelayToken(ctx, profile.BaseURL); err != nil {
+			return BootstrapState{}, err
+		}
 	}
 	// The connect page's entry ① must survive logout — the embedded
 	// bridge is still running and re-adoptable.

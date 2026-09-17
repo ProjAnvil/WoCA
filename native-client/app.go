@@ -22,6 +22,7 @@ import (
 type bridgeAPI interface {
 	Bootstrap(context.Context) (bridge.BootstrapState, error)
 	Connect(context.Context, bridge.ConnectionInput) (bridge.BootstrapState, error)
+	ConnectRelay(context.Context, bridge.ConnectionInput) (bridge.BootstrapState, error)
 	Logout(context.Context) (bridge.BootstrapState, error)
 	ConnectEmbedded(context.Context) (bridge.BootstrapState, error)
 	Profiles(context.Context) ([]bridge.ProfileSummary, error)
@@ -141,6 +142,17 @@ func (a *App) Connect(input bridge.ConnectionInput) (bridge.BootstrapState, erro
 		}
 	}
 	return state, err
+}
+
+// ConnectRelay is the connection-page relay entry: ServerURL is the
+// woca-relay base URL, APIKey the wcr_ rendezvous key. Unlike Connect,
+// the key is never pushed into the bridge credential vault — the stored
+// relay session token (SetProfileRelayToken) is the only credential.
+func (a *App) ConnectRelay(input bridge.ConnectionInput) (bridge.BootstrapState, error) {
+	if a.bridge == nil {
+		return bridge.BootstrapState{}, errors.New("native bridge is required")
+	}
+	return a.bridge.ConnectRelay(a.context(), input)
 }
 
 func (a *App) Logout() (bridge.BootstrapState, error) {

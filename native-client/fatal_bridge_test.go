@@ -52,3 +52,18 @@ func TestFatalLocalDataBridgeRejectsEveryMutatingOrStorageOperation(t *testing.T
 		t.Fatalf("storage results = %#v, %#v; want zero values", preference, write)
 	}
 }
+
+func TestFatalLocalDataBridgeRejectsConnectRelay(t *testing.T) {
+	service := newFatalLocalDataBridge("/tmp/client.db")
+	state, err := service.ConnectRelay(t.Context(), bridge.ConnectionInput{
+		ServerURL: "https://relay.example.com",
+		APIKey:    "wcr_must-not-be-used",
+	})
+	if !errors.Is(err, errFatalLocalData) {
+		t.Fatalf("ConnectRelay error = %v, want fatal local-data error", err)
+	}
+	want := bridge.BootstrapState{State: bridge.StateFatalLocalData, DatabasePath: "/tmp/client.db"}
+	if state != want {
+		t.Fatalf("ConnectRelay state = %#v, want %#v", state, want)
+	}
+}

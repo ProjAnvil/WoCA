@@ -1,4 +1,4 @@
-.PHONY: all build build-personal test race web-test ee-web-test test-ui vet fmt run clean lint check check-sse tui serve web ee-web install deps-baseline check-deps native-test native-build native-dev ent-up ent-down ent-ps ent-logs eval-binary
+.PHONY: all build build-relay e2e-relay build-personal test race web-test ee-web-test test-ui vet fmt run clean lint check check-sse tui serve web ee-web install deps-baseline check-deps native-test native-build native-dev ent-up ent-down ent-ps ent-logs eval-binary
 
 # Default: build the web frontend, then the binary (frontend is embedded).
 all: web build
@@ -31,12 +31,19 @@ ee-web:
 build:
 	go build -o build/woca ./cmd/woca
 
+# The personal remote relay (design 2026-09-17-personal-relay-design): a
+# standalone public-entry binary. Deliberately NOT in SERVER_ARTIFACTS
+# (Makefile:271) — it is a personal-edition artifact and the role
+# TUI/frontend gates do not apply to it.
+build-relay:
+	go build -o build/woca-relay ./cmd/woca-relay
+
 # Personal edition: the single `woca` binary (CLI/TUI/REPL + serve) with all
 # platform interfaces bound to their local implementations. This is the only
 # artifact distributed to individual users; the microservice-role binaries
 # (woca-gateway/-scheduler/-worker/...) live under cmd/ and are built by the
 # build-server / dist-* targets below.
-build-personal: web build
+build-personal: web build build-relay
 
 # Cross-compile the static linux/amd64 binary that the Harbor agent adapter
 # (eval/woca_agent.py) uploads into benchmark task containers. CGO-free
@@ -105,11 +112,14 @@ clean:
 deps-baseline:
 	@mkdir -p ci
 	go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca | LC_ALL=C sort -u > ci/deps-personal.txt
+	go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca-relay | LC_ALL=C sort -u > ci/deps-relay.txt
 
-check-deps: build
+check-deps: build build-relay
 	@mkdir -p build
 	@go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca | LC_ALL=C sort -u > build/deps-personal.actual
 	@diff -u ci/deps-personal.txt build/deps-personal.actual && echo "personal-edition deps match baseline"
+	@go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./cmd/woca-relay | LC_ALL=C sort -u > build/deps-relay.actual
+	@diff -u ci/deps-relay.txt build/deps-relay.actual && echo "relay deps match baseline"
 
 # Enterprise-only native client commands. These remain independent of the
 # personal-edition default/build targets above.
@@ -369,10 +379,17 @@ check-editions: build build-server
 	@if go list -deps ./internal/ee/... | grep -qE 'internal/(tui|repl|console|notify|oauth|sdkout)'; then \
 		echo "enterprise tree links personal/interactive packages"; exit 1; \
 	fi
-	@out=$$(go list -f '{{.ImportPath}} {{join .Imports " "}} {{join .TestImports " "}}' ./internal/... ./web/... ./cmd/woca 2>/dev/null \
+	@out=$$(go list -f '{{.ImportPath}} {{join .Imports " "}} {{join .TestImports " "}}' ./internal/... ./web/... ./cmd/woca ./cmd/woca-relay 2>/dev/null \
 		| grep 'woca/internal/ee/' | grep -v '^github.com/projanvil/woca/internal/ee/'); \
 	if [ -n "$$out" ]; then \
 		echo "core code imports internal/ee (enterprise belongs behind the seams):"; \
 		echo "$$out"; exit 1; \
 	fi
 	@echo "edition boundaries pass dependency hygiene"
+
+# Personal relay end-to-end (design §10): key create → connect → login →
+# tunneled API + SSE → revoke → both sides error. Loopback, throwaway
+# state; no model provider required (the run surface is exercised through
+# the tunneled API and the global events SSE).
+e2e-relay:
+	ci/e2e-relay.sh

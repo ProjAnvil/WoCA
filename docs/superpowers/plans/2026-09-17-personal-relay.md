@@ -2033,6 +2033,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 )
@@ -2045,6 +2046,12 @@ func TestParkTakeComplete(t *testing.T) {
 	q := NewParkingQueue(ParkCapacity)
 	ctx := context.Background()
 	parked := make(chan *ParkedResponse, 1)
+	// checked gates the client goroutine's deferred done() so it cannot
+	// close streamDone before the main goroutine's assertion below: the
+	// parked channel is buffered, so without this gate the goroutine runs
+	// done() immediately after its send and the assertion races (and
+	// loses) against the streamDone close.
+	checked := make(chan struct{})
 	go func() {
 		resp, done, _, err := q.Park(ctx, 7, testRequest("r1"))
 		if err != nil {
@@ -2052,6 +2059,7 @@ func TestParkTakeComplete(t *testing.T) {
 		}
 		defer done()
 		parked <- resp
+		<-checked
 	}()
 	req, err := q.Take(ctx, 7, "gen-a", time.Second)
 	if err != nil {
@@ -2073,6 +2081,9 @@ func TestParkTakeComplete(t *testing.T) {
 		t.Fatal("streamDone closed before the client finished")
 	default:
 	}
+	// Release the client goroutine: its deferred done() must now close
+	// streamDone.
+	close(checked)
 	deadline := time.After(2 * time.Second)
 	for {
 		select {
@@ -2144,6 +2155,100 @@ func TestTakeTimeout(t *testing.T) {
 	}
 	if time.Since(start) < 40*time.Millisecond {
 		t.Fatal("take returned before the wait window")
+	}
+}
+
+// TestDoneFailAllConcurrentNoDoubleClose fires the revocation-during-stream
+// race: a client's done() and a FailAll drain closing the same item's
+// streamDone concurrently must not panic with "close of closed channel"
+// (a panic in any goroutine crashes the test binary).
+func TestDoneFailAllConcurrentNoDoubleClose(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		q := NewParkingQueue(ParkCapacity)
+		ctx := context.Background()
+		parked := make(chan func(), 1)
+		go func() {
+			_, done, _, err := q.Park(ctx, 7, testRequest("r1"))
+			if err != nil {
+				parked <- nil
+				return
+			}
+			parked <- done
+		}()
+		if _, err := q.Take(ctx, 7, "gen-a", time.Second); err != nil {
+			t.Fatal(err)
+		}
+		streamDone, err := q.Complete(7, "gen-a", "r1", &ParkedResponse{Status: http.StatusOK})
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := <-parked
+		if done == nil {
+			t.Fatal("park failed")
+		}
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func() { defer wg.Done(); done() }()
+		}
+		for g := 0; g < 2; g++ {
+			wg.Add(1)
+			go func() { defer wg.Done(); q.FailAll(7, ErrRevoked) }()
+		}
+		wg.Wait()
+		select {
+		case <-streamDone:
+		default:
+			t.Fatal("streamDone not closed after done + FailAll")
+		}
+	}
+}
+
+// TestCompleteDuplicateIsNoOp covers a bridge responding more than once to
+// the same id: duplicates must be no-ops (nil error, the first respond
+// wins) instead of sending into the full result channel while holding the
+// queue mutex — which would freeze every Park/Take/Len.
+func TestCompleteDuplicateIsNoOp(t *testing.T) {
+	q := NewParkingQueue(ParkCapacity)
+	ctx := context.Background()
+	got := make(chan *ParkedResponse, 1)
+	go func() {
+		resp, _, _, err := q.Park(ctx, 7, testRequest("r1"))
+		if err != nil {
+			return
+		}
+		got <- resp
+	}()
+	if _, err := q.Take(ctx, 7, "gen-a", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	first := &ParkedResponse{Status: http.StatusOK}
+	if _, err := q.Complete(7, "gen-a", "r1", first); err != nil {
+		t.Fatal(err)
+	}
+	// The client consumed the first respond, so nothing ever receives from
+	// the item's result channel again. Duplicate responds must be no-ops
+	// (nil error, first wins) — on the unfixed code the first duplicate
+	// refills the result channel and the second blocks on it while holding
+	// the queue mutex, freezing every Park/Take/Len.
+	if resp := <-got; resp != first {
+		t.Fatalf("client received %+v, want the first respond to win", resp)
+	}
+	second := &ParkedResponse{Status: http.StatusTeapot}
+	for i := 0; i < 2; i++ {
+		blocked := make(chan error, 1)
+		go func() {
+			_, err := q.Complete(7, "gen-a", "r1", second)
+			blocked <- err
+		}()
+		select {
+		case err := <-blocked:
+			if err != nil {
+				t.Fatalf("duplicate complete #%d: %v, want nil (no-op)", i+1, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("duplicate complete #%d blocked on the full result channel (queue mutex frozen)", i+1)
+		}
 	}
 }
 
@@ -2346,10 +2451,20 @@ type parkedItem struct {
 	result     chan parkResult
 	failCause  chan error // buffered 1: revocation cause for the stream consumer
 	streamDone chan struct{}
+	// closeOnce makes every streamDone close idempotent: done() and FailAll
+	// can race (revocation during streaming), and a check-then-close would
+	// panic with "close of closed channel".
+	closeOnce  sync.Once
 	inFlight   bool
 	generation string
 	voided     bool
+	completed  bool // set under q.mu: duplicate Complete is a no-op
 	resp       *ParkedResponse
+}
+
+// closeStream closes streamDone exactly once, whoever calls it.
+func (it *parkedItem) closeStream() {
+	it.closeOnce.Do(func() { close(it.streamDone) })
 }
 
 // ParkingQueue holds per-key parked client requests (design §6.2): a
@@ -2396,18 +2511,11 @@ func (q *ParkingQueue) Park(ctx context.Context, keyID int64, req ParkedRequest)
 	q.broadcastLocked()
 	q.mu.Unlock()
 
-	closeStream := func() {
-		select {
-		case <-item.streamDone:
-		default:
-			close(item.streamDone)
-		}
-	}
 	done := func() {
 		q.mu.Lock()
 		q.removeLocked(keyID, item)
 		q.mu.Unlock()
-		closeStream()
+		item.closeStream()
 	}
 
 	select {
@@ -2428,7 +2536,7 @@ func (q *ParkingQueue) Park(ctx context.Context, keyID int64, req ParkedRequest)
 			q.removeLocked(keyID, item)
 			q.mu.Unlock()
 		}
-		closeStream()
+		item.closeStream()
 		return nil, nil, nil, ctx.Err()
 	}
 }
@@ -2480,6 +2588,14 @@ func (q *ParkingQueue) Complete(keyID int64, generation, id string, resp *Parked
 			q.removeLocked(keyID, item)
 			return nil, ErrClientGone
 		}
+		if item.completed {
+			// Duplicate respond for an already-completed id (bridge retry):
+			// no-op — the first respond wins. Without this guard the send
+			// below blocks on the full result channel while holding q.mu,
+			// freezing every Park/Take/Len.
+			return item.streamDone, nil
+		}
+		item.completed = true
 		item.resp = resp
 		item.result <- parkResult{resp: resp}
 		return item.streamDone, nil
@@ -2509,11 +2625,7 @@ func (q *ParkingQueue) FailAll(keyID int64, err error) {
 		if item.resp != nil && item.resp.Body != nil {
 			_ = item.resp.Body.Close()
 		}
-		select {
-		case <-item.streamDone:
-		default:
-			close(item.streamDone)
-		}
+		item.closeStream()
 	}
 }
 

@@ -305,3 +305,44 @@ func TestDeleteSessionForgetsState(t *testing.T) {
 		t.Fatal("state row survived session delete")
 	}
 }
+
+// TestGlobalEventsWritesImmediately verifies an /api/events connection
+// receives an initial frame even when the snapshot is empty: the relay
+// tunnel's streamRecorder commits response headers at the first Write
+// (design §6.3), so a silent stream would hang the tunneled response
+// head — the browser's EventSource would sit in "connecting" forever.
+func TestGlobalEventsWritesImmediately(t *testing.T) {
+	s := New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: t.TempDir()})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	first := make(chan string, 1)
+	go func() {
+		sc := bufio.NewScanner(resp.Body)
+		if sc.Scan() {
+			first <- sc.Text()
+		}
+	}()
+	select {
+	case line := <-first:
+		if !strings.HasPrefix(line, ":") {
+			t.Fatalf("first frame = %q, want an SSE comment", line)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no initial frame within 2s — a tunneled stream cannot commit its response head")
+	}
+}
