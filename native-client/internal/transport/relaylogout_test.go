@@ -3,6 +3,7 @@ package transport
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -36,5 +37,42 @@ func TestRelayLogoutToleratesGoneSession(t *testing.T) {
 			t.Fatalf("status %d: %v", status, err)
 		}
 		srv.Close()
+	}
+}
+
+func TestRelayLogoutDefaultClient(t *testing.T) {
+	// A nil client falls back to http.DefaultClient.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	if err := RelayLogout(t.Context(), nil, srv.URL, "sess-1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRelayLogoutBadURL(t *testing.T) {
+	if err := RelayLogout(t.Context(), nil, "http://\x7f.invalid", "sess-1"); err == nil {
+		t.Fatal("expected request construction error")
+	}
+}
+
+func TestRelayLogoutUnreachable(t *testing.T) {
+	err := RelayLogout(t.Context(), http.DefaultClient, "http://127.0.0.1:1", "sess-1")
+	if err == nil || !strings.Contains(err.Error(), "relay logout:") {
+		t.Fatalf("err = %v, want transport error", err)
+	}
+}
+
+func TestRelayLogoutUnexpectedStatus(t *testing.T) {
+	// A 5xx means the session may still live server-side — surfaced as an
+	// error (the caller still deletes the local row regardless).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	err := RelayLogout(t.Context(), srv.Client(), srv.URL, "sess-1")
+	if err == nil || !strings.Contains(err.Error(), "unexpected status 500") {
+		t.Fatalf("err = %v, want unexpected-status error", err)
 	}
 }

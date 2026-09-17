@@ -308,6 +308,17 @@ func stripResponseCookies(headers http.Header) {
 
 func sanitizeUnauthorizedResponse(response *http.Response) {
 	if response.Body != nil {
+		// The body is closed WITHOUT reading: a hostile upstream could
+		// trickle an endless 401/403 body and stall the sanitize. But
+		// closing an unread body makes the transport drain it on a
+		// background goroutine for connection reuse, and that drain
+		// merges trailers into response.Trailer — racing the Trailer
+		// reset below (found by -race). A ContentLength above the
+		// transport's drain budget (maxPostCloseReadBytes, 256 KiB)
+		// skips the drain: the connection is closed instead of reused
+		// and Close returns only once no goroutine touches this
+		// response anymore.
+		response.ContentLength = 1 << 20
 		_ = response.Body.Close()
 	}
 	const body = `{"error":"authorization required"}`

@@ -449,3 +449,32 @@ func TestConnectStoresKeyOnSuccess(t *testing.T) {
 		t.Fatalf("failed connect persisted: %v", stored)
 	}
 }
+
+func TestAppConnectRelayDelegatesWithoutStoringKey(t *testing.T) {
+	service := &fakeBridgeAPI{connectState: bridge.BootstrapState{State: bridge.StateReady, ServerURL: "https://relay.example.com"}}
+	app := NewApp(service)
+	var stored []string
+	app.storeKey = func(baseURL, apiKey string) { stored = append(stored, baseURL+"="+apiKey) }
+
+	state, err := app.ConnectRelay(bridge.ConnectionInput{ServerURL: "https://relay.example.com", APIKey: "wcr_key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != bridge.StateReady || state.ServerURL != "https://relay.example.com" {
+		t.Fatalf("state: %+v", state)
+	}
+	if service.connectInput.APIKey != "wcr_key" {
+		t.Fatalf("bridge input: %+v", service.connectInput)
+	}
+	// Unlike Connect, the wcr_ key is never pushed into the credential
+	// vault — the stored relay session token is the only credential.
+	if len(stored) != 0 {
+		t.Fatalf("relay key reached the vault sink: %v", stored)
+	}
+}
+
+func TestAppConnectRelayRequiresBridge(t *testing.T) {
+	if _, err := NewApp(nil).ConnectRelay(bridge.ConnectionInput{ServerURL: "https://relay.example.com", APIKey: "wcr_key"}); err == nil {
+		t.Fatal("nil bridge accepted")
+	}
+}

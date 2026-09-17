@@ -3,8 +3,10 @@ package bridge
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
+	"github.com/projanvil/woca/native-client/internal/configstore"
 	"github.com/projanvil/woca/native-client/internal/transport"
 )
 
@@ -63,5 +65,103 @@ func TestConnectRelayRequiresKey(t *testing.T) {
 	svc := NewService(st, nil)
 	if _, err := svc.ConnectRelay(t.Context(), ConnectionInput{ServerURL: "https://relay.example.com"}); err == nil {
 		t.Fatal("empty key accepted")
+	}
+}
+
+// relayTokenStore wraps a real store and injects failures into the
+// relay-token and bridge-pin mutations.
+type relayTokenStore struct {
+	nativeStore
+	saveProfileErr      error
+	activeProfileErr    error
+	setBridgeErr        error
+	setRelayTokenErr    error
+	deleteRelayTokenErr error
+}
+
+func (s relayTokenStore) SaveProfile(ctx context.Context, rawURL string) (configstore.Profile, error) {
+	if s.saveProfileErr != nil {
+		return configstore.Profile{}, s.saveProfileErr
+	}
+	return s.nativeStore.SaveProfile(ctx, rawURL)
+}
+
+func (s relayTokenStore) ActiveProfile(ctx context.Context) (configstore.Profile, bool, error) {
+	if s.activeProfileErr != nil {
+		return configstore.Profile{}, false, s.activeProfileErr
+	}
+	return s.nativeStore.ActiveProfile(ctx)
+}
+
+func (s relayTokenStore) SetProfileBridge(ctx context.Context, baseURL, bridgeID string) error {
+	if s.setBridgeErr != nil {
+		return s.setBridgeErr
+	}
+	return s.nativeStore.SetProfileBridge(ctx, baseURL, bridgeID)
+}
+
+func (s relayTokenStore) SetProfileRelayToken(ctx context.Context, baseURL, token string) error {
+	if s.setRelayTokenErr != nil {
+		return s.setRelayTokenErr
+	}
+	return s.nativeStore.SetProfileRelayToken(ctx, baseURL, token)
+}
+
+func (s relayTokenStore) DeleteProfileRelayToken(ctx context.Context, baseURL string) error {
+	if s.deleteRelayTokenErr != nil {
+		return s.deleteRelayTokenErr
+	}
+	return s.nativeStore.DeleteProfileRelayToken(ctx, baseURL)
+}
+
+func TestConnectRelayRequiresStore(t *testing.T) {
+	svc := NewService(nil, nil)
+	_, err := svc.ConnectRelay(t.Context(), ConnectionInput{ServerURL: "https://relay.example.com", APIKey: "wcr_key"})
+	if err == nil || !strings.Contains(err.Error(), "store is required") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestConnectRelayBadProfileURL(t *testing.T) {
+	svc := NewService(openTestStore(t), nil)
+	_, err := svc.ConnectRelay(t.Context(), ConnectionInput{ServerURL: "://bad-url", APIKey: "wcr_key"})
+	if err == nil {
+		t.Fatal("unnormalizable URL accepted")
+	}
+}
+
+func TestConnectRelaySetBridgeFailure(t *testing.T) {
+	st := openTestStore(t)
+	boom := errors.New("store write failed")
+	svc := NewService(relayTokenStore{nativeStore: st, setBridgeErr: boom}, nil)
+	_, err := svc.ConnectRelay(t.Context(), ConnectionInput{ServerURL: "https://relay.example.com", APIKey: "wcr_key"})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want %v", err, boom)
+	}
+}
+
+func TestConnectRelayTokenStoreFailure(t *testing.T) {
+	st := openTestStore(t)
+	// The login succeeded, but persisting the session token fails: the
+	// profile stays unauthorized and the error surfaces.
+	svc := NewService(relayTokenStore{nativeStore: st, setRelayTokenErr: errors.New("db full")}, nil,
+		WithRelayLogin(relayLoginStub("sess-1")))
+	state, err := svc.ConnectRelay(t.Context(), ConnectionInput{ServerURL: "https://relay.example.com", APIKey: "wcr_key"})
+	if err == nil {
+		t.Fatal("token store failure swallowed")
+	}
+	if state.State != StateAuthorizationNeeded {
+		t.Fatalf("state: %+v, want StateAuthorizationNeeded", state)
+	}
+}
+
+func TestConnectRelayRejectsEmptySessionToken(t *testing.T) {
+	// A login stub returning an empty token trips SetProfileRelayToken's
+	// validation — the relay contract violation surfaces as an error.
+	st := openTestStore(t)
+	svc := NewService(st, nil, WithRelayLogin(relayLoginStub("")))
+	_, err := svc.ConnectRelay(t.Context(), ConnectionInput{ServerURL: "https://relay.example.com", APIKey: "wcr_key"})
+	if err == nil {
+		t.Fatal("empty session token accepted")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +62,67 @@ func TestRelayLoginUnreachable(t *testing.T) {
 	var lerr *RelayLoginError
 	if errors.As(err, &lerr) {
 		t.Fatalf("transport failure misclassified as RelayLoginError: %v", err)
+	}
+}
+
+func TestRelayLoginErrorMessage(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  RelayLoginError
+		want string
+	}{
+		{"with code", RelayLoginError{Status: 401, Code: "revoked"}, "relay login failed (HTTP 401): revoked"},
+		{"without code", RelayLoginError{Status: 500}, "relay login failed (HTTP 500)"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.err.Error(); got != c.want {
+				t.Fatalf("Error() = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestRelayLoginDefaultClient(t *testing.T) {
+	// A nil client falls back to http.DefaultClient (fine for plain-HTTP
+	// test servers; production wires the TOFU-pinned client).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": "sess-2", "expires_at": 1})
+	}))
+	t.Cleanup(srv.Close)
+	sess, err := RelayLogin(context.Background(), nil, srv.URL, "wcr_test")
+	if err != nil || sess.Token != "sess-2" {
+		t.Fatalf("session = %+v, err = %v", sess, err)
+	}
+}
+
+func TestRelayLoginBadURL(t *testing.T) {
+	// A control character in the base URL fails request construction.
+	if _, err := RelayLogin(context.Background(), nil, "http://\x7f.invalid", "wcr_x"); err == nil {
+		t.Fatal("expected request construction error")
+	}
+}
+
+func TestRelayLoginDecodeError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("not-json"))
+	}))
+	t.Cleanup(srv.Close)
+	_, err := RelayLogin(context.Background(), srv.Client(), srv.URL, "wcr_x")
+	if err == nil || !strings.Contains(err.Error(), "decode") {
+		t.Fatalf("err = %v, want decode error", err)
+	}
+}
+
+func TestRelayLoginEmptyToken(t *testing.T) {
+	// A 200 without a token is a contract violation, not a session.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": "", "expires_at": 1})
+	}))
+	t.Cleanup(srv.Close)
+	_, err := RelayLogin(context.Background(), srv.Client(), srv.URL, "wcr_x")
+	if err == nil || !strings.Contains(err.Error(), "empty session token") {
+		t.Fatalf("err = %v, want empty-token error", err)
 	}
 }
