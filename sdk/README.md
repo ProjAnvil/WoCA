@@ -68,6 +68,36 @@ The event stream ends with exactly one `EventResult`, then closes. Drain
 | `WithInterruptHandler(func)` | `OnInterrupt` | — (no CLI equivalent) |
 | `WithPlugins(...Plugin)` | `Plugins` | — (see Plugins below) |
 | `WithTelemetry(...TelemetrySink)` | `Telemetry` | — (see Telemetry below) |
+| `WithLogOutput(io.Writer)` / `WithLogLevel(string)` | `LogOutput` / `LogLevel` | — (silent by default) |
+| `WithSandbox(endpoint, key)` | `Sandbox` / `SandboxAPIKey` | routes every process side effect through the remote sandbox executor |
+
+## Multi-turn sessions
+
+`Query` is one prompt, one run. For conversations, keep a `Session` and
+`Ask` repeatedly — the transcript carries between turns and the per-turn
+result reports that turn's usage (not the session cumulative totals):
+
+```go
+s, err := sdk.NewSession(ctx,
+	sdk.WithProvider("anthropic"), sdk.WithModel("claude-sonnet-4-5"),
+	sdk.WithAPIKey(key), sdk.WithDB("none"),
+)
+if err != nil { panic(err) }
+defer s.Close()
+
+for _, q := range []string{"read the Makefile", "what did it say?"} {
+	evs, err := s.Ask(ctx, q) // one turn, one event stream
+	if err != nil { panic(err) }
+	for ev := range evs {
+		if ev.Type == sdk.EventResult {
+			fmt.Println(q, "->", ev.Result.Text)
+		}
+	}
+}
+```
+
+Only one turn may stream at a time: a second `Ask` while one is in flight
+returns `ErrAskInProgress`; after `Close` it returns `ErrSessionClosed`.
 
 The zero `Options` is the CLI's default posture with headless-safe interrupt
 handling. Embedded runs pin the log level to `error` and discard log output so
@@ -114,9 +144,56 @@ s, err := sdk.Query(ctx, "…", sdk.WithPlugins(auditPlugin{}))
 
 `Observe` is called sequentially from the run goroutine — keep it fast or
 dispatch internally. Every `RunEvent` carries the run's `SessionID`/`RunID`
-so plugins can correlate with their own records. Gating and transformation
-hooks (tool guards, model hooks) are planned follow-ups; a plugin that
-implements only `Name()` is accepted and ignored.
+so plugins can correlate with their own records.
+
+A plugin may also implement the gating and transformation capabilities
+(re-exported aliases of the harness types) in any combination:
+
+```go
+// Memory-style context injection (the pattern the built-in ladyM memory
+// uses internally): attach retrieved context ahead of each model request.
+type knowledgePlugin struct{ fetch func(prompt string) string }
+
+func (knowledgePlugin) Name() string { return "knowledge" }
+func (p knowledgePlugin) BeforeModel(_ context.Context, turn *sdk.ModelTurn) sdk.BeforeModelResult {
+	return sdk.BeforeModelResult{PrependContext: p.fetch(turn.Prompt)}
+}
+func (knowledgePlugin) AfterModel(_ context.Context, _ *sdk.ModelTurn, r *sdk.ModelReply) *sdk.ModelReply {
+	return nil // keep the reply unchanged
+}
+
+// Policy gate: deny dangerous tools, audit the rest.
+type guardPlugin struct{}
+
+func (guardPlugin) Name() string { return "guard" }
+func (guardPlugin) BeforeTool(_ context.Context, call sdk.ToolCallInfo) sdk.ToolDecision {
+	if call.Name == "Bash" {
+		return sdk.AskTool() // escalate to the permission interrupt
+	}
+	return sdk.AllowTool()
+}
+func (guardPlugin) AfterTool(_ context.Context, call sdk.ToolCallInfo, res sdk.ToolResultInfo) sdk.ToolPostDecision {
+	return sdk.ToolFeedback("audited")
+}
+```
+
+Semantics worth knowing:
+
+- **ToolGuard** — `BeforeTool` runs after the permission gate, before
+  execution: `DenyTool(reason)` skips the call and feeds the reason to the
+  model, `AskTool()` escalates to the permission interrupt (in the
+  headless default posture that means denied — override with
+  `WithInterruptHandler`). `AfterTool` feedback is appended to the tool
+  result. Guards run before the settings-file hooks; any deny wins; and
+  installing any guard disables speculative tool execution (no tool starts
+  behind the guard's back).
+- **ModelHook** — `BeforeModel` may `PrependContext` (request-scoped, a
+  `<context>` block inserted after the system prompt; never persisted to
+  the transcript) or return a `ModelReply` to skip the model call
+  entirely. `AfterModel` may replace the reply's TEXT (tool calls survive;
+  gate those with a ToolGuard). While any model hook is installed the
+  model node buffers its stream (no live token streaming) so replacement
+  stays consistent.
 
 ## Telemetry (and Langfuse)
 

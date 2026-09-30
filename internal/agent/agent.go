@@ -187,6 +187,17 @@ type Config struct {
 	SubagentModel language.ChatModel
 	// Hooks optionally runs PreToolUse/PostToolUse/Stop hooks around tool calls.
 	Hooks *hooks.Runner
+	// ToolGuards are in-process tool gates (the embedding host's plugin
+	// surface). They run after the permission gate, before execution; deny
+	// skips the call, ask escalates to the permission prompt. Installing
+	// any guard disables speculative tool execution.
+	ToolGuards []ToolGuard
+	// ModelHooks are in-process model-round transformers (the embedding
+	// host's plugin surface): request-scoped context injection or reply
+	// short-circuit before the call, reply replacement after it (the model
+	// node buffers its stream while hooks are installed). Empty keeps the
+	// node byte-identical to the un-instrumented path.
+	ModelHooks []ModelHook
 	// Skills are loaded skills exposed via the Skill tool.
 	Skills []skills.Skill
 	// ExtraTools are appended to the tool set (e.g. MCP tools).
@@ -281,10 +292,14 @@ type Agent struct {
 	// starting: the fork layers fresh input onto a thread's latest
 	// checkpoint, while woca's turn model starts every fresh run from
 	// scratch (see resetThread).
-	saver        lgcheckpoint.Saver
-	tasks        *TaskManager
-	taskList     *TaskList
-	hooks        *hooks.Runner
+	saver    lgcheckpoint.Saver
+	tasks    *TaskManager
+	taskList *TaskList
+	hooks    *hooks.Runner
+	// toolGuards/modelHooks are the in-process processing plugins
+	// (Config.ToolGuards/ModelHooks): read-only after New.
+	toolGuards   []ToolGuard
+	modelHooks   []ModelHook
 	skills       []skills.Skill
 	compactLimit int
 	summarizer   language.ChatModel
@@ -440,6 +455,8 @@ func New(cfg Config) (*Agent, error) {
 		tasks:          newTaskManager(),
 		taskList:       newTaskList(),
 		hooks:          cfg.Hooks,
+		toolGuards:     cfg.ToolGuards,
+		modelHooks:     cfg.ModelHooks,
 		skills:         cfg.Skills,
 		compactLimit:   cfg.CompactThreshold,
 		summarizer:     cfg.Summarizer,
@@ -1202,6 +1219,30 @@ func (a *Agent) modelNode() lggraph.NodeFunc {
 		// oversized rounds are preview-replaced so the prompt fits.
 		// The transcript/state keeps the originals.
 		msgs = ApplyToolResultBudget(msgs, a.toolBudget)
+		// Model hooks (the embedding host's plugin surface): request-scoped
+		// context injection or a short-circuit reply. Buffered mode (below)
+		// keeps the reply replaceable after the stream completes.
+		buffered := len(a.modelHooks) > 0
+		var prepend string
+		if buffered {
+			turn := &ModelTurn{Model: a.CurrentModelName(), Prompt: lastHumanPrompt(msgs)}
+			for _, h := range a.modelHooks {
+				res := h.BeforeModel(ctx, turn)
+				if res.Reply != nil {
+					txt := res.Reply.Text
+					if emit != nil && txt != "" {
+						emit(txt)
+					}
+					return map[string]any{"messages": []messages.Message{messages.AI(txt)}}, nil
+				}
+				if res.PrependContext != "" {
+					prepend += strings.TrimSpace(res.PrependContext) + "\n"
+				}
+			}
+			if prepend != "" {
+				msgs = withInjectedContext(msgs, prepend)
+			}
+		}
 		// Snapshot the bound model under a.mu: SetModel and tool refreshes
 		// swap it concurrently (settings API, plugin toggles).
 		a.mu.Lock()
@@ -1236,7 +1277,7 @@ func (a *Agent) modelNode() lggraph.NodeFunc {
 				}
 				continue
 			}
-			if text := TextDelta(chunk); text != "" && emit != nil {
+			if text := TextDelta(chunk); text != "" && emit != nil && !buffered {
 				emit(text)
 			}
 			if r := ReasoningDeltaText(chunk); r != "" && emit != nil {
@@ -1245,14 +1286,41 @@ func (a *Agent) modelNode() lggraph.NodeFunc {
 			MergeStreamChunks(&full, chunk)
 			// Providers emit each tool call as one finished chunk when its
 			// content block closes; dispatch it while the stream continues.
+			// Buffered mode (model hooks installed) holds tool calls for
+			// the tools node: AfterModel may replace the whole reply.
 			for _, tc := range chunk.ToolCalls {
-				if a.dispatchSpeculative(ctx, tc) {
+				if !buffered && a.dispatchSpeculative(ctx, tc) {
 					specIDs = append(specIDs, tc.ID)
 				}
 			}
 		}
 		if full.Role == "" {
 			full = messages.AI("")
+		}
+		if buffered {
+			reply := &ModelReply{Text: full.Content}
+			for _, tc := range full.ToolCalls {
+				reply.ToolCalls = append(reply.ToolCalls, ToolCallInfo{ID: tc.ID, Name: tc.Name, Args: tc.Args})
+			}
+			turn := &ModelTurn{Model: a.CurrentModelName(), Prompt: lastHumanPrompt(msgs)}
+			for _, h := range a.modelHooks {
+				if r := h.AfterModel(ctx, turn, reply); r != nil {
+					reply = r
+				}
+			}
+			if reply.Text != full.Content {
+				// Replacement is a text transformation: the model's tool
+				// intents are structural, not prose, so they survive (gate
+				// tool calls with a ToolGuard instead). Usage metadata from
+				// the real call stays for accounting.
+				replaced := messages.AI(reply.Text)
+				replaced.UsageMetadata = full.UsageMetadata
+				replaced.ToolCalls = full.ToolCalls
+				full = replaced
+			}
+			if emit != nil && full.Content != "" {
+				emit(full.Content)
+			}
 		}
 		// Session usage accounting (cost tracking): fold this
 		// call's reported tokens into the running totals for /cost.
@@ -1387,6 +1455,28 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				continue
 			}
 			gateConsumed := lggraph.InterruptConsumeCount(ctx)
+			// In-process guards run before the permission gate (host code
+			// is authoritative): deny skips the call, ask escalates to the
+			// permission prompt directly.
+			if len(a.toolGuards) > 0 {
+				switch d := a.guardsBeforeTool(ctx, call); d.Action {
+				case ToolDeny:
+					content := "Error: tool use denied by guard"
+					if d.Reason != "" {
+						content = "Error: " + d.Reason
+					}
+					overrides[i] = &coretools.Result{Content: content}
+					continue
+				case ToolAsk:
+					ok, err := a.askPermission(ctx, call)
+					if err != nil {
+						return nil, err
+					}
+					if !ok {
+						run[i] = false
+					}
+				}
+			}
 			shouldRun, override, err := a.gate(ctx, call)
 			if err != nil {
 				return nil, err
@@ -1464,6 +1554,11 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				content := res.Content
 				if preFeedback[i] != "" {
 					content = preFeedback[i] + "\n" + content
+				}
+				if len(a.toolGuards) > 0 {
+					if fb := a.guardsAfterTool(ctx, call, content); fb != "" {
+						content += "\n" + fb
+					}
 				}
 				if h := a.hooksFor(ctx); h != nil {
 					if p, err := h.PostToolUse(ctx, call.Name, call.Args, content); err == nil && p.Feedback != "" {

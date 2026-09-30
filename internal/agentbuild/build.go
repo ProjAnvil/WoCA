@@ -228,6 +228,8 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		RecursionLimit:  cfg.RecursionLimit,
 		WorkDir:         cfg.WorkDir,
 		Hooks:           hookRunner,
+		ToolGuards:      opts.ToolGuards,
+		ModelHooks:      opts.ModelHooks,
 		HooksFor: func(ws string) *hooks.Runner {
 			return hooks.NewRunner(loadHooksConfig(ws), ws, "woca", hooks.WithLogger(log))
 		},

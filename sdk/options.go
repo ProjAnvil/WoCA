@@ -1,7 +1,10 @@
 package sdk
 
 import (
+	"io"
+
 	"github.com/projanvil/woca/internal/agentbuild"
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 // Options configures one headless run. The zero value is the CLI's default
@@ -35,6 +38,17 @@ type Options struct {
 	// skill loads) — see TelemetrySink. Installed process-wide, deduped by
 	// identity; a host typically installs once and reuses across queries.
 	Telemetry []TelemetrySink
+	// LogOutput redirects the embedded agent's logs (silent by default).
+	LogOutput io.Writer
+	// LogLevel names a zerolog level ("debug", "info", "warn", "error");
+	// empty is "error".
+	LogLevel string
+	// Sandbox, when set, routes every process side effect (shell and file
+	// tools, hooks, MCP stdio servers, plugin runtimes) through the remote
+	// sandbox executor at endpoint instead of the host.
+	Sandbox string
+	// SandboxAPIKey authenticates the sandbox executor (optional).
+	SandboxAPIKey string
 }
 
 // Option mutates Options (functional-option style).
@@ -66,10 +80,20 @@ func WithPlugins(ps ...Plugin) Option {
 func WithTelemetry(s ...TelemetrySink) Option {
 	return func(o *Options) { o.Telemetry = append(o.Telemetry, s...) }
 }
+func WithLogOutput(w io.Writer) Option { return func(o *Options) { o.LogOutput = w } }
+func WithLogLevel(l string) Option     { return func(o *Options) { o.LogLevel = l } }
+func WithSandbox(endpoint, apiKey string) Option {
+	return func(o *Options) { o.Sandbox, o.SandboxAPIKey = endpoint, apiKey }
+}
 
 // buildOptions translates into the composition-root options. LogLevel is
-// pinned to error: an embedded agent must not spam the host process.
+// pinned to error: an embedded agent must not spam the host process (the
+// logger itself is redirected by logFor, not by this field).
 func (o Options) buildOptions(prompt string) agentbuild.Options {
+	var sandbox *executor.SandboxConfig
+	if o.Sandbox != "" {
+		sandbox = &executor.SandboxConfig{Endpoint: o.Sandbox, APIKey: o.SandboxAPIKey}
+	}
 	return agentbuild.Options{
 		Prompt:         prompt,
 		Model:          o.Model,
@@ -90,5 +114,8 @@ func (o Options) buildOptions(prompt string) agentbuild.Options {
 		DenyCommands:   o.DenyCommands,
 		DB:             o.DB,
 		MaxTurns:       o.MaxTurns,
+		ToolGuards:     toolGuardsOf(o.Plugins),
+		ModelHooks:     modelHooksOf(o.Plugins),
+		Sandbox:        sandbox,
 	}
 }

@@ -62,6 +62,54 @@ func ExampleQuery_withPlugins() {
 	}
 }
 
+// ExampleNewSession shows a multi-turn conversation plus a memory-style
+// model hook (the pattern the built-in ladyM memory uses internally):
+// retrieved context is attached ahead of each model request, scoped to
+// that request only.
+func ExampleNewSession() {
+	knowledge := knowledgePlugin{fetch: func(prompt string) string {
+		return "quarterly revenue is up" // a real plugin retrieves this
+	}}
+
+	s, err := sdk.NewSession(context.Background(),
+		sdk.WithModel("claude-sonnet-4-5"),
+		sdk.WithPermissionMode("bypassPermissions"),
+		sdk.WithPlugins(knowledge),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer s.Close()
+
+	ctx := context.Background()
+	for _, q := range []string{"read the Makefile", "summarize what you saw"} {
+		evs, err := s.Ask(ctx, q)
+		if err != nil {
+			log.Fatal(err)
+		}
+		for ev := range evs {
+			if ev.Type == sdk.EventResult {
+				fmt.Println(q, "->", ev.Result.Subtype)
+			}
+		}
+	}
+}
+
+// knowledgePlugin injects retrieved context ahead of every model request.
+type knowledgePlugin struct {
+	fetch func(prompt string) string
+}
+
+func (p knowledgePlugin) Name() string { return "knowledge" }
+
+func (p knowledgePlugin) BeforeModel(_ context.Context, turn *sdk.ModelTurn) sdk.BeforeModelResult {
+	return sdk.BeforeModelResult{PrependContext: p.fetch(turn.Prompt)}
+}
+
+func (p knowledgePlugin) AfterModel(_ context.Context, _ *sdk.ModelTurn, r *sdk.ModelReply) *sdk.ModelReply {
+	return nil // keep the reply unchanged
+}
+
 func ExampleQuery() {
 	s, err := sdk.Query(context.Background(), "list the files in this repo",
 		sdk.WithModel("claude-sonnet-4-5"),

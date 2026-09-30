@@ -2,12 +2,14 @@ package sdk
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
+	"github.com/rs/zerolog"
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/agentbuild"
@@ -16,97 +18,180 @@ import (
 	"github.com/projanvil/woca/internal/telemetry"
 )
 
-// Session is one headless run. Events streams until the result event, then
-// closes. Close cancels the run (if still going) and releases the agent,
+// Sentinel errors returned by Ask.
+var (
+	// ErrSessionClosed: the session was closed; further asks are rejected.
+	ErrSessionClosed = errors.New("sdk: session closed")
+	// ErrAskInProgress: one turn is still streaming; wait for its result
+	// event (or Close) before asking again.
+	ErrAskInProgress = errors.New("sdk: previous ask still in progress")
+)
+
+// Session is one conversational agent session: the agent is assembled once
+// (NewSession) and reused across turns (Ask), with the transcript carried
+// between turns. Ask returns one event stream per turn, ending with exactly
+// one EventResult. Close cancels any in-flight turn and releases the agent,
 // plugin manager, and build-time teardown hooks.
 type Session struct {
-	events chan Event
-
-	cancel context.CancelFunc
-	done   chan struct{}
-
+	opts      Options
 	ap        *agentbuild.App
-	closeOnce func()
-
-	// sessionID/runID correlate the event stream, RunEvents, and telemetry
-	// span tags; observers are the configured EventPlugins.
 	sessionID string
-	runID     string
 	observers []EventPlugin
+
+	mu         sync.Mutex
+	history    []messages.Message // next turn's input (system stripped)
+	busy       bool
+	closed     bool
+	turnCancel context.CancelFunc
+	turnDone   chan struct{}
+
+	// oneShot marks the Query form: the session ends with its single turn
+	// (session-end hooks run after the result event, not at Close).
+	oneShot bool
+
+	events    <-chan Event // one-shot view, set by Query
+	endOnce   sync.Once    // session-end hooks run exactly once
+	closeOnce func()
 }
 
-// Query starts one headless agent run and returns its session. The caller
-// must drain Events (or call Close) to avoid leaking the run goroutine.
-func Query(ctx context.Context, prompt string, opts ...Option) (*Session, error) {
+// NewSession assembles the agent (model, tools, hooks, skills, MCP,
+// permissions — the same assembly the CLI runs) and starts a session. Pair
+// with Ask for multi-turn conversations; Query wraps NewSession plus a
+// single Ask.
+func NewSession(ctx context.Context, opts ...Option) (*Session, error) {
 	o := Options{}
 	for _, fn := range opts {
 		fn(&o)
 	}
 
-	level, err := logging.ParseLevel("error")
+	log, err := logFor(o)
 	if err != nil {
 		return nil, err
 	}
-	log := logging.NewConsole(io.Discard, level)
 
 	// Install telemetry sinks before the build: spans like load_skills are
 	// recorded while BuildAgent runs.
 	o.installTelemetry()
 
-	ap, err := agentbuild.BuildAgent(ctx, o.buildOptions(prompt), log)
+	// A non-empty prompt marker keeps build-time decisions on the headless
+	// posture (tool-use summaries are interactive-UI only).
+	ap, err := agentbuild.BuildAgent(ctx, o.buildOptions("sdk-session"), log)
 	if err != nil {
 		return nil, err
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
 	s := &Session{
-		events: make(chan Event, 64),
-		cancel: cancel,
-		done:   make(chan struct{}),
-		ap:     ap,
-
+		opts:      o,
+		ap:        ap,
 		sessionID: newID(),
-		runID:     newID(),
 		observers: eventObservers(o.Plugins),
 	}
 	s.closeOnce = sync.OnceFunc(func() {
+		s.mu.Lock()
+		s.closed = true
+		cancel, done := s.turnCancel, s.turnDone
+		s.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		if done != nil {
+			<-done
+		}
+		s.endSession()
 		s.ap.PluginMgr.Close()
 		s.ap.Agent.Close()
 		for _, td := range s.ap.Teardown {
 			td()
 		}
 	})
-	go s.run(runCtx, o, prompt)
+	if fb, err := ap.Agent.RunSessionStart(ctx); err == nil && fb != "" {
+		ap.Log.Info().Str("feedback", fb).Msg("session-start hook feedback")
+	}
 	return s, nil
 }
 
-// Events returns the run's event stream (closed after the result event).
+// Query starts one headless agent run and returns its session. The caller
+// must drain Events (or call Close) to avoid leaking the run goroutine.
+// Query is NewSession plus a single Ask; Events streams that one turn.
+func Query(ctx context.Context, prompt string, opts ...Option) (*Session, error) {
+	s, err := NewSession(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	s.oneShot = true
+	evs, err := s.Ask(ctx, prompt)
+	if err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	s.events = evs
+	return s, nil
+}
+
+// Events returns the single turn's event stream (the Query form). Sessions
+// created with NewSession stream per-turn channels from Ask instead.
 func (s *Session) Events() <-chan Event { return s.events }
 
-// Close cancels the run and releases all resources. Safe to call twice.
+// Ask runs one conversational turn and returns its event stream, which ends
+// with exactly one EventResult and then closes. The turn's transcript feeds
+// the next Ask. Only one turn may stream at a time; a second Ask while one
+// is in flight returns ErrAskInProgress.
+func (s *Session) Ask(ctx context.Context, prompt string) (<-chan Event, error) {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, ErrSessionClosed
+	}
+	if s.busy {
+		s.mu.Unlock()
+		return nil, ErrAskInProgress
+	}
+	s.busy = true
+	s.mu.Unlock()
+
+	runCtx, cancel := context.WithCancel(ctx)
+	events := make(chan Event, 64)
+	done := make(chan struct{})
+	s.mu.Lock()
+	s.turnCancel, s.turnDone = cancel, done
+	s.mu.Unlock()
+	go s.turn(runCtx, cancel, done, events, prompt)
+	return events, nil
+}
+
+// Close cancels any in-flight turn, runs the session-end hooks (unless the
+// one-shot form already did), and releases all resources. Safe to call more
+// than once.
 func (s *Session) Close() error {
-	s.cancel()
-	<-s.done
 	if s.closeOnce != nil {
 		s.closeOnce()
 	}
 	return nil
 }
 
-// run drives the runner, converting stream chunks into events. It mirrors
-// the CLI's one-shot path (cmd/woca/main.go run, the opts.Prompt branch):
-// submit hooks prepend feedback, turns count tool messages + 1, the result
-// event mirrors sdkout.Final.
-func (s *Session) run(ctx context.Context, o Options, prompt string) {
-	defer close(s.done)
-	defer close(s.events)
+// turn drives the runner for one ask, converting stream chunks into events.
+// It mirrors the CLI's one-shot path (cmd/woca/main.go run, the opts.Prompt
+// branch): submit hooks prepend feedback, turns count tool messages + 1,
+// the result event mirrors sdkout.Final (with per-turn usage, not the
+// session cumulative totals).
+func (s *Session) turn(ctx context.Context, cancel context.CancelFunc, done chan struct{}, events chan Event, prompt string) {
+	defer close(done)
+	defer close(events)
+	defer func() {
+		cancel()
+		s.mu.Lock()
+		s.busy = false
+		s.turnCancel, s.turnDone = nil, nil
+		s.mu.Unlock()
+	}()
 
+	a := s.ap.Agent
+	runID := newID()
 	// Tag every span the run records (chat/invoke_tool/...) with the
 	// session/run identity, so an installed TelemetrySink — e.g. the
 	// Langfuse exporter — can group spans per run.
-	ctx = telemetry.WithRun(ctx, s.runID, s.sessionID)
-	start := RunEvent{Kind: RunEventStart, SessionID: s.sessionID, RunID: s.runID, Prompt: prompt, At: time.Now()}
-	dispatchRunEvent(ctx, s.observers, start)
+	ctx = telemetry.WithRun(ctx, runID, s.sessionID)
+	dispatchRunEvent(ctx, s.observers, RunEvent{Kind: RunEventStart, SessionID: s.sessionID, RunID: runID, Prompt: prompt, At: time.Now()})
 
 	render := func(chunk lggraph.StreamChunk) {
 		if chunk.Mode != lggraph.StreamUpdates {
@@ -122,38 +207,45 @@ func (s *Session) run(ctx context.Context, o Options, prompt string) {
 						continue
 					}
 					ev := Event{Type: EventAssistant, Message: messageFrom(m)}
-					s.observeMessage(ctx, ev.Message)
-					s.send(ctx, ev)
+					s.observeMessage(ctx, ev.Message, runID)
+					send(ctx, events, ev)
 				case messages.RoleTool:
 					ev := Event{Type: EventUser, Message: messageFrom(m)}
-					s.observeMessage(ctx, ev.Message)
-					s.send(ctx, ev)
+					s.observeMessage(ctx, ev.Message, runID)
+					send(ctx, events, ev)
 				}
 			}
 		}
 	}
 
-	a := s.ap.Agent
-	r := runner.New(a, o.interruptHandler(), render)
+	r := runner.New(a, s.opts.interruptHandler(), render)
 
-	if fb, err := a.RunSessionStart(ctx); err == nil && fb != "" {
-		s.ap.Log.Info().Str("feedback", fb).Msg("session-start hook feedback")
-	}
 	if fb, err := a.RunUserPromptSubmit(ctx, prompt); err == nil && fb != "" {
 		prompt = fb + "\n\n" + prompt
 	}
 
-	history := []messages.Message{messages.Human(prompt)}
-	result, runErr := r.Run(ctx, history)
+	s.mu.Lock()
+	hist := make([]messages.Message, 0, len(s.history)+1)
+	hist = append(hist, s.history...)
+	hist = append(hist, messages.Human(prompt))
+	s.mu.Unlock()
+
+	before := a.Usage()
+	result, runErr := r.Run(ctx, hist)
+	delta := usageDelta(before, a.Usage())
+
+	// The next turn's input history is this transcript minus the leading
+	// system block (runner.Run takes history without the system prompt) —
+	// the same strip the turn count uses.
+	s.mu.Lock()
+	stripped := stripSystem(result)
+	s.history = stripped
+	s.mu.Unlock()
 
 	// Turn count mirrors the CLI's stripSystem(result) + tool-message count:
-	// drop leading system messages, then count RoleTool and add one.
-	counted := result
-	for len(counted) > 0 && counted[0].Role == messages.RoleSystem {
-		counted = counted[1:]
-	}
+	// tool messages plus one.
 	turns := 1
-	for _, m := range counted {
+	for _, m := range stripped {
 		if m.Role == messages.RoleTool {
 			turns++
 		}
@@ -161,43 +253,95 @@ func (s *Session) run(ctx context.Context, o Options, prompt string) {
 	// The result envelope is built from the run error alone, before the
 	// session-end hook runs — matching the CLI ordering (cmd/woca/main.go
 	// run, the opts.Prompt branch), where sdkout.Final sees the run error and
-	// RunSessionEnd only affects the process exit code afterwards. The SDK
-	// has no exit code, so a session-end failure is logged, never folded into
-	// the result.
-	final := resultEvent(result, a.Usage(), s.ap.Cfg.Model, turns, runErr)
-	s.sendFinal(final)
+	// RunSessionEnd only affects the process exit code afterwards.
+	final := resultEvent(result, delta, s.ap.Cfg.Model, turns, runErr)
+	sendFinal(events, final)
 	dispatchRunEvent(context.WithoutCancel(ctx), s.observers, RunEvent{
-		Kind: RunEventEnd, SessionID: s.sessionID, RunID: s.runID, Result: final.Result, At: time.Now(),
+		Kind: RunEventEnd, SessionID: s.sessionID, RunID: runID, Result: final.Result, At: time.Now(),
 	})
-	if endErr := a.RunSessionEnd(context.WithoutCancel(ctx), "oneshot"); endErr != nil {
-		s.ap.Log.Error().Err(endErr).Msg("session-end hook failed")
+	// The one-shot form ends its session with the turn, exactly like the
+	// CLI's -p path; NewSession sessions end at Close.
+	if s.oneShot {
+		s.endSession()
 	}
 }
 
 // observeMessage dispatches one transcript-message RunEvent to the
 // configured plugins (no-op without observers).
-func (s *Session) observeMessage(ctx context.Context, msg *Message) {
+func (s *Session) observeMessage(ctx context.Context, msg *Message, runID string) {
 	if len(s.observers) == 0 {
 		return
 	}
 	dispatchRunEvent(ctx, s.observers, RunEvent{
-		Kind: RunEventMessage, SessionID: s.sessionID, RunID: s.runID, Message: msg, At: time.Now(),
+		Kind: RunEventMessage, SessionID: s.sessionID, RunID: runID, Message: msg, At: time.Now(),
 	})
 }
 
-// send delivers an event unless the run was cancelled.
-func (s *Session) send(ctx context.Context, ev Event) {
+// endSession runs the session-end hooks exactly once (after the single turn
+// for the Query form, at Close otherwise).
+func (s *Session) endSession() {
+	s.endOnce.Do(func() {
+		reason := "sdk-session"
+		if s.oneShot {
+			reason = "oneshot"
+		}
+		if err := s.ap.Agent.RunSessionEnd(context.WithoutCancel(context.Background()), reason); err != nil {
+			s.ap.Log.Error().Err(err).Msg("session-end hook failed")
+		}
+	})
+}
+
+// logFor builds the embedded agent's logger: silent by default (an embedded
+// agent must not spam the host process), overridable per option.
+func logFor(o Options) (zerolog.Logger, error) {
+	w := o.LogOutput
+	if w == nil {
+		w = io.Discard
+	}
+	level := o.LogLevel
+	if level == "" {
+		level = "error"
+	}
+	lvl, err := logging.ParseLevel(level)
+	if err != nil {
+		return zerolog.Logger{}, err
+	}
+	return logging.NewConsole(w, lvl), nil
+}
+
+// usageDelta subtracts two cumulative snapshots into per-turn totals.
+func usageDelta(before, after agent.UsageTotals) agent.UsageTotals {
+	return agent.UsageTotals{
+		Requests:         after.Requests - before.Requests,
+		InputTokens:      after.InputTokens - before.InputTokens,
+		OutputTokens:     after.OutputTokens - before.OutputTokens,
+		TotalTokens:      after.TotalTokens - before.TotalTokens,
+		CacheReadTokens:  after.CacheReadTokens - before.CacheReadTokens,
+		CacheWriteTokens: after.CacheWriteTokens - before.CacheWriteTokens,
+	}
+}
+
+// stripSystem drops the leading system messages from a transcript.
+func stripSystem(ms []messages.Message) []messages.Message {
+	for len(ms) > 0 && ms[0].Role == messages.RoleSystem {
+		ms = ms[1:]
+	}
+	return ms
+}
+
+// send delivers an event unless the turn was cancelled.
+func send(ctx context.Context, events chan Event, ev Event) {
 	select {
-	case s.events <- ev:
+	case events <- ev:
 	case <-ctx.Done():
 	}
 }
 
 // sendFinal delivers the terminal result event even after cancellation,
 // dropping it only when the events buffer is already full.
-func (s *Session) sendFinal(ev Event) {
+func sendFinal(events chan Event, ev Event) {
 	select {
-	case s.events <- ev:
+	case events <- ev:
 	default:
 	}
 }

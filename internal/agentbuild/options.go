@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/platform/executor"
 	"github.com/projanvil/woca/internal/settings"
 )
@@ -76,6 +77,11 @@ type Options struct {
 	// sandbox executor instead of the host (design §8). Nil keeps the local
 	// executor — the personal-edition posture. See SandboxFromEnv.
 	Sandbox *executor.SandboxConfig
+	// ToolGuards/ModelHooks are the in-process processing plugins passed
+	// through to the agent (the sdk's plugin surface). Nil keeps the
+	// un-instrumented paths byte-identical.
+	ToolGuards []agent.ToolGuard
+	ModelHooks []agent.ModelHook
 }
 
 // SandboxFromEnv resolves the sandbox executor configuration from the

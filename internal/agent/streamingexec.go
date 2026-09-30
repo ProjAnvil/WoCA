@@ -148,6 +148,12 @@ func (a *Agent) speculativeAllowed(call messages.ToolCall) bool {
 // background. Duplicate dispatches (chunk replays merged by ID) are ignored.
 // It reports whether this call started a new speculative execution.
 func (a *Agent) dispatchSpeculative(ctx context.Context, call messages.ToolCall) bool {
+	// Guards must see every call before it starts: speculative execution
+	// would let a tool run behind their back, so it is disabled entirely
+	// while guards are installed.
+	if len(a.toolGuards) > 0 {
+		return false
+	}
 	if call.ID == "" || call.Name == "" || !a.speculativeAllowed(call) {
 		return false
 	}

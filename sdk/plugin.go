@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"time"
+
+	"github.com/projanvil/woca/internal/agent"
 )
 
 // Plugin is the root interface for woca processing plugins. Plugins are
@@ -78,4 +80,58 @@ func newID() string {
 		return fmt.Sprintf("%032x", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b[:])
+}
+
+// Gating and transformation capabilities, re-exported from the harness as
+// aliases: one plugin may implement EventPlugin, ToolGuard, and ModelHook
+// in any combination. ToolGuards run after the permission gate and before
+// execution (any guard installed disables speculative tool execution);
+// ModelHooks transform model rounds (installing any one buffers the
+// model-node stream so reply replacement stays consistent).
+type (
+	ToolGuard         = agent.ToolGuard
+	ToolAction        = agent.ToolAction
+	ToolDecision      = agent.ToolDecision
+	ToolCallInfo      = agent.ToolCallInfo
+	ToolResultInfo    = agent.ToolResultInfo
+	ToolPostDecision  = agent.ToolPostDecision
+	ModelHook         = agent.ModelHook
+	ModelTurn         = agent.ModelTurn
+	ModelReply        = agent.ModelReply
+	BeforeModelResult = agent.BeforeModelResult
+)
+
+const (
+	ToolAllow = agent.ToolAllow
+	ToolDeny  = agent.ToolDeny
+	ToolAsk   = agent.ToolAsk
+)
+
+var (
+	AllowTool    = agent.AllowTool
+	DenyTool     = agent.DenyTool
+	AskTool      = agent.AskTool
+	ToolFeedback = agent.ToolFeedback
+)
+
+// toolGuardsOf extracts the ToolGuard views of the configured plugins.
+func toolGuardsOf(ps []Plugin) []agent.ToolGuard {
+	var out []agent.ToolGuard
+	for _, p := range ps {
+		if g, ok := p.(agent.ToolGuard); ok {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+// modelHooksOf extracts the ModelHook views of the configured plugins.
+func modelHooksOf(ps []Plugin) []agent.ModelHook {
+	var out []agent.ModelHook
+	for _, p := range ps {
+		if h, ok := p.(agent.ModelHook); ok {
+			out = append(out, h)
+		}
+	}
+	return out
 }
