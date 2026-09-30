@@ -67,6 +67,18 @@ ee-web-test:
 
 test-ui: web-test ee-web-test
 
+# Browser E2E over the four frontend forms (e2e/README.md): the personal
+# binary, the lab's real bridge/edge chain, the native-wizard shim, and —
+# with WOCA_E2E_NATIVE_DEV=1 — the real wails process (opens a window).
+e2e-install:
+	cd e2e && npm install && npx playwright install chromium
+
+e2e: web
+	cd e2e && npx playwright test
+
+e2e-native-dev: web
+	cd e2e && WOCA_E2E_NATIVE_DEV=1 npx playwright test
+
 vet:
 	go vet ./...
 
