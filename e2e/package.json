@@ -1,0 +1,13 @@
+{
+  "name": "woca-e2e",
+  "private": true,
+  "description": "Browser end-to-end tests for the four woca frontend forms (personal embedded web, bridge web, edge-entry browser, wails native wizard). The Go side (real backends on loopback ports) lives in e2e/lab.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.0"
+  }
+}
