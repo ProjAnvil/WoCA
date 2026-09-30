@@ -8,6 +8,8 @@ Embedding `sdk` in your own Go program is equivalent to running
 
 ```go
 import "github.com/projanvil/woca/sdk"
+// optional native Langfuse reporting:
+import "github.com/projanvil/woca/sdk/langfuse"
 ```
 
 ## Minimal example
@@ -64,6 +66,8 @@ The event stream ends with exactly one `EventResult`, then closes. Drain
 | `WithFallbackModel(string)` | `FallbackModel` | `--fallback-model` |
 | `WithCheckpointDir(string)` | `CheckpointDir` | `--checkpoint-dir` |
 | `WithInterruptHandler(func)` | `OnInterrupt` | — (no CLI equivalent) |
+| `WithPlugins(...Plugin)` | `Plugins` | — (see Plugins below) |
+| `WithTelemetry(...TelemetrySink)` | `Telemetry` | — (see Telemetry below) |
 
 The zero `Options` is the CLI's default posture with headless-safe interrupt
 handling. Embedded runs pin the log level to `error` and discard log output so
@@ -85,6 +89,67 @@ Set `WithInterruptHandler` to override. The handler receives an
 - `subagent_permission`: a foreground subagent's permission pause, carrying
   the subagent name in `Subagent` and the inner request in `Permission`;
   answer with `"y"` or `"n"`. The default handler auto-denies it.
+
+## Plugins
+
+`WithPlugins` attaches processing plugins to the run — the in-process
+extension surface for embedding apps (the settings-file hooks stay available
+for end users). Plugins are injected at construction time and observe the
+run lifecycle in stream order:
+
+```go
+type auditPlugin struct{}
+
+func (auditPlugin) Name() string { return "audit" }
+func (auditPlugin) Observe(_ context.Context, ev sdk.RunEvent) {
+	switch ev.Kind {
+	case sdk.RunEventStart: // ev.Prompt, ev.SessionID, ev.RunID
+	case sdk.RunEventMessage: // ev.Message: assistant text/tool calls, tool results
+	case sdk.RunEventEnd: // ev.Result: the terminal envelope (usage, cost)
+	}
+}
+
+s, err := sdk.Query(ctx, "…", sdk.WithPlugins(auditPlugin{}))
+```
+
+`Observe` is called sequentially from the run goroutine — keep it fast or
+dispatch internally. Every `RunEvent` carries the run's `SessionID`/`RunID`
+so plugins can correlate with their own records. Gating and transformation
+hooks (tool guards, model hooks) are planned follow-ups; a plugin that
+implements only `Name()` is accepted and ignored.
+
+## Telemetry (and Langfuse)
+
+`WithTelemetry` installs span sinks for everything the harness records —
+LLM calls (`gen_ai.request.model`, usage tokens), tool invocations, skill
+loads. Sinks are process-wide and deduped by identity, so passing the same
+sink to every `Query` installs it exactly once:
+
+```go
+lf, err := langfuse.New(langfuse.Config{
+	Host:      "https://cloud.langfuse.com",
+	PublicKey: "pk-lf-…",
+	SecretKey: "sk-lf-…",
+})
+if err != nil { … }
+defer lf.Close() // flushes the pending batch
+
+s, err := sdk.Query(ctx, "…",
+	sdk.WithTelemetry(lf), // any sdk.TelemetrySink
+)
+```
+
+The `sdk/langfuse` subpackage exports directly to Langfuse's OTLP endpoint
+(`/api/public/otel/v1/traces`, Basic auth, real-time v4 ingestion) with the
+spans grouped into one Langfuse trace per run and tagged with
+`langfuse.session.id`. Delivery is batched, bounded, and lossy by design:
+when Langfuse is unreachable, exports fail fast and drop — never affecting
+the agent. `Stats()` reports `sent`/`dropped` accounting. The subpackage is
+optional: programs that never import it carry no Langfuse code.
+
+The enterprise stack keeps its collector bridge (credentials stay
+platform-side there); the in-process sink serves the personal and embedded
+forms.
 
 ## Resource lifecycle
 

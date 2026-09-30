@@ -395,6 +395,18 @@ func (r *Router) BindTools(bound []tools.Tool) (language.ChatModel, error) {
 // Capabilities delegates to primary.
 func (r *Router) Capabilities() language.ChatModelCapabilities { return r.primary.Capabilities() }
 
+// Name reports the primary's configured model id, so displays and the
+// chat-span attributes (gen_ai.request.model) keep resolving the name
+// through the router — the fallback swaps underneath, the identity stays
+// the primary's. Unnamed primaries degrade to the adapter's type name,
+// matching Agent.CurrentModelName's fallback.
+func (r *Router) Name() string {
+	if n, ok := r.primary.(interface{ Name() string }); ok {
+		return n.Name()
+	}
+	return fmt.Sprintf("%T", r.primary)
+}
+
 // Unwrap returns the primary chat model. Optional capability interfaces the
 // ChatModel interface does not declare (language.TokenCounter,
 // language.MessageTokenCounter) are not promoted through wrappers, so

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
@@ -12,6 +13,7 @@ import (
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/runner"
+	"github.com/projanvil/woca/internal/telemetry"
 )
 
 // Session is one headless run. Events streams until the result event, then
@@ -25,6 +27,12 @@ type Session struct {
 
 	ap        *agentbuild.App
 	closeOnce func()
+
+	// sessionID/runID correlate the event stream, RunEvents, and telemetry
+	// span tags; observers are the configured EventPlugins.
+	sessionID string
+	runID     string
+	observers []EventPlugin
 }
 
 // Query starts one headless agent run and returns its session. The caller
@@ -41,6 +49,10 @@ func Query(ctx context.Context, prompt string, opts ...Option) (*Session, error)
 	}
 	log := logging.NewConsole(io.Discard, level)
 
+	// Install telemetry sinks before the build: spans like load_skills are
+	// recorded while BuildAgent runs.
+	o.installTelemetry()
+
 	ap, err := agentbuild.BuildAgent(ctx, o.buildOptions(prompt), log)
 	if err != nil {
 		return nil, err
@@ -52,6 +64,10 @@ func Query(ctx context.Context, prompt string, opts ...Option) (*Session, error)
 		cancel: cancel,
 		done:   make(chan struct{}),
 		ap:     ap,
+
+		sessionID: newID(),
+		runID:     newID(),
+		observers: eventObservers(o.Plugins),
 	}
 	s.closeOnce = sync.OnceFunc(func() {
 		s.ap.PluginMgr.Close()
@@ -85,6 +101,13 @@ func (s *Session) run(ctx context.Context, o Options, prompt string) {
 	defer close(s.done)
 	defer close(s.events)
 
+	// Tag every span the run records (chat/invoke_tool/...) with the
+	// session/run identity, so an installed TelemetrySink — e.g. the
+	// Langfuse exporter — can group spans per run.
+	ctx = telemetry.WithRun(ctx, s.runID, s.sessionID)
+	start := RunEvent{Kind: RunEventStart, SessionID: s.sessionID, RunID: s.runID, Prompt: prompt, At: time.Now()}
+	dispatchRunEvent(ctx, s.observers, start)
+
 	render := func(chunk lggraph.StreamChunk) {
 		if chunk.Mode != lggraph.StreamUpdates {
 			return
@@ -98,9 +121,13 @@ func (s *Session) run(ctx context.Context, o Options, prompt string) {
 					if m.Content == "" && len(m.ToolCalls) == 0 {
 						continue
 					}
-					s.send(ctx, Event{Type: EventAssistant, Message: messageFrom(m)})
+					ev := Event{Type: EventAssistant, Message: messageFrom(m)}
+					s.observeMessage(ctx, ev.Message)
+					s.send(ctx, ev)
 				case messages.RoleTool:
-					s.send(ctx, Event{Type: EventUser, Message: messageFrom(m)})
+					ev := Event{Type: EventUser, Message: messageFrom(m)}
+					s.observeMessage(ctx, ev.Message)
+					s.send(ctx, ev)
 				}
 			}
 		}
@@ -137,10 +164,25 @@ func (s *Session) run(ctx context.Context, o Options, prompt string) {
 	// RunSessionEnd only affects the process exit code afterwards. The SDK
 	// has no exit code, so a session-end failure is logged, never folded into
 	// the result.
-	s.sendFinal(resultEvent(result, a.Usage(), s.ap.Cfg.Model, turns, runErr))
+	final := resultEvent(result, a.Usage(), s.ap.Cfg.Model, turns, runErr)
+	s.sendFinal(final)
+	dispatchRunEvent(context.WithoutCancel(ctx), s.observers, RunEvent{
+		Kind: RunEventEnd, SessionID: s.sessionID, RunID: s.runID, Result: final.Result, At: time.Now(),
+	})
 	if endErr := a.RunSessionEnd(context.WithoutCancel(ctx), "oneshot"); endErr != nil {
 		s.ap.Log.Error().Err(endErr).Msg("session-end hook failed")
 	}
+}
+
+// observeMessage dispatches one transcript-message RunEvent to the
+// configured plugins (no-op without observers).
+func (s *Session) observeMessage(ctx context.Context, msg *Message) {
+	if len(s.observers) == 0 {
+		return
+	}
+	dispatchRunEvent(ctx, s.observers, RunEvent{
+		Kind: RunEventMessage, SessionID: s.sessionID, RunID: s.runID, Message: msg, At: time.Now(),
+	})
 }
 
 // send delivers an event unless the run was cancelled.

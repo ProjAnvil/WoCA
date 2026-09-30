@@ -27,6 +27,14 @@ type Options struct {
 	// OnInterrupt overrides the headless default (deny everything). The
 	// returned value is the graph resume value — see package docs.
 	OnInterrupt func(Interrupt) (any, error)
+	// Plugins are processing plugins (see Plugin), injected at
+	// construction and observe-only today: EventPlugins receive the run
+	// lifecycle in stream order.
+	Plugins []Plugin
+	// Telemetry sinks receive harness spans (LLM calls, tool invocations,
+	// skill loads) — see TelemetrySink. Installed process-wide, deduped by
+	// identity; a host typically installs once and reuses across queries.
+	Telemetry []TelemetrySink
 }
 
 // Option mutates Options (functional-option style).
@@ -51,6 +59,12 @@ func WithFallbackModel(v string) Option    { return func(o *Options) { o.Fallbac
 func WithCheckpointDir(v string) Option    { return func(o *Options) { o.CheckpointDir = v } }
 func WithInterruptHandler(f func(Interrupt) (any, error)) Option {
 	return func(o *Options) { o.OnInterrupt = f }
+}
+func WithPlugins(ps ...Plugin) Option {
+	return func(o *Options) { o.Plugins = append(o.Plugins, ps...) }
+}
+func WithTelemetry(s ...TelemetrySink) Option {
+	return func(o *Options) { o.Telemetry = append(o.Telemetry, s...) }
 }
 
 // buildOptions translates into the composition-root options. LogLevel is
