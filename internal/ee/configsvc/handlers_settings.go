@@ -166,6 +166,7 @@ func (s *Service) handleExport(w http.ResponseWriter, r *http.Request) {
 			settings.SecretGLMAPIKey, settings.SecretDeepSeekAPIKey,
 			settings.SecretPostgresURL, settings.SecretLadyMEmbeddingAPIKey,
 			settings.SecretCheckpointPGPassword, settings.SecretMemoryPGPassword,
+			settings.SecretLangfuseSecretKey,
 		} {
 			if v := s.settings.GetSecret(name); v != "" {
 				secrets[name] = v

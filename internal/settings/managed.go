@@ -238,6 +238,8 @@ func (m *managedState) checkWritable(cfg Settings) error {
 		{"ladym_embedding_model", o.LadyMEmbeddingModel, cfg.LadyMEmbeddingModel},
 		{"ladym_embedding_base_url", o.LadyMEmbeddingBaseURL, cfg.LadyMEmbeddingBaseURL},
 		{"ladym_llm", o.LadyMLLM, cfg.LadyMLLM},
+		{KeyLangfuseBaseURL, o.LangfuseBaseURL, cfg.LangfuseBaseURL},
+		{KeyLangfusePublicKey, o.LangfusePublicKey, cfg.LangfusePublicKey},
 	}
 	for _, c := range checks {
 		if c.managed == "" {
@@ -261,6 +263,11 @@ func (m *managedState) checkWritable(cfg Settings) error {
 	}
 	if len(o.BuiltinPlugins) > 0 && len(cfg.BuiltinPlugins) > 0 && !slices.Equal(o.BuiltinPlugins, cfg.BuiltinPlugins) {
 		return fmt.Errorf("%w: builtin-plugins (set to %v)", ErrManagedLocked, o.BuiltinPlugins)
+	}
+	// LangfuseEnabled is only-true (a managed false is unset): locking the
+	// switch means an overlay-enabled plugin cannot be turned off locally.
+	if o.LangfuseEnabled && !cfg.LangfuseEnabled {
+		return fmt.Errorf("%w: langfuse-enabled (enabled by the console)", ErrManagedLocked)
 	}
 	// LadyMAutoRetain and LadyMSystem2 (bools, like DebugLog) are not
 	// lockable here: a managed false is indistinguishable from unset.

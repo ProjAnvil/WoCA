@@ -84,6 +84,9 @@ func (s *Service) bridgeConfig(_ context.Context, _ string) (string, map[string]
 		kv["langfuse-public-key"] = cfg.LangfusePublicKey
 	}
 	for key, secret := range settings.ManagedSecretKeys {
+		if secret == settings.SecretLangfuseSecretKey && !cfg.LangfuseEnabled {
+			continue // the plugin's secret only rides when the console enabled it
+		}
 		if v := s.settings.GetSecret(secret); v != "" {
 			kv[key] = v
 		}

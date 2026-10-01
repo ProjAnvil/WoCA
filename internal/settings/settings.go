@@ -531,6 +531,20 @@ func applyPairs(out *Settings, pairs map[string]string) {
 
 // Save persists non-empty settings fields (empty fields are left unchanged so
 // partial updates from the UI don't wipe prior values; use Clear to remove).
+// HasKey reports whether a settings row exists for key (false on a
+// disabled store). It distinguishes "explicitly off" from "never set" for
+// keys whose zero value is meaningless, like langfuse_enabled.
+func (s *Store) HasKey(key string) bool {
+	if s == nil || s.db == nil {
+		return false
+	}
+	var one int
+	if err := s.db.QueryRow(`SELECT 1 FROM settings WHERE key = ?`, key).Scan(&one); err != nil {
+		return false
+	}
+	return true
+}
+
 func (s *Store) Save(cfg Settings) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("settings: store disabled")

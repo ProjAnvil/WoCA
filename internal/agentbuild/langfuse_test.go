@@ -52,7 +52,21 @@ func recordOneSpan(t *testing.T, runID string) {
 	b.End(tracing.WithRun(t.Context(), runID, "sess"), nil)
 }
 
+// resetLangfuseInstall clears the once-per-process guard between tests.
+func resetLangfuseInstall(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		langfuseInstallMu.Lock()
+		langfuseInstalled = false
+		langfuseInstallMu.Unlock()
+	})
+	langfuseInstallMu.Lock()
+	langfuseInstalled = false
+	langfuseInstallMu.Unlock()
+}
+
 func TestInstallLangfuseSinkFromSettings(t *testing.T) {
+	resetLangfuseInstall(t)
 	tracing.SetDefault(nil)
 	t.Cleanup(func() { tracing.SetDefault(nil) })
 
@@ -86,6 +100,7 @@ func TestInstallLangfuseSinkFromSettings(t *testing.T) {
 }
 
 func TestInstallLangfuseSinkEnvFallback(t *testing.T) {
+	resetLangfuseInstall(t)
 	tracing.SetDefault(nil)
 	t.Cleanup(func() { tracing.SetDefault(nil) })
 
@@ -129,6 +144,7 @@ func TestInstallLangfuseSinkEnterpriseOTelWins(t *testing.T) {
 // TestInstallLangfuseSinkIncompleteDegrades: enabled but missing the secret
 // degrades to off — observability never takes the agent down.
 func TestInstallLangfuseSinkIncompleteDegrades(t *testing.T) {
+	resetLangfuseInstall(t)
 	tracing.SetDefault(nil)
 	t.Cleanup(func() { tracing.SetDefault(nil) })
 	st := newSettingsStore(t)
@@ -141,6 +157,49 @@ func TestInstallLangfuseSinkIncompleteDegrades(t *testing.T) {
 	}
 	if closeFn := installLangfuseSink(st, testLogger()); closeFn != nil {
 		t.Fatal("incomplete config must degrade to off")
+	}
+}
+
+// TestInstallLangfuseSinkExplicitOffBeatsEnv: a persisted
+// langfuse_enabled=false row is authoritative — the environment must not
+// re-enable what settings turned off.
+func TestInstallLangfuseSinkExplicitOffBeatsEnv(t *testing.T) {
+	resetLangfuseInstall(t)
+	t.Setenv("WOCA_LANGFUSE_HOST", "https://lf.example")
+	t.Setenv("WOCA_LANGFUSE_PUBLIC_KEY", "pk-env")
+	t.Setenv("WOCA_LANGFUSE_SECRET_KEY", "sk-env")
+
+	st := newSettingsStore(t)
+	cfg := st.Load()
+	cfg.LangfuseEnabled = false // persisted explicitly (Save writes false too)
+	if err := st.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if closeFn := installLangfuseSink(st, testLogger()); closeFn != nil {
+		t.Fatal("explicit settings off must beat the environment")
+	}
+}
+
+// TestInstallLangfuseSinkOncePerProcess: a second BuildAgent (every sdk
+// session runs one) must not nest another chain — spans would export twice.
+func TestInstallLangfuseSinkOncePerProcess(t *testing.T) {
+	resetLangfuseInstall(t)
+	st := newSettingsStore(t)
+	cfg := st.Load()
+	cfg.LangfuseEnabled = true
+	cfg.LangfuseBaseURL = "https://lf.example"
+	cfg.LangfusePublicKey = "pk"
+	if err := st.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSecret(settings.SecretLangfuseSecretKey, "sk"); err != nil {
+		t.Fatal(err)
+	}
+	if closeFn := installLangfuseSink(st, testLogger()); closeFn == nil {
+		t.Fatal("first install failed")
+	}
+	if closeFn := installLangfuseSink(st, testLogger()); closeFn != nil {
+		t.Fatal("second install must be skipped (once per process)")
 	}
 }
 

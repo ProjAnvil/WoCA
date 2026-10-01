@@ -106,6 +106,12 @@ type Edition struct {
 	// coordinates are effective when the backends build. The hook's own
 	// failures are logged, never fatal. Nil does nothing.
 	PreBuildConfig func(ctx context.Context, st *settings.Store, log zerolog.Logger)
+	// ObservabilityConsoleManaged marks editions whose observability
+	// configuration is owned by the enterprise console even when their
+	// auth posture is local-trust (the bridge: its users are enterprise
+	// users, and the config plane delivers the plugin settings). Serve
+	// rejects user writes of the observability plugin keys there.
+	ObservabilityConsoleManaged bool
 	// Nacos states the enterprise registry assembly (the full-stack
 	// posture): when set, the serve path registers with nacos and takes
 	// its configuration from the delivered pack — fail-closed, the

@@ -56,6 +56,10 @@ func (s *ServeState) TunnelMode() string { return TunnelAuthMode(s.Mode()) }
 // Callers must store the auth posture on the state before serving starts.
 func (s *ServeState) Edition() servefront.Edition {
 	return servefront.Edition{
+		// Bridges are enterprise endpoints: observability is console-owned even
+		// in the local-trust enrolled posture (their users cannot configure
+		// the Langfuse plugin; the config package delivers it).
+		ObservabilityConsoleManaged: true,
 		// The bridge ships the full chat UI: it is the execution plane
 		// users command over the web (scenario four tunnels its serve
 		// surface through the edge).
