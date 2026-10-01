@@ -8,7 +8,9 @@ Embedding `sdk` in your own Go program is equivalent to running
 
 ```go
 import "github.com/projanvil/woca/sdk"
-// optional native Langfuse reporting:
+// optional observability: generic OTLP protocol sink,
+// plus backend plugins on top (Langfuse is the first):
+import "github.com/projanvil/woca/sdk/otlp"
 import "github.com/projanvil/woca/sdk/langfuse"
 ```
 
@@ -216,12 +218,33 @@ func (c *cachingPlugin) WrapModel(m sdk.ChatModel) sdk.ChatModel {
 (The `sdk.ChatModel` alias exposes the harness's model interface; the
 wrapped types come from the same `langchain-golang` binding the SDK uses.)
 
-## Telemetry (and Langfuse)
+## Telemetry (OTLP protocol, and Langfuse)
 
 `WithTelemetry` installs span sinks for everything the harness records —
 LLM calls (`gen_ai.request.model`, usage tokens), tool invocations, skill
-loads. Sinks are process-wide and deduped by identity, so passing the same
-sink to every `Query` installs it exactly once:
+loads. The span vocabulary follows the OpenTelemetry GenAI semantic
+conventions, so any OTLP backend maps it without translation. Sinks are
+process-wide and deduped by identity, so passing the same sink to every
+`Query` installs it exactly once.
+
+The protocol implementation is `sdk/otlp` — a generic batched OTLP/HTTP
+exporter (custom endpoint and headers, resource attributes, optional
+per-span decorator) that works with every OTLP backend: Arize Phoenix,
+Jaeger/Tempo, Honeycomb, Langfuse, …
+
+```go
+s, err := otlp.New(otlp.Config{
+	Endpoint: "https://collector.internal:4318",
+	Headers:  map[string]string{"Authorization": "Bearer " + token},
+})
+if err != nil { … }
+defer s.Close()
+q, err := sdk.Query(ctx, "…", sdk.WithTelemetry(s))
+```
+
+Backend-specific conventions live in thin plugins on top of the protocol
+sink. `sdk/langfuse` is the first one — Langfuse's ingestion endpoint and
+Basic auth, its real-time v4 header, and its attribute renames:
 
 ```go
 lf, err := langfuse.New(langfuse.Config{
@@ -232,21 +255,16 @@ lf, err := langfuse.New(langfuse.Config{
 if err != nil { … }
 defer lf.Close() // flushes the pending batch
 
-s, err := sdk.Query(ctx, "…",
-	sdk.WithTelemetry(lf), // any sdk.TelemetrySink
-)
+s, err := sdk.Query(ctx, "…", sdk.WithTelemetry(lf))
 ```
 
-The `sdk/langfuse` subpackage exports directly to Langfuse's OTLP endpoint
-(`/api/public/otel/v1/traces`, Basic auth, real-time v4 ingestion) with the
-spans grouped into one Langfuse trace per run and tagged with
-`langfuse.session.id`. Delivery is batched, bounded, and lossy by design:
-when Langfuse is unreachable, exports fail fast and drop — never affecting
-the agent. `Stats()` reports `sent`/`dropped` accounting. The subpackage is
-optional: programs that never import it carry no Langfuse code.
+Delivery (either sink) is batched, bounded, and lossy by design: when the
+backend is unreachable, exports fail fast and drop — never affecting the
+agent. `Stats()` reports `sent`/`dropped` accounting. Both subpackages are
+optional: programs that never import them carry no exporter code.
 
 The enterprise stack keeps its collector bridge (credentials stay
-platform-side there); the in-process sink serves the personal and embedded
+platform-side there); the in-process sinks serve the personal and embedded
 forms.
 
 ## Resource lifecycle
