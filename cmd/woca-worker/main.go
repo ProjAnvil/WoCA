@@ -32,7 +32,7 @@ import (
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settingswatch"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 	"github.com/projanvil/woca/internal/webfx"
 	"github.com/projanvil/woca/internal/wocadb"
 	"github.com/rs/zerolog"
@@ -76,8 +76,8 @@ func newWorkerRoot() *cobra.Command {
 			}
 			defer func() { _ = obsInst.Shutdown(context.WithoutCancel(cmd.Context())) }()
 			_ = obsInst.Install(cmd.Context())
-			telemetry.SetDefault(telemetry.NewMultiSink(
-				telemetry.NewLocalSink(log), obsInst.Sink()))
+			tracing.SetDefault(tracing.NewMultiSink(
+				tracing.NewLocalSink(log), obsInst.Sink()))
 
 			probeStop, err := serveProbes(cmd.Context(), obsAddr, log, obsInst)
 			if err != nil {

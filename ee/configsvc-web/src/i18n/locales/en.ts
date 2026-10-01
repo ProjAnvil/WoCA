@@ -9,7 +9,7 @@ export default {
     connect: 'Sign in',
     invalid: 'Wrong username or password',
   },
-  nav: { model: 'Model', storage: 'Storage', memory: 'Memory', msgplane: 'Message plane', skills: 'Skills & MCP', ops: 'Ops' },
+  nav: { model: 'Model', storage: 'Storage', memory: 'Memory', msgplane: 'Message plane', langfuse: 'Observability', skills: 'Skills & MCP', ops: 'Ops' },
   skills: {
     title: 'Skills & MCP (operator-delivered)',
     hint: 'The admin registers skills and MCP servers here; they ride the config package and land on enrolled bridges as the LOWEST merge layer — a user\u2019s own same-name config on their bridge wins.',
@@ -89,6 +89,17 @@ export default {
     modePGNATS: 'pg+nats (NATS wake-up overlay)',
     url: 'NATS URL',
     subject: 'Notification subject',
+  },
+  langfuse: {
+    title: 'Langfuse observability plugin',
+    intro:
+      'Enables Langfuse export for the enterprise: every role and bridge reports its agent trace (OTel GenAI semantic conventions) over OTLP. Individual users cannot configure it — this console is the only surface.',
+    enabled: 'Enabled',
+    baseURL: 'Endpoint',
+    publicKey: 'Public key',
+    secretKey: 'Secret key',
+    secretSet: 'Saved (leave empty to keep)',
+    hint: 'After save: business roles pick it up with the config generation; bridges on their next config pull.',
   },
   ops: {
     title: 'Ops (declarative Git)',

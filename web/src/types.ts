@@ -238,6 +238,11 @@ export interface AppSettings {
   msg_plane_mode: 'pg' | 'pg+nats'
   /** False on personal editions — the plane section stays hidden. */
   msg_plane_available: boolean
+  langfuse_enabled?: boolean
+  langfuse_base_url?: string
+  langfuse_public_key?: string
+  langfuse_secret_key_set?: boolean
+  langfuse_console_managed?: boolean
   msg_plane_nats_url: string
   msg_plane_subject: string
   model_whitelist: string
@@ -277,6 +282,10 @@ export interface AppSettingsUpdate {
   msg_plane_mode?: string
   msg_plane_nats_url?: string
   msg_plane_subject?: string
+  langfuse_enabled?: boolean
+  langfuse_base_url?: string
+  langfuse_public_key?: string
+  langfuse_secret_key?: string
 }
 
 // --- memory (mirror /api/memory) ---

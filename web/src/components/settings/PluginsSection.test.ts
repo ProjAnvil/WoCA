@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({
   getPlugins: vi.fn(),
   putPlugins: vi.fn(),
   installPlugin: vi.fn(),
+  getSettings: vi.fn(),
 }))
 vi.mock('../../api/client', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../api/client')>()
@@ -92,5 +93,48 @@ describe('PluginsSection', () => {
     await flushPromises()
     expect(api.installPlugin).toHaveBeenCalledWith('browser', false)
     expect(w.text()).toContain('Installing')
+  })
+})
+
+describe('PluginsSection langfuse card', () => {
+  beforeEach(() => {
+    i18n.global.locale.value = 'en'
+    setActivePinia(createPinia())
+    for (const fn of Object.values(api)) fn.mockReset()
+  })
+
+  async function withServer(over: Partial<AppSettings> = {}) {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    api.getPlugins.mockResolvedValue({ plugins: [] })
+    api.getSettings.mockResolvedValue({
+      provider: 'anthropic',
+      langfuse_enabled: true,
+      langfuse_base_url: 'https://lf.example',
+      langfuse_public_key: 'pk-lf',
+      langfuse_secret_key_set: true,
+      langfuse_console_managed: false,
+      ...over,
+    } as AppSettings)
+    const settings = useServerSettingsStore()
+    await settings.loadServer()
+    const w = mount(PluginsSection, { props: {}, global: { plugins: [i18n, pinia] } })
+    await flushPromises()
+    return { w, settings }
+  }
+
+  it('shows the card on the personal form and reflects saved state', async () => {
+    const { w } = await withServer()
+    const card = w.find('[data-testid="langfuse-card"]')
+    expect(card.exists()).toBe(true)
+    const inputs = card.findAll('input')
+    expect((inputs[0].element as HTMLInputElement).value).toBe('https://lf.example')
+    expect((inputs[1].element as HTMLInputElement).value).toBe('pk-lf')
+    expect((inputs[2].element as HTMLInputElement).placeholder).toContain('Saved')
+  })
+
+  it('hides the card when the console owns observability', async () => {
+    const { w } = await withServer({ langfuse_console_managed: true })
+    expect(w.find('[data-testid="langfuse-card"]').exists()).toBe(false)
   })
 })

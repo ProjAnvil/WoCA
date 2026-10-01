@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, provide, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Brain, Cpu, Database, MessageSquare, MessagesSquare, ServerCog, Settings2, Sparkles } from 'lucide-vue-next'
+import { Activity, Brain, Cpu, Database, MessageSquare, MessagesSquare, ServerCog, Settings2, Sparkles } from 'lucide-vue-next'
 import type { Settings } from './types'
 import type { CfgContext } from './inject'
 import ModelSection from './components/ModelSection.vue'
 import StorageSection from './components/StorageSection.vue'
 import MemorySection from './components/MemorySection.vue'
 import MsgPlaneSection from './components/MsgPlaneSection.vue'
+import LangfuseSection from './components/LangfuseSection.vue'
 import OpsSection from './components/OpsSection.vue'
 import SkillsSection from './components/SkillsSection.vue'
 
@@ -156,6 +157,13 @@ async function save(extra?: Record<string, unknown>) {
     str('msg_plane_mode', 'msg_plane_mode')
     str('msg_plane_nats_url', 'msg_plane_nats_url')
     str('msg_plane_subject', 'msg_plane_subject')
+    // langfuse observability plugin (enterprise-owned: this console is its
+    // only configuration surface; individual users cannot configure it)
+    if (drafts.value['langfuse_enabled'] !== undefined)
+      body['langfuse_enabled'] = drafts.value['langfuse_enabled'] === 'true'
+    str('langfuse_base_url', 'langfuse_base_url')
+    str('langfuse_public_key', 'langfuse_public_key')
+    if (d('langfuse_secret_key')) body['langfuse_secret_key'] = d('langfuse_secret_key')
 
     const resp = await api('/api/settings', { method: 'PUT', body: JSON.stringify(body) })
     if (!resp.ok) {
@@ -176,6 +184,7 @@ const sections = computed(() => [
   { id: 'storage', label: t('nav.storage'), icon: Database },
   { id: 'memory', label: t('nav.memory'), icon: Brain },
   { id: 'msgplane', label: t('nav.msgplane'), icon: MessagesSquare },
+  { id: 'langfuse', label: t('nav.langfuse'), icon: Activity },
   { id: 'skills', label: t('nav.skills'), icon: Sparkles },
   { id: 'ops', label: t('nav.ops'), icon: Settings2 },
 ])
@@ -248,6 +257,7 @@ onMounted(() => {
         <StorageSection v-if="active === 'storage'" />
         <MemorySection v-if="active === 'memory'" />
         <MsgPlaneSection v-if="active === 'msgplane'" />
+        <LangfuseSection v-if="active === 'langfuse'" />
         <SkillsSection v-if="active === 'skills'" />
         <OpsSection v-if="active === 'ops'" />
         <div v-if="savedFlash" class="flash">

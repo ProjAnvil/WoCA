@@ -37,4 +37,8 @@ export interface Settings {
   msg_plane_nats_url: string
   msg_plane_subject: string
   msg_plane_available: boolean
+  langfuse_enabled: boolean
+  langfuse_base_url: string
+  langfuse_public_key: string
+  langfuse_secret_key_set: boolean
 }

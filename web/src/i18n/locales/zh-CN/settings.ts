@@ -170,6 +170,19 @@ export default {
     reinstall: '升级 / 重装',
     reinstallTip: '删除环境后按当前固定版本重装（升级 / 修复）；共享运行时与缓存保留',
     downloadInstall: '下载并安装',
+    langfuse: {
+      title: 'Langfuse 可观测',
+      intro:
+        '把 agent 的调用链（模型/工具/技能 span，OTel GenAI 语义约定）经 OTLP 上报到 Langfuse。凭据只写入本机加密存储；企业部署由控制台统一配置。',
+      baseURL: '上报地址',
+      baseURLHint: 'Langfuse 实例地址，例如 https://cloud.langfuse.com',
+      publicKey: 'Public Key',
+      secretKey: 'Secret Key',
+      secretSet: '已保存（留空保持不变）',
+      restartHint: '保存后重启生效。',
+      enableTip: '点击启用 Langfuse 上报',
+      disableTip: '点击停用（保存并重启后生效）',
+    },
   },
   msgplane: {
     title: '消息面（运行分发）',

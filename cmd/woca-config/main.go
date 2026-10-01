@@ -24,7 +24,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/settings"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 	"github.com/projanvil/woca/internal/webfx"
 	"github.com/spf13/cobra"
 )
@@ -43,7 +43,7 @@ func main() {
 				return err
 			}
 			log := logging.NewConsole(os.Stderr, level)
-			telemetry.SetDefault(telemetry.NewLocalSink(log))
+			tracing.SetDefault(tracing.NewLocalSink(log))
 			obsInst, err := obs.Setup(cmd.Context(), obs.FromEnv())
 			if err != nil {
 				return fmt.Errorf("observability: %w", err)

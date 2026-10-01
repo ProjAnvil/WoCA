@@ -9,7 +9,7 @@ export default {
     connect: '登录',
     invalid: '用户名或密码错误',
   },
-  nav: { model: '模型', storage: '存储', memory: '记忆', msgplane: '消息面', skills: 'Skills & MCP', ops: '运维' },
+  nav: { model: '模型', storage: '存储', memory: '记忆', msgplane: '消息面', langfuse: '可观测', skills: 'Skills & MCP', ops: '运维' },
   skills: {
     title: 'Skills & MCP（管理员下发）',
     hint: '管理员在此登记随配置包下发的 skills 与 MCP 服务器；bridge 落盘为最低合并层——用户在自己 bridge 上的同名配置优先生效。',
@@ -89,6 +89,17 @@ export default {
     modePGNATS: 'pg+nats（叠加 NATS 唤醒）',
     url: 'NATS 地址',
     subject: '通知主题',
+  },
+  langfuse: {
+    title: 'Langfuse 可观测插件',
+    intro:
+      '为企业开启 Langfuse 上报：各角色与 bridge 的 agent 调用链（OTel GenAI 语义约定）经 OTLP 上报。个人用户无法自行配置——此控制台是唯一配置面。',
+    enabled: '启用',
+    baseURL: '上报地址',
+    publicKey: 'Public Key',
+    secretKey: 'Secret Key',
+    secretSet: '已保存（留空保持不变）',
+    hint: '保存后：业务角色随配置代次生效；bridge 在下次配置拉取后生效。',
   },
   ops: {
     title: '运维（Git 声明式）',

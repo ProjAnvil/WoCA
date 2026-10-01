@@ -178,6 +178,19 @@ export default {
     reinstallTip:
       'Deletes the environment and reinstalls the pinned version (upgrade / repair); shared runtimes and caches are kept',
     downloadInstall: 'Download & install',
+    langfuse: {
+      title: 'Langfuse observability',
+      intro:
+        'Exports the agent trace (model/tool/skill spans, OTel GenAI semantic conventions) to Langfuse over OTLP. Credentials stay in the local encrypted store; enterprise deployments configure it from the console.',
+      baseURL: 'Endpoint',
+      baseURLHint: 'Langfuse instance URL, e.g. https://cloud.langfuse.com',
+      publicKey: 'Public key',
+      secretKey: 'Secret key',
+      secretSet: 'Saved (leave empty to keep)',
+      restartHint: 'Takes effect after save and restart.',
+      enableTip: 'Enable Langfuse export',
+      disableTip: 'Disable (effective after save and restart)',
+    },
   },
   msgplane: {
     title: 'Message plane (run dispatch)',

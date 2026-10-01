@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import WSkeleton from '../ui/WSkeleton.vue'
 import { computed, onMounted } from 'vue'
-import { Puzzle } from 'lucide-vue-next'
+import { Activity, Puzzle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useServerSettingsStore } from '../../stores/serverSettings'
 import { usePluginsStore } from '../../stores/sections'
+import WInfoTip from '../ui/WInfoTip.vue'
 
 // bridge=true on the private-cloud form: the same dual track as skills/MCP
 // applies — the organization can pin the enabled set via the config plane
@@ -17,6 +18,10 @@ const settings = useServerSettingsStore()
 const plugins = usePluginsStore()
 const pluginState = plugins.state
 const orgLocked = computed(() => settings.isManaged('builtin-plugins'))
+// The Langfuse observability plugin is a personal-form surface: enterprise
+// deployments own it from the console (the server reports
+// langfuse_console_managed there and rejects writes).
+const langfuseHidden = computed(() => settings.langfuseConsoleManaged)
 
 // Entering the section always refreshes (not just the first visit): the
 // install-progress poller pauses while the section is unmounted, and the
@@ -122,6 +127,70 @@ const stateLabels = computed<Record<string, string>>(() => ({
           {{ p.state === 'installing' ? t('settings.plugins.stateInstalling') : t('settings.plugins.downloadInstall') }}
         </button>
       </div>
+    </div>
+
+    <!-- Langfuse observability plugin: spans follow the OTel GenAI
+         conventions; the plugin exports them over OTLP -->
+    <div v-if="!langfuseHidden" class="plugin-card" data-testid="langfuse-card">
+      <div class="plugin-card-head">
+        <div>
+          <Activity :size="13" style="vertical-align: -2px" />
+          <span class="env-check-name" style="margin-left: 4px">{{ t('settings.plugins.langfuse.title') }}</span>
+          <span class="plugin-badge">OTLP</span>
+        </div>
+        <button
+          class="switch"
+          role="switch"
+          :class="{ on: settings.langfuseEnabled }"
+          :aria-label="t('settings.plugins.langfuse.title')"
+          :aria-checked="settings.langfuseEnabled"
+          :title="settings.langfuseEnabled ? t('settings.plugins.langfuse.disableTip') : t('settings.plugins.langfuse.enableTip')"
+          @click="settings.langfuseEnabled = !settings.langfuseEnabled"
+        ></button>
+      </div>
+      <div class="row-hint">{{ t('settings.plugins.langfuse.intro') }}</div>
+      <template v-if="settings.langfuseEnabled">
+        <div class="setting-row">
+          <div>
+            <div class="row-label">{{ t('settings.plugins.langfuse.baseURL') }}<WInfoTip :text="t('settings.plugins.langfuse.baseURLHint')" /></div>
+          </div>
+          <input
+            v-model="settings.langfuseBaseURL"
+            class="field"
+            style="max-width: 280px"
+            type="text"
+            autocomplete="off"
+            placeholder="https://cloud.langfuse.com"
+          />
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="row-label">{{ t('settings.plugins.langfuse.publicKey') }}</div>
+          </div>
+          <input
+            v-model="settings.langfusePublicKey"
+            class="field"
+            style="max-width: 280px"
+            type="text"
+            autocomplete="off"
+            placeholder="pk-lf-…"
+          />
+        </div>
+        <div class="setting-row">
+          <div>
+            <div class="row-label">{{ t('settings.plugins.langfuse.secretKey') }}</div>
+          </div>
+          <input
+            v-model="settings.langfuseSecret"
+            class="field"
+            style="max-width: 280px"
+            type="password"
+            autocomplete="new-password"
+            :placeholder="settings.langfuseSecretSet ? t('settings.plugins.langfuse.secretSet') : 'sk-lf-…'"
+          />
+        </div>
+        <div class="row-hint">{{ t('settings.plugins.langfuse.restartHint') }}</div>
+      </template>
     </div>
   </section>
 </template>
