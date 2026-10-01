@@ -32,10 +32,10 @@ import (
 // and the auth posture flag parsing decided on. cmd/woca-bridge owns one;
 // test harnesses own their own instead of re-deriving the wiring.
 type ServeState struct {
-	Auth    atomic.Pointer[Auth]
-	CA      atomic.Pointer[CloudAccess]
-	Store   atomic.Pointer[settings.Store]
-	Handler atomic.Pointer[http.Handler]
+	Auth     atomic.Pointer[Auth]
+	CA       atomic.Pointer[CloudAccess]
+	Store    atomic.Pointer[settings.Store]
+	Handler  atomic.Pointer[http.Handler]
 	AuthMode atomic.Value // string; empty means unset → local trust
 }
 

@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 func TestWrapServesHealthzAndMetrics(t *testing.T) {
@@ -143,16 +143,16 @@ func TestSinkRecordsGenAISpans(t *testing.T) {
 	sink := &otelSink{tracer: tp.Tracer("test")}
 
 	now := time.Now()
-	sink.Record(t.Context(), telemetry.Span{
+	sink.Record(t.Context(), tracing.Span{
 		Name:       "chat",
-		Kind:       telemetry.KindLLM,
-		Status:     telemetry.StatusError,
+		Kind:       tracing.KindLLM,
+		Status:     tracing.StatusError,
 		Error:      "boom",
 		Start:      now,
 		DurationMS: 42,
 		Attributes: map[string]any{
-			telemetry.AttrRequestModel:     "glm-4.7",
-			telemetry.AttrUsageInputTokens: int64(128),
+			tracing.AttrRequestModel:     "glm-4.7",
+			tracing.AttrUsageInputTokens: int64(128),
 		},
 		Tags: map[string]string{"tenant_id": "t1", "run_id": "r9"},
 	})
@@ -209,7 +209,7 @@ func TestWorkerInstrumentsAvailable(t *testing.T) {
 }
 
 // compile-time check that the sink implements the telemetry interface.
-var _ telemetry.Sink = (*otelSink)(nil)
+var _ tracing.Sink = (*otelSink)(nil)
 
 // tracer presence guard for Sink() nil path.
 func TestSinkNilTracer(t *testing.T) {

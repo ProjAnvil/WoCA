@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // TestSetupExportsTracesOverOTLP covers the live export path the unit tests
@@ -49,9 +49,9 @@ func TestSetupExportsTracesOverOTLP(t *testing.T) {
 	t.Logf("recording=%v sampled=%v valid=%v", span.IsRecording(), span.SpanContext().IsSampled(), span.SpanContext().IsValid())
 	span.End()
 
-	ctx := telemetry.WithRun(t.Context(), "run-9", "sess-9")
-	sp := telemetry.Start(ctx, "chat", telemetry.KindLLM)
-	sp.Set(telemetry.AttrOperationName, "chat")
+	ctx := tracing.WithRun(t.Context(), "run-9", "sess-9")
+	sp := tracing.Start(ctx, "chat", tracing.KindLLM)
+	sp.Set(tracing.AttrOperationName, "chat")
 	sp.End(ctx, nil)
 
 	// BatchSpanProcessor flushes on its 5s interval; Shutdown would flush

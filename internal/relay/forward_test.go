@@ -14,7 +14,7 @@ import (
 // failWriter errors on every write (streamChunks write-error path).
 type failWriter struct{}
 
-func (failWriter) Header() http.Header  { return http.Header{} }
+func (failWriter) Header() http.Header { return http.Header{} }
 func (failWriter) Write([]byte) (int, error) {
 	return 0, errors.New("test: write failed")
 }

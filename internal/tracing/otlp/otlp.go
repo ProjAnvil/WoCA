@@ -6,7 +6,7 @@
 // Jaeger/Tempo, Honeycomb, …) renders a run as one trace.
 //
 // Backend-specific conventions live in thin plugins on top: see
-// sdk/langfuse, which composes this sink with Langfuse's endpoint,
+// tracing/plugins/langfuse, which composes this sink with Langfuse's endpoint,
 // authentication, and attribute conventions. Delivery posture: async,
 // batched, and lossy by design — unreachable endpoints fail fast and drop
 // (bounded queue, no retry), never affecting the agent. Close flushes the
@@ -27,7 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/projanvil/woca/sdk"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // Default delivery tuning.
@@ -51,7 +51,7 @@ type Config struct {
 	// Decorate, when set, shapes each span before export — the hook
 	// backend plugins use to apply their own conventions. It must not
 	// mutate the input.
-	Decorate func(sp sdk.Span) sdk.Span
+	Decorate func(sp tracing.Span) tracing.Span
 
 	// Optional tuning. Zero values take the defaults shown below.
 	FlushInterval time.Duration // batch window, default 2s
@@ -70,7 +70,7 @@ type Sink struct {
 	tracesURL string
 
 	mu      sync.Mutex
-	pending []sdk.Span
+	pending []tracing.Span
 	closed  bool
 
 	sent    atomic.Uint64
@@ -124,7 +124,7 @@ func (s *Sink) Stats() (sent, dropped uint64) {
 
 // Record queues one span for export. It never blocks and never fails the
 // caller: overflow and closed-sink arrivals are counted as dropped.
-func (s *Sink) Record(_ context.Context, sp sdk.Span) {
+func (s *Sink) Record(_ context.Context, sp tracing.Span) {
 	s.mu.Lock()
 	if s.closed || len(s.pending) >= s.cfg.MaxQueue {
 		s.mu.Unlock()
@@ -189,7 +189,7 @@ func (s *Sink) flush() {
 	s.sent.Add(uint64(len(batch)))
 }
 
-func (s *Sink) export(spans []sdk.Span) error {
+func (s *Sink) export(spans []tracing.Span) error {
 	resAttrs := make([]otlpAttr, 0, len(s.cfg.ResourceAttrs)+1)
 	resAttrs = append(resAttrs, strAttr("service.name", s.cfg.ServiceName))
 	for k, v := range s.cfg.ResourceAttrs {
@@ -280,7 +280,7 @@ type otlpAttrValue struct {
 
 func strAttr(k, v string) otlpAttr { return otlpAttr{Key: k, Value: otlpAttrValue{StringValue: &v}} }
 
-func convertSpans(spans []sdk.Span, decorate func(sdk.Span) sdk.Span) []otlpSpan {
+func convertSpans(spans []tracing.Span, decorate func(tracing.Span) tracing.Span) []otlpSpan {
 	out := make([]otlpSpan, 0, len(spans))
 	for _, sp := range spans {
 		if decorate != nil {

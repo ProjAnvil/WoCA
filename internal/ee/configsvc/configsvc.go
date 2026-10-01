@@ -282,6 +282,9 @@ func (u *update) patches() []patch {
 		{settings.KeyMsgPlaneMode, u.MsgPlaneMode},
 		{settings.KeyMsgPlaneNATSURL, u.MsgPlaneNATSURL},
 		{settings.KeyMsgPlaneSubject, u.MsgPlaneSubject},
+		{settings.KeyLangfuseEnabled, u.boolPtr(u.LangfuseEnabled)},
+		{settings.KeyLangfuseBaseURL, u.LangfuseBaseURL},
+		{settings.KeyLangfusePublicKey, u.LangfusePublicKey},
 	}
 	// The enterprise plugin set (a JSON array of enabled built-ins) rides
 	// as one settings key; present means "pin this set", absent leaves
@@ -312,6 +315,7 @@ func (u *update) secretPatches() []patch {
 		{settings.SecretGLMAPIKey, u.GLMAPIKey},
 		{settings.SecretDeepSeekAPIKey, u.DeepSeekAPIKey},
 		{settings.SecretLadyMEmbeddingAPIKey, u.LadyMEmbeddingAPIKey},
+		{settings.SecretLangfuseSecretKey, u.LangfuseSecretKey},
 	}
 }
 

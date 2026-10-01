@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/projanvil/woca/internal/platform/tenancy"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 	"github.com/projanvil/woca/internal/webfx"
 	"github.com/rs/zerolog"
 )
@@ -17,9 +17,9 @@ import (
 func spanLog(t *testing.T) (*bytes.Buffer, func()) {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	prev := telemetry.Default()
-	telemetry.SetDefault(telemetry.NewLocalSink(zerolog.New(buf)))
-	return buf, func() { telemetry.SetDefault(prev) }
+	prev := tracing.Default()
+	tracing.SetDefault(tracing.NewLocalSink(zerolog.New(buf)))
+	return buf, func() { tracing.SetDefault(prev) }
 }
 
 func TestHTTPMiddlewareSpanAttributes(t *testing.T) {

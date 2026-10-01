@@ -153,7 +153,7 @@ with no extra instrumentation.
   (MinIO direct) is not exposed through the DMZ — same ruling as the
   Terraform side.
 - Session reporting: every LLM call records a `chat` span carrying
-  `run_id`/`session_id`/`tenant_id` tags (internal/telemetry), the
+  `run_id`/`session_id`/`tenant_id` tags (internal/tracing), the
   collector renames `session_id`→`session.id` (and `user_id`→`user.id`)
   onto Langfuse's OTLP conventions — sessions group traces in the UI
   out of the box, no extra instrumentation.

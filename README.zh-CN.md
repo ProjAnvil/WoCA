@@ -320,7 +320,7 @@ internal/merge           分层配置合并
 internal/bus             进程内消息总线（SendMessage）
 internal/obslog          harness 可观测日志（按大小轮转 JSONL）
 internal/settingswatch   管理面写入向各角色的传播
-internal/telemetry       可观测性接缝（Phase 2）
+internal/tracing        可观测核心（span 词汇 + Sink 接口）
 internal/logging         zerolog 封装
 internal/notify          终端通知
 internal/oauth           OAuth 2.0 设备授权许可客户端

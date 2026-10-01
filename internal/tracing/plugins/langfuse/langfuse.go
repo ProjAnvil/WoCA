@@ -1,11 +1,11 @@
 // Package langfuse is the Langfuse plugin for woca's observability
-// protocol: a thin composition of the generic OTLP exporter (sdk/otlp)
+// protocol: a thin composition of the generic OTLP exporter (tracing/otlp)
 // with Langfuse's conventions — the ingestion endpoint and Basic auth, the
 // real-time v4 ingestion header, and the attribute renames Langfuse's OTLP
 // intake expects (session_id → langfuse.session.id, user_id →
 // langfuse.user.id) plus its observation-type vocabulary. The span
 // vocabulary itself (gen_ai.* attributes, run-derived trace grouping) is
-// the standard protocol layer and lives in sdk/otlp.
+// the standard protocol layer and lives in tracing/otlp.
 //
 // Delivery posture is the generic sink's: async, batched, lossy — Langfuse
 // being unreachable drops exports without affecting the agent. Close
@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/projanvil/woca/sdk"
-	"github.com/projanvil/woca/sdk/otlp"
+	"github.com/projanvil/woca/internal/tracing"
+	"github.com/projanvil/woca/internal/tracing/otlp"
 )
 
 // ingestionBase is Langfuse's OTLP intake root; the generic sink appends
@@ -110,7 +110,7 @@ func observationType(kind string) string {
 }
 
 // decorate applies Langfuse's conventions without mutating the input span.
-func decorate(sp sdk.Span) sdk.Span {
+func decorate(sp tracing.Span) tracing.Span {
 	tags := make(map[string]string, len(sp.Tags)+1)
 	for k, v := range sp.Tags {
 		if r, ok := tagRenames[k]; ok {

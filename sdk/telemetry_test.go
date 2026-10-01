@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 type captureSink struct {
@@ -29,7 +29,7 @@ func (c *captureSink) snapshot() []Span {
 func TestWithTelemetryReceivesModelSpan(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Cleanup(func() { telemetry.SetDefault(nil) })
+	t.Cleanup(func() { tracing.SetDefault(nil) })
 
 	srv := fakeAnthropic(t)
 	defer srv.Close()
@@ -55,7 +55,7 @@ func TestWithTelemetryReceivesModelSpan(t *testing.T) {
 
 	var chat *Span
 	for i, sp := range cap.snapshot() {
-		if sp.Kind == telemetry.KindLLM {
+		if sp.Kind == tracing.KindLLM {
 			chat = &sp
 			_ = i
 			break
@@ -75,16 +75,16 @@ func TestWithTelemetryReceivesModelSpan(t *testing.T) {
 // TestInstallTelemetryIdempotent: installing the same sink twice must not
 // re-chain the process default (identity-deduped, so no double recording).
 func TestInstallTelemetryIdempotent(t *testing.T) {
-	t.Cleanup(func() { telemetry.SetDefault(nil) })
+	t.Cleanup(func() { tracing.SetDefault(nil) })
 	cap := &captureSink{}
 	o := Options{Telemetry: []TelemetrySink{cap}}
 	o.installTelemetry()
-	first := telemetry.Default()
+	first := tracing.Default()
 	o.installTelemetry()
-	if telemetry.Default() != first {
+	if tracing.Default() != first {
 		t.Fatal("second installTelemetry must be a no-op for an already-seen sink")
 	}
-	if telemetry.Default() == nil {
+	if tracing.Default() == nil {
 		t.Fatal("first installTelemetry must install the sink")
 	}
 }

@@ -68,6 +68,16 @@ type appSettings struct {
 	// all (the enterprise queue-dispatch form). Personal editions keep the
 	// plane section hidden and its keys read-only no-ops.
 	MsgPlaneAvailable bool `json:"msg_plane_available"`
+
+	// Langfuse observability plugin: personally configured (settings →
+	// plugins). Enterprise deployments own it from the console —
+	// LangfuseConsoleManaged is true there and the UI hides the card;
+	// serve-side writes are rejected regardless of role.
+	LangfuseEnabled        bool   `json:"langfuse_enabled"`
+	LangfuseBaseURL        string `json:"langfuse_base_url"`
+	LangfusePublicKey      string `json:"langfuse_public_key"`
+	LangfuseSecretKeySet   bool   `json:"langfuse_secret_key_set"`
+	LangfuseConsoleManaged bool   `json:"langfuse_console_managed"`
 }
 
 // appSettingsUpdate is the PUT body. Pointer fields distinguish "unchanged"
@@ -106,6 +116,11 @@ type appSettingsUpdate struct {
 	MsgPlaneMode    *string `json:"msg_plane_mode"`
 	MsgPlaneNATSURL *string `json:"msg_plane_nats_url"`
 	MsgPlaneSubject *string `json:"msg_plane_subject"`
+
+	LangfuseEnabled   *bool   `json:"langfuse_enabled"`
+	LangfuseBaseURL   *string `json:"langfuse_base_url"`
+	LangfusePublicKey *string `json:"langfuse_public_key"`
+	LangfuseSecretKey *string `json:"langfuse_secret_key"`
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
@@ -157,6 +172,12 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
 		MsgPlaneAvailable:       s.dispatch,
 		ModelWhitelist:          cfg.ModelWhitelist,
 		ManagedFields:           st.ManagedFields(),
+
+		LangfuseEnabled:        cfg.LangfuseEnabled,
+		LangfuseBaseURL:        cfg.LangfuseBaseURL,
+		LangfusePublicKey:      cfg.LangfusePublicKey,
+		LangfuseSecretKeySet:   st.HasSecret(settings.SecretLangfuseSecretKey),
+		LangfuseConsoleManaged: s.obsManaged,
 	})
 }
 
@@ -278,6 +299,35 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
+	// The Langfuse plugin is a personal-form surface (settings → plugins):
+	// enterprise deployments own observability from the console (config
+	// plane), so serve-side user writes are rejected regardless of role —
+	// the mirror image of the message-plane gate above.
+	if s.obsManaged {
+		for _, f := range []struct {
+			set bool
+			k   string
+		}{
+			{req.LangfuseEnabled != nil, settings.KeyLangfuseEnabled},
+			{req.LangfuseBaseURL != nil, settings.KeyLangfuseBaseURL},
+			{req.LangfusePublicKey != nil, settings.KeyLangfusePublicKey},
+			{req.LangfuseSecretKey != nil, settings.KeyLangfuseSecretKey},
+		} {
+			if f.set {
+				writeError(w, http.StatusBadRequest, f.k+" is managed by the enterprise console; configure observability there")
+				return
+			}
+		}
+	} else {
+		// The sink is installed at agent assembly: changes take effect
+		// after a restart (like the storage backends).
+		patches = append(patches,
+			boolPatch(settings.KeyLangfuseEnabled, req.LangfuseEnabled, effRestart),
+			strPatch(settings.KeyLangfuseBaseURL, req.LangfuseBaseURL, effRestart),
+			strPatch(settings.KeyLangfusePublicKey, req.LangfusePublicKey, effRestart),
+		)
+	}
+
 	cfg := st.Load()
 	var applied uint8
 	// Model whitelist (config plane): the model choice must stay inside
@@ -317,6 +367,7 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		strPatch(settings.SecretDeepSeekAPIKey, req.DeepSeekAPIKey, effModel),
 		strPatch(settings.SecretPostgresURL, req.PostgresURL, effRestart),
 		strPatch(settings.SecretLadyMEmbeddingAPIKey, req.LadyMEmbeddingAPIKey, effMemory),
+		strPatch(settings.SecretLangfuseSecretKey, req.LangfuseSecretKey, effRestart),
 	}
 	for _, sec := range secrets {
 		if !sec.set {

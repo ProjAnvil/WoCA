@@ -77,6 +77,7 @@ const (
 	SecretCheckpointPGPassword = "checkpoint_pg_password"
 	SecretMemoryPGPassword     = "memory_pg_password"
 	SecretRelayKey             = "relay_key"
+	SecretLangfuseSecretKey    = "langfuse_secret_key"
 )
 
 // Settings is the persisted configuration. Secrets (API keys, the postgres
@@ -151,6 +152,12 @@ type Settings struct {
 	// skills tree). Empty means all of them; user and workspace skills of
 	// the same name shadow the built-ins regardless.
 	BuiltinSkills []string `json:"builtin_skills"`
+	// Langfuse observability plugin (personal forms configure it from the
+	// settings UI; enterprise forms receive it from the config plane).
+	// The secret key lives in the secrets table (SecretLangfuseSecretKey).
+	LangfuseEnabled   bool   `json:"langfuse_enabled"`
+	LangfuseBaseURL   string `json:"langfuse_base_url"`
+	LangfusePublicKey string `json:"langfuse_public_key"`
 }
 
 // Default returns the default settings: sqlite storage under ~/.woca.
@@ -442,6 +449,17 @@ func applyPairs(out *Settings, pairs map[string]string) {
 	if v, ok := pairs["model_whitelist"]; ok {
 		out.ModelWhitelist = v
 	}
+	if v, ok := pairs["langfuse_enabled"]; ok {
+		if b, err := ParseBool(v); err == nil {
+			out.LangfuseEnabled = b
+		}
+	}
+	if v, ok := pairs["langfuse_base_url"]; ok {
+		out.LangfuseBaseURL = v
+	}
+	if v, ok := pairs["langfuse_public_key"]; ok {
+		out.LangfusePublicKey = v
+	}
 	if v, ok := pairs["relay_url"]; ok {
 		out.RelayURL = v
 	}
@@ -580,6 +598,13 @@ func (s *Store) Save(cfg Settings) error {
 	fields = append(fields, field{"ladym_endpoint", cfg.LadyMEndpoint})
 	fields = append(fields, field{"ladym_api_username", cfg.LadyMAPIUsername})
 	fields = append(fields, field{"ladym_system2", strconv.FormatBool(cfg.LadyMSystem2)})
+	// Langfuse plugin keys are always written explicitly (enabled=false
+	// included) so turning the plugin off persists.
+	fields = append(fields,
+		field{"langfuse_enabled", strconv.FormatBool(cfg.LangfuseEnabled)},
+		field{"langfuse_base_url", cfg.LangfuseBaseURL},
+		field{"langfuse_public_key", cfg.LangfusePublicKey},
+	)
 	if cfg.LadyMTopK != 0 {
 		fields = append(fields, field{"ladym_topk", strconv.Itoa(cfg.LadyMTopK)})
 	}

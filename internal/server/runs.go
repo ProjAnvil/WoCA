@@ -19,7 +19,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/runstate"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -414,7 +414,7 @@ func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, st
 	run := newRun(id, s.agent, ctx, cancel)
 	// Telemetry correlation: every span inside this run (tools, LLM calls,
 	// skill loads) carries the run/session identity.
-	run.ctx = telemetry.WithRun(run.ctx, id, sessionID)
+	run.ctx = tracing.WithRun(run.ctx, id, sessionID)
 	s.registerRun(id, run)
 	sid := sessionID
 	if sid == "" {

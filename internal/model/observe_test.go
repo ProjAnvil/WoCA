@@ -8,23 +8,23 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/langchain-golang/core/ratelimiters"
 
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 type recordingSink struct {
-	spans []telemetry.Span
+	spans []tracing.Span
 }
 
-func (r *recordingSink) Record(_ context.Context, sp telemetry.Span) {
+func (r *recordingSink) Record(_ context.Context, sp tracing.Span) {
 	r.spans = append(r.spans, sp)
 }
 
 func installSink(t *testing.T) *recordingSink {
 	t.Helper()
 	rec := &recordingSink{}
-	prev := telemetry.Default()
-	telemetry.SetDefault(rec)
-	t.Cleanup(func() { telemetry.SetDefault(prev) })
+	prev := tracing.Default()
+	tracing.SetDefault(rec)
+	t.Cleanup(func() { tracing.SetDefault(prev) })
 	return rec
 }
 
@@ -36,7 +36,7 @@ func TestObserveInvokeRecordsChatSpan(t *testing.T) {
 	inner := language.NewFakeChatModel(language.WithResponses(resp))
 	m := Observe(inner)
 
-	ctx := telemetry.WithRun(context.Background(), "run-1", "sess-1")
+	ctx := tracing.WithRun(context.Background(), "run-1", "sess-1")
 	got, err := m.Invoke(ctx, []messages.Message{messages.Human("hi")})
 	if err != nil {
 		t.Fatalf("invoke: %v", err)
@@ -49,17 +49,17 @@ func TestObserveInvokeRecordsChatSpan(t *testing.T) {
 		t.Fatalf("recorded %d spans", len(rec.spans))
 	}
 	sp := rec.spans[0]
-	if sp.Name != "chat" || sp.Kind != telemetry.KindLLM || sp.Status != telemetry.StatusOK {
+	if sp.Name != "chat" || sp.Kind != tracing.KindLLM || sp.Status != tracing.StatusOK {
 		t.Fatalf("span = %+v", sp)
 	}
-	if sp.Attributes[string(telemetry.AttrOperationName)] != "chat" {
+	if sp.Attributes[string(tracing.AttrOperationName)] != "chat" {
 		t.Fatalf("operation attr = %v", sp.Attributes)
 	}
-	if in, ok := sp.Attributes[string(telemetry.AttrUsageInputTokens)].(int); !ok || in != 12 {
-		t.Fatalf("input tokens = %v", sp.Attributes[string(telemetry.AttrUsageInputTokens)])
+	if in, ok := sp.Attributes[string(tracing.AttrUsageInputTokens)].(int); !ok || in != 12 {
+		t.Fatalf("input tokens = %v", sp.Attributes[string(tracing.AttrUsageInputTokens)])
 	}
-	if out, ok := sp.Attributes[string(telemetry.AttrUsageOutputTokens)].(int); !ok || out != 34 {
-		t.Fatalf("output tokens = %v", sp.Attributes[string(telemetry.AttrUsageOutputTokens)])
+	if out, ok := sp.Attributes[string(tracing.AttrUsageOutputTokens)].(int); !ok || out != 34 {
+		t.Fatalf("output tokens = %v", sp.Attributes[string(tracing.AttrUsageOutputTokens)])
 	}
 	// The run/session tags ride the ctx: downstream grouping keys on them.
 	if sp.Tags["run_id"] != "run-1" || sp.Tags["session_id"] != "sess-1" {
@@ -79,7 +79,7 @@ func TestObserveInvokeErrorStatus(t *testing.T) {
 	if len(rec.spans) != 1 {
 		t.Fatalf("recorded %d spans", len(rec.spans))
 	}
-	if rec.spans[0].Status != telemetry.StatusError {
+	if rec.spans[0].Status != tracing.StatusError {
 		t.Fatalf("status = %v", rec.spans[0].Status)
 	}
 }
@@ -118,11 +118,11 @@ func TestObserveStreamEndsSpanWithUsage(t *testing.T) {
 	if sp.Name != "chat" {
 		t.Fatalf("span = %+v", sp)
 	}
-	if in, ok := sp.Attributes[string(telemetry.AttrUsageInputTokens)].(int); !ok || in != 5 {
-		t.Fatalf("input tokens = %v", sp.Attributes[string(telemetry.AttrUsageInputTokens)])
+	if in, ok := sp.Attributes[string(tracing.AttrUsageInputTokens)].(int); !ok || in != 5 {
+		t.Fatalf("input tokens = %v", sp.Attributes[string(tracing.AttrUsageInputTokens)])
 	}
-	if out, ok := sp.Attributes[string(telemetry.AttrUsageOutputTokens)].(int); !ok || out != 7 {
-		t.Fatalf("output tokens = %v", sp.Attributes[string(telemetry.AttrUsageOutputTokens)])
+	if out, ok := sp.Attributes[string(tracing.AttrUsageOutputTokens)].(int); !ok || out != 7 {
+		t.Fatalf("output tokens = %v", sp.Attributes[string(tracing.AttrUsageOutputTokens)])
 	}
 }
 

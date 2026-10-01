@@ -6,7 +6,6 @@ import (
 	"log"
 
 	"github.com/projanvil/woca/sdk"
-	"github.com/projanvil/woca/sdk/langfuse"
 )
 
 // reportingPlugin shows the smallest useful plugin: an observe-only audit
@@ -31,25 +30,24 @@ func (p *reportingPlugin) Observe(_ context.Context, ev sdk.RunEvent) {
 	}
 }
 
-// ExampleQuery_withPlugins wires a custom reporting plugin and native
-// Langfuse telemetry into one embedded run.
-func ExampleQuery_withPlugins() {
-	lf, err := langfuse.New(langfuse.Config{
-		Host:      "https://cloud.langfuse.com",
-		PublicKey: "pk-lf-example",
-		SecretKey: "sk-lf-example",
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer lf.Close()
+// httpSink is a custom TelemetrySink — WithTelemetry accepts any
+// implementation; the built-in OTLP/Langfuse export needs no code —
+// it is enabled by the langfuse_* settings keys or WOCA_LANGFUSE_* env.
+type httpSink struct{}
 
+func (httpSink) Record(_ context.Context, sp sdk.Span) {
+	fmt.Println("span:", sp.Name, sp.Kind)
+}
+
+// ExampleQuery_withPlugins wires a custom reporting plugin and a custom
+// telemetry sink into one embedded run.
+func ExampleQuery_withPlugins() {
 	s, err := sdk.Query(context.Background(), "list the files in this repo",
 		sdk.WithModel("claude-sonnet-4-5"),
 		sdk.WithPermissionMode("bypassPermissions"),
 		sdk.WithMaxTurns(10),
 		sdk.WithPlugins(&reportingPlugin{}),
-		sdk.WithTelemetry(lf),
+		sdk.WithTelemetry(httpSink{}),
 	)
 	if err != nil {
 		log.Fatal(err)

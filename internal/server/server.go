@@ -40,6 +40,11 @@ type Config struct {
 	// edition behavior — through the same middleware code path server
 	// editions use with stricter providers (design doc §3.3, §11.1).
 	Auth authn.Provider
+	// ObservabilityConsoleManaged marks the enterprise posture (serve
+	// --auth apikey and the bridge edition): observability plugins are
+	// owned by the console, and user writes through this API are
+	// rejected regardless of role.
+	ObservabilityConsoleManaged bool
 	// Authz authorizes /api requests against per-route scopes. Nil uses the
 	// local scope-set authorizer.
 	Authz authz.Authorizer
@@ -172,6 +177,7 @@ type Server struct {
 	static     fs.FS
 	log        zerolog.Logger
 	auth       authn.Provider
+	obsManaged bool
 	authz      authz.Authorizer
 	nativeAuth NativeAuth
 	fs         *fsb.Service
@@ -270,6 +276,7 @@ func New(cfg Config) *Server {
 		static:         cfg.Static,
 		log:            cfg.Logger,
 		auth:           auth,
+		obsManaged:     cfg.ObservabilityConsoleManaged,
 		authz:          authorizer,
 		nativeAuth:     cfg.NativeAuth,
 		anonymousAPI:   cfg.AnonymousAPIPaths,

@@ -345,7 +345,7 @@ internal/merge           layered configuration merge
 internal/bus             in-process message bus (SendMessage)
 internal/obslog          harness observability log (size-rotated JSONL)
 internal/settingswatch   management-plane write propagation to roles
-internal/telemetry       observability seam (Phase 2)
+internal/tracing        observability core (span vocabulary + sink interface)
 internal/logging         zerolog wrapper
 internal/notify          terminal notifications
 internal/oauth           OAuth 2.0 device-authorization-grant client

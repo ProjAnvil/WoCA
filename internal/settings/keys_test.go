@@ -136,6 +136,7 @@ func TestKeyValueAllKeys(t *testing.T) {
 		MsgPlaneMode: "pg+nats", MsgPlaneNATSURL: "nats://n:4222", MsgPlaneSubject: "runs.dispatch",
 		CheckpointPGHost: "ck", CheckpointPGPort: "5433", CheckpointPGDB: "ckdb", CheckpointPGUser: "cku",
 		MemoryPGHost: "mm", MemoryPGPort: "5434", MemoryPGDB: "mmdb", MemoryPGUser: "mmu",
+		LangfuseEnabled: true, LangfuseBaseURL: "https://lf.example", LangfusePublicKey: "pk-lf",
 	}
 	for _, k := range KeyNames() {
 		if _, ok := SecretFor(k); ok {

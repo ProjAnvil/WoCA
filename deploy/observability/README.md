@@ -28,7 +28,7 @@ tracing with the `session.id` mapping applied there (see
 `deploy/collector/README.md`).
 
 Session grouping: every `chat`/`invoke_tool` span carries woca's
-`run_id`/`session_id`/`tenant_id` tags (internal/telemetry); the bridge
+`run_id`/`session_id`/`tenant_id` tags (internal/tracing); the bridge
 renames `session_id`→`session.id` (and `user_id`→`user.id`) onto
 Langfuse's OTLP conventions, so traces group by session in the Langfuse
 UI with no extra instrumentation. Ingestion is asynchronous (queue →
@@ -50,7 +50,7 @@ Metrics produced by `internal/ee/obs`:
 - `woca.worker.claimed`, `woca.worker.runs{status}`, `woca.worker_run_duration_seconds_*`
 - Go runtime instruments (`go_goroutine_count`, `go_memory_*`, …)
 
-Traces: every tool/LLM/skill span recorded by `internal/telemetry` flows to
+Traces: every tool/LLM/skill span recorded by `internal/tracing` flows to
 the OTLP endpoint with `gen_ai.*` attributes (OTel GenAI semconv) plus
 `tenant_id`/`run_id`/`session_id` tags.
 

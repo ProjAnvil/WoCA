@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/projanvil/woca/internal/platform/tenancy"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 	"github.com/rs/zerolog"
 )
 
@@ -101,7 +101,7 @@ func TestLoggerCarriesRunScope(t *testing.T) {
 	r.Use(Logger(log))
 	r.GET("/x", func(c *Ctx) { c.Status(200) })
 	req := httptest.NewRequest("GET", "/x", nil)
-	req = req.WithContext(telemetry.WithRun(req.Context(), "run-9", "sess-1"))
+	req = req.WithContext(tracing.WithRun(req.Context(), "run-9", "sess-1"))
 	r.Handler().ServeHTTP(httptest.NewRecorder(), req)
 	if !strings.Contains(buf.String(), `"run_id":"run-9"`) {
 		t.Errorf("run scope missing from log line: %s", buf.String())

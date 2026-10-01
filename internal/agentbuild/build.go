@@ -84,6 +84,13 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	// here unchanged (design doc §8) — the sandbox session is provisioned
 	// once per process and destroyed at teardown.
 	var teardown []func()
+	// The Langfuse observability plugin (personal forms: settings →
+	// plugins; enterprise forms: the config plane; env fallback otherwise)
+	// chains onto the tracing default for every form that runs through
+	// this composition root. Teardown flushes its batch.
+	if closeLangfuse := installLangfuseSink(st, log); closeLangfuse != nil {
+		teardown = append(teardown, closeLangfuse)
+	}
 	x := executor.Executor(executor.NewLocal())
 	if opts.Sandbox != nil {
 		sbx, err := executor.NewSandbox(*opts.Sandbox)

@@ -15,7 +15,7 @@ import (
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/runner"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // Sentinel errors returned by Ask.
@@ -190,7 +190,7 @@ func (s *Session) turn(ctx context.Context, cancel context.CancelFunc, done chan
 	// Tag every span the run records (chat/invoke_tool/...) with the
 	// session/run identity, so an installed TelemetrySink — e.g. the
 	// Langfuse exporter — can group spans per run.
-	ctx = telemetry.WithRun(ctx, runID, s.sessionID)
+	ctx = tracing.WithRun(ctx, runID, s.sessionID)
 	dispatchRunEvent(ctx, s.observers, RunEvent{Kind: RunEventStart, SessionID: s.sessionID, RunID: runID, Prompt: prompt, At: time.Now()})
 
 	render := func(chunk lggraph.StreamChunk) {

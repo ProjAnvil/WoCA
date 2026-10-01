@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projanvil/woca/sdk"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 type capture struct {
@@ -87,12 +87,12 @@ func TestSinkIsGenericOTLP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Record(context.Background(), sdk.Span{
+	s.Record(context.Background(), tracing.Span{
 		Name: "chat", Kind: "llm", Start: time.Unix(1700000000, 0), DurationMS: 5,
 		Attributes: map[string]any{"gen_ai.request.model": "claude-sonnet-4-5"},
 		Tags:       map[string]string{"run_id": "r1", "session_id": "sess1", "user_id": "u1"},
 	})
-	s.Record(context.Background(), sdk.Span{
+	s.Record(context.Background(), tracing.Span{
 		Name: "chat", Kind: "llm", Start: time.Unix(1700000001, 0), DurationMS: 5,
 		Tags: map[string]string{"run_id": "r1"},
 	})
@@ -164,7 +164,7 @@ func TestDecorate(t *testing.T) {
 	s, err := New(Config{
 		Endpoint:      srv.URL,
 		FlushInterval: time.Hour,
-		Decorate: func(sp sdk.Span) sdk.Span {
+		Decorate: func(sp tracing.Span) tracing.Span {
 			sp.Tags = map[string]string{"backend.tag": "added-by-plugin", "run_id": sp.Tags["run_id"]}
 			return sp
 		},
@@ -172,7 +172,7 @@ func TestDecorate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Record(context.Background(), sdk.Span{Name: "chat", Kind: "llm", Start: time.Unix(1, 0), Tags: map[string]string{"run_id": "r1"}})
+	s.Record(context.Background(), tracing.Span{Name: "chat", Kind: "llm", Start: time.Unix(1, 0), Tags: map[string]string{"run_id": "r1"}})
 	s.Close()
 	<-c.ready
 

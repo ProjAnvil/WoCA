@@ -33,7 +33,7 @@ import (
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/settingswatch"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 	"github.com/projanvil/woca/internal/webd"
 	"github.com/projanvil/woca/internal/webgui"
 	"github.com/projanvil/woca/internal/wocadb"
@@ -323,7 +323,7 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 	// Observability seam (Phase 2 §6.5): one structured line per tool/LLM/
 	// skill span, correlated by tenant/run/session. The enterprise edition
 	// chains the OTel sink behind it (design §6.5.3).
-	telemetry.SetDefault(telemetry.NewLocalSink(log))
+	tracing.SetDefault(tracing.NewLocalSink(log))
 	obs := ed.obs
 	if obs != nil {
 		if err := obs.Install(ctx); err != nil {
@@ -437,26 +437,30 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 		fsSvc = defaultFS(addr)
 	}
 	srv := server.New(server.Config{
-		Auth:                   authProv,
-		ModelCatalog:           ed.ModelCatalog,
-		ResolveModel:           ed.ResolveModel,
-		AnonymousAPIPaths:      ed.AnonymousAPIPaths,
-		HostGateExemptPrefixes: ed.HostGateExemptPrefixes,
-		StreamReauth:           ed.StreamReauth,
-		NativeAuth:             native,
-		RunLedger:              runLedger,
-		DispatchToQueue:        dispatchQueue,
-		RunsOffHost:            runsOffHost,
-		MsgPlane:               plane,
-		Agent:                  ap.Agent,
-		Static:                 ed.Static,
-		Logger:                 log,
-		SessionDir:             sessionDir,
-		WorkDir:                ap.Cfg.WorkDir,
-		GrafanaURL:             os.Getenv("WOCA_GRAFANA_URL"),
-		Settings:               ap.Settings,
-		Memory:                 ap.Memory,
-		MemoryEngine:           ap.MemEngine,
+		Auth: authProv,
+		// A non-local auth plane (serve --auth apikey, the bridge edition)
+		// owns the deployment: observability plugins are console-managed
+		// there, and serve-side user writes are rejected.
+		ObservabilityConsoleManaged: authProv != nil,
+		ModelCatalog:                ed.ModelCatalog,
+		ResolveModel:                ed.ResolveModel,
+		AnonymousAPIPaths:           ed.AnonymousAPIPaths,
+		HostGateExemptPrefixes:      ed.HostGateExemptPrefixes,
+		StreamReauth:                ed.StreamReauth,
+		NativeAuth:                  native,
+		RunLedger:                   runLedger,
+		DispatchToQueue:             dispatchQueue,
+		RunsOffHost:                 runsOffHost,
+		MsgPlane:                    plane,
+		Agent:                       ap.Agent,
+		Static:                      ed.Static,
+		Logger:                      log,
+		SessionDir:                  sessionDir,
+		WorkDir:                     ap.Cfg.WorkDir,
+		GrafanaURL:                  os.Getenv("WOCA_GRAFANA_URL"),
+		Settings:                    ap.Settings,
+		Memory:                      ap.Memory,
+		MemoryEngine:                ap.MemEngine,
 		RebuildMemory: func() error {
 			return ap.RebuildMemory()
 		},

@@ -41,7 +41,7 @@ import (
 	otelruntime "go.opentelemetry.io/contrib/instrumentation/runtime"
 
 	"github.com/projanvil/woca/internal/ee/discovery"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // Environment contract (design §12.2: infrastructure config rides env /
@@ -451,9 +451,9 @@ func (w *statusWriter) WriteHeader(code int) {
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // Sink returns the OTel trace sink (nil-safe to chain). Spans carry the
-// GenAI attributes recorded by internal/telemetry plus the tenant/run tags
+// GenAI attributes recorded by internal/tracing plus the tenant/run tags
 // as plain span attributes.
-func (o *Obs) Sink() telemetry.Sink {
+func (o *Obs) Sink() tracing.Sink {
 	if o.tracer == nil {
 		return nil
 	}
@@ -462,8 +462,8 @@ func (o *Obs) Sink() telemetry.Sink {
 
 type otelSink struct{ tracer trace.Tracer }
 
-// Record implements telemetry.Sink.
-func (s *otelSink) Record(ctx context.Context, sp telemetry.Span) {
+// Record implements tracing.Sink.
+func (s *otelSink) Record(ctx context.Context, sp tracing.Span) {
 	attrs := make([]attribute.KeyValue, 0, len(sp.Attributes)+len(sp.Tags))
 	for k, v := range sp.Tags {
 		attrs = append(attrs, attribute.String(k, v))
@@ -476,7 +476,7 @@ func (s *otelSink) Record(ctx context.Context, sp telemetry.Span) {
 		trace.WithAttributes(attrs...),
 	}
 	_, span := s.tracer.Start(ctx, sp.Name, opts...)
-	if sp.Status == telemetry.StatusError {
+	if sp.Status == tracing.StatusError {
 		span.SetStatus(codes.Error, sp.Error)
 		span.RecordError(errors.New(sp.Error))
 	}
@@ -539,7 +539,7 @@ func (o *Obs) Worker() *WorkerMetrics {
 // the caller.
 func (o *Obs) Install(_ context.Context) error {
 	if s := o.Sink(); s != nil {
-		telemetry.SetDefault(telemetry.NewMultiSink(telemetry.Default(), s))
+		tracing.SetDefault(tracing.NewMultiSink(tracing.Default(), s))
 	}
 	return nil
 }

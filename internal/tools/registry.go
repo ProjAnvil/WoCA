@@ -11,7 +11,7 @@ import (
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 
 	"github.com/projanvil/woca/internal/platform/executor"
 )
@@ -220,9 +220,9 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]any
 	if !ok {
 		return coretools.Result{Content: fmt.Sprintf("Error: unknown tool %q", name)}
 	}
-	sp := telemetry.Start(ctx, "invoke_tool", telemetry.KindTool).
-		Set(telemetry.AttrOperationName, "invoke_tool").
-		Set(telemetry.AttrToolName, name)
+	sp := tracing.Start(ctx, "invoke_tool", tracing.KindTool).
+		Set(tracing.AttrOperationName, "invoke_tool").
+		Set(tracing.AttrToolName, name)
 	res, err := t.Invoke(ctx, args)
 	sp.End(ctx, err)
 	if err != nil {

@@ -128,6 +128,10 @@ func TestGatewayClientStorageMemoryDelivery(t *testing.T) {
 		"ladym-api-username":     "bridge",
 		"ladym-api-password":     "lm-secret",
 		"builtin-plugins":        `["browser","pdf"]`,
+		"langfuse-enabled":       "true",
+		"langfuse-base-url":      "https://lf.corp.example",
+		"langfuse-public-key":    "pk-lf",
+		"langfuse-secret-key":    "lf-secret",
 	})
 	enroll, err := store.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
@@ -161,10 +165,14 @@ func TestGatewayClientStorageMemoryDelivery(t *testing.T) {
 	if len(got.BuiltinPlugins) != 2 || got.BuiltinPlugins[0] != "browser" {
 		t.Fatalf("builtin plugins overlay = %v", got.BuiltinPlugins)
 	}
+	if !got.LangfuseEnabled || got.LangfuseBaseURL != "https://lf.corp.example" || got.LangfusePublicKey != "pk-lf" {
+		t.Fatalf("langfuse overlay = %+v", got)
+	}
 	for secret, want := range map[string]string{
 		settings.SecretCheckpointPGPassword: "cp-secret",
 		settings.SecretMemoryPGPassword:     "mem-secret",
 		settings.SecretLadyMAPIPassword:     "lm-secret",
+		settings.SecretLangfuseSecretKey:    "lf-secret",
 	} {
 		if st.GetSecret(secret) != want {
 			t.Errorf("secret %s not delivered", secret)
@@ -174,7 +182,8 @@ func TestGatewayClientStorageMemoryDelivery(t *testing.T) {
 	// so the settings watcher rebuilds the memory engine even when no
 	// secrets row changed between pulls.
 	if fields := st.ManagedFields(); !slices.Contains(fields, "checkpoint-pg-host") ||
-		!slices.Contains(fields, "ladym-endpoint") || !slices.Contains(fields, "builtin-plugins") {
+		!slices.Contains(fields, "ladym-endpoint") || !slices.Contains(fields, "builtin-plugins") ||
+		!slices.Contains(fields, "langfuse-enabled") {
 		t.Fatalf("managed fields = %v", fields)
 	}
 	gen := st.Generation()

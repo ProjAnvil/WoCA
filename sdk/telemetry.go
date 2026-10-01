@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // Span is one recorded operation, the public mirror of the harness span.
@@ -34,7 +34,7 @@ type TelemetrySink interface {
 // sinkAdapter adapts a public TelemetrySink onto the internal Sink.
 type sinkAdapter struct{ sink TelemetrySink }
 
-func (a sinkAdapter) Record(ctx context.Context, sp telemetry.Span) {
+func (a sinkAdapter) Record(ctx context.Context, sp tracing.Span) {
 	a.sink.Record(ctx, Span{
 		Name:       sp.Name,
 		Kind:       sp.Kind,
@@ -61,7 +61,7 @@ var (
 func (o Options) installTelemetry() {
 	telemetryMu.Lock()
 	defer telemetryMu.Unlock()
-	var fresh []telemetry.Sink
+	var fresh []tracing.Sink
 	for _, s := range o.Telemetry {
 		if s == nil {
 			continue
@@ -73,7 +73,7 @@ func (o Options) installTelemetry() {
 		fresh = append(fresh, sinkAdapter{sink: s})
 	}
 	if len(fresh) > 0 {
-		chain := append([]telemetry.Sink{telemetry.Default()}, fresh...)
-		telemetry.SetDefault(telemetry.NewMultiSink(chain...))
+		chain := append([]tracing.Sink{tracing.Default()}, fresh...)
+		tracing.SetDefault(tracing.NewMultiSink(chain...))
 	}
 }

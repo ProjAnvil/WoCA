@@ -961,6 +961,16 @@ func applyManaged(st *settings.Store, kv map[string]string) error {
 			cfg.BuiltinPlugins = list
 		}
 	})
+	// The Langfuse observability plugin (enterprise-owned: the console
+	// enables it; the secret rides ManagedSecretKeys into the encrypted
+	// store, never the overlay struct).
+	set("langfuse-enabled", func(v string) {
+		if b, err := settings.ParseBool(v); err == nil {
+			cfg.LangfuseEnabled = b
+		}
+	})
+	set("langfuse-base-url", func(v string) { cfg.LangfuseBaseURL = v })
+	set("langfuse-public-key", func(v string) { cfg.LangfusePublicKey = v })
 	st.SetManaged(cfg)
 	// Provider API keys are secrets: they land in the encrypted store,
 	// never in the overlay struct (R4 — they do not travel past the

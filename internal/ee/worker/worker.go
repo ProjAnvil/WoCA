@@ -11,7 +11,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/runstate"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 	"github.com/rs/zerolog"
 )
 
@@ -162,7 +162,7 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 		// queue-dispatch form this process is where runs execute, and spans
 		// without these tags cannot be grouped by session downstream
 		// (Langfuse session.id, per-run filtering).
-		ctx = telemetry.WithRun(ctx, run.RunID, run.SessionID)
+		ctx = tracing.WithRun(ctx, run.RunID, run.SessionID)
 		history := []messages.Message{humanMessage(snap)}
 		if w.sessions != nil && snap.SessionID != "" {
 			if prev := w.sessions.Load(snap.SessionID); len(prev) > 0 {

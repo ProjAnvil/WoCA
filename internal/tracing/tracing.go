@@ -1,11 +1,11 @@
-// Package telemetry is the Phase 2 observability seam (design §6.5): one
+// Package tracing is woca's observability core (design §6.5): one
 // span per skill load/activation, tool invocation, and LLM call, with
 // attributes named after the OTel GenAI semantic conventions. The local
 // sink writes structured log lines tagged with tenant/run/session so a
 // run's full call chain reconstructs from logs plus the run_events stream
 // (tool_call/tool_result frames are mirrored there by the server); an OTel
 // exporter sink is the later remote implementation.
-package telemetry
+package tracing
 
 import (
 	"context"

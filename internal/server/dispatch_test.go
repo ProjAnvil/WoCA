@@ -285,3 +285,114 @@ func TestMsgPlaneSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("invalid mode status = %d want 400", r2.StatusCode)
 	}
 }
+
+// TestLangfusePluginSettingsRoundTrip: the Langfuse plugin is a
+// personal-form surface — writes persist there, and GET reports the
+// console-managed flag false.
+func TestLangfusePluginSettingsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st, err := settings.Open("sqlite:" + filepath.Join(dir, "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{
+		Agent: newScriptedAgent(t, "x"), Static: fstest.MapFS{}, Logger: zerolog.Nop(),
+		SessionDir: dir, WorkDir: dir, Settings: st,
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{
+		"langfuse_enabled": true, "langfuse_base_url": "https://lf.example",
+		"langfuse_public_key": "pk-lf", "langfuse_secret_key": "sk-lf",
+	})
+	put, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	putResp, err := http.DefaultClient.Do(put)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		OK              bool   `json:"ok"`
+		RestartRequired bool   `json:"restart_required"`
+		Error           string `json:"error"`
+	}
+	_ = json.NewDecoder(putResp.Body).Decode(&out)
+	putResp.Body.Close()
+	if !out.OK || !out.RestartRequired {
+		t.Fatalf("update = ok:%v restart:%v status:%d err:%q (sink installs at agent assembly)", out.OK, out.RestartRequired, putResp.StatusCode, out.Error)
+	}
+
+	get, err := http.Get(srv.URL + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer get.Body.Close()
+	var cfg struct {
+		LangfuseEnabled        bool   `json:"langfuse_enabled"`
+		LangfuseBaseURL        string `json:"langfuse_base_url"`
+		LangfusePublicKey      string `json:"langfuse_public_key"`
+		LangfuseSecretKeySet   bool   `json:"langfuse_secret_key_set"`
+		LangfuseConsoleManaged bool   `json:"langfuse_console_managed"`
+	}
+	_ = json.NewDecoder(get.Body).Decode(&cfg)
+	if !cfg.LangfuseEnabled || cfg.LangfuseBaseURL != "https://lf.example" || cfg.LangfusePublicKey != "pk-lf" {
+		t.Fatalf("langfuse fields = %+v", cfg)
+	}
+	if !cfg.LangfuseSecretKeySet {
+		t.Fatal("secret key not reported as set")
+	}
+	if cfg.LangfuseConsoleManaged {
+		t.Fatal("personal deployment must not report console management")
+	}
+	if got := st.GetSecret(settings.SecretLangfuseSecretKey); got != "sk-lf" {
+		t.Fatalf("secret stored = %q", got)
+	}
+}
+
+// TestLangfusePluginEnterpriseWriteRejected: enterprise deployments own
+// observability from the console — serve-side user writes are rejected
+// regardless of role.
+func TestLangfusePluginEnterpriseWriteRejected(t *testing.T) {
+	dir := t.TempDir()
+	st, err := settings.Open("sqlite:" + filepath.Join(dir, "s.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{
+		Agent: newScriptedAgent(t, "x"), Static: fstest.MapFS{}, Logger: zerolog.Nop(),
+		SessionDir: dir, WorkDir: dir, Settings: st,
+		ObservabilityConsoleManaged: true,
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{"langfuse_enabled": true})
+	put, err := http.NewRequest(http.MethodPut, srv.URL+"/api/settings", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	putResp, err := http.DefaultClient.Do(put)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer putResp.Body.Close()
+	if putResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("enterprise langfuse write status = %d, want 400", putResp.StatusCode)
+	}
+
+	get, err := http.Get(srv.URL + "/api/settings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer get.Body.Close()
+	var cfg struct {
+		LangfuseConsoleManaged bool `json:"langfuse_console_managed"`
+	}
+	_ = json.NewDecoder(get.Body).Decode(&cfg)
+	if !cfg.LangfuseConsoleManaged {
+		t.Fatal("enterprise deployment must report console management")
+	}
+}

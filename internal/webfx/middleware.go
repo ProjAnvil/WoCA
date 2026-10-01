@@ -14,7 +14,7 @@ import (
 
 	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/platform/tenancy"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 	"github.com/rs/zerolog"
 )
 
@@ -103,7 +103,7 @@ func Logger(log zerolog.Logger) Middleware {
 				if tc, ok := tenancy.FromContext(r.Context()); ok && tc.TenantID != "" {
 					evt = evt.Str("tenant_id", tc.TenantID)
 				}
-				if sc, ok := telemetry.RunFrom(r.Context()); ok && sc.RunID != "" {
+				if sc, ok := tracing.RunFrom(r.Context()); ok && sc.RunID != "" {
 					evt = evt.Str("run_id", sc.RunID)
 				}
 				l := evt.Logger()

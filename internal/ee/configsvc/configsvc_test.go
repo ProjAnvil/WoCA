@@ -620,3 +620,47 @@ func (f *fakePublisher) Publish(_ context.Context, _, _, content string) error {
 	f.published = append(f.published, content)
 	return nil
 }
+
+// TestLangfuseConsoleRoundTrip: the console owns the Langfuse plugin —
+// keys persist, the secret lands encrypted, and GET reports *_set.
+func TestLangfuseConsoleRoundTrip(t *testing.T) {
+	f := newFixture(t)
+	resp := f.do("PUT", "/api/settings", "", map[string]any{
+		"langfuse_enabled": true, "langfuse_base_url": "https://lf.corp.example",
+		"langfuse_public_key": "pk-lf", "langfuse_secret_key": "sk-lf",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("put = %d", resp.StatusCode)
+	}
+	cfg := f.st.Load()
+	if !cfg.LangfuseEnabled || cfg.LangfuseBaseURL != "https://lf.corp.example" || cfg.LangfusePublicKey != "pk-lf" {
+		t.Fatalf("store = %+v", cfg)
+	}
+	if got := f.st.GetSecret(settings.SecretLangfuseSecretKey); got != "sk-lf" {
+		t.Fatalf("secret = %q", got)
+	}
+
+	get := f.do("GET", "/api/settings", "", nil)
+	defer get.Body.Close()
+	var out struct {
+		Enabled   bool   `json:"langfuse_enabled"`
+		BaseURL   string `json:"langfuse_base_url"`
+		PublicKey string `json:"langfuse_public_key"`
+		SecretSet bool   `json:"langfuse_secret_key_set"`
+	}
+	_ = json.NewDecoder(get.Body).Decode(&out)
+	if !out.Enabled || out.BaseURL != "https://lf.corp.example" || out.PublicKey != "pk-lf" || !out.SecretSet {
+		t.Fatalf("get = %+v", out)
+	}
+
+	// The bridge package carries the plugin when enabled (secret via
+	// ManagedSecretKeys).
+	_, kv, err := f.svc.bridgeConfig(t.Context(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kv["langfuse-enabled"] != "true" || kv["langfuse-base-url"] != "https://lf.corp.example" {
+		t.Fatalf("bridgeConfig langfuse = %v", kv)
+	}
+}

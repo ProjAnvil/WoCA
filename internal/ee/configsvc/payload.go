@@ -76,6 +76,13 @@ func (s *Service) bridgeConfig(_ context.Context, _ string) (string, map[string]
 			kv["builtin-plugins"] = string(raw)
 		}
 	}
+	// The Langfuse observability plugin rides when the console enabled it
+	// (its secret travels via ManagedSecretKeys below).
+	if cfg.LangfuseEnabled {
+		kv["langfuse-enabled"] = "true"
+		kv["langfuse-base-url"] = cfg.LangfuseBaseURL
+		kv["langfuse-public-key"] = cfg.LangfusePublicKey
+	}
 	for key, secret := range settings.ManagedSecretKeys {
 		if v := s.settings.GetSecret(secret); v != "" {
 			kv[key] = v
@@ -219,6 +226,14 @@ type payload struct {
 	// keys for whatever deployment form reads this database (the business
 	// server reports its own dispatch availability separately).
 	MsgPlaneAvailable bool `json:"msg_plane_available"`
+
+	// Langfuse observability plugin — enterprise-owned: configured here,
+	// delivered to business roles via the shared settings tables and to
+	// bridges via the config package.
+	LangfuseEnabled      bool   `json:"langfuse_enabled"`
+	LangfuseBaseURL      string `json:"langfuse_base_url"`
+	LangfusePublicKey    string `json:"langfuse_public_key"`
+	LangfuseSecretKeySet bool   `json:"langfuse_secret_key_set"`
 }
 
 // update is the PUT body. Pointer fields distinguish "unchanged" (absent)
@@ -275,6 +290,11 @@ type update struct {
 	// BuiltinPlugins pins the enterprise plugin set delivered to bridges
 	// (present = pin; absent = user-managed on each bridge).
 	BuiltinPlugins *[]string `json:"builtin_plugins"`
+
+	LangfuseEnabled   *bool   `json:"langfuse_enabled"`
+	LangfuseBaseURL   *string `json:"langfuse_base_url"`
+	LangfusePublicKey *string `json:"langfuse_public_key"`
+	LangfuseSecretKey *string `json:"langfuse_secret_key"`
 }
 
 type patch struct {

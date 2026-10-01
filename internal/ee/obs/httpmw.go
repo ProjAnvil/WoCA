@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/projanvil/woca/internal/platform/tenancy"
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 	"github.com/projanvil/woca/internal/webfx"
 )
 
@@ -35,7 +35,7 @@ const (
 func (o *Obs) HTTPMiddleware() webfx.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			sp := telemetry.Start(r.Context(), "http", telemetry.KindServer).
+			sp := tracing.Start(r.Context(), "http", tracing.KindServer).
 				Set(attrHTTPMethod, r.Method).
 				Set(attrServiceName, o.serviceName)
 			if tc, ok := tenancy.FromContext(r.Context()); ok && tc.TenantID != "" {

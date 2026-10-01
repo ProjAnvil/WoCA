@@ -8,10 +8,6 @@ Embedding `sdk` in your own Go program is equivalent to running
 
 ```go
 import "github.com/projanvil/woca/sdk"
-// optional observability: generic OTLP protocol sink,
-// plus backend plugins on top (Langfuse is the first):
-import "github.com/projanvil/woca/sdk/otlp"
-import "github.com/projanvil/woca/sdk/langfuse"
 ```
 
 ## Minimal example
@@ -218,54 +214,32 @@ func (c *cachingPlugin) WrapModel(m sdk.ChatModel) sdk.ChatModel {
 (The `sdk.ChatModel` alias exposes the harness's model interface; the
 wrapped types come from the same `langchain-golang` binding the SDK uses.)
 
-## Telemetry (OTLP protocol, and Langfuse)
+## Telemetry
 
-`WithTelemetry` installs span sinks for everything the harness records —
-LLM calls (`gen_ai.request.model`, usage tokens), tool invocations, skill
-loads. The span vocabulary follows the OpenTelemetry GenAI semantic
-conventions, so any OTLP backend maps it without translation. Sinks are
-process-wide and deduped by identity, so passing the same sink to every
-`Query` installs it exactly once.
-
-The protocol implementation is `sdk/otlp` — a generic batched OTLP/HTTP
-exporter (custom endpoint and headers, resource attributes, optional
-per-span decorator) that works with every OTLP backend: Arize Phoenix,
-Jaeger/Tempo, Honeycomb, Langfuse, …
+`WithTelemetry` installs custom span sinks for everything the harness
+records — LLM calls (`gen_ai.request.model`, usage tokens), tool
+invocations, skill loads:
 
 ```go
-s, err := otlp.New(otlp.Config{
-	Endpoint: "https://collector.internal:4318",
-	Headers:  map[string]string{"Authorization": "Bearer " + token},
-})
-if err != nil { … }
-defer s.Close()
-q, err := sdk.Query(ctx, "…", sdk.WithTelemetry(s))
+type mySink struct{}
+
+func (mySink) Record(_ context.Context, sp sdk.Span) {
+	fmt.Println("span:", sp.Name, sp.Kind)
+}
+
+s, err := sdk.Query(ctx, "…", sdk.WithTelemetry(mySink{}))
 ```
 
-Backend-specific conventions live in thin plugins on top of the protocol
-sink. `sdk/langfuse` is the first one — Langfuse's ingestion endpoint and
-Basic auth, its real-time v4 header, and its attribute renames:
+Sinks are process-wide and deduped by identity (the same sink may be
+passed to every Query).
 
-```go
-lf, err := langfuse.New(langfuse.Config{
-	Host:      "https://cloud.langfuse.com",
-	PublicKey: "pk-lf-…",
-	SecretKey: "sk-lf-…",
-})
-if err != nil { … }
-defer lf.Close() // flushes the pending batch
-
-s, err := sdk.Query(ctx, "…", sdk.WithTelemetry(lf))
-```
-
-Delivery (either sink) is batched, bounded, and lossy by design: when the
-backend is unreachable, exports fail fast and drop — never affecting the
-agent. `Stats()` reports `sent`/`dropped` accounting. Both subpackages are
-optional: programs that never import them carry no exporter code.
-
-The enterprise stack keeps its collector bridge (credentials stay
-platform-side there); the in-process sinks serve the personal and embedded
-forms.
+The built-in export path needs no code: woca speaks the OTLP protocol
+natively, and the Langfuse plugin is enabled by configuration — the
+`langfuse_*` settings keys (personal UI: settings → plugins) or the
+`WOCA_LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY` environment variables — for
+every form (CLI, serve, TUI, embedded). See the repository README's
+observability section. Enterprise deployments configure it from the
+console instead (individual users cannot).
 
 ## Resource lifecycle
 

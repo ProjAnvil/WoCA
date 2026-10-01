@@ -143,6 +143,18 @@ func (m *managedState) applyOverlay(out *Settings) {
 	// Bool fields (LadyMAutoRetain, LadyMSystem2 — like DebugLog) cannot be
 	// overlay-managed: false == unset, so a managed "false" is indistinguishable
 	// from an unmanaged field and therefore cannot be locked either.
+	// Langfuse (the observability plugin, console-owned on bridges): same
+	// only-true semantics as BuiltinPlugins — the console can enable and
+	// configure it, not force it off on devices that configured it locally.
+	if o.LangfuseEnabled {
+		out.LangfuseEnabled = true
+	}
+	if o.LangfuseBaseURL != "" {
+		out.LangfuseBaseURL = o.LangfuseBaseURL
+	}
+	if o.LangfusePublicKey != "" {
+		out.LangfusePublicKey = o.LangfusePublicKey
+	}
 }
 
 // lockedFields lists the setting keys the overlay currently manages. The
@@ -180,6 +192,11 @@ func (m *managedState) lockedFields() []string {
 	if len(o.BuiltinPlugins) > 0 {
 		out = append(out, KeyBuiltinPlugins)
 	}
+	if o.LangfuseEnabled {
+		out = append(out, KeyLangfuseEnabled)
+	}
+	add(KeyLangfuseBaseURL, o.LangfuseBaseURL)
+	add(KeyLangfusePublicKey, o.LangfusePublicKey)
 	if o.MaxTokens != 0 {
 		out = append(out, KeyMaxTokens)
 	}

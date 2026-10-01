@@ -62,6 +62,10 @@ const (
 	KeyModelWhitelist        = "model-whitelist"
 	KeyOutputStyle           = "output-style"
 	KeyRelayURL              = "relay-url"
+	KeyLangfuseEnabled       = "langfuse-enabled"
+	KeyLangfuseBaseURL       = "langfuse-base-url"
+	KeyLangfusePublicKey     = "langfuse-public-key"
+	KeyLangfuseSecretKey     = "langfuse-secret-key"
 )
 
 // DefaultMsgPlaneSubject is the default run-dispatch notification subject.
@@ -85,6 +89,7 @@ func KeyNames() []string {
 		KeyMsgPlaneMode, KeyMsgPlaneNATSURL, KeyMsgPlaneSubject,
 		KeyCheckpointPGHost, KeyCheckpointPGPort, KeyCheckpointPGDB, KeyCheckpointPGUser,
 		KeyMemoryPGHost, KeyMemoryPGPort, KeyMemoryPGDB, KeyMemoryPGUser,
+		KeyLangfuseEnabled, KeyLangfuseBaseURL, KeyLangfusePublicKey, KeyLangfuseSecretKey,
 	}
 }
 
@@ -110,6 +115,8 @@ func SecretFor(key string) (string, bool) {
 		return SecretCheckpointPGPassword, true
 	case "memory-pg-password":
 		return SecretMemoryPGPassword, true
+	case KeyLangfuseSecretKey:
+		return SecretLangfuseSecretKey, true
 	}
 	return "", false
 }
@@ -126,6 +133,7 @@ var ManagedSecretKeys = map[string]string{
 	"checkpoint-pg-password": SecretCheckpointPGPassword,
 	"memory-pg-password":     SecretMemoryPGPassword,
 	"ladym-api-password":     SecretLadyMAPIPassword,
+	"langfuse-secret-key":    SecretLangfuseSecretKey,
 }
 
 // KeyHelp returns a short usage line for a key.
@@ -227,6 +235,14 @@ func KeyHelp(key string) string {
 		return "memoryStore postgres database (default woca)"
 	case KeyMemoryPGUser:
 		return "memoryStore postgres user"
+	case KeyLangfuseEnabled:
+		return "langfuse observability plugin: true | false (personal forms; enterprise forms receive it from the console)"
+	case KeyLangfuseBaseURL:
+		return "langfuse base URL (scheme://host, e.g. https://cloud.langfuse.com)"
+	case KeyLangfusePublicKey:
+		return "langfuse public API key (pk-lf-…)"
+	case KeyLangfuseSecretKey:
+		return "langfuse secret API key (stored encrypted)"
 	}
 	return "unknown key"
 }
@@ -270,7 +286,7 @@ func Apply(cfg *Settings, key, value string) error {
 		cfg.GLMBaseURL = value
 	case KeyDeepSeekBaseURL:
 		cfg.DeepSeekBaseURL = value
-	case KeyAnthropicAPIKey, KeyOpenAIAPIKey, KeyGLMAPIKey, KeyDeepSeekAPIKey, KeyPostgresURL, KeyLadyMEmbeddingAPIKey:
+	case KeyAnthropicAPIKey, KeyOpenAIAPIKey, KeyGLMAPIKey, KeyDeepSeekAPIKey, KeyPostgresURL, KeyLadyMEmbeddingAPIKey, KeyLangfuseSecretKey:
 		return fmt.Errorf("%s is a secret; use SetSecret", key)
 	case KeyClaudeSkills:
 		list, err := ParseNameList(value)
@@ -405,6 +421,19 @@ func Apply(cfg *Settings, key, value string) error {
 		cfg.CheckpointPGDB = value
 	case KeyCheckpointPGUser:
 		cfg.CheckpointPGUser = value
+	case KeyLangfuseEnabled:
+		b, err := ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.LangfuseEnabled = b
+	case KeyLangfuseBaseURL:
+		if value != "" && !strings.Contains(value, "://") {
+			return fmt.Errorf("langfuse-base-url must be scheme://host, got %q", value)
+		}
+		cfg.LangfuseBaseURL = value
+	case KeyLangfusePublicKey:
+		cfg.LangfusePublicKey = value
 	case KeyMemoryPGHost:
 		cfg.MemoryPGHost = value
 	case KeyMemoryPGPort:
@@ -516,6 +545,10 @@ func Describe(cfg Settings, secretSet func(string) bool, dbPath string) string {
 	fmt.Fprintf(&b, "memory-pg-port: %s\n", orDefault(cfg.MemoryPGPort, "5432"))
 	fmt.Fprintf(&b, "memory-pg-db: %s\n", orDefault(cfg.MemoryPGDB, "woca"))
 	fmt.Fprintf(&b, "memory-pg-user: %s\n", orDefault(cfg.MemoryPGUser, "(unset)"))
+	fmt.Fprintf(&b, "langfuse-enabled: %s\n", strconv.FormatBool(cfg.LangfuseEnabled))
+	fmt.Fprintf(&b, "langfuse-base-url: %s\n", orDefault(cfg.LangfuseBaseURL, "(unset)"))
+	fmt.Fprintf(&b, "langfuse-public-key: %s\n", orDefault(cfg.LangfusePublicKey, "(unset)"))
+	fmt.Fprintf(&b, "langfuse-secret-key: %s\n", mask(SecretLangfuseSecretKey))
 	return b.String()
 }
 
@@ -605,6 +638,12 @@ func KeyValue(cfg Settings, key string) string {
 		return cfg.MemoryPGUser
 	case KeyRelayURL:
 		return cfg.RelayURL
+	case KeyLangfuseEnabled:
+		return strconv.FormatBool(cfg.LangfuseEnabled)
+	case KeyLangfuseBaseURL:
+		return cfg.LangfuseBaseURL
+	case KeyLangfusePublicKey:
+		return cfg.LangfusePublicKey
 	}
 	return ""
 }

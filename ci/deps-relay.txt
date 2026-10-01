@@ -8,7 +8,7 @@ github.com/projanvil/woca/internal/logging
 github.com/projanvil/woca/internal/platform/httpx
 github.com/projanvil/woca/internal/platform/tenancy
 github.com/projanvil/woca/internal/relay
-github.com/projanvil/woca/internal/telemetry
+github.com/projanvil/woca/internal/tracing
 github.com/projanvil/woca/internal/webfx
 github.com/projanvil/woca/web
 github.com/remyoudompheng/bigfft

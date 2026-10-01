@@ -16,7 +16,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/schema"
 	"github.com/projanvil/langchain-golang/core/tools"
 
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // Observe wraps a chat model with gen_ai tracing spans. Agent.SetModel
@@ -105,11 +105,11 @@ func (o *ObservedModel) InvokeStructured(ctx context.Context, input []messages.M
 
 // chatSpan starts the per-call "chat" span with the attributes every
 // backend maps (Langfuse: operation, request model, usage, error status).
-func chatSpan(ctx context.Context, o *ObservedModel) *telemetry.Builder {
-	sp := telemetry.Start(ctx, "chat", telemetry.KindLLM).
-		Set(telemetry.AttrOperationName, "chat")
+func chatSpan(ctx context.Context, o *ObservedModel) *tracing.Builder {
+	sp := tracing.Start(ctx, "chat", tracing.KindLLM).
+		Set(tracing.AttrOperationName, "chat")
 	if name := modelName(o.ChatModel); name != "" {
-		sp = sp.Set(telemetry.AttrRequestModel, name)
+		sp = sp.Set(tracing.AttrRequestModel, name)
 	}
 	return sp
 }
@@ -123,13 +123,13 @@ func modelName(m language.ChatModel) string {
 
 // setUsage copies the response's token accounting onto the span. Usage
 // arrives on the final AI message; zero values are omitted.
-func setUsage(sp *telemetry.Builder, resp messages.Message) {
+func setUsage(sp *tracing.Builder, resp messages.Message) {
 	u := resp.UsageMetadata
 	if u.InputTokens > 0 {
-		sp = sp.Set(telemetry.AttrUsageInputTokens, u.InputTokens)
+		sp = sp.Set(tracing.AttrUsageInputTokens, u.InputTokens)
 	}
 	if u.OutputTokens > 0 {
-		sp.Set(telemetry.AttrUsageOutputTokens, u.OutputTokens)
+		sp.Set(tracing.AttrUsageOutputTokens, u.OutputTokens)
 	}
 }
 
@@ -138,7 +138,7 @@ func setUsage(sp *telemetry.Builder, resp messages.Message) {
 // final chunk; partials are skipped).
 type observedStream struct {
 	runnables.Stream[messages.Message]
-	sp     *telemetry.Builder
+	sp     *tracing.Builder
 	ctx    context.Context
 	done   bool
 	usage  messages.UsageMetadata
@@ -170,10 +170,10 @@ func (s *observedStream) finish(err error) {
 	s.done = true
 	if s.hasUse {
 		if s.usage.InputTokens > 0 {
-			s.sp = s.sp.Set(telemetry.AttrUsageInputTokens, s.usage.InputTokens)
+			s.sp = s.sp.Set(tracing.AttrUsageInputTokens, s.usage.InputTokens)
 		}
 		if s.usage.OutputTokens > 0 {
-			s.sp = s.sp.Set(telemetry.AttrUsageOutputTokens, s.usage.OutputTokens)
+			s.sp = s.sp.Set(tracing.AttrUsageOutputTokens, s.usage.OutputTokens)
 		}
 	}
 	s.sp.End(s.ctx, err)

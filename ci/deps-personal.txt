@@ -155,9 +155,11 @@ github.com/projanvil/woca/internal/settingswatch
 github.com/projanvil/woca/internal/skills
 github.com/projanvil/woca/internal/slashcmds
 github.com/projanvil/woca/internal/store
-github.com/projanvil/woca/internal/telemetry
 github.com/projanvil/woca/internal/tokens
 github.com/projanvil/woca/internal/tools
+github.com/projanvil/woca/internal/tracing
+github.com/projanvil/woca/internal/tracing/otlp
+github.com/projanvil/woca/internal/tracing/plugins/langfuse
 github.com/projanvil/woca/internal/tui
 github.com/projanvil/woca/internal/webd
 github.com/projanvil/woca/internal/webfx

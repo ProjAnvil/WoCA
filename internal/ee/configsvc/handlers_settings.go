@@ -87,6 +87,11 @@ func (s *Service) handleGet(w http.ResponseWriter, _ *http.Request) {
 		// that know their own topology (the business server reports its own
 		// dispatch state).
 		MsgPlaneAvailable: true,
+
+		LangfuseEnabled:      cfg.LangfuseEnabled,
+		LangfuseBaseURL:      cfg.LangfuseBaseURL,
+		LangfusePublicKey:    cfg.LangfusePublicKey,
+		LangfuseSecretKeySet: s.settings.HasSecret(settings.SecretLangfuseSecretKey),
 	})
 }
 

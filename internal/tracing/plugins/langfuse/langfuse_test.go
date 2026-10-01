@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/projanvil/woca/sdk"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // captureServer records one OTLP export request.
@@ -57,8 +57,8 @@ func (c *captureServer) wait(t *testing.T) {
 }
 
 // spanAt is a convenience constructor for test spans.
-func spanAt(name, kind, runID string, attrs map[string]any, tags map[string]string) sdk.Span {
-	return sdk.Span{Name: name, Kind: kind, Start: time.Unix(1700000000, 0), DurationMS: 42,
+func spanAt(name, kind, runID string, attrs map[string]any, tags map[string]string) tracing.Span {
+	return tracing.Span{Name: name, Kind: kind, Start: time.Unix(1700000000, 0), DurationMS: 42,
 		Attributes: attrs, Tags: tags}
 }
 
@@ -180,7 +180,7 @@ func TestSinkMarksErrorStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.Record(context.Background(), sdk.Span{Name: "chat", Kind: "llm", Status: "error",
+	s.Record(context.Background(), tracing.Span{Name: "chat", Kind: "llm", Status: "error",
 		Error: "boom", Start: time.Unix(1700000000, 0), DurationMS: 1})
 	s.Close()
 	cap.wait(t)

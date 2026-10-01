@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/projanvil/woca/internal/telemetry"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // Skill is a loaded skill: a name, a one-line description, and the markdown
@@ -132,8 +132,8 @@ func NewLoader(root string) *Loader {
 
 // Load (re-)reads skills from the loader's root directory from disk each call.
 func (l *Loader) Load() ([]Skill, error) {
-	sp := telemetry.Start(context.Background(), "load_skills", telemetry.KindSkill).
-		Set(telemetry.AttrOperationName, "load_skill")
+	sp := tracing.Start(context.Background(), "load_skills", tracing.KindSkill).
+		Set(tracing.AttrOperationName, "load_skill")
 	skills, err := Load(l.root)
 	if err == nil {
 		sp.Set("woca.skill.count", len(skills))
