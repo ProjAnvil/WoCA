@@ -137,6 +137,7 @@ github.com/projanvil/woca/internal/platform/httpx
 github.com/projanvil/woca/internal/platform/tenancy
 github.com/projanvil/woca/internal/pluginrt
 github.com/projanvil/woca/internal/plugins
+github.com/projanvil/woca/internal/plugins/tracing/langfuse
 github.com/projanvil/woca/internal/prompt
 github.com/projanvil/woca/internal/promptref
 github.com/projanvil/woca/internal/quota
@@ -159,7 +160,6 @@ github.com/projanvil/woca/internal/tokens
 github.com/projanvil/woca/internal/tools
 github.com/projanvil/woca/internal/tracing
 github.com/projanvil/woca/internal/tracing/otlp
-github.com/projanvil/woca/internal/tracing/plugins/langfuse
 github.com/projanvil/woca/internal/tui
 github.com/projanvil/woca/internal/webd
 github.com/projanvil/woca/internal/webfx

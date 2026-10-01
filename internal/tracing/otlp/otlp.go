@@ -6,7 +6,7 @@
 // Jaeger/Tempo, Honeycomb, …) renders a run as one trace.
 //
 // Backend-specific conventions live in thin plugins on top: see
-// tracing/plugins/langfuse, which composes this sink with Langfuse's endpoint,
+// plugins/tracing/langfuse, which composes this sink with Langfuse's endpoint,
 // authentication, and attribute conventions. Delivery posture: async,
 // batched, and lossy by design — unreachable endpoints fail fast and drop
 // (bounded queue, no retry), never affecting the agent. Close flushes the

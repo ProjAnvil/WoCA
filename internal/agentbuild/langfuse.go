@@ -6,9 +6,9 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/projanvil/woca/internal/plugins/tracing/langfuse"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/tracing"
-	"github.com/projanvil/woca/internal/tracing/plugins/langfuse"
 )
 
 // langfuseInstallMu guards the once-per-process install: the sink chains
