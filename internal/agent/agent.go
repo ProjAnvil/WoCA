@@ -198,6 +198,10 @@ type Config struct {
 	// node buffers its stream while hooks are installed). Empty keeps the
 	// node byte-identical to the un-instrumented path.
 	ModelHooks []ModelHook
+	// ModelWrappers wrap the chat model itself at assembly time and on
+	// every tool rebind (the call-level extension point: caching, retries,
+	// fan-out). Observation stays outermost. Empty keeps the stack as-is.
+	ModelWrappers []ModelWrapper
 	// Skills are loaded skills exposed via the Skill tool.
 	Skills []skills.Skill
 	// ExtraTools are appended to the tool set (e.g. MCP tools).
@@ -296,14 +300,16 @@ type Agent struct {
 	tasks    *TaskManager
 	taskList *TaskList
 	hooks    *hooks.Runner
-	// toolGuards/modelHooks are the in-process processing plugins
-	// (Config.ToolGuards/ModelHooks): read-only after New.
-	toolGuards   []ToolGuard
-	modelHooks   []ModelHook
-	skills       []skills.Skill
-	compactLimit int
-	summarizer   language.ChatModel
-	bus          *bus.Bus
+	// toolGuards/modelHooks/modelWrappers are the in-process processing
+	// plugins (Config.ToolGuards/ModelHooks/ModelWrappers): read-only
+	// after New.
+	toolGuards    []ToolGuard
+	modelHooks    []ModelHook
+	modelWrappers []ModelWrapper
+	skills        []skills.Skill
+	compactLimit  int
+	summarizer    language.ChatModel
+	bus           *bus.Bus
 	// agentName is this session's identity in a team (lead for the
 	// interactive session, the teammate name for spawned members).
 	agentName string
@@ -457,6 +463,7 @@ func New(cfg Config) (*Agent, error) {
 		hooks:          cfg.Hooks,
 		toolGuards:     cfg.ToolGuards,
 		modelHooks:     cfg.ModelHooks,
+		modelWrappers:  cfg.ModelWrappers,
 		skills:         cfg.Skills,
 		compactLimit:   cfg.CompactThreshold,
 		summarizer:     cfg.Summarizer,
@@ -515,11 +522,12 @@ func New(cfg Config) (*Agent, error) {
 		runtimeModel = router
 	}
 	// LLM tracing: every model entering the agent records "chat" spans
-	// (one per logical request, retries included in the same span). Same
-	// wrap as SetModel applies on swaps — the two assembly paths must not
-	// diverge.
-	runtimeModel = model.Observe(runtimeModel)
-	a.model = model.Observe(a.model)
+	// (one per logical request, retries included in the same span), with
+	// the configured model wrappers inside so short-circuited wrapper
+	// calls (cache hits) still record. Same wrap as SetModel applies on
+	// swaps — the two assembly paths must not diverge.
+	runtimeModel = model.Observe(a.wrapModels(runtimeModel))
+	a.model = model.Observe(a.wrapModels(a.model))
 
 	base := cfg.Registry.All()
 	if cfg.Subagent {
@@ -553,7 +561,9 @@ func New(cfg Config) (*Agent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("agent: bind tools: %w", err)
 		}
-		bound = b
+		// BindTools returns bare bound copies that drop the wrapper stack;
+		// re-apply it (observation outermost).
+		bound = a.rebind(b)
 	}
 	a.boundModel = bound
 
@@ -926,7 +936,7 @@ func (a *Agent) SetModel(m language.ChatModel) error {
 	if m == nil {
 		return fmt.Errorf("agent: model is required")
 	}
-	m = model.Observe(m)
+	m = model.Observe(a.wrapModels(m))
 	a.mu.Lock()
 	tools := a.toolList
 	a.mu.Unlock()
@@ -936,7 +946,9 @@ func (a *Agent) SetModel(m language.ChatModel) error {
 		if err != nil {
 			return fmt.Errorf("agent: bind tools: %w", err)
 		}
-		bound = b
+		// BindTools drops the wrapper stack on the bare bound copy; the
+		// rebind helper re-applies it with observation outermost.
+		bound = a.rebind(b)
 	}
 	a.mu.Lock()
 	a.model = m

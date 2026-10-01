@@ -230,6 +230,7 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		Hooks:           hookRunner,
 		ToolGuards:      opts.ToolGuards,
 		ModelHooks:      opts.ModelHooks,
+		ModelWrappers:   opts.ModelWrappers,
 		HooksFor: func(ws string) *hooks.Runner {
 			return hooks.NewRunner(loadHooksConfig(ws), ws, "woca", hooks.WithLogger(log))
 		},

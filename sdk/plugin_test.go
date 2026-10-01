@@ -10,6 +10,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/projanvil/langchain-golang/core/language"
+	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/langchain-golang/core/runnables"
 )
 
 // recordingPlugin captures every RunEvent for inspection.
@@ -277,5 +281,64 @@ func TestQueryPluginFullChain(t *testing.T) {
 	}
 	if !start || !end {
 		t.Fatalf("plugin lifecycle events incomplete: %+v", p.events)
+	}
+}
+
+// wrapPlugin wraps the model with a pass-through counter.
+type wrapPlugin struct{ streams, factories int }
+
+type passthroughModel struct {
+	language.ChatModel
+	p *wrapPlugin
+}
+
+func (m *passthroughModel) Stream(ctx context.Context, in []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	m.p.streams++
+	return m.ChatModel.Stream(ctx, in, opts...)
+}
+
+func (p *wrapPlugin) Name() string { return "wrap" }
+
+func (p *wrapPlugin) WrapModel(m ChatModel) ChatModel {
+	p.factories++
+	return &passthroughModel{ChatModel: m, p: p}
+}
+
+// TestQueryModelWrapper: a WrapModel plugin wraps the model through the
+// full sdk assembly (and survives the tool bind).
+func TestQueryModelWrapper(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	srv := fakeAnthropic(t)
+	defer srv.Close()
+
+	p := &wrapPlugin{}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	s, err := Query(ctx, "say hi",
+		WithProvider("anthropic"),
+		WithModel("claude-sonnet-4-5"),
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithDB("none"),
+		WithWorkdir(t.TempDir()),
+		WithPlugins(p),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res *Result
+	for ev := range s.Events() {
+		if ev.Type == EventResult {
+			res = ev.Result
+		}
+	}
+	if res == nil || res.IsError || res.Text != "hello from fake" {
+		t.Fatalf("result = %+v", res)
+	}
+	if p.streams != 1 || p.factories == 0 {
+		t.Fatalf("wrapper streams=%d factories=%d, want the model call through the wrapper", p.streams, p.factories)
 	}
 }

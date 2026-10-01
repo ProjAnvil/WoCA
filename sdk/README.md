@@ -194,6 +194,27 @@ Semantics worth knowing:
   gate those with a ToolGuard). While any model hook is installed the
   model node buffers its stream (no live token streaming) so replacement
   stays consistent.
+- **ModelWrapper** — `WrapModel(m sdk.ChatModel) sdk.ChatModel` wraps the
+  model itself at assembly time and again on every tool rebind: the
+  call-level capability for caching, retries, fan-out, or alternate
+  backends (what the hooks cannot do — serving a cached reply without
+  calling the model, for instance). Wrappers sit inside the chat-span
+  decorator (a cache hit still records its Langfuse span; put
+  `UsageMetadata` on synthesized replies), the first registered wrapper is
+  the outermost, and implementations never need `BindTools` — the factory
+  is re-applied after every bind.
+
+```go
+type cachingPlugin struct{ cache map[string]messages.Message }
+
+func (c *cachingPlugin) Name() string { return "cache" }
+func (c *cachingPlugin) WrapModel(m sdk.ChatModel) sdk.ChatModel {
+	return &cachingModel{ChatModel: m, cache: c.cache}
+}
+```
+
+(The `sdk.ChatModel` alias exposes the harness's model interface; the
+wrapped types come from the same `langchain-golang` binding the SDK uses.)
 
 ## Telemetry (and Langfuse)
 

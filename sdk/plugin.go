@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/projanvil/langchain-golang/core/language"
+
 	"github.com/projanvil/woca/internal/agent"
 )
 
@@ -114,6 +116,17 @@ var (
 	ToolFeedback = agent.ToolFeedback
 )
 
+// ChatModel is the model interface wrappers receive and return (an alias
+// of the harness's language binding — see ModelWrapper).
+type ChatModel = language.ChatModel
+
+// ModelWrapper wraps the chat model at assembly time and on every tool
+// rebind — the call-level capability: caching, retries, fan-out, alternate
+// backends. Wrappers sit inside the chat-span decorator (a cache hit still
+// records its span; put UsageMetadata on synthesized replies). The first
+// registered wrapper is the outermost.
+type ModelWrapper = agent.ModelWrapper
+
 // toolGuardsOf extracts the ToolGuard views of the configured plugins.
 func toolGuardsOf(ps []Plugin) []agent.ToolGuard {
 	var out []agent.ToolGuard
@@ -131,6 +144,17 @@ func modelHooksOf(ps []Plugin) []agent.ModelHook {
 	for _, p := range ps {
 		if h, ok := p.(agent.ModelHook); ok {
 			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// modelWrappersOf extracts the ModelWrapper views of the configured plugins.
+func modelWrappersOf(ps []Plugin) []agent.ModelWrapper {
+	var out []agent.ModelWrapper
+	for _, p := range ps {
+		if w, ok := p.(agent.ModelWrapper); ok {
+			out = append(out, w)
 		}
 	}
 	return out

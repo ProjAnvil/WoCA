@@ -116,6 +116,7 @@ func (o Options) buildOptions(prompt string) agentbuild.Options {
 		MaxTurns:       o.MaxTurns,
 		ToolGuards:     toolGuardsOf(o.Plugins),
 		ModelHooks:     modelHooksOf(o.Plugins),
+		ModelWrappers:  modelWrappersOf(o.Plugins),
 		Sandbox:        sandbox,
 	}
 }

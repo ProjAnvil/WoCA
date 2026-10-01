@@ -11,8 +11,54 @@ import (
 	"context"
 	"strings"
 
+	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+
+	"github.com/projanvil/woca/internal/model"
 )
+
+// ModelWrapper wraps the chat model at assembly time (and again on every
+// tool rebind) — the call-level extension point: caching, retries, fan-out,
+// alternate backends. Wrappers sit INSIDE the chat-span decorator, so a
+// wrapper that short-circuits (a cache hit) still records its span; put
+// UsageMetadata on synthesized replies or usage accounting sees zero
+// tokens. Registration order is wrap order (the first wrapper is the
+// outermost). The factory is re-applied after every BindTools (adapters'
+// BindTools returns a bare bound copy that would otherwise drop wrappers),
+// so implementations never need BindTools of their own.
+type ModelWrapper interface {
+	WrapModel(m language.ChatModel) language.ChatModel
+}
+
+// wrapModels applies the configured wrappers around m, innermost last.
+func (a *Agent) wrapModels(m language.ChatModel) language.ChatModel {
+	for _, w := range a.modelWrappers {
+		if w == nil {
+			continue
+		}
+		if wrapped := w.WrapModel(m); wrapped != nil {
+			m = wrapped
+		}
+	}
+	return m
+}
+
+// rebind wraps a freshly tool-bound model with the wrapper stack and the
+// chat-span decorator, keeping observation outermost (spans record even
+// short-circuited wrapper calls). The bind's result is stripped of its
+// decorator first: BindTools on the observed stack loses the wrappers (the
+// adapters return bare bound copies).
+func (a *Agent) rebind(m language.ChatModel) language.ChatModel {
+	return model.Observe(a.wrapModels(unobserve(m)))
+}
+
+// unobserve strips one chat-span decorator layer.
+func unobserve(m language.ChatModel) language.ChatModel {
+	if om, ok := m.(*model.ObservedModel); ok {
+		return om.Unwrap()
+	}
+	return m
+}
 
 // ToolAction is a tool guard's verdict on one tool call.
 type ToolAction int

@@ -2,11 +2,15 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/langchain-golang/core/runnables"
 
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/tools"
@@ -285,5 +289,186 @@ func TestModelHookReplacementKeepsToolCalls(t *testing.T) {
 	}
 	if got := out[len(out)-1].Content; got != "replaced preamble" {
 		t.Fatalf("final = %q, want the replaced text", got)
+	}
+}
+
+// ---- ModelWrapper ----
+
+// countingWrapper counts factory applications and Stream calls; its wrapped
+// model forwards everything.
+type countingWrapper struct {
+	factories int
+	streams   int
+}
+
+type countedModel struct {
+	language.ChatModel
+	w *countingWrapper
+}
+
+func (m *countedModel) Stream(ctx context.Context, in []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	m.w.streams++
+	return m.ChatModel.Stream(ctx, in, opts...)
+}
+
+func (w *countingWrapper) WrapModel(m language.ChatModel) language.ChatModel {
+	w.factories++
+	return &countedModel{ChatModel: m, w: w}
+}
+
+func TestModelWrapperCountsRequests(t *testing.T) {
+	fake := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+				{ID: "1", Name: "Bash", Args: map[string]any{"command": "echo hi"}},
+			}},
+			messages.AI("done"),
+		),
+	)
+	w := &countingWrapper{}
+	a, err := New(Config{
+		Model: fake, Registry: tools.NewRegistry(t.TempDir()),
+		SystemPrompt: "test", PermissionMode: config.ModeBypass,
+		ModelWrappers: []ModelWrapper{w},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("run it")}, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out[len(out)-1].Content != "done" {
+		t.Fatalf("final = %+v", out[len(out)-1])
+	}
+	// Two model rounds (tool call + final) must both pass the wrapper.
+	if w.streams != 2 {
+		t.Fatalf("wrapper saw %d streams, want 2", w.streams)
+	}
+	if w.factories == 0 {
+		t.Fatal("wrapper factory never applied")
+	}
+}
+
+// TestModelWrapperSurvivesSetModel: the factory is re-applied on every tool
+// rebind, so wrappers survive model swaps (the adapters' BindTools returns
+// a bare bound copy that would otherwise drop them).
+func TestModelWrapperSurvivesSetModel(t *testing.T) {
+	fake1 := language.NewFakeChatModel(language.WithResponses(messages.AI("from one")))
+	fake2 := language.NewFakeChatModel(language.WithResponses(messages.AI("from two")))
+	w := &countingWrapper{}
+	a, err := New(Config{
+		Model: fake1, Registry: tools.NewRegistry(t.TempDir()),
+		SystemPrompt: "test", PermissionMode: config.ModeBypass,
+		ModelWrappers: []ModelWrapper{w},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out[len(out)-1].Content != "from one" {
+		t.Fatalf("first final = %+v", out[len(out)-1])
+	}
+	if err := a.SetModel(fake2); err != nil {
+		t.Fatal(err)
+	}
+	out, err = a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out[len(out)-1].Content != "from two" {
+		t.Fatalf("second final = %+v, want the swapped model's reply", out[len(out)-1])
+	}
+	if w.streams < 2 || w.factories < 2 {
+		t.Fatalf("after SetModel: streams=%d factories=%d, wrapper lost on rebind", w.streams, w.factories)
+	}
+}
+
+// cacheWrapper short-circuits duplicate requests — the pattern that needs
+// call-level wrap power (BeforeModel/AfterModel cannot serve a cached reply
+// without calling the model).
+type cacheWrapper struct {
+	cache map[string]string
+	inner int
+}
+
+type cachedModel struct {
+	language.ChatModel
+	w    *cacheWrapper
+	key  string
+	once sync.Once
+	syn  bool
+}
+
+func (m *cachedModel) Stream(ctx context.Context, in []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	if reply, ok := m.w.cache[m.key]; ok {
+		msg := messages.AI(reply)
+		return runnables.NewSliceStream([]messages.Message{msg}), nil
+	}
+	m.w.inner++
+	st, err := m.ChatModel.Stream(ctx, in, opts...)
+	if err != nil {
+		return nil, err
+	}
+	// Tee: remember the final text for the cache.
+	tee := &teeStream{Stream: st, w: m.w, key: m.key}
+	return tee, nil
+}
+
+type teeStream struct {
+	runnables.Stream[messages.Message]
+	w    *cacheWrapper
+	key  string
+	full strings.Builder
+}
+
+func (s *teeStream) Next(ctx context.Context) (messages.Message, bool, error) {
+	msg, ok, err := s.Stream.Next(ctx)
+	if ok && msg.Role == messages.RoleAI {
+		s.full.WriteString(msg.Content)
+	}
+	if !ok || err != nil {
+		if s.full.Len() > 0 {
+			s.w.cache[s.key] = s.full.String()
+		}
+	}
+	return msg, ok, err
+}
+
+func requestKey(in []messages.Message) string {
+	raw, _ := json.Marshal(in)
+	return string(raw)
+}
+
+func (w *cacheWrapper) WrapModel(m language.ChatModel) language.ChatModel {
+	return &cachedModel{ChatModel: m, w: w}
+}
+
+func TestModelWrapperCacheShortCircuit(t *testing.T) {
+	fake := language.NewFakeChatModel(language.WithResponses(messages.AI("expensive answer")))
+	w := &cacheWrapper{cache: map[string]string{}}
+	a, err := New(Config{
+		Model: fake, Registry: tools.NewRegistry(t.TempDir()),
+		SystemPrompt: "test", PermissionMode: config.ModeBypass,
+		ModelWrappers: []ModelWrapper{w},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("same question")}, fmt.Sprintf("t%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := out[len(out)-1].Content; got != "expensive answer" {
+			t.Fatalf("run %d final = %q", i, got)
+		}
+	}
+	if w.inner != 1 {
+		t.Fatalf("inner model called %d times, want 1 (second served from cache)", w.inner)
 	}
 }

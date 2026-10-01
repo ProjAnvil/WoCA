@@ -80,8 +80,9 @@ type Options struct {
 	// ToolGuards/ModelHooks are the in-process processing plugins passed
 	// through to the agent (the sdk's plugin surface). Nil keeps the
 	// un-instrumented paths byte-identical.
-	ToolGuards []agent.ToolGuard
-	ModelHooks []agent.ModelHook
+	ToolGuards    []agent.ToolGuard
+	ModelHooks    []agent.ModelHook
+	ModelWrappers []agent.ModelWrapper
 }
 
 // SandboxFromEnv resolves the sandbox executor configuration from the
