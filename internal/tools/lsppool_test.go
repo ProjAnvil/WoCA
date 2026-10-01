@@ -77,14 +77,11 @@ func TestLSPPoolBrokenCircuitBreaker(t *testing.T) {
 }
 
 func TestLSPPoolIdleReap(t *testing.T) {
-	oldIdle, oldTick := lspIdleTimeout, lspReapInterval
-	lspIdleTimeout, lspReapInterval = 30*time.Millisecond, 10*time.Millisecond
-	defer func() { lspIdleTimeout, lspReapInterval = oldIdle, oldTick }()
 	var spawns atomic.Int32
-	p := newLSPPool(func([]string) (lspTransport, error) {
+	p := newLSPPoolTuned(func([]string) (lspTransport, error) {
 		spawns.Add(1)
 		return &fakeTransport{responses: map[string]any{}}, nil
-	}, nil)
+	}, nil, 30*time.Millisecond, 10*time.Millisecond)
 	defer p.Close()
 	ws, cmd := poolKeyForTest()
 	_ = p.call(t.Context(), ws, cmd, func(tr lspTransport) error { return nil })

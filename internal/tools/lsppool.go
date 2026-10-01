@@ -57,15 +57,23 @@ type lspEntry struct {
 	mu sync.Mutex
 }
 
+// newLSPPool builds a pool with the production timing knobs. The tuned
+// variant exists so tests inject short timings instead of mutating the
+// package defaults — a concurrently-constructed pool (another test's
+// registry) would otherwise read the globals while a test writes them.
 func newLSPPool(spawn func([]string) (lspTransport, error), init func(lspTransport, string) error) *lspPool {
+	return newLSPPoolTuned(spawn, init, lspIdleTimeout, lspReapInterval)
+}
+
+func newLSPPoolTuned(spawn func([]string) (lspTransport, error), init func(lspTransport, string) error, idleTimeout, reapInterval time.Duration) *lspPool {
 	p := &lspPool{
 		spawn:       spawn,
 		init:        init,
 		entries:     map[string]*lspEntry{},
 		stopCh:      make(chan struct{}),
-		idleTimeout: lspIdleTimeout,
+		idleTimeout: idleTimeout,
 	}
-	p.wg.Go(func() { p.reapLoop(lspReapInterval) })
+	p.wg.Go(func() { p.reapLoop(reapInterval) })
 	return p
 }
 
