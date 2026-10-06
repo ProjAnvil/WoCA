@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import WSkeleton from './ui/WSkeleton.vue'
 import { useI18n } from 'vue-i18n'
 import { CircleAlert } from 'lucide-vue-next'
 import { useWorkspaceStore } from '../stores/workspace'
 import { renderMarkdown } from '../lib/markdown'
+import { decorateCodeBlocks } from '../lib/codeBlocks'
 import { highlightCode, langForFile } from '../lib/highlight'
 import FileIcon from './FileIcon.vue'
 
@@ -17,6 +18,18 @@ const isMarkdown = computed(() => /\.(md|mdx|markdown)$/i.test(file.value?.name 
 
 const mdHtml = computed(() =>
   isMarkdown.value ? renderMarkdown(file.value?.content ?? '') : '',
+)
+
+// Language header + copy button on fenced blocks, reapplied on file swaps.
+const mdBody = ref<HTMLElement | null>(null)
+watch(
+  mdHtml,
+  async () => {
+    await nextTick()
+    if (mdBody.value)
+      decorateCodeBlocks(mdBody.value, { copy: t('chat.copyCode'), copied: t('chat.codeCopied') })
+  },
+  { immediate: true, flush: 'post' },
 )
 
 // Shiki highlights asynchronously; swap in the highlighted HTML when ready.
@@ -57,7 +70,7 @@ const plainText = computed(() =>
     </div>
 
     <div v-else class="fp-body">
-      <div v-if="isMarkdown" class="markdown-body" v-html="mdHtml"></div>
+      <div v-if="isMarkdown" ref="mdBody" class="markdown-body" v-html="mdHtml"></div>
       <div
         v-else-if="codeHtml"
         class="code-view shiki-host"

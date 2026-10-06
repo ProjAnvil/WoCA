@@ -74,6 +74,8 @@ export default {
   copyPlain: 'Copy as plain text',
   copiedMarkdown: 'Markdown copied',
   copiedPlain: 'Plain text copied',
+  copyCode: 'Copy code',
+  codeCopied: 'Code copied',
   copyDebug: 'Copy debug info (workspace / session / message and log locations)',
   thinkingLive: 'Thinking…',
   thinkingDone: 'Thought process',

@@ -74,6 +74,8 @@ export default {
   copyPlain: '仅复制纯文字',
   copiedMarkdown: '已复制 Markdown',
   copiedPlain: '已复制纯文字',
+  copyCode: '复制代码',
+  codeCopied: '已复制代码',
   copyDebug: '复制调试信息（workspace / session / message 与日志位置）',
   thinkingLive: '思考中…',
   thinkingDone: '思考过程',

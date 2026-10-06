@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore } from '../stores/sessions'
 import { renderMarkdown } from '../lib/markdown'
+import { decorateCodeBlocks } from '../lib/codeBlocks'
 
 const { t } = useI18n()
 const store = useSessionStore()
@@ -16,6 +17,18 @@ watch(intr, () => {
 
 const planHtml = computed(() =>
   intr.value?.kind === 'plan' ? renderMarkdown(intr.value.payload.plan) : '',
+)
+
+// Language header + copy button on fenced blocks in the plan body.
+const mdBody = ref<HTMLElement | null>(null)
+watch(
+  planHtml,
+  async () => {
+    await nextTick()
+    if (mdBody.value)
+      decorateCodeBlocks(mdBody.value, { copy: t('chat.copyCode'), copied: t('chat.codeCopied') })
+  },
+  { immediate: true, flush: 'post' },
 )
 
 function approve() {
@@ -67,7 +80,7 @@ function onFreeText(qi: number, e: Event) {
 
         <!-- plan -->
         <template v-else-if="intr.kind === 'plan'">
-          <div class="markdown-body" v-html="planHtml"></div>
+          <div ref="mdBody" class="markdown-body" v-html="planHtml"></div>
         </template>
 
         <!-- ask -->

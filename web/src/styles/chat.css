@@ -357,6 +357,66 @@ html.dark .avatar.woca {
   overflow-x: auto;
   margin: 0.8em 0;
 }
+
+/* Fenced-block chrome: language header + copy (decorated post-render).
+ * The wrapper owns spacing/radius; the pre drops its own. */
+.code-block {
+  margin: 0.8em 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.code-block pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+}
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-3);
+  height: 28px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.code-lang {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.code-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.code-copy:hover,
+.code-copy:focus-visible {
+  color: var(--text);
+  outline: none;
+}
+.code-copy svg:last-child {
+  display: none;
+}
+.code-copy.copied svg:first-child {
+  display: none;
+}
+.code-copy.copied svg:last-child {
+  display: block;
+  color: var(--text);
+}
 .markdown-body pre code {
   background: none;
   border: none;

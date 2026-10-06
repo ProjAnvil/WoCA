@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Brain, Bug, Check, ChevronDown, Copy, Target, Wrench } from 'lucide-vue-next'
 import type { ChatItem } from '../types'
 import { renderMarkdown, markdownToPlain } from '../lib/markdown'
+import { decorateCodeBlocks } from '../lib/codeBlocks'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
 import { useServerSettingsStore } from '../stores/serverSettings'
@@ -31,6 +32,21 @@ const streaming = computed(() => {
   const it = props.item
   return it.kind === 'assistant' ? it.streaming : false
 })
+
+// Decorate fenced blocks (language header + copy) after every settled
+// render — mount, content change, stream end; never mid-stream (v-html
+// replaces the subtree each tick).
+const mdBody = ref<HTMLElement | null>(null)
+watch(
+  [textHtml, streaming],
+  async () => {
+    if (streaming.value) return
+    await nextTick()
+    if (mdBody.value)
+      decorateCodeBlocks(mdBody.value, { copy: t('chat.copyCode'), copied: t('chat.codeCopied') })
+  },
+  { immediate: true, flush: 'post' },
+)
 const attachments = computed(() => {
   const it = props.item
   return it.kind === 'user' ? it.attachments : undefined
@@ -196,7 +212,7 @@ function copyDebugInfo() {
           class="msg-attachment-img"
         />
       </div>
-      <div v-if="textContent" class="markdown-body" v-html="textHtml"></div>
+      <div v-if="textContent" ref="mdBody" class="markdown-body" v-html="textHtml"></div>
       <span v-if="streaming" class="cursor"></span>
       <!-- hover action bar: split copy button (markdown source by default,
            plain text via the side menu) + debug context (when the
