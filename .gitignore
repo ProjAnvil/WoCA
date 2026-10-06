@@ -47,3 +47,4 @@ native-client/native-client
 
 # Local deploy environment (use .env.example)
 deploy/selfhosted/.env
+coverage/
