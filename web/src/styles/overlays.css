@@ -279,7 +279,8 @@
   transition: opacity 0.12s ease;
 }
 .message.assistant .message-bubble:hover .bubble-actions,
-.bubble-actions:focus-within {
+.bubble-actions:focus-within,
+.bubble-actions.is-menu-open {
   opacity: 1;
 }
 /* Touch has no hover: the actions stay visible at reduced emphasis. */

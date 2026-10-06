@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Brain, Bug, Check, Copy, Target, Wrench } from 'lucide-vue-next'
+import { Brain, Bug, Check, ChevronDown, Copy, Target, Wrench } from 'lucide-vue-next'
 import type { ChatItem } from '../types'
-import { renderMarkdown } from '../lib/markdown'
+import { renderMarkdown, markdownToPlain } from '../lib/markdown'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
 import { useServerSettingsStore } from '../stores/serverSettings'
 import Avatar from './Avatar.vue'
 import WCollapseCard from './ui/WCollapseCard.vue'
+import WDropdown from './ui/WDropdown.vue'
 
 const props = defineProps<{ item: ChatItem }>()
 const { t } = useI18n()
@@ -113,16 +114,17 @@ const collapsed = ref(settings.autoCollapseTools)
 
 /* -------------------------------- copy actions ---------------------------- */
 
-const copied = ref<'md' | 'debug' | ''>('')
+const copied = ref<'md' | 'plain' | 'debug' | ''>('')
+const copyMenuOpen = ref(false)
 
-function flash(kind: 'md' | 'debug') {
+function flash(kind: 'md' | 'plain' | 'debug') {
   copied.value = kind
   window.setTimeout(() => {
     copied.value = ''
-  }, 1200)
+  }, 1800)
 }
 
-function copyText(text: string, kind: 'md' | 'debug') {
+function copyText(text: string, kind: 'md' | 'plain' | 'debug') {
   void navigator.clipboard.writeText(text).then(
     () => flash(kind),
     () => flash(kind),
@@ -133,6 +135,20 @@ function copyText(text: string, kind: 'md' | 'debug') {
 function copyMarkdown() {
   copyText(textContent.value, 'md')
 }
+
+// "Copy as plain text": strip structural markers for targets that have no
+// markdown support (Slack-style chats, documents).
+function copyPlain() {
+  copyText(markdownToPlain(textContent.value), 'plain')
+}
+
+const copiedAnnouncement = computed(() =>
+  copied.value === 'md'
+    ? t('chat.copiedMarkdown')
+    : copied.value === 'plain'
+      ? t('chat.copiedPlain')
+      : '',
+)
 
 // The debug bug copies the log-retrieval context for this bubble: workspace,
 // session, run, timestamp, and where the matching log files live.
@@ -182,11 +198,12 @@ function copyDebugInfo() {
       </div>
       <div v-if="textContent" class="markdown-body" v-html="textHtml"></div>
       <span v-if="streaming" class="cursor"></span>
-      <!-- hover action bar: copy markdown (always) + debug context (when the
+      <!-- hover action bar: split copy button (markdown source by default,
+           plain text via the side menu) + debug context (when the
            observability log is enabled in settings) -->
-      <div v-if="!isUser && !streaming" class="bubble-actions">
+      <div v-if="!isUser && !streaming" class="bubble-actions" :class="{ 'is-menu-open': copyMenuOpen }">
         <button
-          class="bubble-action"
+          class="bubble-action copy-main"
           :title="t('chat.copyMarkdown')"
           :aria-label="t('chat.copyMarkdown')"
           @click="copyMarkdown()"
@@ -194,6 +211,25 @@ function copyDebugInfo() {
           <Check v-if="copied === 'md'" :size="12" />
           <Copy v-else :size="12" />
         </button>
+        <WDropdown v-model="copyMenuOpen">
+          <template #trigger>
+            <button
+              class="bubble-action copy-side"
+              :title="t('chat.copyMenu')"
+              :aria-label="t('chat.copyMenu')"
+            >
+              <ChevronDown :size="12" />
+            </button>
+          </template>
+          <template #menu>
+            <button role="menuitem" type="button" @click="copyMarkdown(); copyMenuOpen = false">
+              <Check :size="12" /> {{ t('chat.copyMarkdown') }}
+            </button>
+            <button role="menuitem" type="button" @click="copyPlain(); copyMenuOpen = false">
+              <Copy :size="12" /> {{ t('chat.copyPlain') }}
+            </button>
+          </template>
+        </WDropdown>
         <button
           v-if="serverSettings.debugLog"
           class="bubble-action debug"
@@ -204,6 +240,7 @@ function copyDebugInfo() {
           <Check v-if="copied === 'debug'" :size="12" />
           <Bug v-else :size="13" />
         </button>
+        <span class="sr-only" role="status" aria-live="polite">{{ copiedAnnouncement }}</span>
       </div>
     </div>
   </div>
