@@ -24,7 +24,14 @@ export interface WorkspaceGroup {
 
 // A conversation is a flat, ordered list of items produced by the agent.
 export type ChatItem =
-  | { id: string; kind: 'user'; content: string; attachments?: Attachment[] }
+  | {
+      id: string
+      kind: 'user'
+      content: string
+      attachments?: Attachment[]
+      /** Set on live sends (this process) — drives the msg-send entrance. */
+      fresh?: boolean
+    }
   | {
       id: string
       kind: 'assistant'

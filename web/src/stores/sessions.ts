@@ -355,6 +355,7 @@ export const useSessionStore = defineStore('sessions', () => {
       kind: 'user',
       content: prompt,
       attachments: attachments?.length ? attachments : undefined,
+      fresh: true,
     })
     error.value[sid] = ''
     interrupt.value[sid] = null
@@ -418,7 +419,7 @@ export const useSessionStore = defineStore('sessions', () => {
     if (cmd !== '/permissions' && cmd !== '/thinking' && cmd !== '/quota') return false
 
     const agentCtl = useAgentStore()
-    push(sid, { id: nid(), kind: 'user', content: prompt })
+    push(sid, { id: nid(), kind: 'user', content: prompt, fresh: true })
     status.value[sid] = 'running'
     error.value[sid] = ''
     let out = ''
@@ -485,7 +486,7 @@ export const useSessionStore = defineStore('sessions', () => {
     if (st === 'running' || st === 'awaiting') return
     if (demo.value) return
 
-    push(sid, { id: nid(), kind: 'user', content: `/goal ${command}`.trim() })
+    push(sid, { id: nid(), kind: 'user', content: `/goal ${command}`.trim(), fresh: true })
     error.value[sid] = ''
     streamingId.value[sid] = null
     try {

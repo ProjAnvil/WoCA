@@ -139,7 +139,11 @@ function copyDebugInfo() {
 
 <template>
   <!-- user / assistant text: bubble + avatar (user right, woca left) -->
-  <div v-if="isText" class="message" :class="isUser ? 'user' : 'assistant'">
+  <div
+    v-if="isText"
+    class="message"
+    :class="[isUser ? 'user' : 'assistant', { 'message--new': isUser && item.kind === 'user' && item.fresh }]"
+  >
     <Avatar :kind="isUser ? 'user' : 'woca'" />
     <div class="message-bubble">
       <div v-if="attachments?.length" class="msg-attachments">

@@ -126,3 +126,20 @@
 .stream-card {
   animation: msg-rise 320ms var(--ease-out) both;
 }
+
+/* User send "promotion": a fresh live-pushed user bubble rises from the
+ * composer's edge — the counterpart motion to the FLIP dock-down. History
+ * loads keep the shared msg-rise (they rise as one block). */
+@keyframes msg-send {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.message.message--new {
+  animation: msg-send 240ms var(--ease-out) both;
+}
