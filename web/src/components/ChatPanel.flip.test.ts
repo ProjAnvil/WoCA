@@ -40,7 +40,7 @@ describe('composer FLIP dock transition', () => {
     let calls = 0
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function () {
       calls++
-      return { top: calls === 1 ? 300 : 600, ...({} as DOMRect) } as DOMRect
+      return { ...({} as DOMRect), top: calls === 1 ? 300 : 600 } as DOMRect
     })
     const wrapper = mountPanel()
     calls = 0 // mount 后归零：首个调用即 watch 回调里的 First 量测

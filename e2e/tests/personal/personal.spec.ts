@@ -32,4 +32,28 @@ test.describe('个人内嵌 web（woca serve）', () => {
 
     await expect(page.locator('.status-lamp')).toHaveCount(0);
   });
+
+  // 空会话居中问候 → 首条消息后 composer 沉底（FLIP 落定后无残留 transform）。
+  test('空会话居中问候：首条消息后 composer 沉底', async ({ page }) => {
+    await page.goto(PERSONAL);
+
+    await expect(page.locator('.chat-greeting-text')).toBeVisible();
+    await expect(page.locator('.chat-greeting-text')).toContainText(
+      /从哪里开始|做点什么|帮你|搭把手|how can I help/i,
+    );
+    await expect(page.locator('.greeting-chip')).toHaveCount(3);
+
+    // chip 点击 → 填入 composer（fillPrompt 契约）。
+    await page.locator('.greeting-chip').first().click();
+    await expect(page.locator('.chat-input textarea')).not.toHaveValue('');
+
+    // 发送 → 离开问候态；FLIP 落定（含 400ms 兜底路径）后无残留 transform。
+    await page.locator('.chat-input textarea').fill('hello from the greeting test');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.chat--greeting')).toHaveCount(0);
+    await page.waitForTimeout(600);
+    expect(await page.locator('.chat-input').evaluate((el) => getComputedStyle(el).transform)).toBe(
+      'none',
+    );
+  });
 });
