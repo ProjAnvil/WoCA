@@ -69,4 +69,30 @@ describe('bubble copy split button', () => {
     await w.get('.bubble-action.copy-side').trigger('click')
     expect(w.get('.bubble-actions').classes()).toContain('is-menu-open')
   })
+
+  it('hides the action bar while still streaming', () => {
+    const w = mountItem({ id: 'a1', kind: 'assistant', content: 'partial', streaming: true } as ChatItem)
+    expect(w.find('.bubble-actions').exists()).toBe(false)
+  })
+})
+
+describe('reasoning card meta', () => {
+  const reasoning = (over: Record<string, unknown>): ChatItem =>
+    ({ id: 'r1', kind: 'reasoning', content: 'think', streaming: false, ...over }) as ChatItem
+
+  it('ticks live seconds while the thinking segment streams', () => {
+    const w = mountItem(reasoning({ streaming: true, startedAt: Date.now() }))
+    expect(w.get('.stream-card').text()).toContain(i18n.global.t('chat.thinkingSeconds', { count: 0 }))
+    w.unmount()
+  })
+
+  it('shows the total once known', () => {
+    const w = mountItem(reasoning({ durationMs: 3000 }))
+    expect(w.get('.stream-card').text()).toContain(i18n.global.t('chat.thoughtFor', { count: 3 }))
+  })
+
+  it('falls back to the char count for legacy blocks without durations', () => {
+    const w = mountItem(reasoning({}))
+    expect(w.get('.stream-card').text()).toContain(i18n.global.t('chat.charCount', { count: 5 }))
+  })
 })

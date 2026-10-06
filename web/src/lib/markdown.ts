@@ -74,7 +74,10 @@ function blocks(tokens: Token[]): string {
 function listItem(it: Tokens.ListItem, index: number, depth: number, ordered: boolean): string {
   const pad = '  '.repeat(depth)
   const marker = it.task ? `- [${it.checked ? 'x' : ' '}] ` : `${ordered ? `${index + 1}.` : '-'} `
+  // Nested blocks (a nested list) join without paragraph gaps so the
+  // indented child lines stay adjacent to their parent.
   return blocks((it.tokens ?? []) as Token[])
+    .replace(/\n{2,}/g, '\n')
     .split('\n')
     .map((l, i) => (i === 0 ? `${pad}${marker}${l}` : `${pad}  ${l}`))
     .join('\n')

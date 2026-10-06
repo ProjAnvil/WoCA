@@ -32,4 +32,19 @@ describe('markdownToPlain', () => {
   it('handles empty input', () => {
     expect(markdownToPlain('')).toBe('')
   })
+  it('keeps image alts, hard breaks, and escapes', () => {
+    expect(markdownToPlain('![logo](x.png)')).toBe('logo')
+    expect(markdownToPlain('a  \nb')).toBe('a\nb')
+    expect(markdownToPlain('\\*not em\\*')).toBe('*not em*')
+  })
+  it('keeps task list markers and nested indentation', () => {
+    expect(markdownToPlain('- [x] done\n- [ ] todo')).toBe('- [x] done\n- [ ] todo')
+    expect(markdownToPlain('- a\n  - b')).toBe('- a\n  - b')
+  })
+  it('renders bare autolinks without duplication', () => {
+    expect(markdownToPlain('<https://x.dev>')).toBe('https://x.dev')
+  })
+  it('strips block-level html to its text', () => {
+    expect(markdownToPlain('<div>x</div>\n\ntext')).toBe('x\n\ntext')
+  })
 })

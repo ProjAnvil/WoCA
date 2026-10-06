@@ -47,4 +47,72 @@ describe('WDropdown', () => {
     expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false])
     w.unmount()
   })
+
+  it('opens via ArrowDown on the trigger', async () => {
+    const w = mount(WDropdown, {
+      props: { modelValue: false },
+      slots: {
+        trigger: '<button class="trig">t</button>',
+        menu: '<button role="menuitem">one</button>',
+      },
+    })
+    await w.get('.trig').trigger('keydown', { key: 'ArrowDown' })
+    expect(w.emitted('update:modelValue')?.[0]).toEqual([true])
+    w.unmount()
+  })
+
+  // Open through the real path (trigger toggle) so the watch attaches the
+  // listeners; then exercise the ARIA menu keyboard contract on the
+  // teleported menu.
+  async function openViaTrigger() {
+    const w = mount(WDropdown, {
+      props: { modelValue: false },
+      slots: {
+        trigger: '<button class="trig">t</button>',
+        menu:
+          '<button role="menuitem">one</button><button role="menuitem">two</button><button role="menuitem">three</button>',
+      },
+    })
+    await w.get('.trig').trigger('click')
+    await w.vm.$nextTick()
+    return w
+  }
+
+  const menuItems = () =>
+    Array.from(document.body.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+
+  it('cycles focus with ArrowDown/ArrowUp and jumps with Home/End', async () => {
+    const w = await openViaTrigger()
+    const menu = document.body.querySelector('.w-dropdown-menu')!
+    const items = menuItems()
+    items[0].focus()
+    expect(document.activeElement).toBe(items[0])
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    expect(document.activeElement).toBe(items[1])
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }))
+    expect(document.activeElement).toBe(items[2])
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }))
+    expect(document.activeElement).toBe(items[1])
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+    expect(document.activeElement).toBe(items[0])
+    w.unmount()
+  })
+
+  it('closes on Tab and on an outside pointerdown', async () => {
+    const w = await openViaTrigger()
+    const menu = document.body.querySelector('.w-dropdown-menu')!
+    menu.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    await w.vm.$nextTick()
+    expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false])
+
+    // Reopen, then close via a pointerdown outside trigger and menu.
+    await w.get('.trig').trigger('click')
+    await w.vm.$nextTick()
+    document.body.dispatchEvent(
+      new PointerEvent('pointerdown', { bubbles: true }),
+    )
+    await w.vm.$nextTick()
+    expect(w.emitted('update:modelValue')?.at(-1)).toEqual([false])
+    w.unmount()
+  })
 })

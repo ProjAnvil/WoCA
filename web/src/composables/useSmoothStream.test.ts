@@ -42,7 +42,7 @@ describe('useSmoothStream', () => {
   })
 
   it('releases words gradually while streaming', async () => {
-    const { s, content, streaming, drain, settle } = setup()
+    const { s, content, streaming, ticks, drain, settle } = setup()
     await settle(() => {
       streaming.value = true
     })
@@ -53,6 +53,8 @@ describe('useSmoothStream', () => {
     expect(s.display.value.length).toBeLessThan('aa bb cc'.length)
     drain(20)
     expect(s.display.value).toBe('aa bb cc')
+    // Every released chunk re-notifies the stick-to-bottom follower.
+    expect(ticks.length).toBeGreaterThan(0)
   })
 
   it('flushes to the exact store content when streaming ends', async () => {
