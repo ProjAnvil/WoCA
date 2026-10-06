@@ -12,7 +12,7 @@
 }
 
 .chat-input-inner {
-  max-width: 820px;
+  max-width: var(--chat-col);
   margin: 0 auto;
   display: flex;
   align-items: flex-end;
@@ -44,7 +44,7 @@
 
 /* Chat-input toolbar: permission mode / thinking level / quota chips */
 .input-toolbar {
-  max-width: 820px;
+  max-width: var(--chat-col);
   margin: 0 auto 8px;
   display: flex;
   align-items: center;
@@ -392,7 +392,7 @@
 
 /* Attachment tray (pasted screenshots + picked files) */
 .attach-tray {
-  max-width: 820px;
+  max-width: var(--chat-col);
   margin: 0 auto 10px;
   display: flex;
   flex-wrap: wrap;
@@ -466,7 +466,7 @@
   bottom: calc(100% - 4px);
   left: 20px;
   right: 20px;
-  max-width: 780px;
+  max-width: calc(var(--chat-col) - 40px);
   max-height: 360px;
   margin: 0 auto 8px;
   display: flex;
