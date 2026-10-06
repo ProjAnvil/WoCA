@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ArrowDown, Brain, Check, PanelRight, Target } from 'lucide-vue-next'
 import ChatItemView from './ChatItemView.vue'
@@ -53,6 +53,45 @@ const isGreeting = computed(
   () => store.activeItems.length === 0 && !busy.value && !store.historyLoading,
 )
 const greetingKey = computed(() => greetingSlot())
+
+// Greeting→conversation is a layout-state transition (auto margins are not
+// interpolable), so the position change is compensated with a FLIP: measure
+// the composer before the re-render (pre-flush watcher), after nextTick the
+// class has re-laid it out, then play the delta as a transform. Runs in both
+// directions; mount never animates (no immediate flag).
+const prefersReducedMotion = () =>
+  typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
+let flipFallbackTimer: number | undefined
+
+watch(isGreeting, async () => {
+  const root = composerEl.value?.$el as HTMLElement | undefined
+  if (!root || prefersReducedMotion()) return
+  const first = root.getBoundingClientRect().top
+  await nextTick()
+  const last = root.getBoundingClientRect().top
+  const dy = first - last
+  if (Math.abs(dy) < 1) return
+  root.style.transition = 'none'
+  root.style.transform = `translateY(${dy}px)`
+  requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      const clear = () => {
+        root.style.transition = ''
+        root.style.transform = ''
+        root.removeEventListener('transitionend', clear)
+      }
+      root.addEventListener('transitionend', clear)
+      window.clearTimeout(flipFallbackTimer)
+      flipFallbackTimer = window.setTimeout(clear, 400)
+      root.style.transition =
+        'transform 320ms var(--ease-flip), border-top-color 180ms var(--ease-in-out) 140ms'
+      root.style.transform = ''
+    }),
+  )
+})
+
+onBeforeUnmount(() => window.clearTimeout(flipFallbackTimer))
 
 /* --------------------------- streaming liveness ---------------------------- */
 
@@ -207,11 +246,13 @@ const latestEvent = computed(() => {
       </Transition>
     </div>
 
-    <div v-if="running" class="stream-liveness" role="status">
-      <span class="liveness-dot" aria-hidden="true" />
-      <span class="liveness-elapsed">{{ t('chat.runningFor', { time: elapsedLabel }) }}</span>
-      <span v-if="latestEvent" class="liveness-event" :title="latestEvent">{{ latestEvent }}</span>
-    </div>
+    <Transition name="fade">
+      <div v-if="running" class="stream-liveness" role="status">
+        <span class="liveness-dot" aria-hidden="true" />
+        <span class="liveness-elapsed">{{ t('chat.runningFor', { time: elapsedLabel }) }}</span>
+        <span v-if="latestEvent" class="liveness-event" :title="latestEvent">{{ latestEvent }}</span>
+      </div>
+    </Transition>
 
     <Composer ref="composerEl" :greeting="isGreeting" />
   </div>

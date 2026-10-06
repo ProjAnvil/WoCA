@@ -330,6 +330,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The strip appears only after the composer's FLIP has essentially docked;
+   otherwise both animate through each other on the first send. */
+.stream-liveness.fade-enter-active {
+  transition-delay: 200ms;
+}
 .bubble-action {
   display: inline-flex;
   align-items: center;

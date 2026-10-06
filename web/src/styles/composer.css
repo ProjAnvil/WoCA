@@ -6,6 +6,9 @@
   border-top: 1px solid var(--border);
   background: var(--surface);
   padding: 14px 20px;
+  /* Shared by both layout states so the top hairline fades in as the
+     composer docks (greeting state keeps it transparent). */
+  transition: border-top-color 180ms var(--ease-in-out) 140ms;
 }
 
 .chat-input-inner {
