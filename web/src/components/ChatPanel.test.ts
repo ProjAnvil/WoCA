@@ -88,3 +88,38 @@ describe('ChatPanel greeting state', () => {
     expect(wrapper.find('.chat-greeting').exists()).toBe(false)
   })
 })
+
+describe('ChatPanel first-output shimmer', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('shows the shimmer while a run has produced nothing yet', async () => {
+    const wrapper = mountPanel()
+    const s = useSessionStore()
+    s.seed(
+      [{ id: 's1', title: 'S', updatedAt: '', loaded: true, workspace: '', workspaceName: '' }],
+      { s1: [{ id: 'u1', kind: 'user', content: 'hi', fresh: true }] },
+    )
+    s.status = { s1: 'running' }
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.msg-shimmer-row').exists()).toBe(true)
+  })
+
+  it('hides the shimmer once any output block exists', async () => {
+    const wrapper = mountPanel()
+    const s = useSessionStore()
+    s.seed(
+      [{ id: 's1', title: 'S', updatedAt: '', loaded: true, workspace: '', workspaceName: '' }],
+      {
+        s1: [
+          { id: 'u1', kind: 'user', content: 'hi' },
+          { id: 'a1', kind: 'assistant', content: 'h', streaming: true },
+        ],
+      },
+    )
+    s.status = { s1: 'running' }
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.msg-shimmer-row').exists()).toBe(false)
+  })
+})

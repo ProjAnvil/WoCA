@@ -392,3 +392,43 @@ html.dark .avatar.woca {
 }
 
 /* -------------------------------------------------------------------------- */
+
+/* -------------------------------------------------------------------------- */
+/* First-output shimmer: run is live, no block rendered yet                    */
+/* -------------------------------------------------------------------------- */
+
+.msg-shimmer-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 180px;
+  padding: 2px 0;
+}
+.msg-shimmer-bars::before,
+.msg-shimmer-bars::after {
+  content: '';
+  height: var(--lh-chat);
+  border-radius: var(--radius);
+  background: linear-gradient(
+    90deg,
+    var(--surface-active) 25%,
+    var(--surface-hover) 50%,
+    var(--surface-active) 75%
+  );
+  background-size: 200% 100%;
+  animation: msg-shimmer 1400ms linear infinite;
+}
+.msg-shimmer-bars::before {
+  width: 62%;
+}
+.msg-shimmer-bars::after {
+  width: 94%;
+}
+@keyframes msg-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}

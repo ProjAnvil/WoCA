@@ -93,6 +93,14 @@ watch(isGreeting, async () => {
 
 onBeforeUnmount(() => window.clearTimeout(flipFallbackTimer))
 
+// A run is live but no block has rendered yet (reasoning/answer/tool are all
+// lazy-created): show a shimmer placeholder row instead of an empty beat.
+const awaitingFirstOutput = computed(() => {
+  if (store.activeStatus !== 'running') return false
+  const items = store.activeItems
+  return items.length > 0 && items[items.length - 1].kind === 'user'
+})
+
 /* --------------------------- streaming liveness ---------------------------- */
 
 // While a run is active the composer edge shows a liveness strip: a
@@ -231,6 +239,11 @@ const latestEvent = computed(() => {
           {{ store.activeError }}
         </div>
       </Transition>
+      <div v-if="awaitingFirstOutput" class="message assistant msg-shimmer-row" aria-hidden="true">
+        <div class="message-bubble">
+          <div class="msg-shimmer-bars"></div>
+        </div>
+      </div>
       <Transition name="fade">
         <div v-if="isGreeting" class="chat-greeting">
           <h1 class="chat-greeting-text">{{ t(`chat.greeting.${greetingKey}`) }}</h1>
