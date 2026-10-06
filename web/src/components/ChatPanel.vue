@@ -220,7 +220,12 @@ const latestEvent = computed(() => {
 
     <div class="chat-stream">
       <div ref="messagesEl" class="chat-messages">
-        <ChatItemView v-for="item in store.activeItems" :key="item.id" :item="item" />
+        <ChatItemView
+          v-for="item in store.activeItems"
+          :key="item.id"
+          :item="item"
+          @render-tick="follow"
+        />
       <Transition name="fade">
         <div v-if="store.historyLoading" class="msg-skeleton-wrap" role="status" aria-busy="true">
           <span class="sr-only">{{ t('common.loading') }}</span>

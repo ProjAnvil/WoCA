@@ -5,6 +5,7 @@ import { Brain, Bug, Check, ChevronDown, Copy, Target, Wrench } from 'lucide-vue
 import type { ChatItem } from '../types'
 import { renderMarkdown, markdownToPlain } from '../lib/markdown'
 import { decorateCodeBlocks } from '../lib/codeBlocks'
+import { useSmoothStream } from '../composables/useSmoothStream'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
 import { useServerSettingsStore } from '../stores/serverSettings'
@@ -13,6 +14,7 @@ import WCollapseCard from './ui/WCollapseCard.vue'
 import WDropdown from './ui/WDropdown.vue'
 
 const props = defineProps<{ item: ChatItem }>()
+const emit = defineEmits<{ (e: 'render-tick'): void }>()
 const { t } = useI18n()
 const settings = useSettingsStore()
 const serverSettings = useServerSettingsStore()
@@ -27,11 +29,21 @@ const textContent = computed(() => {
   const it = props.item
   return it.kind === 'user' || it.kind === 'assistant' ? it.content : ''
 })
-const textHtml = computed(() => (isText.value ? renderMarkdown(textContent.value) : ''))
 const streaming = computed(() => {
   const it = props.item
   return it.kind === 'assistant' ? it.streaming : false
 })
+
+// Word-paced display smoothing: the store stays the source of truth; the
+// bubble renders the released prefix while streaming and the exact content
+// once settled. Each released chunk re-triggers stick-to-bottom upstream.
+const smooth = useSmoothStream({
+  content: () => (props.item.kind === 'assistant' ? props.item.content : ''),
+  streaming: () => streaming.value,
+  onTick: () => emit('render-tick'),
+})
+const shownContent = computed(() => (streaming.value ? smooth.display.value : textContent.value))
+const textHtml = computed(() => (isText.value ? renderMarkdown(shownContent.value) : ''))
 
 // Decorate fenced blocks (language header + copy) after every settled
 // render — mount, content change, stream end; never mid-stream (v-html
