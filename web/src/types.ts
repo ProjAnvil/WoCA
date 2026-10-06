@@ -48,6 +48,10 @@ export type ChatItem =
       content: string
       /** True while the model is still streaming this thinking segment. */
       streaming: boolean
+      /** Unix ms when the segment started (elapsed/duration labels). */
+      startedAt?: number
+      /** Total thinking time, set when the segment closes. */
+      durationMs?: number
     }
   | {
       id: string

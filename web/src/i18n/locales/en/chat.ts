@@ -73,6 +73,8 @@ export default {
   copyDebug: 'Copy debug info (workspace / session / message and log locations)',
   thinkingLive: 'Thinking…',
   thinkingDone: 'Thought process',
+  thinkingSeconds: 'Thinking · {count}s',
+  thoughtFor: 'Thought for {count}s',
   charCount: '{count} chars',
   goalLoopLive: 'Goal loop running…',
   goalLoopDone: 'Goal loop progress',

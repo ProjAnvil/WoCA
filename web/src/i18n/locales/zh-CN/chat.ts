@@ -73,6 +73,8 @@ export default {
   copyDebug: '复制调试信息（workspace / session / message 与日志位置）',
   thinkingLive: '思考中…',
   thinkingDone: '思考过程',
+  thinkingSeconds: '思考中 · {count}s',
+  thoughtFor: '思考了 {count}s',
   charCount: '{count} 字符',
   goalLoopLive: '目标循环进行中…',
   goalLoopDone: '目标循环过程',

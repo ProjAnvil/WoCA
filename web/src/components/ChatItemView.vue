@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Brain, Bug, Check, Copy, Target, Wrench } from 'lucide-vue-next'
 import type { ChatItem } from '../types'
@@ -46,6 +46,31 @@ const reasoningStreaming = computed(() => {
 // Live thinking stays expanded so the user can watch it; once the answer
 // starts the block collapses to its header (click to expand again).
 const reasoningOpen = ref(reasoningStreaming.value)
+
+const reasoningDurationSec = computed(() => {
+  const it = props.item
+  if (it.kind !== 'reasoning' || it.durationMs === undefined) return null
+  return Math.max(1, Math.round(it.durationMs / 1000))
+})
+
+// Live "Thinking · Ns" ticker (livenessTimer precedent in ChatPanel).
+const reasoningElapsed = ref(0)
+let reasoningTimer: number | undefined
+watch(
+  reasoningStreaming,
+  (live) => {
+    window.clearInterval(reasoningTimer)
+    if (live) {
+      const start = props.item.kind === 'reasoning' ? props.item.startedAt : undefined
+      reasoningElapsed.value = start ? Math.max(0, Math.round((Date.now() - start) / 1000)) : 0
+      reasoningTimer = window.setInterval(() => {
+        reasoningElapsed.value++
+      }, 1000)
+    }
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => window.clearInterval(reasoningTimer))
 
 const goalNoteContent = computed(() => {
   const it = props.item
@@ -186,7 +211,11 @@ function copyDebugInfo() {
   <!-- reasoning (thinking process): collapsible card, live while streaming -->
   <WCollapseCard class="stream-card"     v-else-if="item.kind === 'reasoning'"
     :title="reasoningStreaming ? t('chat.thinkingLive') : t('chat.thinkingDone')"
-    :meta="reasoningStreaming ? '' : t('chat.charCount', { count: reasoningContent.length })"
+    :meta="reasoningStreaming
+      ? t('chat.thinkingSeconds', { count: reasoningElapsed })
+      : reasoningDurationSec !== null
+        ? t('chat.thoughtFor', { count: reasoningDurationSec })
+        : t('chat.charCount', { count: reasoningContent.length })"
     tone="brand"
     :live="reasoningStreaming"
     :open="reasoningOpen"

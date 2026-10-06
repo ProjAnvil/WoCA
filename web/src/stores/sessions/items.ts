@@ -108,12 +108,12 @@ export function createItemMutations(state: ItemState) {
       return
     }
     id = nid()
-    push(sid, { id, kind: 'reasoning', content: text, streaming: true })
+    push(sid, { id, kind: 'reasoning', content: text, streaming: true, startedAt: Date.now() })
     reasoningId.value[sid] = id
   }
 
   // closeReasoning freezes the live thinking block (its card collapses to a
-  // "thinking process" header the user can expand).
+  // "thinking process" header the user can expand) and stamps its duration.
   function closeReasoning(sid: string) {
     const id = reasoningId.value[sid]
     reasoningId.value[sid] = null
@@ -121,8 +121,14 @@ export function createItemMutations(state: ItemState) {
     const ls = list(sid)
     const idx = ls.findIndex((i) => i.id === id)
     if (idx >= 0 && ls[idx].kind === 'reasoning') {
+      const cur = ls[idx] as Extract<ChatItem, { kind: 'reasoning' }>
       const next = [...ls]
-      next[idx] = { ...(next[idx] as Extract<ChatItem, { kind: 'reasoning' }>), streaming: false }
+      next[idx] = {
+        ...cur,
+        streaming: false,
+        durationMs:
+          cur.startedAt !== undefined ? Math.max(0, Date.now() - cur.startedAt) : undefined,
+      }
       items.value[sid] = next
     }
   }
