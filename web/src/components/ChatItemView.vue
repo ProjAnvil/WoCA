@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { Brain, Bug, Check, ChevronDown, Copy, Target, Wrench } from 'lucide-vue-next'
 import type { ChatItem } from '../types'
 import { renderMarkdown, markdownToPlain } from '../lib/markdown'
-import { decorateCodeBlocks } from '../lib/codeBlocks'
+import { decorateCodeBlocks, highlightCodeBlocks } from '../lib/codeBlocks'
 import { useSmoothStream } from '../composables/useSmoothStream'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
@@ -54,8 +54,10 @@ watch(
   async () => {
     if (streaming.value) return
     await nextTick()
-    if (mdBody.value)
+    if (mdBody.value) {
       decorateCodeBlocks(mdBody.value, { copy: t('chat.copyCode'), copied: t('chat.codeCopied') })
+      highlightCodeBlocks(mdBody.value)
+    }
   },
   { immediate: true, flush: 'post' },
 )

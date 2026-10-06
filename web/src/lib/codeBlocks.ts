@@ -1,3 +1,5 @@
+import { highlightCode } from './highlight'
+
 export interface CodeCopyLabels {
   copy: string
   copied: string
@@ -52,5 +54,44 @@ export function decorateCodeBlocks(root: HTMLElement, labels: CodeCopyLabels): v
     head.append(label, btn)
     pre.replaceWith(wrap)
     wrap.append(head, pre)
+  }
+}
+
+/** Fuses: single blocks over this many lines, or whole containers past this
+ * many bytes, stay unhighlighted (re-parse cost outweighs the value). */
+const HL_MAX_LINES = 200
+const HL_MAX_TOTAL_BYTES = 64_000
+
+/**
+ * Syntax-highlight already-decorated chat code blocks (same lazy shiki
+ * engine + dual github themes as the file preview). Spans are injected on
+ * the live DOM after sanitization; the .shiki-host class scopes the
+ * dark-mode color swap from panels.css. Idempotent; async per block — a
+ * write landing on a node that v-html has since replaced is inert.
+ */
+export function highlightCodeBlocks(root: HTMLElement): void {
+  const codes = Array.from(root.querySelectorAll<HTMLElement>('.code-block pre code'))
+  let budget = HL_MAX_TOTAL_BYTES
+  for (const code of codes) {
+    if (code.dataset.hlDone === '1') continue
+    code.dataset.hlDone = '1'
+    const text = code.textContent ?? ''
+    budget -= text.length
+    const lang =
+      Array.from(code.classList)
+        .find((c) => c.startsWith('language-'))
+        ?.slice('language-'.length) ?? ''
+    const lines = text.split('\n').length
+    if (!lang || lang === 'text' || lines > HL_MAX_LINES || budget < 0) continue
+    void highlightCode(text, lang).then((html) => {
+      if (!html) return
+      const tpl = document.createElement('template')
+      tpl.innerHTML = html
+      const inner = tpl.content.querySelector('code')
+      if (inner) {
+        code.innerHTML = inner.innerHTML
+        code.classList.add('shiki-host')
+      }
+    })
   }
 }
