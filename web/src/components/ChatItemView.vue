@@ -77,6 +77,9 @@ const reasoningStreaming = computed(() => {
 // Live thinking stays expanded so the user can watch it; once the answer
 // starts the block collapses to its header (click to expand again).
 const reasoningOpen = ref(reasoningStreaming.value)
+watch(reasoningStreaming, (live) => {
+  if (!live) reasoningOpen.value = false
+})
 
 const reasoningDurationSec = computed(() => {
   const it = props.item
