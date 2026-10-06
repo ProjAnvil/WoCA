@@ -4,13 +4,13 @@ import { useI18n } from 'vue-i18n'
 import { ArrowDown, Brain, Check, PanelRight, Target } from 'lucide-vue-next'
 import ChatItemView from './ChatItemView.vue'
 import Composer from './composer/Composer.vue'
-import WEmptyState from './ui/WEmptyState.vue'
 import WSkeleton from './ui/WSkeleton.vue'
 import { useSessionStore } from '../stores/sessions'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useMemoryStore } from '../stores/memory'
 import { useStickToBottom } from '../composables/useStickToBottom'
 import { toolEventSummary } from '../lib/toolEvent'
+import { greetingSlot } from '../lib/greeting'
 
 // Chat surface: header (session identity + panel toggles), the message
 // stream (stick-to-bottom + skeletons + empty state), the streaming
@@ -44,14 +44,15 @@ watch(
 
 /* ------------------------------ empty state ------------------------------- */
 
-// One-click sample prompts: a fresh session starts with something to run,
-// not a blank page (industry baseline since Jules' one-click prompts).
+// The single source of truth for the centered "greeting" layout: no items,
+// no run in flight, no history fetch — exactly when the transcript is
+// genuinely empty. Drives the .chat--greeting layout class, the greeting
+// block and the composer's chip row (and the FLIP dock transition).
 const composerEl = ref<InstanceType<typeof Composer> | null>(null)
-const emptyPrompts = computed(() => [t('chat.emptyPrompt1'), t('chat.emptyPrompt2'), t('chat.emptyPrompt3')])
-
-function usePrompt(p: string) {
-  composerEl.value?.fillPrompt(p)
-}
+const isGreeting = computed(
+  () => store.activeItems.length === 0 && !busy.value && !store.historyLoading,
+)
+const greetingKey = computed(() => greetingSlot())
 
 /* --------------------------- streaming liveness ---------------------------- */
 
@@ -111,7 +112,7 @@ const latestEvent = computed(() => {
 </script>
 
 <template>
-  <div class="chat">
+  <div class="chat" :class="{ 'chat--greeting': isGreeting }">
     <header class="chat-header">
       <div class="chat-title-wrap">
         <span class="chat-title">{{ store.activeSession?.title ?? 'woca' }}</span>
@@ -192,13 +193,9 @@ const latestEvent = computed(() => {
         </div>
       </Transition>
       <Transition name="fade">
-        <WEmptyState v-if="store.activeItems.length === 0 && !busy && !store.historyLoading" :hint="t('chat.emptyHint')">
-          <template #actions>
-            <button v-for="p in emptyPrompts" :key="p" class="empty-prompt-chip" type="button" @click="usePrompt(p)">
-              {{ p }}
-            </button>
-          </template>
-        </WEmptyState>
+        <div v-if="isGreeting" class="chat-greeting">
+          <h1 class="chat-greeting-text">{{ t(`chat.greeting.${greetingKey}`) }}</h1>
+        </div>
       </Transition>
       </div>
       <Transition name="jump-latest">
@@ -216,6 +213,6 @@ const latestEvent = computed(() => {
       <span v-if="latestEvent" class="liveness-event" :title="latestEvent">{{ latestEvent }}</span>
     </div>
 
-    <Composer ref="composerEl" />
+    <Composer ref="composerEl" :greeting="isGreeting" />
   </div>
 </template>

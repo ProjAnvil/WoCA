@@ -587,6 +587,9 @@ export const useSessionStore = defineStore('sessions', () => {
     activeSession,
     activeItems,
     activeStatus,
+    // Raw per-session status map (exposed alongside runId/queuePosition for
+    // read-only consumers and component tests).
+    status,
     activeError,
     activeInterrupt,
     activeGoal,

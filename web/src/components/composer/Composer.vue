@@ -31,6 +31,10 @@ const toast = useToastStore()
 const workspaceStore = useWorkspaceStore()
 const btw = useBtwStore()
 
+// Greeting mode (empty session): renders the two-tier suggestion chips
+// under the input row; the layout itself lives on .chat--greeting.
+const props = defineProps<{ greeting?: boolean }>()
+
 const draft = ref('')
 const textarea = ref<HTMLTextAreaElement | null>(null)
 
@@ -237,5 +241,20 @@ defineExpose({ fillPrompt })
         <Send :size="16" />
       </button>
     </div>
+
+    <Transition name="fade">
+      <div v-if="props.greeting" class="greeting-chips">
+        <button
+          v-for="key in ['emptyPrompt1', 'emptyPrompt2', 'emptyPrompt3'] as const"
+          :key="key"
+          class="greeting-chip"
+          type="button"
+          @click="fillPrompt(t(`chat.${key}.prompt`))"
+        >
+          <span class="greeting-chip-title">{{ t(`chat.${key}.title`) }}</span>
+          <span class="greeting-chip-desc">{{ t(`chat.${key}.prompt`) }}</span>
+        </button>
+      </div>
+    </Transition>
   </div>
 </template>
