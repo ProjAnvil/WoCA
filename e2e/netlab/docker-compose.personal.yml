@@ -1,0 +1,89 @@
+# netlab personal topology — the personal-edition relay chain (中转站)
+# across docker network isolation. This is a TEST topology (design
+# docs/superpowers/specs/2026-10-06-netlab-design.md), deliberately
+# decomposed from both the dev stacks (deploy/selfhosted/*) and the
+# Playwright suite: only the network layer runs here, as the final
+# distribution images (make dist-role packages).
+#
+#   front (the public side)      wan (the simulated home uplink)
+#  ┌────────┐      ┌───────────┐      ┌──────────────────┐
+#  │ client │─────▶│   relay   │◀─────│ woca (home)      │
+#  │ (curl) │ http │woca-relay │ poll │ woca serve +     │
+#  └────────┘      │  :8080    │      │ relayclient      │
+#  外网浏览器替身    └───────────┘      │  :8080 (wan only)│
+#                  dual-homed          └──────────────────┘
+#
+# The home container sits ONLY on wan — the client cannot reach it by
+# address (docker isolates the bridges); every browser request must ride
+# the outbound long-poll tunnel through the relay, exactly like a
+# NAT-hidden home instance behind a VPS relay.
+#
+# Dev posture (same as ci/e2e-relay.sh and the lab): plain HTTP with the
+# relay's --insecure bind and the env-first-boot relay coordinates
+# (WOCA_RELAY_URL/KEY — the headless path relayclient/persist.go
+# documents). TLS posture is deliberately out of netlab scope.
+#
+# Two-phase bring-up (the wcr_ key is minted ON the relay first, then
+# handed to the home side — the real ops flow):
+#   docker compose up -d --build relay
+#   docker compose exec -T relay ./woca-relay --db /var/lib/woca-relay/relay.db key create netlab
+#   NETLAB_RELAY_KEY=wcr_... docker compose up -d --build woca
+
+name: woca-netlab-p
+
+services:
+  relay:
+    image: woca-relay:netlab
+    build:
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-relay.tar.gz
+    container_name: woca-netlab-p-relay
+    command: ["serve", "--addr", ":8080", "--insecure", "--log-level", "info"]
+    environment:
+      WOCA_RELAY_DB: /var/lib/woca-relay/relay.db
+    volumes:
+      - relay-home:/var/lib/woca-relay
+    networks: [front, wan]
+
+  woca:
+    image: woca:netlab
+    build:
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca.tar.gz
+    container_name: woca-netlab-p-woca
+    command: ["serve", "--addr", "0.0.0.0:8080", "--no-browser", "--log-level", "info"]
+    environment:
+      WOCA_HOME: /var/lib/woca
+      WOCA_NO_BROWSER: "1"
+      # Headless first-boot coordinates (env wins over the settings
+      # store by design): the home side polls OUT to the relay.
+      WOCA_RELAY_URL: http://relay:8080
+      WOCA_RELAY_KEY: ${NETLAB_RELAY_KEY:-}
+    volumes:
+      - woca-home:/var/lib/woca
+    networks: [wan]
+
+  # The external web frontend stand-in: a browser-equivalent prober that
+  # lives ONLY on front — if a request succeeds from here, it genuinely
+  # crossed the relay; if one must not, that is the isolation assertion.
+  client:
+    image: curlimages/curl:8.10.1
+    container_name: woca-netlab-p-client
+    entrypoint: ["sleep", "infinity"]
+    networks: [front]
+
+networks:
+  front:
+    name: woca-netlab-p-front
+  wan:
+    name: woca-netlab-p-wan
+
+volumes:
+  relay-home:
+    name: woca-netlab-p-relay-home
+  woca-home:
+    name: woca-netlab-p-woca-home

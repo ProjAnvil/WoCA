@@ -287,6 +287,41 @@ edge-bridge:
 edge-bridge-down:
 	$(EDGE_BRIDGE_COMPOSE) down
 
+# ─────────── netlab: 网络层 docker 隔离集成测试（e2e/netlab） ───────────
+# The network layer split out of the e2e pyramid and tested on its own:
+# each edition gets a dedicated compose topology whose docker networks
+# stand in for the real zones (public front / simulated wan / private
+# core), the services run as the FINAL distribution images (dist-role
+# packages baked into build/dist/Dockerfile), and the Go driver asserts
+# both the positive chain (frontend → relay/edge → tunnel → internal
+# bridge) and the cross-zone isolation. Design:
+# docs/superpowers/specs/2026-10-06-netlab-design.md.
+#
+#	make netlab-personal     个人版：client → woca-relay → 隧道 → 家庭 woca
+#	make netlab-enterprise   企业版：client → woca-edge → 隧道 → bridge + core
+#	make netlab              both, independently reported
+#
+# NETLAB_KEEP=1 keeps a failing stack up for manual 排查 (see
+# e2e/netlab/README.md). Requires a linux-container docker engine; the
+# role packages cross-compile with GOOS=linux at the host's GOARCH.
+NETLAB_PERSONAL_ROLES := woca woca-relay
+NETLAB_ENTERPRISE_ROLES := woca-server woca-config woca-edge woca-bridge
+
+.PHONY: netlab netlab-personal netlab-enterprise
+netlab: netlab-personal netlab-enterprise
+
+netlab-personal:
+	@for r in $(NETLAB_PERSONAL_ROLES); do \
+		GOOS=linux $(MAKE) --no-print-directory dist-role ROLE=$$r || exit 1; \
+	done
+	go test -tags netlab -count=1 -timeout 25m -run 'TestPersonalRelayChain' -v ./e2e/netlab
+
+netlab-enterprise:
+	@for r in $(NETLAB_ENTERPRISE_ROLES); do \
+		GOOS=linux $(MAKE) --no-print-directory dist-role ROLE=$$r || exit 1; \
+	done
+	go test -tags netlab -count=1 -timeout 40m -run 'TestEnterpriseEdgeChain' -v ./e2e/netlab
+
 # Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
 # woca-edge joins the set with the v1.5 topology split (stateless public
 # entry; still a role artifact — thin, no interactive surfaces).
