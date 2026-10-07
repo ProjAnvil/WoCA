@@ -665,6 +665,13 @@ func (e *Edge) handleRespond(w http.ResponseWriter, r *http.Request) {
 			p.w.Header().Add(k, v)
 		}
 	}
+	// The edge is the public entry behind which a buffering proxy may
+	// sit, so SSE answers get the anti-buffering marker here — the same
+	// contract the personal relay enforces (design §6.3,
+	// internal/relay/forward.go).
+	if strings.HasPrefix(p.w.Header().Get("Content-Type"), "text/event-stream") {
+		p.w.Header().Set("X-Accel-Buffering", "no")
+	}
 	p.w.WriteHeader(status)
 	first()
 	rc := http.NewResponseController(p.w)

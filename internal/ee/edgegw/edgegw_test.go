@@ -341,6 +341,13 @@ func TestTunnelSSE(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("content-type = %q", ct)
 	}
+	// The edge is the public entry (design §6.3, same contract the
+	// personal relay enforces in internal/relay/forward.go): SSE answers
+	// must carry X-Accel-Buffering: no or a buffering proxy in front of
+	// the edge stalls the stream.
+	if ab := resp.Header.Get("X-Accel-Buffering"); ab != "no" {
+		t.Fatalf("x-accel-buffering = %q (want \"no\")", ab)
+	}
 	buf := make([]byte, 4096)
 	var reads []time.Duration
 	start := time.Now()
