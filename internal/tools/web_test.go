@@ -14,6 +14,14 @@ func TestValidateWebURLBlocksSSRF(t *testing.T) {
 		"http://10.0.0.1/",
 		"http://192.168.1.1/",
 		"http://0.0.0.0/",
+		// IPv4-compatible IPv6 spellings (::/96) used to bypass the IPv4
+		// checks before langchain-golang v0.11.0 unwrapped them.
+		"http://[::127.0.0.1]/",
+		"http://[::169.254.169.254]/",
+		"http://[::ffff:127.0.0.1]/",
+		// NAT64 well-known and discovery prefixes (blocked since v0.11.0).
+		"http://[64:ff9b::192.0.2.1]/",
+		"http://[64:ff9b:1::192.0.2.1]/",
 	}
 	for _, rawurl := range blocked {
 		rawurl := rawurl
@@ -53,6 +61,8 @@ func TestFetchHTTPBlocksSSRFBeforeNetwork(t *testing.T) {
 		"http://localhost/",
 		"http://[::1]/",
 		"http://169.254.169.254/",
+		"http://[::127.0.0.1]/",
+		"http://[::169.254.169.254]/",
 	} {
 		_, err := fetchHTTP(t.Context(), rawurl)
 		if err == nil {

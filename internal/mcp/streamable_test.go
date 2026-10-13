@@ -206,6 +206,14 @@ func TestStreamableHTTPSSRF(t *testing.T) {
 		"http://169.254.169.254/",
 		"http://10.0.0.1/mcp",
 		"http://192.168.1.1/mcp",
+		// IPv4-compatible IPv6 spellings (::/96) must not dodge the blocked
+		// ranges: langchain-golang v0.11.0 unwraps them onto the IPv4 path.
+		"http://[::169.254.169.254]/mcp",
+		"http://[64:ff9b:1::192.0.2.1]/mcp",
+		// The loopback whitelist matches literal spellings only, so the
+		// compatible spelling of 127.0.0.1 is blocked; endpoints must use
+		// "127.0.0.1" (or "::1", allowed below) to reach a local server.
+		"http://[::127.0.0.1]/mcp",
 	} {
 		if c := NewStreamableHTTP("x", endpoint); c != nil {
 			t.Fatalf("NewStreamableHTTP(%q) = %v, want nil", endpoint, c)
@@ -217,6 +225,7 @@ func TestStreamableHTTPSSRF(t *testing.T) {
 	for _, endpoint := range []string{
 		"http://127.0.0.1/mcp",
 		"http://localhost/mcp",
+		"http://[::1]/mcp",
 		"https://example.com/mcp",
 	} {
 		if c := NewStreamableHTTP("x", endpoint); c == nil {
