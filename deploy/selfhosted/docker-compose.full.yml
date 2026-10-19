@@ -296,7 +296,7 @@ services:
         publish woca-edge.config "http://woca-config:8086"
         # The empty bootstrap config pack: roles refuse to start without
         # a deliverable pack, so it exists before any console write.
-        publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
+        publish woca-config.pack '{"version":2,"generation":"","settings":{}}'
         echo "nacos service addresses ready"
     restart: "no"
     networks:

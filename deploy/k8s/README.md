@@ -37,7 +37,7 @@ Practical consequences:
 - The woca client speaks the nacos v1 HTTP API only, so the Service
   exposes just port 8848.
 - The `nacos-init` Job publishes the empty pack
-  (`{"version":1,"generation":"","settings":{}}`) — wait for it before
+  (`{"version":2,"generation":"","settings":{}}`) — wait for it before
   rolling out 20/21, or the role pods crashloop on the missing pack.
 - Cluster DNS still addresses *infrastructure* endpoints (OTel collector);
   nacos owns *role* registration and config delivery. Server-role DSNs may

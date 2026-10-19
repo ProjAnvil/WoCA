@@ -34,7 +34,7 @@ echo "== publish the initial (empty) config pack"
 curl -sf -X POST "http://localhost:8848/nacos/v1/cs/configs" \
     --data-urlencode "dataId=woca-config.pack" \
     --data-urlencode "group=DEFAULT_GROUP" \
-    --data-urlencode 'content={"version":1,"generation":"","settings":{}}' >/dev/null
+    --data-urlencode 'content={"version":2,"generation":"","settings":{}}' >/dev/null
 
 echo "== build woca-server"
 go build -o "$DIR/woca-server" ./cmd/woca-server

@@ -86,7 +86,7 @@ services:
           echo "published $$1"
         }
         publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@pg:5432/woca?sslmode=disable"
-        publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
+        publish woca-config.pack '{"version":2,"generation":"","settings":{}}'
         echo "nacos entries ready"
     restart: "no"
     networks: [core]

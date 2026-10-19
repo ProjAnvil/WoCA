@@ -263,7 +263,7 @@ services:
         }
         publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@pg:5432/woca?sslmode=disable"
         publish woca-ops.upstream "http://server:8090"
-        publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
+        publish woca-config.pack '{"version":2,"generation":"","settings":{}}'
         echo "nacos entries ready"
     restart: "no"
     networks: [internal]

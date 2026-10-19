@@ -283,15 +283,12 @@ run (today: `contract-http`, `cfbridge`).
   prerequisite for the off-host posture — runs execute on workers, not
   in the server process.
 
-### Upgrade order (hard constraint)
+### Pack version
 
-The config pack is version 2 (it carries `sandbox_backends`). The
-worker's decoder accepts both v1 and v2 (a v1 pack reads as "no
-sandbox backends"), the config plane publishes v2 only. Therefore, on a
-mixed-version rolling upgrade **upgrade every woca-worker before the
-first woca-config**: an old worker meeting a v2 pack refuses to apply
-it, while a new worker under a v1 pack simply runs un-sandboxed until
-the config plane catches up. Same ordering applies when downgrading.
+The config pack is version 2 (it carries `sandbox_backends`). Both the
+config plane and the workers run the same generation — a fresh deployment
+has no mixed-version window, and the decoder accepts v2 only: a pack of
+any other version is refused outright instead of half-applying.
 
 ### Limits and known restrictions
 

@@ -91,9 +91,9 @@ spec:
               curl -sf -X POST "http://nacos:8848/nacos/v1/cs/configs" \
                 --data-urlencode "dataId=woca-config.pack" \
                 --data-urlencode "group=DEFAULT_GROUP" \
-                --data-urlencode 'content={"version":1,"generation":"","settings":{}}'
+                --data-urlencode 'content={"version":2,"generation":"","settings":{}}'
               i=0
-              until curl -sf "http://nacos:8848/nacos/v1/cs/configs?dataId=woca-config.pack&group=DEFAULT_GROUP" | grep -q '"version":1'; do
+              until curl -sf "http://nacos:8848/nacos/v1/cs/configs?dataId=woca-config.pack&group=DEFAULT_GROUP" | grep -q '"version":2'; do
                 i=$((i+1)); [ $i -gt 30 ] && { echo "nacos read-back of woca-config.pack never settled"; exit 1; }
                 sleep 1
               done

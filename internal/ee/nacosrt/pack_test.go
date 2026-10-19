@@ -110,13 +110,10 @@ func TestPackV2RoundTripWithSandboxes(t *testing.T) {
 
 // TestPackV1BackwardCompatible: v1 packs predate sandbox backends — they
 // decode as an empty set (design §10.2 M-1).
-func TestPackV1BackwardCompatible(t *testing.T) {
-	p, err := DecodePack(`{"version":1,"generation":"g","settings":{"model":"m"}}`)
-	if err != nil {
-		t.Fatalf("v1 decode: %v", err)
-	}
-	if p.Sandboxes != nil {
-		t.Fatalf("v1 sandboxes = %+v want nil", p.Sandboxes)
+// Fresh deployments only: v1 packs (pre-sandbox) are refused outright.
+func TestPackV1Refused(t *testing.T) {
+	if _, err := DecodePack(`{"version":1,"generation":"g","settings":{"model":"m"}}`); err == nil {
+		t.Fatal("v1 pack must be refused")
 	}
 }
 
@@ -127,18 +124,15 @@ func TestPackV3Refused(t *testing.T) {
 	}
 }
 
-// TestExportWithoutSandboxTable: deployments materializing only the v1
-// table set export fine — the sandbox table is skipped silently.
-func TestExportWithoutSandboxTable(t *testing.T) {
+// The sandbox table is part of the v2 schema: a database without it is a
+// broken deployment, and ExportPack must say so instead of silently
+// exporting an empty sandbox set.
+func TestExportMissingSandboxTableErrors(t *testing.T) {
 	db := openPackDB(t)
-	// The v1 table set only.
+	// Only the pre-sandbox table set — sandbox_backends missing.
 	createV1Tables(t, db)
 	st := openTestStore(t)
-	pack, err := ExportPack(context.Background(), st, db)
-	if err != nil {
-		t.Fatalf("export without table: %v", err)
-	}
-	if pack.Sandboxes != nil {
-		t.Fatalf("sandboxes = %+v want nil", pack.Sandboxes)
+	if _, err := ExportPack(context.Background(), st, db); err == nil {
+		t.Fatal("export without sandbox table must fail")
 	}
 }

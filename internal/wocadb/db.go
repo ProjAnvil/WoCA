@@ -279,10 +279,6 @@ func (d *DB) migrate() error {
 				capabilities TEXT NOT NULL DEFAULT '',
 				updated_at BIGINT NOT NULL
 			)`,
-			// Widen pre-existing config_acks tables (the capabilities
-			// column landed after the first boot had already created
-			// them; design §10.2 M-4).
-			`ALTER TABLE config_acks ADD COLUMN IF NOT EXISTS capabilities TEXT NOT NULL DEFAULT ''`,
 		}
 		// The lgcp ownership policies (below) judge "which tenant owns this
 		// checkpoint thread" by querying runs; that subquery must see rows of
@@ -469,17 +465,11 @@ func (d *DB) migrate() error {
 				capabilities TEXT NOT NULL DEFAULT '',
 				updated_at BIGINT NOT NULL
 			)`,
-			`ALTER TABLE config_acks ADD COLUMN capabilities TEXT NOT NULL DEFAULT ''`,
 		}
 	}
 	return d.WithMigrateLock(func(q Querier) error {
 		for _, s := range stmts {
 			if _, err := q.Exec(s); err != nil {
-				// SQLite's ADD COLUMN has no IF NOT EXISTS form: the
-				// duplicate-column error is the "already migrated" marker.
-				if strings.Contains(err.Error(), "duplicate column") {
-					continue
-				}
 				return fmt.Errorf("wocadb: migrate: %w", err)
 			}
 		}

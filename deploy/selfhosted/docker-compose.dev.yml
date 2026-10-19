@@ -511,7 +511,7 @@ services:
         publish woca-edge.service "http://woca-server-1:8090"
         publish woca-edge.config "http://woca-config:8080"
         publish woca-obs.otlp "http://woca-collector:4318"
-        publish woca-config.pack '{"version":1,"generation":"","settings":{}}'
+        publish woca-config.pack '{"version":2,"generation":"","settings":{}}'
         echo "nacos entries ready"
     restart: "no"
     networks:

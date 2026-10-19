@@ -288,7 +288,11 @@ func TestPackVersionGuard(t *testing.T) {
 	if _, err := DecodePack(`{"version":99,"generation":"","settings":{}}`); err == nil {
 		t.Fatal("unknown pack version must be refused")
 	}
-	p, err := DecodePack(`{"version":1,"generation":"g","settings":{"model":"m"}}`)
+	// Fresh deployments only: v1 packs are refused, not half-applied.
+	if _, err := DecodePack(`{"version":1,"generation":"g","settings":{"model":"m"}}`); err == nil {
+		t.Fatal("v1 pack must be refused")
+	}
+	p, err := DecodePack(`{"version":2,"generation":"g","settings":{"model":"m"}}`)
 	if err != nil || p.Settings.Model != "m" {
 		t.Fatalf("decode: %v %+v", err, p)
 	}

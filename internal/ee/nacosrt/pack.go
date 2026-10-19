@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/wocadb"
@@ -112,17 +111,15 @@ func ExportPack(ctx context.Context, st *settings.Store, db *wocadb.DB) (*Pack, 
 	if err := mrows.Close(); err != nil {
 		return nil, fmt.Errorf("nacosrt: export mcp: %w", err)
 	}
-	// Sandbox backends (v2): the managed inventory without keys. A
-	// database still on the v1 table set exports fine — the missing table
-	// is skipped silently (design §10.2 M-5: secrets ride the pack's
-	// Secrets map, collected wholesale by SecretNames above).
+	// Sandbox backends (v2): the managed inventory without keys (design
+	// §10.2 M-5: secrets ride the pack's Secrets map, collected wholesale
+	// by SecretNames above).
 	srows, err := db.Query(`SELECT id, name, type, endpoint, timeout_ms, enabled,
 		last_probe_at, last_probe_ok, last_probe_error FROM sandbox_backends ORDER BY name`)
 	if err != nil {
-		if !isMissingTable(err) {
-			return nil, fmt.Errorf("nacosrt: export sandboxes: %w", err)
-		}
-	} else {
+		return nil, fmt.Errorf("nacosrt: export sandboxes: %w", err)
+	}
+	{
 		for srows.Next() {
 			var r SandboxRow
 			var enabled, probeOK sql.NullInt64
@@ -197,27 +194,15 @@ func (p *Pack) Encode() (string, error) {
 	return string(raw), nil
 }
 
-// DecodePack parses a delivered payload, refusing unknown versions. v1
-// packs predate sandbox backends: they decode as an empty set (the
-// writer side only produces the current version).
+// DecodePack parses a delivered payload, refusing any version other than
+// the current one (fresh deployments only — no v1 compatibility path).
 func DecodePack(content string) (*Pack, error) {
 	var p Pack
 	if err := json.Unmarshal([]byte(content), &p); err != nil {
 		return nil, fmt.Errorf("nacosrt: pack decode: %w", err)
 	}
-	if p.Version < 1 || p.Version > packVersion {
-		return nil, fmt.Errorf("nacosrt: pack version %d not understood (want 1..%d)", p.Version, packVersion)
-	}
-	// v1 packs predate sandbox backends: treated as an empty set.
-	if p.Version < 2 {
-		p.Sandboxes = nil
+	if p.Version != packVersion {
+		return nil, fmt.Errorf("nacosrt: pack version %d not understood (want %d)", p.Version, packVersion)
 	}
 	return &p, nil
-}
-
-// isMissingTable reports a "table does not exist" error across dialects
-// (sqlite: "no such table"; postgres: "relation ... does not exist").
-func isMissingTable(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "no such table") || strings.Contains(msg, "does not exist")
 }
