@@ -279,6 +279,12 @@ func downloadWorkspace(ctx context.Context, x executor.Executor, ws string, maxB
 		if name == "." || name == ".." || strings.HasPrefix(name, "../") || strings.HasPrefix(name, "/") {
 			continue
 		}
+		// .git is host-owned (excluded on upload) and must not be
+		// reintroduced by the backend: a hostile backend could otherwise
+		// plant git hooks on the host workspace via run products.
+		if name == ".git" || strings.HasPrefix(name, ".git/") {
+			continue
+		}
 		target := filepath.Join(ws, filepath.FromSlash(name))
 		switch hdr.Typeflag {
 		case tar.TypeDir:
@@ -286,6 +292,13 @@ func downloadWorkspace(ctx context.Context, x executor.Executor, ws string, maxB
 				return err
 			}
 		case tar.TypeSymlink:
+			// Skip symlinks whose targets escape the workspace: an
+			// absolute or ../ link turns later host-side writes into
+			// arbitrary-path writes.
+			link := filepath.ToSlash(filepath.Clean(hdr.Linkname))
+			if strings.HasPrefix(link, "/") || link == ".." || strings.HasPrefix(link, "../") {
+				continue
+			}
 			_ = os.Remove(target)
 			if err := os.Symlink(hdr.Linkname, target); err != nil {
 				return err

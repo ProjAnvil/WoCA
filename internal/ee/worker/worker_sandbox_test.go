@@ -7,6 +7,9 @@ package worker
 // silent fallback to local execution.
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +23,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/platform/executor"
 	"github.com/projanvil/woca/internal/platform/executor/fakesandbox"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/tools"
@@ -270,3 +274,58 @@ func TestWorkerNoBackendRunsLocally(t *testing.T) {
 }
 
 var _ = fmt.Sprintf
+
+// Terminal-review hardening: the download must not reintroduce .git
+// (host-owned, excluded on upload) or write symlinks whose targets escape
+// the workspace — a hostile backend could otherwise plant git hooks on the
+// host workspace via run products.
+func TestDownloadSkipsGitAndEscapingSymlinks(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(tw.WriteHeader(&tar.Header{Name: "normal.txt", Mode: 0o644, Size: 3}))
+	_, err := tw.Write([]byte("ok\n"))
+	must(err)
+	must(tw.WriteHeader(&tar.Header{Name: ".git/hooks/pre-commit", Mode: 0o755, Size: 5}))
+	_, err = tw.Write([]byte("evil\n"))
+	must(err)
+	must(tw.WriteHeader(&tar.Header{Name: ".git", Typeflag: tar.TypeDir, Mode: 0o755}))
+	must(tw.WriteHeader(&tar.Header{Name: "lnk-abs", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"}))
+	must(tw.WriteHeader(&tar.Header{Name: "lnk-esc", Typeflag: tar.TypeSymlink, Linkname: "../../escape"}))
+	must(tw.Close())
+	must(gz.Close())
+
+	srv := httptest.NewServer(fakesandbox.New().Handler())
+	t.Cleanup(srv.Close)
+	sbx, err := executor.NewSandbox(executor.SandboxConfig{Endpoint: srv.URL, Timeout: 10 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sbx.Close() })
+	if err := sbx.PutArchive(t.Context(), bytes.NewReader(buf.Bytes())); err != nil {
+		t.Fatal(err)
+	}
+
+	ws := t.TempDir()
+	if err := downloadWorkspace(t.Context(), sbx, ws, 8<<20); err != nil {
+		t.Fatal(err)
+	}
+
+	if b, err := os.ReadFile(filepath.Join(ws, "normal.txt")); err != nil || string(b) != "ok\n" {
+		t.Fatalf("normal.txt = %q err=%v", b, err)
+	}
+	if _, err := os.Lstat(filepath.Join(ws, ".git")); !os.IsNotExist(err) {
+		t.Fatalf(".git leaked into host workspace (err=%v)", err)
+	}
+	for _, l := range []string{"lnk-abs", "lnk-esc"} {
+		if _, err := os.Lstat(filepath.Join(ws, l)); !os.IsNotExist(err) {
+			t.Fatalf("%s leaked into host workspace", l)
+		}
+	}
+}
