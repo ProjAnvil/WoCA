@@ -6,8 +6,10 @@ package nacosrt
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/wocadb"
@@ -15,7 +17,7 @@ import (
 
 // packVersion guards the codec: a role that cannot understand a pack
 // refuses it loudly instead of half-applying.
-const packVersion = 1
+const packVersion = 2
 
 // SkillRow / MCPRow mirror the config plane's managed tables (the
 // operator-delivered skills and MCP servers that materialize at the
@@ -58,7 +60,10 @@ type Pack struct {
 	Secrets    map[string]string `json:"secrets,omitempty"`
 	Skills     []SkillRow        `json:"skills,omitempty"`
 	MCP        []MCPRow          `json:"mcp,omitempty"`
-	Gateway    map[string]string `json:"gateway,omitempty"`
+	// Sandboxes are the managed sandbox backends (pack v2; the API keys
+	// ride Secrets under "sandbox-api-key:<id>").
+	Sandboxes []SandboxRow      `json:"sandboxes,omitempty"`
+	Gateway   map[string]string `json:"gateway,omitempty"`
 }
 
 // ExportPack snapshots the config plane's stores into a Pack. Generation
@@ -106,6 +111,37 @@ func ExportPack(ctx context.Context, st *settings.Store, db *wocadb.DB) (*Pack, 
 	}
 	if err := mrows.Close(); err != nil {
 		return nil, fmt.Errorf("nacosrt: export mcp: %w", err)
+	}
+	// Sandbox backends (v2): the managed inventory without keys. A
+	// database still on the v1 table set exports fine — the missing table
+	// is skipped silently (design §10.2 M-5: secrets ride the pack's
+	// Secrets map, collected wholesale by SecretNames above).
+	srows, err := db.Query(`SELECT id, name, type, endpoint, timeout_ms, enabled,
+		last_probe_at, last_probe_ok, last_probe_error FROM sandbox_backends ORDER BY name`)
+	if err != nil {
+		if !isMissingTable(err) {
+			return nil, fmt.Errorf("nacosrt: export sandboxes: %w", err)
+		}
+	} else {
+		for srows.Next() {
+			var r SandboxRow
+			var enabled, probeOK sql.NullInt64
+			var probeAt sql.NullInt64
+			var probeErr sql.NullString
+			if err := srows.Scan(&r.ID, &r.Name, &r.Type, &r.Endpoint, &r.TimeoutMs,
+				&enabled, &probeAt, &probeOK, &probeErr); err != nil {
+				_ = srows.Close()
+				return nil, fmt.Errorf("nacosrt: export sandboxes: %w", err)
+			}
+			r.Enabled = enabled.Valid && enabled.Int64 != 0
+			r.LastProbeAt = probeAt.Int64
+			r.LastProbeOK = probeOK.Valid && probeOK.Int64 != 0
+			r.LastProbeError = probeErr.String
+			p.Sandboxes = append(p.Sandboxes, r)
+		}
+		if err := srows.Close(); err != nil {
+			return nil, fmt.Errorf("nacosrt: export sandboxes: %w", err)
+		}
 	}
 	// Gateway policy (edge SPKI pin, bridge posture) rides the same pack:
 	// the ops console edits it, servers materialize it.
@@ -161,14 +197,27 @@ func (p *Pack) Encode() (string, error) {
 	return string(raw), nil
 }
 
-// DecodePack parses a delivered payload, refusing unknown versions.
+// DecodePack parses a delivered payload, refusing unknown versions. v1
+// packs predate sandbox backends: they decode as an empty set (the
+// writer side only produces the current version).
 func DecodePack(content string) (*Pack, error) {
 	var p Pack
 	if err := json.Unmarshal([]byte(content), &p); err != nil {
 		return nil, fmt.Errorf("nacosrt: pack decode: %w", err)
 	}
-	if p.Version != packVersion {
-		return nil, fmt.Errorf("nacosrt: pack version %d not understood (want %d)", p.Version, packVersion)
+	if p.Version < 1 || p.Version > packVersion {
+		return nil, fmt.Errorf("nacosrt: pack version %d not understood (want 1..%d)", p.Version, packVersion)
+	}
+	// v1 packs predate sandbox backends: treated as an empty set.
+	if p.Version < 2 {
+		p.Sandboxes = nil
 	}
 	return &p, nil
+}
+
+// isMissingTable reports a "table does not exist" error across dialects
+// (sqlite: "no such table"; postgres: "relation ... does not exist").
+func isMissingTable(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "no such table") || strings.Contains(msg, "does not exist")
 }
