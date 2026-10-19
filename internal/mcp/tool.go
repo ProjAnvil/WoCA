@@ -7,7 +7,21 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/schema"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/runexec"
 )
+
+// sandboxGateErr reports the refusal MCP stdio surfaces raise during
+// sandboxed runs: the servers are host processes spawned at build time
+// and cannot follow a per-run sandbox (design §4.5 / §10.2 M-8), so the
+// tools refuse instead of silently talking to a host process.
+func sandboxGateErr(ctx context.Context) error {
+	if x, ok := runexec.RunExecutorFrom(ctx); ok && executor.IsSandbox(x) {
+		return fmt.Errorf("MCP stdio servers are not available during sandboxed runs: %w", executor.ErrSandboxUnsupported)
+	}
+	return nil
+}
 
 // AsTool converts an MCP tool into a langchain Tool, namespaced
 // mcp__<server>__<tool>.
@@ -16,6 +30,9 @@ func (c *Client) AsTool(serverName string, t Tool) coretools.Tool {
 	s := normalizeSchema(t.InputSchema)
 	tool, err := coretools.NewFunc(name, t.Description, s,
 		func(ctx context.Context, input map[string]any) (coretools.Result, error) {
+			if err := sandboxGateErr(ctx); err != nil {
+				return coretools.Result{}, err
+			}
 			out, err := c.CallTool(ctx, t.Name, input)
 			if err != nil {
 				return coretools.Result{}, err
@@ -26,6 +43,9 @@ func (c *Client) AsTool(serverName string, t Tool) coretools.Tool {
 		// Fall back to an empty object schema on validation failure.
 		tool, _ = coretools.NewFunc(name, t.Description, schema.Object(map[string]schema.Schema{}),
 			func(ctx context.Context, input map[string]any) (coretools.Result, error) {
+				if err := sandboxGateErr(ctx); err != nil {
+					return coretools.Result{}, err
+				}
 				out, err := c.CallTool(ctx, t.Name, input)
 				if err != nil {
 					return coretools.Result{}, err
@@ -65,6 +85,9 @@ func (c *Client) AsResourceTools(serverName string) []coretools.Tool {
 		"List the resources exposed by MCP server "+serverName,
 		schema.Object(map[string]schema.Schema{}),
 		func(ctx context.Context, input map[string]any) (coretools.Result, error) {
+			if err := sandboxGateErr(ctx); err != nil {
+				return coretools.Result{}, err
+			}
 			resources, err := c.ListResources(ctx)
 			if err != nil {
 				return coretools.Result{}, err
@@ -86,6 +109,9 @@ func (c *Client) AsResourceTools(serverName string) []coretools.Tool {
 		"Read an MCP resource by URI from server "+serverName,
 		schema.Object(map[string]schema.Schema{"uri": schema.String("resource URI")}, "uri"),
 		func(ctx context.Context, input map[string]any) (coretools.Result, error) {
+			if err := sandboxGateErr(ctx); err != nil {
+				return coretools.Result{}, err
+			}
 			uri, _ := input["uri"].(string)
 			text, err := c.ReadResource(ctx, uri)
 			if err != nil {

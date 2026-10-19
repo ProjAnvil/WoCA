@@ -17,6 +17,7 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/runexec"
 )
 
 // LSP tool: pulls diagnostics for one file from a language server speaking
@@ -345,6 +346,12 @@ func lspTool(d *Dir, pool *lspPool) coretools.Tool {
 		func(ctx context.Context, a struct {
 			Path string `json:"path"`
 		}) (coretools.Result, error) {
+			// LSP servers are host processes (pooled, spawned at build
+			// time) — unreachable from a sandboxed run (design §10.2
+			// M-8), so refuse instead of diagnosing host files.
+			if x, ok := runexec.RunExecutorFrom(ctx); ok && executor.IsSandbox(x) {
+				return coretools.Result{Content: "Error: LSP is not available during sandboxed runs"}, nil
+			}
 			command := lspServerCommand()
 			if len(command) == 0 {
 				return coretools.Result{Content: "Error: no LSP server configured (set WOCA_LSP_SERVER, e.g. WOCA_LSP_SERVER=gopls)"}, nil

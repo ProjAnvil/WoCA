@@ -9,6 +9,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/platform/executor/fakesandbox"
+	"github.com/projanvil/woca/internal/runexec"
 )
 
 // lspTestServerSrc is a mode-aware LSP server used to drive the stdio
@@ -420,3 +424,40 @@ func (n *notifyFailingTransport) Notify(ctx context.Context, method string, para
 }
 
 func (n *notifyFailingTransport) Close() error { return n.fake.Close() }
+
+// LSP servers are host processes (pooled, spawned at build time); a
+// sandboxed run cannot reach them (design §10.2 M-8), so the tool refuses
+// up front instead of silently diagnosing host files.
+func TestLSPToolSandboxGate(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir)
+	tool, ok := reg.Get("LSP")
+	if !ok {
+		t.Fatal("LSP tool missing")
+	}
+
+	sbx, err := executor.NewSandbox(executor.SandboxConfig{Endpoint: fakesandbox.Addr(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sbx.Close() }()
+
+	t.Setenv("WOCA_LSP_SERVER", "gopls")
+	ctx := runexec.WithRunExecutor(nilCtx(), sbx)
+	res, err := tool.Invoke(ctx, map[string]any{"path": "a.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Content, "LSP is not available during sandboxed runs") {
+		t.Fatalf("sandboxed LSP = %q", res.Content)
+	}
+
+	// Local ctx: the gate stays open (the call proceeds to the pool).
+	res, err = tool.Invoke(nilCtx(), map[string]any{"path": "a.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Content, "sandboxed runs") {
+		t.Fatalf("local LSP wrongly gated: %q", res.Content)
+	}
+}
