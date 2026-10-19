@@ -2,11 +2,15 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/platform/executor/fakesandbox"
+	"github.com/projanvil/woca/internal/runexec"
 	"github.com/projanvil/woca/internal/runws"
 )
 
@@ -280,5 +284,39 @@ func TestFileHistoryUndoThroughPathUnwindsAboveIt(t *testing.T) {
 	// Unknown path is a no-op, not an error.
 	if applied, summary, err := h.UndoThroughPath(nilCtx(), filepath.Join(dir, "zz.txt")); err != nil || applied != 0 || summary == "" {
 		t.Fatalf("unknown path = %d, %q, %v", applied, summary, err)
+	}
+}
+
+// Sandbox runs gate undo/redo: the stacks describe host-workspace edits
+// while a sandboxed run's writes land in the sandbox — restoring host
+// bytes from a sandbox run would corrupt the workspace (design §10.1
+// C-2), so both operations refuse with ErrSandboxUnsupported. Recording
+// stays ungated so the Write/Edit tools keep working.
+func TestFileHistorySandboxGate(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(a, []byte("a1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := NewFileHistory()
+	h.Record(nilCtx(), a, nil, []byte("a1"))
+
+	sbx, err := executor.NewSandbox(executor.SandboxConfig{Endpoint: fakesandbox.Addr(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sbx.Close() }()
+	ctx := runexec.WithRunExecutor(nilCtx(), sbx)
+
+	if _, err := h.Undo(ctx); !errors.Is(err, executor.ErrSandboxUnsupported) {
+		t.Fatalf("Undo under sandbox = %v, want ErrSandboxUnsupported", err)
+	}
+	if _, err := h.Redo(ctx); !errors.Is(err, executor.ErrSandboxUnsupported) {
+		t.Fatalf("Redo under sandbox = %v, want ErrSandboxUnsupported", err)
+	}
+
+	// Local runs (no injection) keep the undo working.
+	if desc, err := h.Undo(nilCtx()); err != nil || desc == "" {
+		t.Fatalf("Undo without sandbox = %q, %v", desc, err)
 	}
 }

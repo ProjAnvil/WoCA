@@ -26,6 +26,28 @@ import (
 // available" errors; the contract-v2 client implements the full Executor).
 var ErrSandboxNotImplemented = errors.New("sandbox: operation not available in this sandbox executor revision")
 
+// ErrSandboxUnsupported is returned by host-bound surfaces during sandbox
+// runs (design §10.1 C-2): operations with no sandbox-side equivalent
+// (file-history undo, worktree switching, MCP stdio, LSP).
+var ErrSandboxUnsupported = errors.New("sandbox: operation not supported during sandboxed runs")
+
+// IsSandbox reports whether x executes in a remote sandbox. Wrapper types
+// that know their inner executor (Translate, future providers) delegate
+// via the IsSandbox() bool method; the type check is the fallback.
+func IsSandbox(x Executor) bool {
+	if x == nil {
+		return false
+	}
+	if s, ok := x.(interface{ IsSandbox() bool }); ok {
+		return s.IsSandbox()
+	}
+	_, ok := x.(*Sandbox)
+	return ok
+}
+
+// IsSandbox marks the sandbox executor for executor.IsSandbox.
+func (s *Sandbox) IsSandbox() bool { return true }
+
 // SandboxConfig configures the sandbox executor.
 type SandboxConfig struct {
 	// Endpoint is the sandbox service base URL (scheme://host:port).

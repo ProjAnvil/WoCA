@@ -26,6 +26,10 @@ type Translate struct {
 // compile-time interface check.
 var _ Executor = (*Translate)(nil)
 
+// IsSandbox delegates to the wrapped executor so executor.IsSandbox
+// keeps reporting the truth through the translation layer.
+func (t *Translate) IsSandbox() bool { return IsSandbox(t.Inner) }
+
 // toSandbox maps one host path under HostRoot to its SandboxRoot form.
 // Sandbox paths are slash-separated regardless of the host OS (the
 // contract's filesystem is remote).

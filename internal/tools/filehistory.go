@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/runexec"
 	"github.com/projanvil/woca/internal/runws"
 )
 
@@ -79,10 +81,24 @@ func (h *FileHistory) Record(ctx context.Context, path string, before, after []b
 	s.redo = nil
 }
 
+// sandboxGate refuses undo/redo during sandboxed runs (design §10.1 C-2):
+// the stacks restore host-workspace bytes with os calls, which a sandbox
+// run must never do. Recording is not gated — the Write/Edit tools keep
+// working, only the host-side restore refuses.
+func sandboxGate(ctx context.Context) error {
+	if x, ok := runexec.RunExecutorFrom(ctx); ok && executor.IsSandbox(x) {
+		return executor.ErrSandboxUnsupported
+	}
+	return nil
+}
+
 // Undo restores the most recent change and returns a human-readable
 // description. The stacks only move after the restore hits the disk: a
 // failed apply leaves the step undoable instead of losing it between stacks.
 func (h *FileHistory) Undo(ctx context.Context) (string, error) {
+	if err := sandboxGate(ctx); err != nil {
+		return "", err
+	}
 	s := h.scope(ctx)
 	h.mu.Lock()
 	if len(s.undo) == 0 {
@@ -105,6 +121,9 @@ func (h *FileHistory) Undo(ctx context.Context) (string, error) {
 // Redo re-applies the most recently undone change (same apply-then-commit
 // ordering as Undo).
 func (h *FileHistory) Redo(ctx context.Context) (string, error) {
+	if err := sandboxGate(ctx); err != nil {
+		return "", err
+	}
 	s := h.scope(ctx)
 	h.mu.Lock()
 	if len(s.redo) == 0 {

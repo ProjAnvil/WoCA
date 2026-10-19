@@ -10,6 +10,8 @@ import (
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
+	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/runexec"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -37,6 +39,12 @@ type exitWorktreeArgs struct {
 func (a *Agent) worktreeTools() []coretools.Tool {
 	enter := tools.MustTool(coretools.FromFunc("EnterWorktree", worktreeDescription,
 		func(ctx context.Context, args enterWorktreeArgs) (coretools.Result, error) {
+			// Worktrees are host-side git state; a sandboxed run cannot
+			// reach them (design §10.1 C-2), so refuse up front instead
+			// of mutating the host behind the sandbox's back.
+			if x, ok := runexec.RunExecutorFrom(ctx); ok && executor.IsSandbox(x) {
+				return coretools.Result{Content: "Error: EnterWorktree is not available during sandboxed runs"}, nil
+			}
 			name := strings.Map(sanitizeWorktreeRune, args.Name)
 			if name == "" {
 				return coretools.Result{Content: "Error: a worktree name is required"}, nil
