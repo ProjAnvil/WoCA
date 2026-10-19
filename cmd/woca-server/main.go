@@ -45,6 +45,10 @@ import (
 func main() {
 	discovery.Install()
 	opts := &agentbuild.Options{}
+	// sandboxSettings captures the settings store the serve path opens
+	// (before the server assembles) so the SandboxEnabled probe reads the
+	// same database the nacos pack apply materialized into.
+	var sandboxSettings *settings.Store
 	root := &cobra.Command{
 		Use:           "woca-server",
 		Short:         "woca enterprise server role (no interactive surfaces)",
@@ -94,6 +98,19 @@ func main() {
 		}(),
 		Authn: edition.Authn,
 		Plane: edition.Plane,
+		// Dynamic sandbox gate (design §10.2 M-3): RunsOffHost posture is
+		// only as live as an enabled backend in the materialized
+		// sandbox_backends table (the nacos pack apply maintains it). The
+		// settings store is captured when the serve path opens it
+		// (OnSettings, before the server assembles — no race).
+		OnSettings: func(st *settings.Store) { sandboxSettings = st },
+		SandboxEnabled: func() bool {
+			if sandboxSettings == nil {
+				return false
+			}
+			row, err := nacosrt.EnabledSandbox(sandboxSettings.DB().DB)
+			return err == nil && row != nil
+		},
 		// Service-plane gateway listener (product design v1.5 拓扑拆分):
 		// the machine registry the edge access point calls home to —
 		// enrollment, renewal, heartbeats, /gw/resolve, /gw/bridges — plus

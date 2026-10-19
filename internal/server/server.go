@@ -67,6 +67,14 @@ type Config struct {
 	// creation and event streaming no longer touch the host. All other
 	// host-surface routes (workspaces, settings, memory) stay local-gated.
 	RunsOffHost bool
+	// SandboxEnabled reports live whether a sandbox backend is enabled
+	// (the enterprise entry injects a query against the materialized
+	// sandbox_backends table). It refines RunsOffHost per request (design
+	// §10.2 M-3): an off-host deployment without a working sandbox fails
+	// closed — POST /api/runs returns 403 — and queued runs additionally
+	// require a live sandbox-capable worker (503 otherwise). Nil counts
+	// as no sandbox.
+	SandboxEnabled func() bool
 	// MsgPlane is the run dispatch message plane (internal/ee/msgplane). Nil
 	// keeps pure-PG queuing; with a plane, dispatched runs additionally
 	// notify NATS so idle workers wake instantly (progressive overlay —
@@ -193,9 +201,12 @@ type Server struct {
 	ledger         *runstate.Ledger
 	workerID       string
 	// dispatch enqueues runs for a worker to execute (Phase 3 wiring);
-	// runsOffHost opens the run surface to remote tenants.
-	dispatch    bool
-	runsOffHost bool
+	// runsOffHost opens the run surface to remote tenants; sandboxEnabled
+	// is its live refinement (see Config.SandboxEnabled).
+	dispatch        bool
+	runsOffHost     bool
+	sandboxEnabled  func() bool
+	ackDB           *wocadb.DB // config_acks reads for worker-capability dispatch checks
 
 	mu            sync.Mutex
 	runs          map[string]*Run
@@ -290,6 +301,8 @@ func New(cfg Config) *Server {
 		workerID:       newWorkerID(),
 		dispatch:       cfg.DispatchToQueue && cfg.RunLedger != nil,
 		runsOffHost:    cfg.RunsOffHost,
+		sandboxEnabled: cfg.SandboxEnabled,
+		ackDB:          stateDB,
 		runs:           map[string]*Run{},
 		sessions:       store,
 		admission:      newAdmission(),
@@ -313,6 +326,11 @@ func New(cfg Config) *Server {
 		installPlugin:  cfg.InstallPlugin,
 		rootCtx:        rootCtx,
 		rootCancel:     rootCancel,
+	}
+	// A nil SandboxEnabled counts as "no sandbox" (fail-closed), never as
+	// a nil-func panic on the request path.
+	if s.sandboxEnabled == nil {
+		s.sandboxEnabled = func() bool { return false }
 	}
 	if cfg.Agent != nil {
 		// Goal persistence: every live goal change mirrors to the owning

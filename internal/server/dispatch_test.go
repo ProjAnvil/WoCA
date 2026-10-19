@@ -20,6 +20,7 @@ import (
 	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/wocadb"
 	"github.com/rs/zerolog"
 )
 
@@ -153,20 +154,45 @@ func (p tenantProvider) Authenticate(context.Context, string) (tenancy.Context, 
 
 // RunsOffHost admits a non-local tenant to /api/runs but keeps every other
 // host surface forbidden; without it the run surface stays local-gated.
+// With it, the dynamic sandbox gate applies (design §10.2 M-3): an
+// off-host deployment without an enabled sandbox backend fails closed,
+// and a sandboxed one needs a live sandbox-capable worker to dispatch.
 func TestRunsOffHostGate(t *testing.T) {
 	for _, tc := range []struct {
 		offHost              bool
+		sandbox              func() bool
+		liveSandboxWorker    bool
 		runStatus, setStatus int
 	}{
-		{false, http.StatusForbidden, http.StatusForbidden},
-		{true, http.StatusOK, http.StatusForbidden},
+		{false, nil, false, http.StatusForbidden, http.StatusForbidden},
+		{true, nil, false, http.StatusForbidden, http.StatusForbidden},  // no sandbox backend: fail closed
+		{true, func() bool { return true }, false, http.StatusServiceUnavailable, http.StatusForbidden}, // no capable worker
+		{true, func() bool { return true }, true, http.StatusOK, http.StatusForbidden},
 	} {
-		ledger := openRunLedger(t)
+		db, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "runs.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		ledger, err := runstate.New(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.liveSandboxWorker {
+			if err := db.SetConfigAck(wocadb.ConfigAck{
+				ServiceID: "wkr-gate", Role: "worker", Generation: "g1",
+				Capabilities: "sandbox", UpdatedAt: wocadb.Now(),
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
 		s := New(Config{
 			Agent: newScriptedAgent(t, "x"), Static: fstest.MapFS{}, Logger: zerolog.Nop(),
 			SessionDir: t.TempDir(), WorkDir: t.TempDir(),
 			RunLedger: ledger, DispatchToQueue: true, RunsOffHost: tc.offHost,
-			Auth: tenantProvider{tenant: "tenant-a"},
+			RunStateDB:     db,
+			SandboxEnabled: tc.sandbox,
+			Auth:           tenantProvider{tenant: "tenant-a"},
 		})
 		srv := httptest.NewServer(s.Handler())
 		run := dispatchPost(t, srv.URL, "s-remote", "from afar")

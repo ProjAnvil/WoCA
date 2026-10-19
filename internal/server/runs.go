@@ -29,6 +29,13 @@ var attachmentMIMEs = map[string]bool{
 }
 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
+	// Dynamic off-host gate (design §10.2 M-3): an off-host deployment
+	// without a live enabled sandbox backend fails closed — run creation
+	// would land un-sandboxed tool execution somewhere.
+	if s.runsOffHost && !s.sandboxEnabled() {
+		http.Error(w, "sandbox execution is not available (no enabled sandbox backend)", http.StatusForbidden)
+		return
+	}
 	var req struct {
 		SessionID   string          `json:"session_id"`
 		Prompt      string          `json:"prompt"`
@@ -84,6 +91,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	run, sid, pos, err := s.startRun(req.SessionID, human, req.Workspace, req.Attachments)
 	if err == errQueueFull {
 		http.Error(w, "session run queue is full", http.StatusConflict)
+		return
+	}
+	if errors.Is(err, errNoSandboxWorker) {
+		http.Error(w, errNoSandboxWorker.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	if err != nil {
@@ -508,6 +519,44 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 	return run, sid, pos, nil
 }
 
+// errNoSandboxWorker is returned by enqueueRun (and surfaced as HTTP 503)
+// when no live sandbox-capable worker acked recently — a queued off-host
+// run must never wait on a worker that cannot execute it sandboxed.
+var errNoSandboxWorker = errors.New("no sandbox-capable worker available")
+
+// sandboxAckLiveWindow bounds how old a worker's capability ack may be to
+// count as live (the worker heartbeat refreshes every 10s, design §10.2
+// M-4).
+const sandboxAckLiveWindow = 15 * 1000 // ms
+
+// hasLiveSandboxWorker reports whether a worker acked the sandbox
+// capability inside the live window.
+func (s *Server) hasLiveSandboxWorker() bool {
+	if s.ackDB == nil {
+		return false
+	}
+	acks, err := s.ackDB.ConfigAcks()
+	if err != nil {
+		s.log.Warn().Err(err).Msg("sandbox dispatch check: config_acks read failed")
+		return false
+	}
+	now := wocadb.Now()
+	for _, a := range acks {
+		if a.Role != "worker" {
+			continue
+		}
+		if now-a.UpdatedAt > sandboxAckLiveWindow {
+			continue
+		}
+		for _, cap := range strings.Split(a.Capabilities, ",") {
+			if cap == "sandbox" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // enqueueRun dispatches a run to the shared queue for a woca-worker to
 // execute (Phase 3 wiring): the run is born queued with its prompt and
 // execution environment in the config snapshot, the cross-instance
@@ -518,6 +567,12 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 // ledger path (a registered run with no local execution would subscribe
 // clients to a stream that never fires).
 func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace string, atts []runAttachment) (*Run, string, int, error) {
+	// Dispatch precondition (design §4.5): an off-host run may only queue
+	// when a live sandbox-capable worker exists — otherwise the run would
+	// sit queued behind workers that cannot execute it sandboxed.
+	if s.runsOffHost && !s.hasLiveSandboxWorker() {
+		return nil, sessionID, 0, errNoSandboxWorker
+	}
 	sid := sessionID
 	if sid == "" {
 		sid = newSessionID()

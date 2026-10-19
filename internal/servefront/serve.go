@@ -158,6 +158,14 @@ type Edition struct {
 	// (nil = resolve against the local database).
 	ResolveModel func(ctx context.Context, id, provider, model string) (wocadb.ModelPreset, string, bool)
 
+	// SandboxEnabled reports live whether a sandbox backend is enabled
+	// (server.Config.SandboxEnabled; design §10.2 M-3). The enterprise
+	// entry injects a query against the materialized sandbox_backends
+	// table — this package stays enterprise-free. Nil keeps the personal
+	// posture: the process-level sandbox flag (WOCA_SANDBOX_ENDPOINT)
+	// decides.
+	SandboxEnabled func() bool
+
 	// obs carries the built Observability from the cobra RunE into
 	// ServeWithEdition (unexported; callers pass only the factories).
 	obs Observability
@@ -457,6 +465,15 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 		RunLedger:                   runLedger,
 		DispatchToQueue:             dispatchQueue,
 		RunsOffHost:                 runsOffHost,
+		SandboxEnabled: func() bool {
+			// Enterprise injection wins; the personal posture keeps the
+			// process-level sandbox flag (WOCA_SANDBOX_ENDPOINT) as the
+			// sandbox signal.
+			if ed.SandboxEnabled != nil {
+				return ed.SandboxEnabled()
+			}
+			return opts.Sandbox != nil
+		},
 		MsgPlane:                    plane,
 		Agent:                       ap.Agent,
 		Static:                      ed.Static,
