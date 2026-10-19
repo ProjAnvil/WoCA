@@ -228,9 +228,20 @@ func streamSince(t *testing.T, base, runID, lastEventID string, untilDone bool) 
 // returns the missed tail; an id outside retention signals a resync.
 func TestSSELastEventIDReplayAndGap(t *testing.T) {
 	a := newScriptedAgent(t, "done-reply")
-	_, srv, _ := newLedgerServer(t, a)
+	s, srv, _ := newLedgerServer(t, a)
+	// Deviation note: the done event is emitted before onDone persists; the
+	// transcript save must land before the test ends, or it races the
+	// t.TempDir cleanup ("directory not empty" — the save goroutine's ctx
+	// is deliberately WithoutCancel, so nothing else stops it).
+	saved := make(chan string, 4)
+	s.sessions.testAfterSave = func(id string) { saved <- id }
 	runID, _, _ := postRun(t, srv.URL, "", "hello")
 	waitRunDone(t, srv.URL, runID)
+	select {
+	case <-saved:
+	case <-time.After(10 * time.Second):
+		t.Fatal("transcript save not completed")
+	}
 
 	// Replaying run-1 since seq 1 reaches the terminal done event.
 	types := streamSince(t, srv.URL, runID, "1", true)
@@ -243,7 +254,12 @@ func TestSSELastEventIDReplayAndGap(t *testing.T) {
 // as done/cancelled instead of executing.
 func TestCancelWhileQueued(t *testing.T) {
 	a := newScriptedAgent(t, "first-reply")
-	_, srv, _ := newLedgerServer(t, a)
+	s, srv, _ := newLedgerServer(t, a)
+	// Deviation note: same cleanup race as above — run1's transcript save
+	// fires after its done event (the cancelled queued run2 never persists,
+	// so exactly one save is expected).
+	saved := make(chan string, 4)
+	s.sessions.testAfterSave = func(id string) { saved <- id }
 
 	run1, sid, _ := postRun(t, srv.URL, "", "gate holder")
 	run2, _, pos := postRun(t, srv.URL, sid, "queued")
@@ -261,6 +277,11 @@ func TestCancelWhileQueued(t *testing.T) {
 	}
 
 	waitRunDone(t, srv.URL, run1)
+	select {
+	case <-saved:
+	case <-time.After(10 * time.Second):
+		t.Fatal("transcript save not completed")
+	}
 	types := streamSince(t, srv.URL, run2, "", true)
 	if len(types) == 0 {
 		t.Fatal("cancelled run stream empty")
