@@ -36,7 +36,10 @@ type BackgroundShells struct {
 	next   int
 	shells map[string]*backgroundShell
 	onDone func(notification string)
-	exec   executor.Executor
+	// execFor resolves the execution backend per start, so a run executor
+	// injected into the invoking context (a per-run sandbox) serves the
+	// background shell too.
+	execFor func(context.Context) executor.Executor
 }
 
 type backgroundShell struct {
@@ -57,12 +60,24 @@ func NewBackgroundShells() *BackgroundShells {
 }
 
 // NewBackgroundShellsWithExecutor is NewBackgroundShells with an explicit
-// execution backend; a nil executor falls back to the local machine.
+// fixed execution backend; a nil executor falls back to the local machine.
+// The backend does not resolve run executors from the context — use
+// NewBackgroundShellsWithExecFor for that.
 func NewBackgroundShellsWithExecutor(x executor.Executor) *BackgroundShells {
 	if x == nil {
 		x = executor.NewLocal()
 	}
-	return &BackgroundShells{shells: map[string]*backgroundShell{}, exec: x}
+	return NewBackgroundShellsWithExecFor(func(context.Context) executor.Executor { return x })
+}
+
+// NewBackgroundShellsWithExecFor resolves the execution backend per start
+// from the invoking context; a nil resolver falls back to the local
+// machine.
+func NewBackgroundShellsWithExecFor(execFor func(context.Context) executor.Executor) *BackgroundShells {
+	if execFor == nil {
+		execFor = func(context.Context) executor.Executor { return executor.NewLocal() }
+	}
+	return &BackgroundShells{shells: map[string]*backgroundShell{}, execFor: execFor}
 }
 
 // SetNotify installs the completion callback (called in the shell's run
@@ -74,8 +89,12 @@ func (b *BackgroundShells) SetNotify(fn func(notification string)) {
 }
 
 // Start launches a command in the background and returns its shell ID. The
-// working directory resolution matches the foreground Bash tool.
-func (b *BackgroundShells) Start(command, workdir, baseWorkdir string) (string, error) {
+// working directory resolution matches the foreground Bash tool. ctx is the
+// invoking tool's context: its values (run executor resolution) carry into
+// the process start, while its cancellation deliberately does not —
+// background shells outlive their turn, so the process starts under
+// context.WithoutCancel(ctx).
+func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWorkdir string) (string, error) {
 	wd := workdir
 	if wd == "" {
 		wd = baseWorkdir
@@ -95,12 +114,15 @@ func (b *BackgroundShells) Start(command, workdir, baseWorkdir string) (string, 
 	}
 	b.shells[id] = sh
 	onDone := b.onDone
-	x := b.exec
+	execFor := b.execFor
 	b.mu.Unlock()
 
 	// Background shells deliberately outlive the calling turn's context
-	// (that is their point), so they start under the background context.
-	proc, err := x.Start(context.Background(),
+	// (that is their point), but keep its values — WithoutCancel preserves
+	// them, so a per-run sandbox executor resolved from ctx still serves
+	// the shell while the turn's cancellation cannot kill it.
+	x := execFor(ctx)
+	proc, err := x.Start(context.WithoutCancel(ctx),
 		executor.ExecRequest{Name: "bash", Args: []string{"-c", command}, Dir: wd},
 		executor.StartOptions{Stdout: lineWriter{sh}, Stderr: lineWriter{sh}})
 	if err != nil {

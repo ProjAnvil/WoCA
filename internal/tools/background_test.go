@@ -1,10 +1,18 @@
 package tools
 
 import (
+	"context"
+	"io"
+	"io/fs"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/runexec"
 )
 
 func TestBackgroundShellLifecycle(t *testing.T) {
@@ -71,7 +79,7 @@ func TestBackgroundShellCompletionNotification(t *testing.T) {
 	notifications := make(chan string, 4)
 	bg.SetNotify(func(text string) { notifications <- text })
 
-	id, err := bg.Start("echo hello-bg", "", reg.dir.Base())
+	id, err := bg.Start(t.Context(), "echo hello-bg", "", reg.dir.Base())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +103,7 @@ func TestBackgroundShellNotificationOutputCap(t *testing.T) {
 
 	done := make(chan string, 1)
 	bg.SetNotify(func(text string) { done <- text })
-	if _, err := bg.Start("head -c 9000 /dev/zero | tr '\\0' 'x'", "", "."); err != nil {
+	if _, err := bg.Start(t.Context(), "head -c 9000 /dev/zero | tr '\\0' 'x'", "", "."); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -124,7 +132,7 @@ func TestBashOutputAndKillShellTools(t *testing.T) {
 		t.Fatal("KillShell tool missing")
 	}
 
-	if _, err := bg.Start("sleep 5", "", "."); err != nil {
+	if _, err := bg.Start(t.Context(), "sleep 5", "", "."); err != nil {
 		t.Fatal(err)
 	}
 	res, err := poll.Invoke(t.Context(), map[string]any{"shell_id": "1"})
@@ -162,7 +170,7 @@ func TestBackgroundShellIDsIncrement(t *testing.T) {
 	reg := NewRegistry(t.TempDir())
 	bg := reg.Background()
 	for i, cmd := range []string{"true", "false"} {
-		id, err := bg.Start(cmd, "", ".")
+		id, err := bg.Start(t.Context(), cmd, "", ".")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,4 +192,90 @@ func TestBackgroundShellIDsIncrement(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("shells did not finish")
+}
+
+// Background shells capture the invoking context (design §10.1 C-3): the
+// process starts under context.WithoutCancel(ctx) so it outlives the turn,
+// while the ctx values — including the run executor — survive. A sandboxed
+// run therefore starts its background shells in the sandbox, not on the
+// host behind the sandbox's back.
+func TestBackgroundShellCapturesRunExecutor(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir)
+	fake := newFakeStartExecutor()
+	parent, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx := runexec.WithRunExecutor(parent, fake)
+
+	bg := reg.Background()
+	id, err := bg.Start(ctx, "long-running", "", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = bg.Kill(id) })
+
+	<-fake.started
+	if len(fake.reqs) != 1 || fake.reqs[0].Name != "bash" {
+		t.Fatalf("start requests = %+v", fake.reqs)
+	}
+	// The values survived WithoutCancel: the started process's ctx still
+	// resolves the run executor.
+	if _, ok := runexec.RunExecutorFrom(fake.startCtx); !ok {
+		t.Fatal("run executor missing from the background start ctx")
+	}
+	// Canceling the parent (turn end) must not kill the background shell.
+	cancel()
+	if err := fake.startCtx.Err(); err != nil {
+		t.Fatalf("background ctx canceled by parent: %v", err)
+	}
+}
+
+// fakeStartExecutor records the Start call and hands out a controllable
+// process.
+type fakeStartExecutor struct {
+	startCtx  context.Context
+	reqs      []executor.ExecRequest
+	started   chan struct{}
+	startOnce sync.Once
+}
+
+func newFakeStartExecutor() *fakeStartExecutor {
+	return &fakeStartExecutor{started: make(chan struct{})}
+}
+
+func (f *fakeStartExecutor) Start(ctx context.Context, req executor.ExecRequest, _ executor.StartOptions) (executor.Process, error) {
+	f.startCtx = ctx
+	f.reqs = append(f.reqs, req)
+	f.startOnce.Do(func() { close(f.started) })
+	return &fakeProcess{done: make(chan struct{})}, nil
+}
+
+func (f *fakeStartExecutor) Exec(context.Context, executor.ExecRequest) (executor.ExecResult, error) {
+	return executor.ExecResult{}, nil
+}
+func (f *fakeStartExecutor) ReadFile(context.Context, string) ([]byte, error) { return nil, nil }
+func (f *fakeStartExecutor) WriteFile(context.Context, string, []byte, fs.FileMode) error {
+	return nil
+}
+func (f *fakeStartExecutor) MkdirAll(context.Context, string, fs.FileMode) error { return nil }
+func (f *fakeStartExecutor) Stat(context.Context, string) (fs.FileInfo, error) {
+	return nil, fs.ErrNotExist
+}
+func (f *fakeStartExecutor) Glob(context.Context, string) ([]string, error) { return nil, nil }
+func (f *fakeStartExecutor) Grep(context.Context, string, *regexp.Regexp) ([]executor.GrepMatch, error) {
+	return nil, nil
+}
+
+// fakeProcess blocks in Wait until killed.
+type fakeProcess struct {
+	done    chan struct{}
+	killOne sync.Once
+}
+
+func (p *fakeProcess) Stdin() io.WriteCloser { return nopWriteCloser{} }
+func (p *fakeProcess) Stdout() io.Reader     { return nil }
+func (p *fakeProcess) Wait() error           { <-p.done; return nil }
+func (p *fakeProcess) Kill() error {
+	p.killOne.Do(func() { close(p.done) })
+	return nil
 }

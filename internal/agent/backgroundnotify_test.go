@@ -99,7 +99,7 @@ func TestBackgroundNotificationIdleDeliveredNextRun(t *testing.T) {
 	}
 
 	// A shell completes between runs.
-	if _, err := reg.Background().Start("echo idle-77", "", "."); err != nil {
+	if _, err := reg.Background().Start(t.Context(), "echo idle-77", "", "."); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)

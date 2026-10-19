@@ -101,7 +101,7 @@ func TestBashOutputWithOutputAndKillShellEdges(t *testing.T) {
 	bg := reg.Background()
 	// printf without a newline exercises the newline-appending branch of
 	// BashOutput's rendering.
-	if _, err := bg.Start("printf partial-output; sleep 0.2", "", "."); err != nil {
+	if _, err := bg.Start(t.Context(), "printf partial-output; sleep 0.2", "", "."); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)

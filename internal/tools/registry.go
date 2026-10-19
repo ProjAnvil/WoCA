@@ -143,7 +143,6 @@ func NewRegistryWithExecutor(workdir string, x executor.Executor) *Registry {
 		byName:  map[string]coretools.Tool{},
 		todos:   NewTodoStore(),
 		dir:     NewDir(workdir),
-		bg:      NewBackgroundShellsWithExecutor(x),
 		history: NewFileHistory(),
 		lspPool: newLSPPool(
 			func(cmd []string) (lspTransport, error) { return startLSPWith(x, cmd) },
@@ -151,6 +150,7 @@ func NewRegistryWithExecutor(workdir string, x executor.Executor) *Registry {
 		),
 		exec: x,
 	}
+	r.bg = NewBackgroundShellsWithExecFor(r.ExecForFn())
 	for _, t := range defaultTools(r.dir, r.todos, r.bg, r.history, r.lspPool, r.ExecForFn()) {
 		r.Register(t)
 	}

@@ -35,7 +35,7 @@ func bashTool(d *Dir, bg *BackgroundShells, execFor func(context.Context) execut
 			}
 
 			if a.RunInBackground {
-				id, err := bg.Start(a.Command, a.Workdir, baseWorkdir)
+				id, err := bg.Start(ctx, a.Command, a.Workdir, baseWorkdir)
 				if err != nil {
 					return coretools.Result{Content: fmt.Sprintf("Error: start background command: %v", err)}, nil
 				}
