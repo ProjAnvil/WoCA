@@ -30,6 +30,10 @@ type Identity struct {
 	ServiceID string // lease-style identity, e.g. "srv-host-1" / "worker-host-1"
 	Role      string // server | worker | scheduler
 	Addr      string // optional reachability hint
+	// Capabilities is the comma-separated ability set carried on every
+	// ack (v1: "sandbox"); the run dispatcher routes by it (design §10.2
+	// M-4).
+	Capabilities string
 }
 
 // Watch polls the settings generation until ctx is cancelled and calls
@@ -47,7 +51,8 @@ func Watch(ctx context.Context, st *settings.Store, db *wocadb.DB, id Identity, 
 			return
 		}
 		if err := db.SetConfigAck(wocadb.ConfigAck{
-			ServiceID: id.ServiceID, Role: id.Role, Generation: gen, Addr: id.Addr, UpdatedAt: wocadb.Now(),
+			ServiceID: id.ServiceID, Role: id.Role, Generation: gen, Addr: id.Addr,
+			Capabilities: id.Capabilities, UpdatedAt: wocadb.Now(),
 		}); err != nil {
 			log.Warn().Err(err).Msg("config ack write failed")
 		}

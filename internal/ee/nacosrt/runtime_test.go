@@ -119,3 +119,16 @@ func TestEnabledSandboxNone(t *testing.T) {
 		t.Fatalf("enabled = %+v want nil", row)
 	}
 }
+
+// LastGeneration exposes the last applied pack's generation (the
+// capability heartbeat rewrites the ack row with it between deliveries).
+func TestLastGeneration(t *testing.T) {
+	r := &Runtime{}
+	if got := r.LastGeneration(); got != "" {
+		t.Fatalf("empty runtime LastGeneration = %q, want \"\"", got)
+	}
+	r.pack = &Pack{Version: 2, Generation: "g7"}
+	if got := r.LastGeneration(); got != "g7" {
+		t.Fatalf("LastGeneration = %q, want g7", got)
+	}
+}

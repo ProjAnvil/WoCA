@@ -332,10 +332,21 @@ func (r *Runtime) ack(pack *Pack) {
 	}
 	if err := r.cfg.DB.SetConfigAck(wocadb.ConfigAck{
 		ServiceID: r.cfg.Identity.ServiceID, Role: r.cfg.Identity.Role,
-		Generation: pack.Generation, Addr: r.cfg.Identity.Addr, UpdatedAt: wocadb.Now(),
+		Generation: pack.Generation, Addr: r.cfg.Identity.Addr,
+		Capabilities: r.cfg.Identity.Capabilities, UpdatedAt: wocadb.Now(),
 	}); err != nil {
 		r.cfg.log.Warn().Err(err).Msg("nacosrt: config ack write failed")
 	}
+}
+
+// LastGeneration returns the generation of the last applied pack ("" when
+// none was delivered yet) — the worker's capability heartbeat rewrites
+// its ack row with it between pack deliveries.
+func (r *Runtime) LastGeneration() string {
+	if r.pack == nil {
+		return ""
+	}
+	return r.pack.Generation
 }
 
 // autodetectIP picks the first non-loopback IPv4 address (container

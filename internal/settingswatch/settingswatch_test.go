@@ -48,3 +48,33 @@ func TestWatchFiresOnChange(t *testing.T) {
 	}
 	t.Fatal("watcher never fired after a config write")
 }
+
+// The ack row carries the service's capabilities (design §10.2 M-4) so
+// the run dispatcher can route by ability, not just by liveness.
+func TestWatchAcksCapabilities(t *testing.T) {
+	dir := t.TempDir()
+	st, err := settings.Open("sqlite:" + filepath.Join(dir, "w.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Watch(ctx, st, st.DB(), Identity{ServiceID: "cap-worker", Role: "worker", Capabilities: "sandbox"}, zerolog.Nop(), nil, func() {})
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		acks, err := st.DB().ConfigAcks()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range acks {
+			if a.ServiceID == "cap-worker" && a.Capabilities == "sandbox" {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("capabilities never landed in the ack row")
+}

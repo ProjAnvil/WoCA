@@ -173,11 +173,17 @@ func newWorkerRoot() *cobra.Command {
 			if obsAddr == "" || obsAddr == "off" {
 				return fmt.Errorf("worker requires --obs-addr (the advertise port) when registering with nacos")
 			}
-			rt, err := nacosrt.New(nacosrt.Config{
-				Server: nacosBase, Service: "woca-worker", Advertise: obsAddr,
-				St: ap.Settings, DB: db,
-				Identity: settingswatch.Identity{ServiceID: workerID(), Role: "worker", Addr: obsAddr},
-				OnChange: func() {
+		rt, err := nacosrt.New(nacosrt.Config{
+			Server: nacosBase, Service: "woca-worker", Advertise: obsAddr,
+			St: ap.Settings, DB: db,
+			Identity: settingswatch.Identity{
+				ServiceID: workerID(), Role: "worker", Addr: obsAddr,
+				// Refreshed live by the heartbeat below: the marker rides
+				// every ack rewrite, so enabling/disabling a backend
+				// applies without a restart.
+				Capabilities: workerCapabilities(db),
+			},
+			OnChange: func() {
 					if err := ap.RebuildModel(); err != nil {
 						log.Warn().Err(err).Msg("model hot-swap after config change failed")
 					}
@@ -192,18 +198,37 @@ func newWorkerRoot() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := rt.Start(ctx); err != nil {
-				return err
-			}
-			go rt.Loop(ctx)
+		if err := rt.Start(ctx); err != nil {
+			return err
+		}
+		go rt.Loop(ctx)
 
-			return w.Run(ctx)
+		// Capability heartbeat (design §10.2 M-4): rewrite this worker's
+		// ack row every 10s — generation from the last applied pack,
+		// capabilities from the live enabled-sandbox state — so the
+		// dispatcher's 15s live window never prunes a healthy idle
+		// worker.
+		go w.AckHeartbeat(ctx, 0, rt.LastGeneration, func() string { return workerCapabilities(db) })
+
+		return w.Run(ctx)
 		},
 	}
 	root.Flags().StringVar(&logLevel, "log-level", "info", "debug | info | warn | error")
 	root.Flags().String("db", "", "settings database: sqlite path, postgres:// DSN (env WOCA_DB)")
 	root.Flags().String("obs-addr", defaultObsAddr(), "healthz/metrics listener address, or \"off\" (env WOCA_OBS_ADDR)")
 	return root
+}
+
+// workerCapabilities reports the live capability set for the ack row:
+// "sandbox" when the materialized config carries an enabled backend.
+func workerCapabilities(db *wocadb.DB) string {
+	if db == nil {
+		return ""
+	}
+	if row, err := nacosrt.EnabledSandbox(db.DB); err == nil && row != nil {
+		return "sandbox"
+	}
+	return ""
 }
 
 // workerMetrics adapts the obs instruments into the worker's plain hooks.
