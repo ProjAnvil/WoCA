@@ -232,3 +232,85 @@ Memory is already wired: `memory_engine=remote` + the `WOCA_LADYM_*` env
 in docker-compose.full.yml point the execution roles at the ladyM
 enterprise API (design §6.3/§12.2 — the endpoint is infrastructure config,
 env wins over the settings rows).
+
+## Sandbox backends (off-host run execution)
+
+Runs created by remote tenants execute on workers whose tool calls run
+inside a sandbox backend registered and enabled through the config
+console (`woca-config`, 沙箱后端 section). The worker provisions one
+sandbox per run: it uploads the run workspace as a tar.gz, routes every
+tool call through the sandbox (paths translated host-workspace →
+`/workspace`), and downloads the products back (`.git` excluded, host
+`.git` preserved). Any failure in that chain fails the run explicitly —
+the worker never falls back to executing locally.
+
+### Backend types
+
+| `type` | What it talks to | Requirements |
+|---|---|---|
+| `contract-http` | Any service implementing the generic HTTP contract v2 (`internal/platform/executor/CONTRACT.md`) | The contract implementation's endpoint + API key. Use the `woca-fakesandbox` image (`make dist-role ROLE=woca-fakesandbox`) to validate the chain without a real sandbox |
+| `cfbridge` | Cloudflare sandbox bridge (SSE exec, tar persist/hydrate) | A Cloudflare account with the sandbox bridge deployed; single-file limit 32 MiB rides the archive channel |
+| `e2b` / `daytona` / `modal` | SaaS sandbox platforms | Registrable now; the Go providers land post-v1 — verify reports "provider not available" until then |
+| `microsandbox` | Self-hosted microsandbox cluster | Same as above (registrable, provider pending); self-hosted Firecracker/KVM hosts |
+| `sidecar` | SDK-only platforms exposed as a contract v2 sidecar process | v1 deferred |
+
+The type enum is the full contract set — registration accepts every
+value above; the worker's provider registry decides what can actually
+run (today: `contract-http`, `cfbridge`).
+
+### Verify, enable, and the gate semantics
+
+- **Verify** (`POST /api/sandboxes/{id}/verify` from the console's
+  "test connection" button) walks the whole chain against the backend —
+  create, exec, write/read round-trip, glob/stat, start/kill, archive
+  round-trip — and records per-step latency and the last probe result on
+  the row (badge in the console). Probe state is advisory only: an
+  enabled-but-failing backend shows a warning badge; it never auto-flips
+  the gate (avoiding probe flaps gating run creation).
+- **Enable** is global and single: enabling one backend disables the
+  others in the same write. An enabled backend cannot be deleted (409) —
+  disable it first (which also clears its stored API key).
+- **API keys** are stored encrypted in the shared secrets table under
+  `sandbox-api-key:<id>` — every role must share one `WOCA_HOME` master
+  key volume (the compose stacks already do), or workers cannot decrypt
+  the backend key the config plane wrote.
+- **Run gating**: with `WOCA_RUN_DISPATCH=queue` +
+  `WOCA_RUNS_OFF_HOST=true` on woca-server, `POST /api/runs` from remote
+  tenants answers 403 while no backend is enabled, and 503
+  ("no sandbox-capable worker available") while no live worker acks the
+  `sandbox` capability (the worker rewrites its capability ack every
+  10 s; the dispatcher's live window is 15 s). Queue dispatch is a hard
+  prerequisite for the off-host posture — runs execute on workers, not
+  in the server process.
+
+### Upgrade order (hard constraint)
+
+The config pack is version 2 (it carries `sandbox_backends`). The
+worker's decoder accepts both v1 and v2 (a v1 pack reads as "no
+sandbox backends"), the config plane publishes v2 only. Therefore, on a
+mixed-version rolling upgrade **upgrade every woca-worker before the
+first woca-config**: an old worker meeting a v2 pack refuses to apply
+it, while a new worker under a v1 pack simply runs un-sandboxed until
+the config plane catches up. Same ordering applies when downgrading.
+
+### Limits and known restrictions
+
+- `sandbox-archive-max-bytes` (settings key, default 536870912 —
+  512 MiB) bounds the workspace archive in BOTH directions: a run whose
+  upload or product download exceeds it fails explicitly (the products
+  never silently truncate).
+- During a sandboxed run the worker disables host-bound surfaces:
+  file-level undo/redo, worktree enter, MCP stdio servers, and LSP
+  return "not available during sandboxed runs". The system prompt's git
+  status block is the one deliberate exception (design §10.3 m-6): it
+  reads the host workspace read-only — the same tree the archive upload
+  carries into the sandbox — so it is kept as-is rather than rebuilt
+  around a context-free cache.
+- The run workspace must be a directory shared between the dispatching
+  woca-server and the executing workers (the same volume both roles
+  mount); products land back in it after each run.
+
+Reference e2e: `make sandboxlab` (e2e/sandboxlab) drives this whole
+chain against the containerized fakesandbox, including the 403/503
+gate postures.
+
