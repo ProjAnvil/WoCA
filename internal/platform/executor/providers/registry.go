@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/platform/executor/providers/cfbridge"
 )
 
 // Config is the resolved connection profile for one sandbox backend.
@@ -33,6 +34,12 @@ func New(cfg Config) (executor.Executor, error) {
 	switch cfg.Type {
 	case "contract-http":
 		return executor.NewSandbox(executor.SandboxConfig{
+			Endpoint: cfg.Endpoint,
+			APIKey:   cfg.APIKey,
+			Timeout:  cfg.Timeout,
+		})
+	case "cfbridge":
+		return cfbridge.New(cfbridge.Config{
 			Endpoint: cfg.Endpoint,
 			APIKey:   cfg.APIKey,
 			Timeout:  cfg.Timeout,

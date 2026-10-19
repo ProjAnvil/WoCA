@@ -1,6 +1,8 @@
 package providers
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +34,41 @@ func TestNewContractHTTP(t *testing.T) {
 		if err := c.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
+	}
+}
+
+// TestNewCfbridge pins the cfbridge dispatch: New must provision a
+// sandbox via the bridge create endpoint and yield a closeable Executor.
+func TestNewCfbridge(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/sandbox", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer k1" {
+			t.Errorf("Authorization = %q, want Bearer k1", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"sbx_r"}`))
+	})
+	mux.HandleFunc("DELETE /v1/sandbox/{id}", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	x, err := New(Config{
+		Type:     "cfbridge",
+		Endpoint: srv.URL,
+		APIKey:   "k1",
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New(cfbridge): %v", err)
+	}
+	if c, ok := x.(interface{ Close() error }); ok {
+		if err := c.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	} else {
+		t.Fatal("cfbridge executor must implement io.Closer")
 	}
 }
 
