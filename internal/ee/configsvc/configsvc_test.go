@@ -611,6 +611,19 @@ func TestStorageMemoryRidePackage(t *testing.T) {
 	}
 }
 
+// TestSandboxBackendsMigration: New provisions the sandbox_backends table
+// (design §4.2) — the management plane's sandbox backend inventory.
+func TestSandboxBackendsMigration(t *testing.T) {
+	f := newFixture(t)
+	var n int
+	if err := f.db.QueryRow(`SELECT count(*) FROM sandbox_backends`).Scan(&n); err != nil {
+		t.Fatalf("sandbox_backends table missing after New: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("fresh table has %d rows, want 0", n)
+	}
+}
+
 // fakePublisher records deliveries for assertions.
 type fakePublisher struct {
 	published []string

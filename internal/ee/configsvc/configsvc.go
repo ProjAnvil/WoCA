@@ -101,11 +101,24 @@ func New(st *settings.Store, ts *tenant.Store, db *wocadb.DB, log zerolog.Logger
 				body TEXT NOT NULL,
 				updated_at ` + tsCol + ` NOT NULL
 			)`,
-			`CREATE TABLE IF NOT EXISTS managed_mcp (
-				name TEXT PRIMARY KEY,
-				spec TEXT NOT NULL,
-				updated_at ` + tsCol + ` NOT NULL
-			)`,
+		`CREATE TABLE IF NOT EXISTS managed_mcp (
+			name TEXT PRIMARY KEY,
+			spec TEXT NOT NULL,
+			updated_at ` + tsCol + ` NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS sandbox_backends (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			type TEXT NOT NULL DEFAULT 'contract-http',
+			endpoint TEXT NOT NULL,
+			timeout_ms INTEGER NOT NULL DEFAULT 120000,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			last_probe_at ` + tsCol + `,
+			last_probe_ok INTEGER,
+			last_probe_error TEXT,
+			created_at ` + tsCol + ` NOT NULL,
+			updated_at ` + tsCol + ` NOT NULL
+		)`,
 		}
 		if db.Dialect == wocadb.DialectPostgres {
 			// Widen pre-existing int4 columns (the migration landed after

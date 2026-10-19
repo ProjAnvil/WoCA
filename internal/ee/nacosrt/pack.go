@@ -31,6 +31,22 @@ type MCPRow struct {
 	Spec string `json:"spec"`
 }
 
+// SandboxRow is one managed sandbox backend, carried in pack v2. The API
+// key never rides the pack under this row — it travels separately in
+// Pack.Secrets under "sandbox-api-key:<id>".
+type SandboxRow struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Endpoint  string `json:"endpoint"`
+	TimeoutMs int64  `json:"timeout_ms"`
+	Enabled   bool   `json:"enabled"`
+	// LastProbeAt is unix milliseconds, 0 = never probed.
+	LastProbeAt    int64  `json:"last_probe_at"`
+	LastProbeOK    bool   `json:"last_probe_ok"`
+	LastProbeError string `json:"last_probe_error,omitempty"`
+}
+
 // Pack is the delivered configuration: settings domains (the
 // settings.Settings JSON), secret values (decrypted for transport — the
 // pack rides the internal registry network and re-encrypts at each
