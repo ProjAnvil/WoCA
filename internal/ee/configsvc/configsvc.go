@@ -205,6 +205,12 @@ func (s *Service) Handler() http.Handler {
 	r.Handle("GET /api/mcp", s.requireScope(authz.ScopeSettingsRead, s.handleListManagedMCP))
 	r.Handle("PUT /api/mcp", s.requireScope(authz.ScopeSettingsWrite, s.handlePutManagedMCP))
 	r.Handle("DELETE /api/mcp/{name}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteManagedMCP))
+	// Sandbox backends (§4.3): registration, the single-enabled toggle,
+	// and full-chain verify. Keys ride the encrypted secrets table.
+	r.Handle("GET /api/sandboxes", s.requireScope(authz.ScopeSettingsRead, s.handleListSandboxes))
+	r.Handle("POST /api/sandboxes", s.requireScope(authz.ScopeSettingsWrite, s.handleCreateSandbox))
+	r.Handle("PUT /api/sandboxes/{id}", s.requireScope(authz.ScopeSettingsWrite, s.handleUpdateSandbox))
+	r.Handle("DELETE /api/sandboxes/{id}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteSandbox))
 	// Console SPA: when it was not built (fresh clone, no `make ee-web`),
 	// serve a 503 placeholder instead of panicking on the missing
 	// index.html inside webfx.SPA.
