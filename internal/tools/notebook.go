@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 const notebookEditDescription = `Edit a Jupyter notebook (.ipynb) cell's source. Identify the cell by cell_id or cell_index (0-based).`
@@ -19,11 +20,12 @@ type notebookEditArgs struct {
 	NewSource    string `json:"new_source"`
 }
 
-func notebookEditTool(d *Dir, fh *FileHistory) coretools.Tool {
+func notebookEditTool(d *Dir, fh *FileHistory, execFor func(context.Context) executor.Executor) coretools.Tool {
 	t := MustTool(coretools.FromFunc("NotebookEdit", notebookEditDescription,
 		func(ctx context.Context, a notebookEditArgs) (coretools.Result, error) {
 			path := resolvePath(d.For(ctx), a.NotebookPath)
-			data, err := os.ReadFile(path)
+			x := execFor(ctx)
+			data, err := x.ReadFile(ctx, path)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("notebook %s: %w", a.NotebookPath, err)
 			}
@@ -61,7 +63,7 @@ func notebookEditTool(d *Dir, fh *FileHistory) coretools.Tool {
 			if err != nil {
 				return coretools.Result{}, err
 			}
-			if err := os.WriteFile(path, out, 0o644); err != nil {
+			if err := x.WriteFile(ctx, path, out, 0o644); err != nil {
 				return coretools.Result{}, fmt.Errorf("write notebook %s: %w", a.NotebookPath, err)
 			}
 			fh.Record(ctx, path, data, out)

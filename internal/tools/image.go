@@ -78,13 +78,20 @@ type ImagePayload struct {
 	Resized  bool
 }
 
-// ProcessImage validates, optionally downscales, and base64-encodes an image
-// file. Non-image or oversized inputs return an error the tool surfaces.
+// ProcessImage validates, optionally downscales, and base64-encodes an
+// image file. Non-image or oversized inputs return an error the tool
+// surfaces. The file read stays on the caller so sandboxed runs can feed
+// bytes fetched through their executor.
 func ProcessImage(path string) (ImagePayload, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ImagePayload{}, err
 	}
+	return ProcessImageData(data)
+}
+
+// ProcessImageData is ProcessImage over already-read file bytes.
+func ProcessImageData(data []byte) (ImagePayload, error) {
 	if len(data) > maxImageBytes {
 		return ImagePayload{}, fmt.Errorf("image is %d bytes, over the %d-byte limit", len(data), maxImageBytes)
 	}

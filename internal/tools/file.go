@@ -26,7 +26,11 @@ func readTool(d *Dir, execFor func(context.Context) executor.Executor) coretools
 		func(ctx context.Context, a readArgs) (coretools.Result, error) {
 			path := resolvePath(d.For(ctx), a.FilePath)
 			if IsImagePath(a.FilePath) {
-				p, err := ProcessImage(path)
+				data, err := execFor(ctx).ReadFile(ctx, path)
+				if err != nil {
+					return coretools.Result{Content: fmt.Sprintf("Error: %s is not readable as an image: %v", a.FilePath, err)}, nil
+				}
+				p, err := ProcessImageData(data)
 				if err != nil {
 					return coretools.Result{Content: fmt.Sprintf("Error: %s is not readable as an image: %v", a.FilePath, err)}, nil
 				}

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/projanvil/woca/internal/platform/executor"
 )
@@ -22,7 +23,26 @@ type fakeExecutor struct {
 	reads   map[string][]byte
 	mkdirs  []fakePath
 	writes  []fakeWrite
+
+	globCalls   []string
+	globMatches map[string][]string
+	statCalls   []string
+	statInfo    map[string]fakeFileInfo
+	grepCalls   []string
+	grepMatches []executor.GrepMatch
 }
+
+type fakeFileInfo struct {
+	name string
+	dir  bool
+}
+
+func (f fakeFileInfo) Name() string       { return f.name }
+func (f fakeFileInfo) Size() int64        { return 0 }
+func (f fakeFileInfo) Mode() fs.FileMode  { return 0o644 }
+func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (f fakeFileInfo) IsDir() bool        { return f.dir }
+func (f fakeFileInfo) Sys() any           { return nil }
 
 type fakePath struct {
 	path string
@@ -61,10 +81,22 @@ func (f *fakeExecutor) MkdirAll(_ context.Context, path string, perm fs.FileMode
 	return nil
 }
 
-func (f *fakeExecutor) Stat(context.Context, string) (fs.FileInfo, error) { return nil, fs.ErrNotExist }
-func (f *fakeExecutor) Glob(context.Context, string) ([]string, error)    { return nil, nil }
-func (f *fakeExecutor) Grep(context.Context, string, *regexp.Regexp) ([]executor.GrepMatch, error) {
-	return nil, nil
+func (f *fakeExecutor) Stat(_ context.Context, path string) (fs.FileInfo, error) {
+	f.statCalls = append(f.statCalls, path)
+	if fi, ok := f.statInfo[path]; ok {
+		return fi, nil
+	}
+	return nil, fs.ErrNotExist
+}
+
+func (f *fakeExecutor) Glob(_ context.Context, pattern string) ([]string, error) {
+	f.globCalls = append(f.globCalls, pattern)
+	return f.globMatches[pattern], nil
+}
+
+func (f *fakeExecutor) Grep(_ context.Context, root string, pattern *regexp.Regexp) ([]executor.GrepMatch, error) {
+	f.grepCalls = append(f.grepCalls, root)
+	return f.grepMatches, nil
 }
 
 func TestBashToolRoutesThroughExecutor(t *testing.T) {

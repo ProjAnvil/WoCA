@@ -1,16 +1,16 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/platform/executor"
 )
 
 const maxSearchResults = 200
@@ -21,26 +21,53 @@ type listDirArgs struct {
 	Path string `json:"path,omitempty"`
 }
 
-func listDirTool(d *Dir) coretools.Tool {
+// listDirTool lists one directory through the resolved executor: a Glob
+// of dir/* plus a Stat per entry distinguishes files from directories
+// (the Executor interface has no ReadDir, design §10.1 C-2 keeps it
+// frozen), so sandboxed runs list the sandbox filesystem instead of the
+// host.
+func listDirTool(d *Dir, execFor func(context.Context) executor.Executor) coretools.Tool {
 	t := MustTool(coretools.FromFunc("ListDir", listDirDescription,
 		func(ctx context.Context, a listDirArgs) (coretools.Result, error) {
 			dir := resolvePath(d.For(ctx), a.Path)
-			entries, err := os.ReadDir(dir)
+			x := execFor(ctx)
+			info, err := x.Stat(ctx, dir)
+			if err != nil {
+				return coretools.Result{}, fmt.Errorf("list %s: %w", a.Path, err)
+			}
+			if !info.IsDir() {
+				return coretools.Result{}, fmt.Errorf("list %s: not a directory", a.Path)
+			}
+			entries, err := x.Glob(ctx, filepath.Join(dir, "*"))
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("list %s: %w", a.Path, err)
 			}
 			var b strings.Builder
-			for _, e := range entries {
-				name := e.Name()
-				if e.IsDir() {
-					name += "/"
-				}
+			for _, name := range sortedEntries(listEntryNames(ctx, x, entries)) {
 				b.WriteString(name)
 				b.WriteString("\n")
 			}
 			return coretools.Result{Content: b.String()}, nil
 		}))
 	return t
+}
+
+// listEntryNames maps one directory's globbed entries to display names,
+// suffixing directories with "/" via a Stat per entry.
+func listEntryNames(ctx context.Context, x executor.Executor, entries []string) []string {
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		fi, err := x.Stat(ctx, e)
+		if err != nil {
+			continue
+		}
+		name := filepath.Base(e)
+		if fi.IsDir() {
+			name += "/"
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 const globDescription = `Find files whose paths match a glob pattern. A pattern with no "/" matches basenames at any depth (e.g. "*.go"). Supports "**", "*", "?", and character classes.`
@@ -50,11 +77,11 @@ type globArgs struct {
 	Path    string `json:"path,omitempty"`
 }
 
-func globTool(d *Dir) coretools.Tool {
+func globTool(d *Dir, execFor func(context.Context) executor.Executor) coretools.Tool {
 	t := MustTool(coretools.FromFunc("Glob", globDescription,
 		func(ctx context.Context, a globArgs) (coretools.Result, error) {
 			base := resolvePath(d.For(ctx), a.Path)
-			matches, err := walkMatches(base, a.Pattern, nil)
+			matches, err := walkMatches(ctx, execFor, base, a.Pattern, nil)
 			if err != nil {
 				return coretools.Result{}, err
 			}
@@ -71,7 +98,11 @@ type grepArgs struct {
 	Include string `json:"include,omitempty"`
 }
 
-func grepTool(d *Dir) coretools.Tool {
+// grepTool runs the content search through the executor's Grep and
+// post-filters by the include glob on the relative paths (the executor
+// interface carries no include parameter; the filter is path-shape only,
+// so applying it client-side is equivalent).
+func grepTool(d *Dir, execFor func(context.Context) executor.Executor) coretools.Tool {
 	t := MustTool(coretools.FromFunc("Grep", grepDescription,
 		func(ctx context.Context, a grepArgs) (coretools.Result, error) {
 			re, err := regexp.Compile(a.Pattern)
@@ -88,29 +119,27 @@ func grepTool(d *Dir) coretools.Tool {
 				}
 			}
 
-			files, err := walkMatches(base, "**", include)
+			matches, err := execFor(ctx).Grep(ctx, base, re)
 			if err != nil {
-				return coretools.Result{}, err
+				return coretools.Result{}, fmt.Errorf("grep %s: %w", a.Path, err)
 			}
 
 			var b strings.Builder
 			count := 0
-			for _, rel := range files {
+			for _, m := range matches {
 				if count >= maxSearchResults {
 					break
 				}
-				abs := filepath.Join(base, filepath.FromSlash(rel))
-				matches, err := grepFile(abs, re)
-				if err != nil {
+				rel, rerr := filepath.Rel(base, m.Path)
+				if rerr != nil {
 					continue
 				}
-				for _, m := range matches {
-					fmt.Fprintf(&b, "%s:%s\n", rel, m)
-					count++
-					if count >= maxSearchResults {
-						break
-					}
+				rel = filepath.ToSlash(rel)
+				if include != nil && !include.MatchString(rel) {
+					continue
 				}
+				fmt.Fprintf(&b, "%s:%d:%s\n", rel, m.Line, m.Text)
+				count++
 			}
 			if b.Len() == 0 {
 				return coretools.Result{Content: "No matches found."}, nil
@@ -123,10 +152,13 @@ func grepTool(d *Dir) coretools.Tool {
 	return t
 }
 
-// walkMatches walks base and returns the slash-separated relative paths of
-// files matching pattern (a glob). include optionally filters which paths are
-// even considered (compiled glob regexp).
-func walkMatches(base, pattern string, include *regexp.Regexp) ([]string, error) {
+// walkMatches enumerates the files under base through the executor and
+// returns the slash-separated relative paths matching pattern (a glob).
+// include optionally filters which paths are even considered (compiled
+// glob regexp). The Executor interface is frozen (no tree walk), so the
+// enumeration is a recursive Glob+Stat combination — one level per call —
+// which reproduces the previous filepath.WalkDir file list.
+func walkMatches(ctx context.Context, execFor func(context.Context) executor.Executor, base, pattern string, include *regexp.Regexp) ([]string, error) {
 	matcher, err := globToRegexp(pattern)
 	if err != nil {
 		return nil, fmt.Errorf("invalid glob %q: %w", pattern, err)
@@ -137,41 +169,54 @@ func walkMatches(base, pattern string, include *regexp.Regexp) ([]string, error)
 		deep, _ = globToRegexp("**/" + pattern)
 	}
 
-	var out []string
-	info, err := os.Stat(base)
+	x := execFor(ctx)
+	info, err := x.Stat(ctx, base)
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", base, err)
 	}
 	if !info.IsDir() {
 		rel := filepath.Base(base)
 		if matchAny(matcher, deep, filepath.ToSlash(rel)) {
-			out = append(out, rel)
+			return []string{rel}, nil
 		}
-		return out, nil
+		return nil, nil
 	}
 
-	err = filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
+	var files []string
+	var walk func(dir string)
+	walk = func(dir string) {
+		entries, err := x.Glob(ctx, filepath.Join(dir, "*"))
 		if err != nil {
-			return nil // skip unreadable entries
+			return // skip unreadable directories (WalkDir parity)
 		}
-		if d.IsDir() {
-			return nil
+		for _, e := range entries {
+			fi, err := x.Stat(ctx, e)
+			if err != nil {
+				continue // skip unreadable entries (WalkDir parity)
+			}
+			if fi.IsDir() {
+				walk(e)
+				continue
+			}
+			files = append(files, e)
 		}
-		rel, rerr := filepath.Rel(base, path)
+	}
+	walk(base)
+	slices.Sort(files)
+
+	var out []string
+	for _, f := range files {
+		rel, rerr := filepath.Rel(base, f)
 		if rerr != nil {
-			return nil
+			continue
 		}
 		rel = filepath.ToSlash(rel)
 		if include != nil && !include.MatchString(rel) {
-			return nil
+			continue
 		}
 		if matchAny(matcher, deep, rel) {
 			out = append(out, rel)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("walk %s: %w", base, err)
 	}
 	return out, nil
 }
@@ -191,28 +236,6 @@ func formatMatches(matches []string, empty string) string {
 		matches = matches[:maxSearchResults]
 	}
 	return strings.Join(matches, "\n") + "\n"
-}
-
-// grepFile returns "line:content" strings for each line matching re.
-func grepFile(path string, re *regexp.Regexp) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-
-	var out []string
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := scanner.Text()
-		if re.MatchString(line) {
-			out = append(out, fmt.Sprintf("%d:%s", lineNo, line))
-		}
-	}
-	return out, scanner.Err()
 }
 
 // globToRegexp compiles a glob (with "**", "*", "?", "[...]") into a regexp
