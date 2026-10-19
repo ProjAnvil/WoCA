@@ -180,11 +180,6 @@ func timeoutMillis(ctx context.Context) int64 {
 	return 0
 }
 
-// Start is not yet available on sandboxes.
-func (s *Sandbox) Start(context.Context, ExecRequest, StartOptions) (Process, error) {
-	return nil, ErrSandboxNotImplemented
-}
-
 // ReadFile reads a file from the sandbox (base64-wrapped content).
 func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	var out struct {

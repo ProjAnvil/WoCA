@@ -153,9 +153,15 @@ curl -X POST http://sandbox.local/sandbox/sbx_1/sessions/ses_1/input \
 ```
 
 `data` is base64 bytes appended to the process stdin. Writing after process
-exit is a no-op (200), not an error. EOF is signaled by the client killing
-the session or the backend closing stdin on process-exit cleanup; the
-contract has no explicit EOF frame.
+exit is a no-op (200), not an error. EOF is signaled with an explicit frame:
+
+```json
+{"eof": true}
+```
+
+On receiving `{"eof":true}` the backend closes the process stdin; data
+frames and the EOF frame are mutually exclusive (a data frame carries
+`{"data":"<base64>","eof":false}`).
 
 ### 3.6 Kill — `POST /sandbox/{id}/sessions/{sid}/kill`
 

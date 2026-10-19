@@ -89,11 +89,9 @@ func TestSandboxUnimplementedSurfacesError(t *testing.T) {
 	sb, _ := NewSandbox(SandboxConfig{Endpoint: srv.URL})
 	defer sb.Close()
 
-	// Start/MkdirAll/Stat/Grep are v2 — calling them surfaces explicit
-	// errors, not panics or silent successes.
-	if _, err := sb.Start(t.Context(), ExecRequest{}, StartOptions{}); err == nil {
-		t.Fatal("Start on sandbox succeeded")
-	}
+	// MkdirAll/Stat/Grep are v2 — calling them surfaces explicit errors,
+	// not panics or silent successes. (Start landed with the session
+	// surface; see sandbox_process_test.go.)
 	if err := sb.MkdirAll(t.Context(), "/x", 0o755); err == nil {
 		t.Fatal("MkdirAll on sandbox succeeded")
 	}
