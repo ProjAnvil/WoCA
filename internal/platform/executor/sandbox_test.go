@@ -20,7 +20,8 @@ func newFakeSandboxServer(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("POST /sandbox/sbx_test/exec", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.Body.Close()
-		write(w, `{"exit_code":0,"stdout":"sandbox output\n","stderr":""}`)
+		// contract v2: base64 payloads ("sandbox output\n")
+		write(w, `{"exit_code":0,"stdout":"c2FuZGJveCBvdXRwdXQK","stderr":""}`)
 	})
 	mux.HandleFunc("GET /sandbox/sbx_test/read", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"content":"aGVsbG8="}`) // base64 "hello"

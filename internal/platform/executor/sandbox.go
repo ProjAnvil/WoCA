@@ -1,11 +1,8 @@
-// sandbox.go is the Phase 3 sandbox Executor (design §8): commands run in
-// a remote sandbox (E2B or Daytona-style HTTP API) instead of the host.
-// v1 covers the hot path (Exec, ReadFile, WriteFile, Glob); Start, Stat,
-// MkdirAll, and Grep surface explicit "not yet available" errors — the
-// full file-system surface arrives with the workspace snapshot lifecycle
-// (§8.3). The concrete provider is an HTTP client behind the same API
-// shape (POST /sandbox/{id}/exec, GET .../read, ...); E2B and Daytona
-// both fit with thin adapters.
+// sandbox.go is the contract-v2 sandbox Executor (CONTRACT.md, design §4.1):
+// commands run in a remote sandbox behind a generic HTTP API instead of the
+// host. The concrete provider is any HTTP service implementing the 15
+// endpoints of the contract; E2B, Daytona, and friends fit with thin
+// adapters layered on the provider registry.
 package executor
 
 import (
@@ -75,7 +72,9 @@ func (s *Sandbox) create(ctx context.Context) error {
 	var out struct {
 		SandboxID string `json:"sandbox_id"`
 	}
-	if err := s.do(ctx, http.MethodPost, "/sandbox/create", nil, &out); err != nil {
+	if err := s.do(ctx, http.MethodPost, "/sandbox/create", map[string]any{
+		"cwd": "/workspace",
+	}, &out); err != nil {
 		return err
 	}
 	if out.SandboxID == "" {
@@ -109,6 +108,7 @@ func (s *Sandbox) do(ctx context.Context, method, path string, body, out any) er
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Woca-Sandbox-Contract", "2")
 	if s.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+s.apiKey)
 	}
@@ -129,7 +129,8 @@ func (s *Sandbox) do(ctx context.Context, method, path string, body, out any) er
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// Exec runs a command in the sandbox.
+// Exec runs a command in the sandbox per contract v2: argv array, cwd,
+// env object, base64 stdin; stdout/stderr come back base64-encoded.
 func (s *Sandbox) Exec(ctx context.Context, req ExecRequest) (ExecResult, error) {
 	var out struct {
 		ExitCode int    `json:"exit_code"`
@@ -137,11 +138,46 @@ func (s *Sandbox) Exec(ctx context.Context, req ExecRequest) (ExecResult, error)
 		Stderr   string `json:"stderr"`
 	}
 	if err := s.do(ctx, http.MethodPost, "/sandbox/"+s.sbxID+"/exec", map[string]any{
-		"command": strings.Join(append([]string{req.Name}, req.Args...), " "),
+		"argv":       append([]string{req.Name}, req.Args...),
+		"cwd":        req.Dir,
+		"env":        envSliceToMap(req.Env),
+		"stdin":      base64.StdEncoding.EncodeToString(req.Stdin),
+		"timeout_ms": timeoutMillis(ctx),
 	}, &out); err != nil {
 		return ExecResult{}, err
 	}
-	return ExecResult{ExitCode: out.ExitCode, Stdout: []byte(out.Stdout), Stderr: []byte(out.Stderr)}, nil
+	stdout, err := base64.StdEncoding.DecodeString(out.Stdout)
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("sandbox: exec stdout not base64: %w", err)
+	}
+	stderr, err := base64.StdEncoding.DecodeString(out.Stderr)
+	if err != nil {
+		return ExecResult{}, fmt.Errorf("sandbox: exec stderr not base64: %w", err)
+	}
+	return ExecResult{ExitCode: out.ExitCode, Stdout: stdout, Stderr: stderr}, nil
+}
+
+// envSliceToMap converts the Env slice form ("K=V", "K=") into the contract
+// v2 env object. It always returns a non-nil map so the wire body carries
+// an env object ({} when nil/empty = inherit the sandbox defaults).
+func envSliceToMap(env []string) map[string]string {
+	m := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		m[k] = v
+	}
+	return m
+}
+
+// timeoutMillis derives the exec timeout_ms field from the context
+// deadline; 0 means the backend default.
+func timeoutMillis(ctx context.Context) int64 {
+	if dl, ok := ctx.Deadline(); ok {
+		if ms := time.Until(dl).Milliseconds(); ms > 0 {
+			return ms
+		}
+	}
+	return 0
 }
 
 // Start is not yet available on sandboxes.
@@ -160,11 +196,12 @@ func (s *Sandbox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(out.Content)
 }
 
-// WriteFile writes data to the sandbox.
-func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, _ fs.FileMode) error {
+// WriteFile writes data to the sandbox (base64 content + Unix mode bits).
+func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error {
 	return s.do(ctx, http.MethodPost, "/sandbox/"+s.sbxID+"/write", map[string]any{
 		"path":    path,
 		"content": base64.StdEncoding.EncodeToString(data),
+		"mode":    int(perm),
 	}, nil)
 }
 
