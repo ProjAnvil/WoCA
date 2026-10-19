@@ -219,11 +219,34 @@ func joinEventText(t *testing.T, events []string) string {
 // <goal-report> markers so a transcript reload can tell it apart from
 // intermediate cycle chatter.
 func TestGoalRunUnifiedReply(t *testing.T) {
-	_, ts, _ := newGoalTestServer(t)
+	s, ts, _ := newGoalTestServer(t)
 	sid := "sess-goal-unified"
+	// The transcript save fires after the final done event (its ctx is
+	// deliberately WithoutCancel): wait for the saves to quiesce before
+	// t.TempDir cleanup, same race as the SSE replay tests.
+	saved := make(chan string, 8)
+	s.sessions.testAfterSave = func(id string) { saved <- id }
+	waitSaves := func() {
+		t.Helper()
+		select {
+		case <-saved:
+		case <-time.After(10 * time.Second):
+			t.Fatal("transcript save not completed")
+		}
+		// A goal run may persist more than once: drain until a short
+		// quiet window passes.
+		for {
+			select {
+			case <-saved:
+			case <-time.After(250 * time.Millisecond):
+				return
+			}
+		}
+	}
 
 	_, runID, _ := postGoal(t, ts.URL, sid, "set make the feature work")
 	events := streamGoalEventsUntilDone(t, ts.URL, runID)
+	waitSaves()
 
 	deltaText := joinEventText(t, events["delta"])
 	noteText := joinEventText(t, events["goal_note"])

@@ -329,11 +329,21 @@ func TestSessionPersistenceAndList(t *testing.T) {
 	// WorkDir mirrors the real binary (always resolved non-empty): saves are
 	// tagged with the workspace, which puts them in the listing index.
 	s := New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop(), SessionDir: dir, WorkDir: dir})
+	// The transcript save fires after the done event (its ctx is
+	// deliberately WithoutCancel): wait for it before t.TempDir cleanup,
+	// same race as the SSE replay tests.
+	saved := make(chan string, 4)
+	s.sessions.testAfterSave = func(id string) { saved <- id }
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
 	runID, sessionID := createRun(t, ts.URL, "")
 	driveToDone(t, ts.URL, runID)
+	select {
+	case <-saved:
+	case <-time.After(10 * time.Second):
+		t.Fatal("transcript save not completed")
+	}
 
 	// The transcript (including the tool result) is persisted under the session.
 	resp, err := http.Get(ts.URL + "/api/sessions/" + sessionID)
