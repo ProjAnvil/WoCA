@@ -14,6 +14,7 @@ import (
 	"github.com/projanvil/woca/internal/tracing"
 
 	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/runexec"
 )
 
 // Category classifies a tool for the permission system.
@@ -150,10 +151,28 @@ func NewRegistryWithExecutor(workdir string, x executor.Executor) *Registry {
 		),
 		exec: x,
 	}
-	for _, t := range defaultTools(r.dir, r.todos, r.bg, r.history, r.lspPool, r.exec) {
+	for _, t := range defaultTools(r.dir, r.todos, r.bg, r.history, r.lspPool, r.ExecForFn()) {
 		r.Register(t)
 	}
 	return r
+}
+
+// ExecFor resolves the executor for one invocation: the run executor
+// injected into ctx (runexec.WithRunExecutor — a per-run sandbox) wins;
+// otherwise the build-time executor applies (the local machine by
+// default), keeping every non-sandboxed run byte-identical.
+func (r *Registry) ExecFor(ctx context.Context) executor.Executor {
+	if x, ok := runexec.RunExecutorFrom(ctx); ok && x != nil {
+		return x
+	}
+	return r.exec
+}
+
+// ExecForFn returns ExecFor as a closure, so tool constructors capture
+// the resolver instead of a fixed executor and pick up run overrides at
+// invoke time.
+func (r *Registry) ExecForFn() func(context.Context) executor.Executor {
+	return r.ExecFor
 }
 
 // Close shuts down pooled LSP servers. Safe to call multiple times.

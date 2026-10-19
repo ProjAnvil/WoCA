@@ -22,7 +22,7 @@ type bashArgs struct {
 	RunInBackground bool   `json:"run_in_background,omitempty"`
 }
 
-func bashTool(d *Dir, bg *BackgroundShells, x executor.Executor) coretools.Tool {
+func bashTool(d *Dir, bg *BackgroundShells, execFor func(context.Context) executor.Executor) coretools.Tool {
 	t := MustTool(coretools.FromFunc("Bash", bashDescription,
 		func(ctx context.Context, a bashArgs) (coretools.Result, error) {
 			baseWorkdir := d.For(ctx)
@@ -49,7 +49,7 @@ func bashTool(d *Dir, bg *BackgroundShells, x executor.Executor) coretools.Tool 
 			runCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
-			res, runErr := x.Exec(runCtx, executor.ExecRequest{
+			res, runErr := execFor(ctx).Exec(runCtx, executor.ExecRequest{
 				Name: "bash",
 				Args: []string{"-c", a.Command},
 				Dir:  wd,

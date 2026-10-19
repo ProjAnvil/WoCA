@@ -21,7 +21,7 @@ type readArgs struct {
 	Limit    int    `json:"limit,omitempty"`
 }
 
-func readTool(d *Dir, x executor.Executor) coretools.Tool {
+func readTool(d *Dir, execFor func(context.Context) executor.Executor) coretools.Tool {
 	t := MustTool(coretools.FromFunc("Read", readDescription,
 		func(ctx context.Context, a readArgs) (coretools.Result, error) {
 			path := resolvePath(d.For(ctx), a.FilePath)
@@ -33,7 +33,7 @@ func readTool(d *Dir, x executor.Executor) coretools.Tool {
 				content, meta := FormatImageResult(a.FilePath, p)
 				return coretools.Result{Content: content, Metadata: meta}, nil
 			}
-			data, err := x.ReadFile(ctx, path)
+			data, err := execFor(ctx).ReadFile(ctx, path)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("read %s: %w", a.FilePath, err)
 			}
@@ -75,10 +75,11 @@ type writeArgs struct {
 	Content  string `json:"content"`
 }
 
-func writeTool(d *Dir, fh *FileHistory, x executor.Executor) coretools.Tool {
+func writeTool(d *Dir, fh *FileHistory, execFor func(context.Context) executor.Executor) coretools.Tool {
 	t := MustTool(coretools.FromFunc("Write", writeDescription,
 		func(ctx context.Context, a writeArgs) (coretools.Result, error) {
 			path := resolvePath(d.For(ctx), a.FilePath)
+			x := execFor(ctx)
 			before, _ := x.ReadFile(ctx, path) // nil when absent: creation
 			if err := x.MkdirAll(ctx, filepath.Dir(path), 0o755); err != nil {
 				return coretools.Result{}, fmt.Errorf("write %s: %w", a.FilePath, err)
@@ -101,10 +102,11 @@ type editArgs struct {
 	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
-func editTool(d *Dir, fh *FileHistory, x executor.Executor) coretools.Tool {
+func editTool(d *Dir, fh *FileHistory, execFor func(context.Context) executor.Executor) coretools.Tool {
 	t := MustTool(coretools.FromFunc("Edit", editDescription,
 		func(ctx context.Context, a editArgs) (coretools.Result, error) {
 			path := resolvePath(d.For(ctx), a.FilePath)
+			x := execFor(ctx)
 			data, err := x.ReadFile(ctx, path)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("edit %s: %w", a.FilePath, err)

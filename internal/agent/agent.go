@@ -1814,6 +1814,10 @@ func (a *Agent) askPermission(ctx context.Context, call messages.ToolCall) (bool
 // prompt, tools and memory calls stay scoped to the same session).
 func (a *Agent) newSubagent(ctx context.Context, def *agents.Definition) (*Agent, error) {
 	ws := a.memoryWorkspaceCtx(ctx)
+	// The sub-registry resolves executors per invocation (Registry.ExecFor:
+	// run executor from the ctx first, a.exec as fallback), so the parent
+	// run's executor override — a per-run sandbox — flows into subagent
+	// tool calls with the ctx unchanged (see TestSubregistryResolvesRunExecutor).
 	reg := tools.NewRegistryWithExecutor(ws, a.exec)
 	sysPrompt := prompt.SubagentPrompt(ws)
 	if def != nil && def.Prompt != "" {
