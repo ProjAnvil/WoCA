@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/runexec"
 )
 
 // recordingExecutor captures Exec requests and replays a canned result.
@@ -102,5 +103,46 @@ func TestExecutorCommandRunnerErrorPassthrough(t *testing.T) {
 	run := ExecutorCommandRunner(fake)
 	if _, err := run(t.Context(), "cmd", "stdin", "/tmp"); err == nil || !strings.Contains(err.Error(), "spawn failed") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// The ctx-resolved runner (design §10.2 M-7): a run executor injected
+// into the context (a per-run sandbox) wins; without one the
+// construction-time executor applies; a nil construction executor falls
+// back to the local machine.
+func TestExecutorCommandRunnerPrefersRunExecutorFromContext(t *testing.T) {
+	build := &recordingExecutor{}
+	run := &recordingExecutor{result: executor.ExecResult{Stdout: []byte("from-run\n")}}
+	runFn := ExecutorCommandRunner(build)
+
+	ctx := runexec.WithRunExecutor(t.Context(), run)
+	res, err := runFn(ctx, "hook-cmd", "stdin", "/wd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run.reqs) != 1 || len(build.reqs) != 0 {
+		t.Fatalf("run/build execs = %d/%d, want 1/0", len(run.reqs), len(build.reqs))
+	}
+	if res.Stdout != "from-run\n" {
+		t.Fatalf("stdout = %q", res.Stdout)
+	}
+
+	// Without an injected run executor the build-time executor runs.
+	if _, err := runFn(t.Context(), "hook-cmd", "stdin", "/wd"); err != nil {
+		t.Fatal(err)
+	}
+	if len(build.reqs) != 1 {
+		t.Fatalf("build execs = %d, want 1", len(build.reqs))
+	}
+}
+
+func TestExecutorCommandRunnerNilExecutorFallsBackLocal(t *testing.T) {
+	runFn := ExecutorCommandRunner(nil)
+	res, err := runFn(t.Context(), "printf hi", "", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Stdout != "hi" {
+		t.Fatalf("stdout = %q, want hi (local fallback)", res.Stdout)
 	}
 }

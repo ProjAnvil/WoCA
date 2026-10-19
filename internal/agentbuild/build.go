@@ -121,7 +121,8 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	}
 	sysPrompt := sysFor(cfg.WorkDir, cfg.Model)
 
-	hookRunner := hooks.NewRunner(loadHooksConfig(workdir), workdir, "woca", hooks.WithLogger(log))
+	hookRunner := hooks.NewRunner(loadHooksConfig(workdir), workdir, "woca",
+		hooks.WithLogger(log), hooks.WithCommandRunner(hooks.ExecutorCommandRunner(x)))
 	// Claude environment import (settings claude-skills / claude-mcp):
 	// selected ~/.claude skills are symlinked into ~/.woca/skills (loadSkills
 	// picks them up from there) and the selected global MCP servers are
@@ -239,7 +240,8 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		ModelHooks:      opts.ModelHooks,
 		ModelWrappers:   opts.ModelWrappers,
 		HooksFor: func(ws string) *hooks.Runner {
-			return hooks.NewRunner(loadHooksConfig(ws), ws, "woca", hooks.WithLogger(log))
+			return hooks.NewRunner(loadHooksConfig(ws), ws, "woca",
+				hooks.WithLogger(log), hooks.WithCommandRunner(hooks.ExecutorCommandRunner(x)))
 		},
 		Skills:             skillList,
 		SkillsFor:          func(ws string) []skills.Skill { return loadSkills(ws, st.Load().BuiltinSkills, log) },
