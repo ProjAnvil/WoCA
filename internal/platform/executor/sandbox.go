@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -130,6 +131,71 @@ func (s *Sandbox) do(ctx context.Context, method, path string, body, out any) er
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+// doRaw performs a non-JSON sandbox request (raw body in or out) with the
+// same contract headers as do. On success the response body is left open
+// for the caller; status >= 300 reads at most 4 KiB of the error body and
+// returns it as an error.
+func (s *Sandbox) doRaw(ctx context.Context, method, path, contentType string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, s.endpoint+path, body)
+	if err != nil {
+		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	req.Header.Set("X-Woca-Sandbox-Contract", "2")
+	if s.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+s.apiKey)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		defer func() { _ = resp.Body.Close() }()
+		snippet := make([]byte, 4096)
+		n, _ := io.ReadFull(resp.Body, snippet)
+		if n == 0 {
+			return nil, fmt.Errorf("sandbox: %s %s: http %d", method, path, resp.StatusCode)
+		}
+		var errOut struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(snippet[:n], &errOut) == nil && errOut.Error != "" {
+			return nil, fmt.Errorf("sandbox: %s %s: http %d: %s", method, path, resp.StatusCode, errOut.Error)
+		}
+		return nil, fmt.Errorf("sandbox: %s %s: http %d: %s", method, path, resp.StatusCode, snippet[:n])
+	}
+	return resp, nil
+}
+
+// PutArchive uploads a gzipped tar of the host workspace into the sandbox
+// (PUT /sandbox/{id}/archive, CONTRACT.md §3.13). The tar conventions are
+// the caller's responsibility (§4): entries relative to the workspace
+// root, permission bits and symlinks preserved, .git excluded.
+func (s *Sandbox) PutArchive(ctx context.Context, r io.Reader) error {
+	resp, err := s.doRaw(ctx, http.MethodPut, "/sandbox/"+s.sbxID+"/archive", "application/gzip", r)
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
+// GetArchive downloads the sandbox workspace as a gzipped tar stream
+// (GET /sandbox/{id}/archive, CONTRACT.md §3.14). The caller must Close
+// the returned reader.
+func (s *Sandbox) GetArchive(ctx context.Context) (io.ReadCloser, error) {
+	resp, err := s.doRaw(ctx, http.MethodGet, "/sandbox/"+s.sbxID+"/archive", "", nil)
+	if err != nil {
+		return nil, err
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "" && ct != "application/gzip" && ct != "application/octet-stream" {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("sandbox: archive content-type %q, want application/gzip", ct)
+	}
+	return resp.Body, nil
+}
+
 // Exec runs a command in the sandbox per contract v2: argv array, cwd,
 // env object, base64 stdin; stdout/stderr come back base64-encoded.
 func (s *Sandbox) Exec(ctx context.Context, req ExecRequest) (ExecResult, error) {
@@ -212,10 +278,10 @@ func (s *Sandbox) MkdirAll(ctx context.Context, path string, _ fs.FileMode) erro
 // Stat returns file information for path in the sandbox (GET .../stat).
 func (s *Sandbox) Stat(ctx context.Context, path string) (fs.FileInfo, error) {
 	var out struct {
-		Mode     int64 `json:"mode"`
-		Size     int64 `json:"size"`
-		MtimeMs  int64 `json:"mtime_ms"`
-		IsDir    bool  `json:"is_dir"`
+		Mode    int64 `json:"mode"`
+		Size    int64 `json:"size"`
+		MtimeMs int64 `json:"mtime_ms"`
+		IsDir   bool  `json:"is_dir"`
 	}
 	if err := s.do(ctx, http.MethodGet, "/sandbox/"+s.sbxID+"/stat?path="+url.QueryEscape(path), nil, &out); err != nil {
 		return nil, err
@@ -247,10 +313,10 @@ func (fi *sandboxFileInfo) Name() string {
 	return fi.name
 }
 
-func (fi *sandboxFileInfo) Size() int64          { return fi.size }
-func (fi *sandboxFileInfo) ModTime() time.Time   { return time.UnixMilli(fi.mtimeMs) }
-func (fi *sandboxFileInfo) IsDir() bool          { return fi.isDir }
-func (fi *sandboxFileInfo) Sys() any             { return nil }
+func (fi *sandboxFileInfo) Size() int64        { return fi.size }
+func (fi *sandboxFileInfo) ModTime() time.Time { return time.UnixMilli(fi.mtimeMs) }
+func (fi *sandboxFileInfo) IsDir() bool        { return fi.isDir }
+func (fi *sandboxFileInfo) Sys() any           { return nil }
 
 func (fi *sandboxFileInfo) Mode() fs.FileMode {
 	m := fs.FileMode(fi.mode).Perm()
