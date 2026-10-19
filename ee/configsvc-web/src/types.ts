@@ -42,3 +42,25 @@ export interface Settings {
   langfuse_public_key: string
   langfuse_secret_key_set: boolean
 }
+
+// One managed sandbox backend (configsvc /api/sandboxes). The API key
+// never rides this shape — key_set reports whether one is stored.
+export interface SandboxBackend {
+  id: string
+  name: string
+  type: string
+  endpoint: string
+  timeout_ms: number
+  enabled: boolean
+  key_set?: boolean
+  last_probe_at?: number
+  last_probe_ok?: boolean
+  last_probe_error?: string
+}
+
+// The verify probe's answer: per-step outcomes without credentials.
+export interface VerifyResult {
+  ok: boolean
+  total_latency_ms: number
+  steps: Array<{ name: string; ok: boolean; latency_ms: number; error?: string }>
+}
