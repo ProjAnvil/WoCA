@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -239,12 +240,14 @@ func TestSessionLifecycle(t *testing.T) {
 		t.Fatalf("eof = %d", code)
 	}
 
-	// poll until done
+	// poll until done, following the offset cursor so chunks counted on an
+	// earlier (not-yet-done) poll are never double-counted.
 	var got string
 	var done bool
 	var exitCode float64
+	offset := 0
 	for i := 0; i < 100 && !done; i++ {
-		code, out = c.json("GET", base+"/sessions/"+sid+"/output?offset=0", nil)
+		code, out = c.json("GET", base+"/sessions/"+sid+"/output?offset="+strconv.Itoa(offset), nil)
 		if code != 200 {
 			t.Fatalf("output = %d", code)
 		}
@@ -255,6 +258,9 @@ func TestSessionLifecycle(t *testing.T) {
 			if e["stream"] == "stdout" {
 				got += unb64(t, e["data"].(string))
 			}
+		}
+		if next, ok := out["next_offset"].(float64); ok {
+			offset = int(next)
 		}
 		if !done {
 			timeSleep()
