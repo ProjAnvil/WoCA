@@ -242,10 +242,15 @@ func (r *Runtime) apply(ctx context.Context, pack *Pack) error {
 }
 
 // materializeTables upserts the pack's shared-table domains: managed
-// skills/MCP (the operator-delivered set — full inventory, so removals
-// propagate on the next apply) and the gateway policy entries.
+// skills/MCP (the operator-delivered set) and the gateway policy entries.
+// The sandbox backends follow full-manifest semantics (design §10.2 M-2):
+// rows absent from the pack are deleted, including a previously enabled
+// one — the pack is the complete inventory, never a patch.
 func (r *Runtime) materializeTables(pack *Pack) error {
 	db := r.cfg.DB
+	if err := ensureSandboxBackends(db); err != nil {
+		return err
+	}
 	for _, s := range pack.Skills {
 		if _, err := db.Exec(`INSERT INTO managed_skills (name, description, body, updated_at) VALUES (`+
 			db.Dialect.Placeholder(0)+`, `+db.Dialect.Placeholder(1)+`, `+db.Dialect.Placeholder(2)+`, `+db.Dialect.Placeholder(3)+`)
@@ -267,6 +272,53 @@ func (r *Runtime) materializeTables(pack *Pack) error {
 			db.Dialect.Placeholder(0)+`, `+db.Dialect.Placeholder(1)+`)
 			ON CONFLICT(key) DO UPDATE SET value = excluded.value`, k, v); err != nil {
 			return fmt.Errorf("gateway setting %s: %w", k, err)
+		}
+	}
+	for _, sb := range pack.Sandboxes {
+		var enabled int64
+		if sb.Enabled {
+			enabled = 1
+		}
+		var probeOK any
+		if sb.LastProbeOK {
+			probeOK = 1
+		} else if sb.LastProbeAt > 0 {
+			probeOK = 0
+		}
+		var probeAt any
+		if sb.LastProbeAt > 0 {
+			probeAt = sb.LastProbeAt
+		}
+		if _, err := db.Exec(`INSERT INTO sandbox_backends
+			(id, name, type, endpoint, timeout_ms, enabled, last_probe_at, last_probe_ok, last_probe_error, created_at, updated_at)
+			VALUES (`+db.Dialect.Placeholder(0)+`, `+db.Dialect.Placeholder(1)+`, `+db.Dialect.Placeholder(2)+`, `+
+			db.Dialect.Placeholder(3)+`, `+db.Dialect.Placeholder(4)+`, `+db.Dialect.Placeholder(5)+`, `+
+			db.Dialect.Placeholder(6)+`, `+db.Dialect.Placeholder(7)+`, `+db.Dialect.Placeholder(8)+`, `+
+			db.Dialect.Placeholder(9)+`, `+db.Dialect.Placeholder(10)+`)
+			ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, endpoint = excluded.endpoint,
+				timeout_ms = excluded.timeout_ms, enabled = excluded.enabled, last_probe_at = excluded.last_probe_at,
+				last_probe_ok = excluded.last_probe_ok, last_probe_error = excluded.last_probe_error,
+				updated_at = excluded.updated_at`,
+			sb.ID, sb.Name, sb.Type, sb.Endpoint, sb.TimeoutMs, enabled, probeAt, probeOK, sb.LastProbeError,
+			wocadb.Now(), wocadb.Now()); err != nil {
+			return fmt.Errorf("sandbox backend %s: %w", sb.ID, err)
+		}
+	}
+	// Full-manifest cleanup: delete rows the pack no longer carries. An
+	// empty manifest clears the table.
+	if len(pack.Sandboxes) == 0 {
+		if _, err := db.Exec(`DELETE FROM sandbox_backends`); err != nil {
+			return fmt.Errorf("sandbox backend cleanup: %w", err)
+		}
+	} else {
+		ph := make([]string, len(pack.Sandboxes))
+		args := make([]any, len(pack.Sandboxes))
+		for i, sb := range pack.Sandboxes {
+			ph[i] = db.Dialect.Placeholder(i)
+			args[i] = sb.ID
+		}
+		if _, err := db.Exec(`DELETE FROM sandbox_backends WHERE id NOT IN (`+strings.Join(ph, ", ")+`)`, args...); err != nil {
+			return fmt.Errorf("sandbox backend cleanup: %w", err)
 		}
 	}
 	return nil
