@@ -20,8 +20,9 @@ import (
 	"time"
 )
 
-// ErrSandboxNotImplemented reports a surface the sandbox executor does not
-// yet provide (the callers fall back or surface the error to the agent).
+// ErrSandboxNotImplemented reports a surface a sandbox provider does not
+// provide (kept for provider adapters that surface explicit "not yet
+// available" errors; the contract-v2 client implements the full Executor).
 var ErrSandboxNotImplemented = errors.New("sandbox: operation not available in this sandbox executor revision")
 
 // SandboxConfig configures the sandbox executor.
@@ -200,14 +201,63 @@ func (s *Sandbox) WriteFile(ctx context.Context, path string, data []byte, perm 
 	}, nil)
 }
 
-// MkdirAll is not yet available on sandboxes.
-func (s *Sandbox) MkdirAll(context.Context, string, fs.FileMode) error {
-	return ErrSandboxNotImplemented
+// MkdirAll creates path and all missing parents in the sandbox
+// (POST .../mkdir); permission bits are backend-defined per the contract.
+func (s *Sandbox) MkdirAll(ctx context.Context, path string, _ fs.FileMode) error {
+	return s.do(ctx, http.MethodPost, "/sandbox/"+s.sbxID+"/mkdir", map[string]any{
+		"path": path,
+	}, nil)
 }
 
-// Stat is not yet available on sandboxes.
-func (s *Sandbox) Stat(context.Context, string) (fs.FileInfo, error) {
-	return nil, ErrSandboxNotImplemented
+// Stat returns file information for path in the sandbox (GET .../stat).
+func (s *Sandbox) Stat(ctx context.Context, path string) (fs.FileInfo, error) {
+	var out struct {
+		Mode     int64 `json:"mode"`
+		Size     int64 `json:"size"`
+		MtimeMs  int64 `json:"mtime_ms"`
+		IsDir    bool  `json:"is_dir"`
+	}
+	if err := s.do(ctx, http.MethodGet, "/sandbox/"+s.sbxID+"/stat?path="+url.QueryEscape(path), nil, &out); err != nil {
+		return nil, err
+	}
+	return &sandboxFileInfo{
+		name:    path,
+		mode:    out.Mode,
+		size:    out.Size,
+		mtimeMs: out.MtimeMs,
+		isDir:   out.IsDir,
+	}, nil
+}
+
+// sandboxFileInfo adapts a contract v2 stat response to fs.FileInfo.
+type sandboxFileInfo struct {
+	name    string // full path; Name() derives the base element
+	mode    int64  // Unix permission bits (decimal on the wire)
+	size    int64
+	mtimeMs int64
+	isDir   bool
+}
+
+var _ fs.FileInfo = (*sandboxFileInfo)(nil)
+
+func (fi *sandboxFileInfo) Name() string {
+	if i := strings.LastIndexByte(fi.name, '/'); i >= 0 {
+		return fi.name[i+1:]
+	}
+	return fi.name
+}
+
+func (fi *sandboxFileInfo) Size() int64          { return fi.size }
+func (fi *sandboxFileInfo) ModTime() time.Time   { return time.UnixMilli(fi.mtimeMs) }
+func (fi *sandboxFileInfo) IsDir() bool          { return fi.isDir }
+func (fi *sandboxFileInfo) Sys() any             { return nil }
+
+func (fi *sandboxFileInfo) Mode() fs.FileMode {
+	m := fs.FileMode(fi.mode).Perm()
+	if fi.isDir {
+		m |= fs.ModeDir
+	}
+	return m
 }
 
 // Glob matches a pattern in the sandbox.
@@ -223,7 +273,30 @@ func (s *Sandbox) Glob(ctx context.Context, pattern string) ([]string, error) {
 	return out.Matches, nil
 }
 
-// Grep is not yet available on sandboxes.
-func (s *Sandbox) Grep(context.Context, string, *regexp.Regexp) ([]GrepMatch, error) {
-	return nil, ErrSandboxNotImplemented
+// Grep walks root in the sandbox (POST .../grep) and returns lines matching
+// pattern, mirroring the contract's hidden-directory skip semantics.
+func (s *Sandbox) Grep(ctx context.Context, root string, pattern *regexp.Regexp) ([]GrepMatch, error) {
+	var out struct {
+		Matches []struct {
+			Path string `json:"path"`
+			Line int    `json:"line"`
+			Text string `json:"text"`
+		} `json:"matches"`
+	}
+	if err := s.do(ctx, http.MethodPost, "/sandbox/"+s.sbxID+"/grep", map[string]any{
+		"root":        root,
+		"pattern":     pattern.String(),
+		"max_matches": 200,
+	}, &out); err != nil {
+		return nil, err
+	}
+	matches := make([]GrepMatch, 0, len(out.Matches))
+	for _, m := range out.Matches {
+		text, err := base64.StdEncoding.DecodeString(m.Text)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox: grep text not base64: %w", err)
+		}
+		matches = append(matches, GrepMatch{Path: m.Path, Line: m.Line, Text: string(text)})
+	}
+	return matches, nil
 }

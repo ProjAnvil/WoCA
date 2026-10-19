@@ -83,26 +83,6 @@ func TestSandboxGlob(t *testing.T) {
 	}
 }
 
-func TestSandboxUnimplementedSurfacesError(t *testing.T) {
-	srv := newFakeSandboxServer(t)
-	defer srv.Close()
-	sb, _ := NewSandbox(SandboxConfig{Endpoint: srv.URL})
-	defer sb.Close()
-
-	// MkdirAll/Stat/Grep are v2 — calling them surfaces explicit errors,
-	// not panics or silent successes. (Start landed with the session
-	// surface; see sandbox_process_test.go.)
-	if err := sb.MkdirAll(t.Context(), "/x", 0o755); err == nil {
-		t.Fatal("MkdirAll on sandbox succeeded")
-	}
-	if _, err := sb.Stat(t.Context(), "/x"); err == nil {
-		t.Fatal("Stat on sandbox succeeded")
-	}
-	if _, err := sb.Grep(t.Context(), "/", nil); err == nil {
-		t.Fatal("Grep on sandbox succeeded")
-	}
-}
-
 func TestSandboxConfigValidation(t *testing.T) {
 	if _, err := NewSandbox(SandboxConfig{}); err == nil {
 		t.Fatal("empty endpoint accepted")
