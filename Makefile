@@ -322,6 +322,28 @@ netlab-enterprise:
 	done
 	go test -tags netlab -count=1 -timeout 40m -run 'TestEnterpriseEdgeChain' -v ./e2e/netlab
 
+# ─────────── sandboxlab: 沙箱执行链 e2e（e2e/sandboxlab） ───────────
+# The off-host execution chain on real role containers (plan task 27,
+# design 2026-10-19-sandbox-console-design.md §6): configsvc registers +
+# verifies + enables a contract-http backend (the fakesandbox container),
+# a remote tenant creates a run, and the worker executes it inside the
+# sandbox and downloads the products back to the shared workspace.
+#
+#	make sandboxlab    full chain (403 gate → verify → enable → run → artifact)
+#
+# SANDBOXLAB_KEEP=1 keeps a failing stack up. Requires a linux-container
+# docker engine; the role packages cross-compile with GOOS=linux at the
+# host's GOARCH. The scripted anthropic-compatible model (fakemodel/)
+# needs no package — it builds in its own docker stage.
+SANDBOXLAB_ROLES := woca-server woca-config woca-worker woca-fakesandbox
+
+.PHONY: sandboxlab
+sandboxlab:
+	@for r in $(SANDBOXLAB_ROLES); do \
+		GOOS=linux $(MAKE) --no-print-directory dist-role ROLE=$$r || exit 1; \
+	done
+	go test -tags sandboxlab -count=1 -timeout 25m -run 'TestSandboxLab' -v ./e2e/sandboxlab
+
 # Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
 # woca-edge joins the set with the v1.5 topology split (stateless public
 # entry; still a role artifact — thin, no interactive surfaces).

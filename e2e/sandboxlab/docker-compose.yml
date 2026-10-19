@@ -1,0 +1,233 @@
+# sandboxlab — the sandbox execution-chain e2e topology (plan task 27,
+# design docs/superpowers/specs/2026-10-19-sandbox-console-design.md §6):
+# the full off-host chain across real role containers — configsvc
+# registers/verifies/enables a contract-http backend (the fakesandbox
+# container), a remote tenant creates a run on woca-server (queue
+# dispatch + RunsOffHost), woca-worker claims it, executes every tool
+# call inside the sandbox backend, and downloads the products back to
+# the shared workspace volume, where the Go driver asserts them.
+#
+#   core (single internal network — no zone isolation under test here)
+#  ┌──────────┐ ┌─────────┐ ┌────────┐ ┌──────────────┐ ┌────────────┐
+#  │ pg       │ │ nacos   │ │ config │ │ server       │ │ worker     │
+#  │          │ │ +init   │ │ :8080  │ │ :8080 GW:8090│ │ (phase 2)  │
+#  └──────────┘ └─────────┘ └────────┘ └──────────────┘ └────────────┘
+#  ┌──────────────┐ ┌──────────┐ ┌────────┐
+#  │ fakesandbox  │ │ fakemodel│ │ client │
+#  │ contract v2  │ │ scripted │ │ (curl) │
+#  └──────────────┘ └──────────┘ └────────┘
+#
+# Posture (mirrors netlab's dev posture): plain HTTP everywhere, the
+# config console left open (no WOCA_CONSOLE_USER — the operator declared
+# the network the boundary), insecure bridges flag inert (none enrolled).
+#
+# Two-phase bring-up (the worker must NOT boot before the config plane
+# has published provider settings — its BuildAgent resolves the model
+# from the shared settings tables at startup):
+#   docker compose up -d --build pg nacos nacos-init server config fakesandbox fakemodel client
+#   … register + verify + enable the backend over the config API …
+#   docker compose up -d --build worker
+#
+# The run workspace is a HOST bind mount (SANDBOXLAB_WORKSPACE, default
+# ./workspace-data) shared by server and worker at /data — the product
+# assertion reads it directly on the host. Everything else rides
+# throwaway named volumes (down -v).
+
+name: woca-sandboxlab
+
+services:
+  pg:
+    image: postgres:16-alpine
+    container_name: woca-sandboxlab-pg
+    environment:
+      POSTGRES_USER: woca
+      POSTGRES_PASSWORD: ${WOCA_PG_PASSWORD:-sandboxlab-pg}
+      POSTGRES_DB: woca
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U woca -d woca"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks: [core]
+
+  nacos:
+    image: nacos/nacos-server:v2.4.3
+    container_name: woca-sandboxlab-nacos
+    environment:
+      MODE: standalone
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8848/nacos/v1/console/health/readiness || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+    networks: [core]
+
+  nacos-init:
+    image: curlimages/curl:8.10.1
+    container_name: woca-sandboxlab-nacos-init
+    depends_on:
+      nacos: { condition: service_healthy }
+    environment:
+      WOCA_PG_PASSWORD: ${WOCA_PG_PASSWORD:-sandboxlab-pg}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        publish() {
+          curl -sf -X POST "http://nacos:8848/nacos/v1/cs/configs" \
+            --data-urlencode "dataId=$$1" \
+            --data-urlencode "group=DEFAULT_GROUP" \
+            --data-urlencode "content=$$2"
+          i=0
+          until [ "$$(curl -sf "http://nacos:8848/nacos/v1/cs/configs?dataId=$$1&group=DEFAULT_GROUP")" = "$$2" ]; do
+            i=$$((i+1)); [ $$i -gt 30 ] && { echo "nacos read-back of $$1 never settled"; exit 1; }
+            sleep 1
+          done
+          echo "published $$1"
+        }
+        publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@pg:5432/woca?sslmode=disable"
+        # The bootstrap pack must be BYTE-stable under the roles'
+        # DecodePack→Encode round trip: the watcher fingerprints the
+        # re-encoded pack, and a handwritten {"settings":{}} never
+        # matches (settings.Settings marshals its non-omitempty fields),
+        # so every role would re-apply on every long-poll return — and
+        # each apply of a sandbox-less pack wipes sandbox_backends (the
+        # full-manifest semantics), racing the config plane's
+        # register→enable window. This exact JSON is the canonical
+        # re-encoding (generated via nacosrt.DecodePack+Encode).
+        publish woca-config.pack '{"version":1,"generation":"","settings":{"provider":"","model":"","max_tokens":0,"temperature":0,"thinking_budget":0,"anthropic_base_url":"","openai_base_url":"","glm_base_url":"","deepseek_base_url":"","checkpoint_backend":"","memory_backend":"","checkpoint_dir":"","output_style":"","memory_engine":"","ladym_db_path":"","ladym_embedding":"","ladym_embedding_model":"","ladym_embedding_base_url":"","ladym_llm":"","ladym_autoretain":false,"ladym_topk":0,"ladym_system2":false,"ladym_system2_interval":0,"ladym_endpoint":"","ladym_api_username":"","debug_log":false,"model_whitelist":"","relay_url":"","msg_plane_mode":"","msg_plane_nats_url":"","msg_plane_subject":"","checkpoint_pg_host":"","checkpoint_pg_port":"","checkpoint_pg_db":"","checkpoint_pg_user":"","memory_pg_host":"","memory_pg_port":"","memory_pg_db":"","memory_pg_user":"","claude_skills":null,"claude_mcp":null,"builtin_plugins":null,"builtin_skills":null,"langfuse_enabled":false,"langfuse_base_url":"","langfuse_public_key":"","sandbox_archive_max_bytes":0}}'
+        echo "nacos entries ready"
+    restart: "no"
+    networks: [core]
+
+  server:
+    image: woca-server:sandboxlab
+    build:
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-server.tar.gz
+    container_name: woca-sandboxlab-server
+    command: ["serve", "--addr", ":8080", "--auth", "apikey"]
+    environment:
+      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD:-sandboxlab-pg}@pg:5432/woca?sslmode=disable"
+      WOCA_NACOS_URL: "http://nacos:8848"
+      WOCA_AUTH: apikey
+      WOCA_GW_ADDR: ":8090"
+      WOCA_SESSION_DIR: /var/lib/woca/sessions
+      WOCA_HOME: /var/lib/woca/home
+      WOCA_OBS_ADDR: "off"
+      WOCA_INSECURE_BRIDGES: "1"
+      # Off-host posture under test (design §10.2 M-3): queue dispatch +
+      # RunsOffHost; /api/runs stays open to remote tenants only while an
+      # enabled sandbox backend exists (server-side dynamic gate).
+      WOCA_RUN_DISPATCH: "queue"
+      WOCA_RUNS_OFF_HOST: "true"
+    volumes:
+      - sessions:/var/lib/woca/sessions
+      - crypto:/var/lib/woca/home
+      - ${SANDBOXLAB_WORKSPACE:-./workspace-data}:/data
+    restart: unless-stopped
+    depends_on:
+      pg: { condition: service_healthy }
+      nacos-init: { condition: service_completed_successfully }
+    networks: [core]
+
+  config:
+    image: woca-config:sandboxlab
+    build:
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-config.tar.gz
+    container_name: woca-sandboxlab-config
+    command: ["--addr", ":8080"]
+    environment:
+      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD:-sandboxlab-pg}@pg:5432/woca?sslmode=disable"
+      WOCA_NACOS_URL: "http://nacos:8848"
+      WOCA_OBS_ADDR: "off"
+      WOCA_HOME: /var/lib/woca/home
+    volumes:
+      - crypto:/var/lib/woca/home
+    restart: unless-stopped
+    depends_on:
+      pg: { condition: service_healthy }
+      nacos-init: { condition: service_completed_successfully }
+    networks: [core]
+
+  worker:
+    image: woca-worker:sandboxlab
+    build:
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-worker.tar.gz
+    container_name: woca-sandboxlab-worker
+    environment:
+      WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD:-sandboxlab-pg}@pg:5432/woca?sslmode=disable"
+      WOCA_NACOS_URL: "http://nacos:8848"
+      WOCA_OBS_ADDR: ":9092"
+      # Shared session transcripts + the same secrets master key the
+      # config plane encrypted the backend/API keys with (crypto volume).
+      WOCA_SESSION_DIR: /var/lib/woca/sessions
+      WOCA_HOME: /var/lib/woca/home
+    volumes:
+      - sessions:/var/lib/woca/sessions
+      - crypto:/var/lib/woca/home
+      - ${SANDBOXLAB_WORKSPACE:-./workspace-data}:/data
+      # Unattended runs still enforce the default permission mode; the
+      # scripted model only calls Write, which the allow rule admits
+      # without a human answer loop (queue-dispatched runs have none).
+      - ./worker-settings.json:/opt/woca/.woca/settings.json:ro
+    restart: unless-stopped
+    depends_on:
+      pg: { condition: service_healthy }
+      # Deliberately NOT nacos-init: a partial `up worker` (phase 2)
+      # re-runs completed one-shots it depends on, and nacos-init would
+      # republish the v1 bootstrap pack over the config plane's v2 —
+      # the same trap netlab's late-booting bridge sidesteps by depending
+      # only on its runtime peers.
+    networks: [core]
+
+  fakesandbox:
+    image: woca-fakesandbox:sandboxlab
+    build:
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-fakesandbox.tar.gz
+    container_name: woca-sandboxlab-fakesandbox
+    command: ["--addr", ":8080"]
+    restart: unless-stopped
+    networks: [core]
+
+  fakemodel:
+    image: woca-fakemodel:sandboxlab
+    build:
+      context: ./fakemodel
+      dockerfile: Dockerfile
+    container_name: woca-sandboxlab-fakemodel
+    restart: unless-stopped
+    networks: [core]
+
+  client:
+    image: curlimages/curl:8.10.1
+    container_name: woca-sandboxlab-client
+    entrypoint: ["sleep", "infinity"]
+    networks: [core]
+
+networks:
+  core:
+    name: woca-sandboxlab-core
+    internal: true
+
+volumes:
+  pg-data:
+    name: woca-sandboxlab-pg
+  sessions:
+    name: woca-sandboxlab-sessions
+  crypto:
+    name: woca-sandboxlab-crypto
