@@ -66,7 +66,12 @@ const (
 	KeyLangfuseBaseURL       = "langfuse-base-url"
 	KeyLangfusePublicKey     = "langfuse-public-key"
 	KeyLangfuseSecretKey     = "langfuse-secret-key"
+	KeySandboxArchiveMaxBytes = "sandbox-archive-max-bytes"
 )
+
+// DefaultSandboxArchiveMaxBytes is the default workspace-archive size cap
+// for the worker's sandbox round-trip (512 MiB, design §10.3 m-7).
+const DefaultSandboxArchiveMaxBytes int64 = 536870912
 
 // DefaultMsgPlaneSubject is the default run-dispatch notification subject.
 // It mirrors the message plane's own constant so the settings surface does
@@ -90,6 +95,7 @@ func KeyNames() []string {
 		KeyCheckpointPGHost, KeyCheckpointPGPort, KeyCheckpointPGDB, KeyCheckpointPGUser,
 		KeyMemoryPGHost, KeyMemoryPGPort, KeyMemoryPGDB, KeyMemoryPGUser,
 		KeyLangfuseEnabled, KeyLangfuseBaseURL, KeyLangfusePublicKey, KeyLangfuseSecretKey,
+		KeySandboxArchiveMaxBytes,
 	}
 }
 
@@ -243,6 +249,8 @@ func KeyHelp(key string) string {
 		return "langfuse public API key (pk-lf-…)"
 	case KeyLangfuseSecretKey:
 		return "langfuse secret API key (stored encrypted)"
+	case KeySandboxArchiveMaxBytes:
+		return "max bytes of the workspace tar.gz the worker uploads to / downloads from a sandbox (default 536870912 = 512 MiB)"
 	}
 	return "unknown key"
 }
@@ -457,6 +465,12 @@ func Apply(cfg *Settings, key, value string) error {
 			}
 		}
 		cfg.RelayURL = value
+	case KeySandboxArchiveMaxBytes:
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n <= 0 {
+			return fmt.Errorf("sandbox-archive-max-bytes must be a positive integer, got %q", value)
+		}
+		cfg.SandboxArchiveMaxBytes = n
 	default:
 		return fmt.Errorf("unknown settings key %q", key)
 	}
@@ -549,6 +563,7 @@ func Describe(cfg Settings, secretSet func(string) bool, dbPath string) string {
 	fmt.Fprintf(&b, "langfuse-base-url: %s\n", orDefault(cfg.LangfuseBaseURL, "(unset)"))
 	fmt.Fprintf(&b, "langfuse-public-key: %s\n", orDefault(cfg.LangfusePublicKey, "(unset)"))
 	fmt.Fprintf(&b, "langfuse-secret-key: %s\n", mask(SecretLangfuseSecretKey))
+	fmt.Fprintf(&b, "sandbox-archive-max-bytes: %s\n", orDefault(strconv.FormatInt(cfg.SandboxArchiveMaxBytes, 10), strconv.FormatInt(DefaultSandboxArchiveMaxBytes, 10)))
 	return b.String()
 }
 
@@ -644,6 +659,8 @@ func KeyValue(cfg Settings, key string) string {
 		return cfg.LangfuseBaseURL
 	case KeyLangfusePublicKey:
 		return cfg.LangfusePublicKey
+	case KeySandboxArchiveMaxBytes:
+		return strconv.FormatInt(cfg.SandboxArchiveMaxBytes, 10)
 	}
 	return ""
 }

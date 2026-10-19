@@ -194,3 +194,36 @@ func TestDescribeAndParseHelpers(t *testing.T) {
 		t.Error("parseNameList")
 	}
 }
+
+// sandbox-archive-max-bytes bounds the worker's workspace archive
+// round-trip in both directions (design §10.3 m-7): positive integers
+// only, default 512 MiB when unset.
+func TestSandboxArchiveMaxBytes(t *testing.T) {
+	var cfg Settings
+	if err := Apply(&cfg, KeySandboxArchiveMaxBytes, "536870912"); err != nil {
+		t.Fatalf("Apply = %v", err)
+	}
+	if cfg.SandboxArchiveMaxBytes != 536870912 {
+		t.Fatalf("value = %d", cfg.SandboxArchiveMaxBytes)
+	}
+	if err := Apply(&cfg, KeySandboxArchiveMaxBytes, "0"); err == nil {
+		t.Fatal("Apply(0) = nil error, want rejection")
+	}
+	if err := Apply(&cfg, KeySandboxArchiveMaxBytes, "-1"); err == nil {
+		t.Fatal("Apply(-1) = nil error, want rejection")
+	}
+	if err := Apply(&cfg, KeySandboxArchiveMaxBytes, "big"); err == nil {
+		t.Fatal("Apply(big) = nil error, want rejection")
+	}
+	if KeyValue(cfg, KeySandboxArchiveMaxBytes) != "536870912" {
+		t.Fatalf("KeyValue = %q", KeyValue(cfg, KeySandboxArchiveMaxBytes))
+	}
+	// Normalize fills the 512 MiB default when unset.
+	norm, err := (&Settings{}).Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if norm.SandboxArchiveMaxBytes != DefaultSandboxArchiveMaxBytes {
+		t.Fatalf("default = %d, want %d", norm.SandboxArchiveMaxBytes, DefaultSandboxArchiveMaxBytes)
+	}
+}

@@ -135,17 +135,28 @@ func newWorkerRoot() *cobra.Command {
 				states = &dbSessionStates{db: db}
 			}
 
-			w := worker.New(worker.Config{
-				Ledger:   ledger,
-				Agent:    ap.Agent,
-				Bus:      bus,
-				Logger:   log,
-				ID:       workerID(),
-				Metrics:  workerMetrics(obsInst),
-				Sessions: sessions,
-				States:   states,
-				Idle:     idle,
-			})
+		w := worker.New(worker.Config{
+			Ledger:  ledger,
+			Agent:   ap.Agent,
+			Bus:     bus,
+			Logger:  log,
+			ID:      workerID(),
+			Metrics: workerMetrics(obsInst),
+			Sessions: sessions,
+			States:   states,
+			Idle:     idle,
+			// Per-run sandbox wiring (design §4.5): the materialized
+			// sandbox_backends table (nacos pack apply) plus the backend
+			// secrets landed in the settings store by the same apply.
+			DB:      db,
+			SecretFor: func(backendID string) string {
+				if ap.Settings == nil {
+					return ""
+				}
+				return ap.Settings.GetSecret("sandbox-api-key:" + backendID)
+			},
+			MaxArchiveBytes: ap.Settings.Load().SandboxArchiveMaxBytes,
+		})
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()

@@ -158,6 +158,10 @@ type Settings struct {
 	LangfuseEnabled   bool   `json:"langfuse_enabled"`
 	LangfuseBaseURL   string `json:"langfuse_base_url"`
 	LangfusePublicKey string `json:"langfuse_public_key"`
+	// SandboxArchiveMaxBytes caps the workspace tar.gz the worker
+	// uploads to / downloads from a sandbox backend, in both directions
+	// (design §10.3 m-7). Zero means the DefaultSandboxArchiveMaxBytes.
+	SandboxArchiveMaxBytes int64 `json:"sandbox_archive_max_bytes"`
 }
 
 // Default returns the default settings: sqlite storage under ~/.woca.
@@ -220,6 +224,9 @@ func (s Settings) Normalize() (Settings, error) {
 	case LadyMLLMInherit, LadyMLLMNone:
 	default:
 		return out, fmt.Errorf("settings: unknown ladym llm %q", out.LadyMLLM)
+	}
+	if out.SandboxArchiveMaxBytes == 0 {
+		out.SandboxArchiveMaxBytes = DefaultSandboxArchiveMaxBytes
 	}
 	if out.LadyMTopK == 0 {
 		out.LadyMTopK = DefaultLadyMTopK

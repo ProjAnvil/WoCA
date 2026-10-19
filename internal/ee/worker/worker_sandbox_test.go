@@ -1,0 +1,272 @@
+package worker
+
+// Per-run sandbox execution (design §4.5): when the materialized config
+// carries an enabled backend, the worker provisions a sandbox, uploads the
+// run workspace, executes the run through the run-executor injection, and
+// downloads the products back. Every step fails the run explicitly — no
+// silent fallback to local execution.
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/projanvil/langchain-golang/core/language"
+	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/platform/executor/fakesandbox"
+	"github.com/projanvil/woca/internal/runstate"
+	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/wocadb"
+	"github.com/rs/zerolog"
+)
+
+// seedSandboxBackend creates the materialized sandbox_backends table and
+// one enabled row pointing at endpoint.
+func seedSandboxBackend(t *testing.T, db *wocadb.DB, endpoint string) {
+	t.Helper()
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS sandbox_backends (
+		id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
+		type TEXT NOT NULL DEFAULT 'contract-http',
+		endpoint TEXT NOT NULL, timeout_ms INTEGER NOT NULL DEFAULT 120000,
+		enabled INTEGER NOT NULL DEFAULT 0,
+		last_probe_at INTEGER, last_probe_ok INTEGER, last_probe_error TEXT,
+		created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO sandbox_backends
+		(id, name, type, endpoint, timeout_ms, enabled, created_at, updated_at)
+		VALUES ('sb1', 'fake', 'contract-http', ?, 120000, 1, ?, ?)`,
+		endpoint, time.Now().UnixMilli(), time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newSandboxWorker builds a worker whose DB carries an enabled backend at
+// endpoint and whose agent replays the scripted model responses.
+func newSandboxWorker(t *testing.T, endpoint string, maxBytes int64, replies ...messages.Message) (*Worker, *runstate.Ledger) {
+	t.Helper()
+	db, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "w.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	seedSandboxBackend(t, db, endpoint)
+	ledger, err := runstate.New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := agent.New(agent.Config{
+		Model: language.NewFakeChatModel(
+			language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+			language.WithResponses(replies...),
+		),
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := New(Config{
+		Ledger:  ledger,
+		Agent:   a,
+		Logger:  zerolog.Nop(),
+		ID:      "worker-sbx",
+		DB:      db,
+		MaxArchiveBytes: maxBytes,
+		SecretFor: func(id string) string { return "secret-for-" + id },
+	})
+	return w, ledger
+}
+
+func enqueueWorkspaceRun(t *testing.T, ledger *runstate.Ledger, runID, prompt, workspace string) {
+	t.Helper()
+	snap, err := runstate.EncodeSnapshot(runstate.RunSnapshot{
+		Prompt: prompt, SessionID: "s-" + runID, Workspace: workspace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Enqueue(t.Context(), runstate.Run{
+		RunID: runID, SessionID: "s-" + runID, ThreadID: "th-" + runID,
+		ConfigSnapshot: snap,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func runStatus(t *testing.T, ledger *runstate.Ledger, runID string) (string, []runstate.Event) {
+	t.Helper()
+	row, ok, err := ledger.Row(t.Context(), runID)
+	if err != nil || !ok {
+		t.Fatalf("row = ok=%v err=%v", ok, err)
+	}
+	events, err := ledger.Replay(t.Context(), runID, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row.Status, events
+}
+
+// A run over an enabled backend writes its products in the sandbox and
+// the download returns them to the host workspace.
+func TestWorkerSandboxRoundTrip(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "in.txt"), []byte("host-side"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, ledger := newSandboxWorker(t, fakesandbox.Addr(t), 8<<20,
+		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+			{ID: "1", Name: "Write", Args: map[string]any{"file_path": "out.txt", "content": "sandbox-side"}},
+		}},
+		messages.AI("done"),
+	)
+	enqueueWorkspaceRun(t, ledger, "r1", "write the file", ws)
+
+	if err := w.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	status, events := runStatus(t, ledger, "r1")
+	if status != "done" {
+		for _, ev := range events {
+			t.Logf("event %s: %s", ev.Kind, ev.Payload)
+		}
+		t.Fatalf("status = %q, want done", status)
+	}
+	data, err := os.ReadFile(filepath.Join(ws, "out.txt"))
+	if err != nil {
+		t.Fatalf("product not downloaded back to the host workspace: %v", err)
+	}
+	if string(data) != "sandbox-side" {
+		t.Fatalf("out.txt = %q", data)
+	}
+	// The host's .git exclusion keeps the host tree intact (nothing was
+	// clobbered); the pre-existing file survives the download.
+	if _, err := os.Stat(filepath.Join(ws, "in.txt")); err != nil {
+		t.Fatalf("pre-existing host file lost: %v", err)
+	}
+}
+
+// An upload past the archive cap fails the run instead of silently
+// executing locally.
+func TestWorkerSandboxUploadOverflowFailsRun(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "big.bin"), make([]byte, 64<<10), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, ledger := newSandboxWorker(t, fakesandbox.Addr(t), 4<<10, messages.AI("done"))
+	enqueueWorkspaceRun(t, ledger, "r2", "big workspace", ws)
+
+	if err := w.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	status, events := runStatus(t, ledger, "r2")
+	if status != "error" {
+		t.Fatalf("status = %q, want error (upload overflow must fail the run)", status)
+	}
+	var sawSandboxErr bool
+	for _, ev := range events {
+		if strings.Contains(ev.Payload, "sandbox") {
+			sawSandboxErr = true
+		}
+	}
+	if !sawSandboxErr {
+		t.Fatalf("no sandbox error event: %+v", events)
+	}
+}
+
+// A download past the archive cap fails the run (the products cannot be
+// recovered; the run must not report success).
+func TestWorkerSandboxDownloadOverflowFailsRun(t *testing.T) {
+	ws := t.TempDir()
+	w, ledger := newSandboxWorker(t, fakesandbox.Addr(t), 4<<10,
+		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+			{ID: "1", Name: "Write", Args: map[string]any{
+				"file_path": "huge.txt", "content": strings.Repeat("x", 64<<10),
+			}},
+		}},
+		messages.AI("done"),
+	)
+	enqueueWorkspaceRun(t, ledger, "r3", "write a huge file", ws)
+
+	if err := w.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	status, _ := runStatus(t, ledger, "r3")
+	if status != "error" {
+		t.Fatalf("status = %q, want error (download overflow must fail the run)", status)
+	}
+}
+
+// A broken backend fails the run — the worker never falls back to local
+// execution.
+func TestWorkerSandboxBrokenBackendFailsRun(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	ws := t.TempDir()
+	w, ledger := newSandboxWorker(t, srv.URL, 8<<20, messages.AI("done"))
+	enqueueWorkspaceRun(t, ledger, "r4", "unreachable backend", ws)
+
+	if err := w.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	status, _ := runStatus(t, ledger, "r4")
+	if status != "error" {
+		t.Fatalf("status = %q, want error (broken backend must fail the run)", status)
+	}
+	// The prompt never executed locally: no side effects, and the ledger
+	// shows the failure instead of a quiet local run.
+	if entries, _ := os.ReadDir(ws); len(entries) != 0 {
+		t.Fatalf("host workspace mutated: %v", entries)
+	}
+}
+
+// No enabled backend (table present, no rows) keeps the pre-sandbox
+// behavior: the run executes locally and finishes done.
+func TestWorkerNoBackendRunsLocally(t *testing.T) {
+	db, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "w.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	seedSandboxBackend(t, db, "http://unused.example") // creates the table
+	if _, err := db.Exec(`DELETE FROM sandbox_backends`); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := runstate.New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := agent.New(agent.Config{
+		Model:          language.NewFakeChatModel(language.WithResponses(messages.AI("local reply"))),
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := New(Config{Ledger: ledger, Agent: a, Logger: zerolog.Nop(), ID: "w-local", DB: db})
+	enqueueWorkspaceRun(t, ledger, "r5", "plain run", t.TempDir())
+
+	if err := w.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	status, _ := runStatus(t, ledger, "r5")
+	if status != "done" {
+		t.Fatalf("status = %q, want done (no backend = local execution)", status)
+	}
+}
+
+var _ = fmt.Sprintf
