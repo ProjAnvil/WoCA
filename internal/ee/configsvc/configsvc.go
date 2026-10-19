@@ -211,6 +211,7 @@ func (s *Service) Handler() http.Handler {
 	r.Handle("POST /api/sandboxes", s.requireScope(authz.ScopeSettingsWrite, s.handleCreateSandbox))
 	r.Handle("PUT /api/sandboxes/{id}", s.requireScope(authz.ScopeSettingsWrite, s.handleUpdateSandbox))
 	r.Handle("DELETE /api/sandboxes/{id}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteSandbox))
+	r.Handle("POST /api/sandboxes/{id}/verify", s.requireScope(authz.ScopeSettingsWrite, s.handleVerifySandbox))
 	// Console SPA: when it was not built (fresh clone, no `make ee-web`),
 	// serve a 503 placeholder instead of panicking on the missing
 	// index.html inside webfx.SPA.
