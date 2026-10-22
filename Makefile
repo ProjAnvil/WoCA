@@ -344,6 +344,28 @@ sandboxlab:
 	done
 	go test -tags sandboxlab -count=1 -timeout 25m -run 'TestSandboxLab' -v ./e2e/sandboxlab
 
+# ─────────── complab: component integration tests (e2e/complab) ───────────
+# Unlike netlab / sandboxlab there is no docker topology here: woca is
+# assembled in-process the way production wires it, each component is checked
+# for actually working, and components are exercised in combination
+# (search -> fetch).
+#
+#	make complab          every component (including WebSearch / WebFetch,
+#	                      which need internet)
+#	make complab-offline  only the components that work offline (CI with no
+#	                      egress)
+#
+# The failure semantics for the networked components are deliberate: no
+# internet -> skip (environment problem); internet present but every free
+# backend blocked -> FAIL (a real finding: this network needs a self-hosted
+# SearXNG or Tavily keyless). See docs/websearch-free-providers.md.
+.PHONY: complab complab-offline
+complab:
+	go test -tags complab -count=1 -timeout 10m -v ./e2e/complab
+
+complab-offline:
+	WOCA_COMPLAB_OFFLINE=1 go test -tags complab -count=1 -timeout 5m -v ./e2e/complab
+
 # Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
 # woca-edge joins the set with the v1.5 topology split (stateless public
 # entry; still a role artifact — thin, no interactive surfaces).
