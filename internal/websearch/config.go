@@ -107,6 +107,14 @@ func KnownProviderIDs() []string {
 // order without hardcoding the string.
 const ProviderCustom = genericID
 
+// EffectiveOrder returns the provider ids that will actually be tried: the
+// configured order, or the built-in default when none is set.
+//
+// The settings UI needs this rather than the raw Order, because an unset
+// setting still means "the two DuckDuckGo endpoints" and the user has to be
+// able to see and reorder them.
+func (c Config) EffectiveOrder() []string { return c.order() }
+
 // order returns the effective chain: the explicit override, or the default —
 // DuckDuckGo's two endpoints, then whichever configured backends apply.
 func (c Config) order() []string {

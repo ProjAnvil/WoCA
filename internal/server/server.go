@@ -203,10 +203,10 @@ type Server struct {
 	// dispatch enqueues runs for a worker to execute (Phase 3 wiring);
 	// runsOffHost opens the run surface to remote tenants; sandboxEnabled
 	// is its live refinement (see Config.SandboxEnabled).
-	dispatch        bool
-	runsOffHost     bool
-	sandboxEnabled  func() bool
-	ackDB           *wocadb.DB // config_acks reads for worker-capability dispatch checks
+	dispatch       bool
+	runsOffHost    bool
+	sandboxEnabled func() bool
+	ackDB          *wocadb.DB // config_acks reads for worker-capability dispatch checks
 
 	mu            sync.Mutex
 	runs          map[string]*Run
@@ -419,6 +419,12 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "POST /api/plugins/{name}/reinstall", authz.ScopePluginsWrite, s.handleInstallPlugin)
 	s.route(mux, "GET /api/settings", authz.ScopeSettingsRead, s.handleGetSettings)
 	s.route(mux, "PUT /api/settings", authz.ScopeSettingsWrite, s.handleUpdateSettings)
+	// Web search: reading the config is a settings read; changing it or
+	// running a probe both reach the public internet, so they carry the
+	// write scope (the same posture as the sandbox verify endpoint).
+	s.route(mux, "GET /api/websearch", authz.ScopeSettingsRead, s.handleGetWebSearch)
+	s.route(mux, "PUT /api/websearch", authz.ScopeSettingsWrite, s.handlePutWebSearch)
+	s.route(mux, "POST /api/websearch/test", authz.ScopeSettingsWrite, s.handleTestWebSearch)
 	s.route(mux, "GET /api/memory", authz.ScopeMemoryRead, s.handleListMemory)
 	s.route(mux, "GET /api/memory/stats", authz.ScopeMemoryRead, s.handleMemoryStats)
 	s.route(mux, "GET /api/stats", authz.ScopeSettingsRead, s.handleStats)
