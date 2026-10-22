@@ -69,7 +69,9 @@ func TestWebSearchSurvivesABlockedProvider(t *testing.T) {
 	blocked := &blockedProvider{}
 	// Put the broken backend first: if failover does not work, this test gets 0
 	// results.
-	chain := append([]websearch.Provider{blocked}, websearch.LoadConfig().Build()...)
+	// The default chain: whatever the built-in defaults are. The point of this
+	// test is the failover, not which backends happen to be reachable.
+	chain := append([]websearch.Provider{blocked}, websearch.Config{}.Build()...)
 	if len(chain) < 2 {
 		t.Fatal("default chain is empty, cannot exercise failover")
 	}

@@ -195,16 +195,31 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		ev.Msg("web search")
 	})
 
-	reg := tools.NewRegistryWithExecutor(cfg.WorkDir, x)
-	// --search-api replaces the free chain outright (see
-	// tools.WebSearchToolWithProviders): an explicitly configured endpoint is a
-	// deliberate choice, so it must not fall back to a public backend.
-	if opts.SearchAPI != "" {
-		reg.Register(tools.WebSearchToolWithProviders(websearch.NewGeneric(websearch.GenericOptions{
-			Endpoint: opts.SearchAPI,
-			APIKey:   opts.SearchAPIKey,
-		})))
+	// Web search is configured from the settings layer, not the environment:
+	// the settings page is the single source of truth and edits must take
+	// effect without a restart. applySearchConfig is called here for startup
+	// and again from RefreshTools so a settings change lands on the next turn.
+	//
+	// secretOrEmpty tolerates a disabled store (--db none) so the harness
+	// still comes up without a database.
+	secretOrEmpty := func(name string) string {
+		if st == nil {
+			return ""
+		}
+		return st.GetSecret(name)
 	}
+	applySearchConfig := func() {
+		loaded := dbSettings
+		if st != nil {
+			loaded = st.Load()
+		}
+		cfgSearch := loaded.SearchConfig(secretOrEmpty(settings.SecretSearchCustomKey))
+		cfgSearch = settings.SearchConfigWithOverride(cfgSearch, opts.SearchAPI, opts.SearchAPIKey)
+		tools.SetWebSearchConfig(cfgSearch)
+	}
+	applySearchConfig()
+
+	reg := tools.NewRegistryWithExecutor(cfg.WorkDir, x)
 
 	checkpointer, memory := openStorageBackends(ctx, opts, dbSettings, st, log)
 
@@ -283,6 +298,10 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		// hot-added ones are usable in the next round, plus re-evaluate the
 		// enabled built-in plugins (settings toggles apply live).
 		RefreshTools: func(ctx context.Context) []coretools.Tool {
+			// Re-read search settings every refresh so a settings-page edit
+			// lands on the next turn; the router is swapped in place, so the
+			// already-registered WebSearch tool picks it up.
+			applySearchConfig()
 			fresh := refreshMCPTools(ctx, log, mcpClients)
 			return append(fresh, pluginMgr.Tools(st.Load().BuiltinPlugins)...)
 		},

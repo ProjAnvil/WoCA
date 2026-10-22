@@ -155,14 +155,14 @@ func explainSearchFailure(t *testing.T, err error, log *eventLog) {
 		t.Fatalf("every free backend was throttled or blocked (%v).\n"+
 			"DuckDuckGo blocks by IP reputation and fails deterministically from datacenter "+
 			"ranges (CI runners, enterprise workers, containers).\n"+
-			"On this network, configure one of:\n"+
-			"  export %s=<instance url>   for example https://searx.internal.example.com\n"+
-			"  export %s=1                or enable Tavily keyless\n"+
-			"See docs/websearch-free-providers.md §7.",
-			err, websearch.EnvSearXNG, websearch.EnvTavily)
+			"On this network, open Settings -> Web search and either point the searxng "+
+			"backend at a reachable instance (for example https://searx.internal.example.com) "+
+			"or enable the Tavily keyless backend.",
+			err)
 	}
 	if errors.Is(err, websearch.ErrNoBackend) {
-		t.Fatalf("no usable backend: %v (check the %s configuration)", err, websearch.EnvProviders)
+		t.Fatalf("no usable backend: %v — enable at least one backend under "+
+			"Settings -> Web search", err)
 	}
 	t.Fatalf("search failed: %v", err)
 }

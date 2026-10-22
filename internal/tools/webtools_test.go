@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -246,6 +247,51 @@ func TestWebSearchToolFailsOverToSecondProvider(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, "From second") {
 		t.Fatalf("output = %q, want the second provider's result", res.Content)
+	}
+}
+
+// TestSetWebSearchConfigRebuildsChain: the settings page is the source of
+// truth, so rebuilding the chain must actually replace it.
+func TestSetWebSearchConfigRebuildsChain(t *testing.T) {
+	t.Cleanup(func() { SetWebSearchConfig(websearch.Config{}) })
+
+	// An order naming only an unconfigured backend yields an empty chain:
+	// the backend is listed but has no endpoint to reach, so it is dropped.
+	// (An empty order means "use the default", not "disable everything" —
+	// nil and empty are indistinguishable after a settings round trip, and
+	// silently disabling search is the worse failure.)
+	SetWebSearchConfig(websearch.Config{Order: []string{"searxng"}})
+	if got := WebSearchRouter().Providers(); len(got) != 0 {
+		t.Fatalf("unconfigured chain produced %d providers, want 0", len(got))
+	}
+
+	// Rebuilding with a reachable instance must replace the chain outright.
+	SetWebSearchConfig(websearch.Config{SearXNG: "https://searx.example.com"})
+	got := WebSearchRouter().Providers()
+	if len(got) != 3 {
+		t.Fatalf("providers = %d, want 3 (ddg-html, ddg-lite, searxng)", len(got))
+	}
+}
+
+// TestWebSearchToolResolvesRouterPerCall is the live-reload guarantee.
+//
+// The tool set is built once per agent, so if WebSearch captured its router at
+// construction a settings edit could never reach it. A nil router means
+// "resolve per call", which this proves without touching the network: the tool
+// is built while a populated chain is active, the chain is then emptied, and
+// the very same tool object must report no backend.
+func TestWebSearchToolResolvesRouterPerCall(t *testing.T) {
+	t.Cleanup(func() { SetWebSearchConfig(websearch.Config{}) })
+
+	SetWebSearchConfig(websearch.Config{})
+	tool := newWebSearchTool(nil)
+
+	// Empty the chain behind the tool's back.
+	SetWebSearchConfig(websearch.Config{Order: []string{"searxng"}})
+	_, err := tool.Invoke(t.Context(), map[string]any{"query": "golang"})
+	if !errors.Is(err, websearch.ErrNoBackend) {
+		t.Fatalf("tool built against the old chain = %v, want ErrNoBackend "+
+			"(the router must be resolved per call, not captured)", err)
 	}
 }
 

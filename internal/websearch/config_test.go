@@ -23,9 +23,16 @@ func TestDefaultChainIsDuckDuckGoOnly(t *testing.T) {
 	}
 }
 
-func TestConfiguredProvidersJoinTheChain(t *testing.T) {
-	got := ids(Config{SearXNG: "https://searx.example.com", Tavily: true}.Build())
-	want := []string{ddgHTMLID, ddgLiteID, searxngID, tavilyID}
+// TestConfiguredBackendsJoinTheChain: enabling is expressed by listing the
+// provider id, so ordering and enable/disable are one control.
+func TestConfiguredBackendsJoinTheChain(t *testing.T) {
+	c := Config{
+		Order:   []string{ddgHTMLID, ddgLiteID, searxngID, tavilyID, genericID},
+		SearXNG: "https://searx.example.com",
+		Custom:  "https://search.example/api",
+	}
+	got := ids(c.Build())
+	want := []string{ddgHTMLID, ddgLiteID, searxngID, tavilyID, genericID}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("chain = %v, want %v", got, want)
 	}
@@ -43,14 +50,26 @@ func TestExplicitOrderIsRespected(t *testing.T) {
 	}
 }
 
-// TestOptInProvidersStayOutUnlessEnabled: Tavily is keyless but still a third
-// party, so enabling it has to be a decision, not a default.
-func TestOptInProvidersStayOutUnlessEnabled(t *testing.T) {
-	got := ids(Config{Tavily: false, SearXNG: ""}.Build())
+// TestOptInProvidersStayOutUnlessListed: Tavily is keyless but still a third
+// party, so turning it on has to be a decision, not a default.
+func TestOptInProvidersStayOutUnlessListed(t *testing.T) {
+	got := ids(Config{SearXNG: "", Custom: ""}.Build())
 	for _, id := range got {
-		if id == tavilyID || id == searxngID {
-			t.Fatalf("chain %v contains an opt-in provider that was not enabled", got)
+		if id == tavilyID || id == searxngID || id == genericID {
+			t.Fatalf("chain %v contains a provider that was not enabled", got)
 		}
+	}
+}
+
+// TestListedButUnconfiguredIsDropped: listing searxng without an endpoint (or
+// custom without an endpoint) must drop it rather than produce a provider that
+// cannot work.
+func TestListedButUnconfiguredIsDropped(t *testing.T) {
+	c := Config{Order: []string{searxngID, genericID, ddgHTMLID}}
+	got := ids(c.Build())
+	want := []string{ddgHTMLID}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("chain = %v, want %v", got, want)
 	}
 }
 
@@ -61,76 +80,51 @@ func TestValidateRejectsUnknownProvider(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "brave") {
 		t.Fatalf("Validate error = %v, want it to name the offending id", err)
 	}
-	if err := (Config{Order: []string{"searxng", tavilyID}}).Validate(); err != nil {
+	if err := (Config{Order: []string{"searxng", tavilyID, genericID}}).Validate(); err != nil {
 		t.Fatalf("Validate(known) = %v, want nil", err)
 	}
 }
 
-func TestLoadConfigFromEnv(t *testing.T) {
-	t.Setenv(EnvProviders, "searxng, ddg-html")
-	t.Setenv(EnvSearXNG, "https://searx.example.com")
-	t.Setenv(EnvTavily, "on")
-	t.Setenv(EnvAllowedDomains, "go.dev, example.com")
-	t.Setenv(EnvDeniedDomains, "spam.example.net")
-
-	c := LoadConfig()
-	if len(c.Order) != 2 || c.Order[0] != "searxng" {
-		t.Errorf("Order = %v", c.Order)
-	}
-	if c.SearXNG != "https://searx.example.com" {
-		t.Errorf("SearXNG = %q", c.SearXNG)
-	}
-	if !c.Tavily {
-		t.Error("Tavily should be enabled")
-	}
-	if len(c.AllowedDomains) != 2 || c.AllowedDomains[0] != "go.dev" {
-		t.Errorf("AllowedDomains = %v", c.AllowedDomains)
-	}
-	if len(c.DeniedDomains) != 1 {
-		t.Errorf("DeniedDomains = %v", c.DeniedDomains)
-	}
-	opts := c.RouterOptions()
-	if len(opts.Providers) != 2 {
-		t.Errorf("RouterOptions providers = %v", ids(opts.Providers))
-	}
-}
-
-func TestLoadConfigEmptyEnv(t *testing.T) {
-	t.Setenv(EnvProviders, "")
-	t.Setenv(EnvSearXNG, "")
-	t.Setenv(EnvTavily, "")
-	t.Setenv(EnvAllowedDomains, "")
-	t.Setenv(EnvDeniedDomains, "")
-
-	c := LoadConfig()
-	if c.Order != nil || c.SearXNG != "" || c.Tavily {
-		t.Fatalf("empty env produced %+v", c)
-	}
-	if len(c.RouterOptions().Providers) != 2 {
-		t.Fatalf("empty env chain = %v", ids(c.RouterOptions().Providers))
-	}
-}
-
-func TestEnvBool(t *testing.T) {
-	for _, on := range []string{"1", "true", "TRUE", "yes", "on", " On "} {
-		t.Setenv(EnvTavily, on)
-		if !LoadConfig().Tavily {
-			t.Errorf("envBool(%q) = false, want true", on)
+func TestKnownProviderIDsIncludeCustom(t *testing.T) {
+	// The settings layer validates against this list, so the custom extension
+	// point has to be in it or a user's own endpoint would be rejected.
+	var found bool
+	for _, id := range KnownProviderIDs() {
+		if id == genericID {
+			found = true
 		}
 	}
-	for _, off := range []string{"", "0", "false", "no", "off", "maybe"} {
-		t.Setenv(EnvTavily, off)
-		if LoadConfig().Tavily {
-			t.Errorf("envBool(%q) = true, want false", off)
-		}
+	if !found {
+		t.Fatalf("KnownProviderIDs = %v, want it to include %q", KnownProviderIDs(), genericID)
 	}
 }
 
-func TestSplitList(t *testing.T) {
-	if got := splitList("a, b ,,c"); len(got) != 3 || got[1] != "b" {
-		t.Fatalf("splitList = %v", got)
+func TestRouterOptionsCarriesFiltersThrough(t *testing.T) {
+	opts := Config{
+		AllowedDomains: []string{"go.dev"},
+		DeniedDomains:  []string{"spam.example"},
+	}.RouterOptions()
+	if len(opts.AllowedDomains) != 1 || opts.AllowedDomains[0] != "go.dev" {
+		t.Errorf("AllowedDomains = %v", opts.AllowedDomains)
 	}
-	if got := splitList("  "); got != nil {
-		t.Fatalf("splitList(blank) = %v, want nil", got)
+	if len(opts.DeniedDomains) != 1 || opts.DeniedDomains[0] != "spam.example" {
+		t.Errorf("DeniedDomains = %v", opts.DeniedDomains)
+	}
+}
+
+// TestNoEnvironmentVariables: configuration used to come from WOCA_SEARCH_*
+// environment variables, which left two competing sources of truth. The
+// settings layer is now the only source, so Config must have no ambient state.
+func TestNoEnvironmentVariables(t *testing.T) {
+	t.Setenv("WOCA_SEARCH_PROVIDERS", "searxng")
+	t.Setenv("WOCA_SEARCH_SEARXNG", "https://from-env.example")
+	t.Setenv("WOCA_SEARCH_TAVILY", "1")
+	t.Setenv("WOCA_SEARCH_ALLOWED_DOMAINS", "env.example")
+	t.Setenv("WOCA_SEARCH_DENIED_DOMAINS", "env.example")
+
+	got := ids(Config{}.Build())
+	want := []string{ddgHTMLID, ddgLiteID}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("env leaked into the chain: got %v, want %v", got, want)
 	}
 }

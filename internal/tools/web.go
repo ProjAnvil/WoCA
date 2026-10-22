@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/security"
@@ -101,24 +102,52 @@ type webSearchArgs struct {
 	Query string `json:"query"`
 }
 
-// webSearchRouter is the process-wide router behind WebSearch. It is a var so
-// tests can install a router over fake providers without touching the network;
-// the default is built from the environment (see websearch.LoadConfig).
-var webSearchRouter = websearch.NewRouter(websearch.LoadConfig().RouterOptions())
+// webSearchRouter is the process-wide router behind WebSearch. It starts as
+// the built-in default chain and is replaced by SetWebSearchConfig whenever the
+// settings change, so a settings edit takes effect on the next turn.
+var (
+	webSearchMu     sync.RWMutex
+	webSearchRouter = websearch.NewRouter(websearch.Config{}.RouterOptions())
+)
 
-func webSearchTool() coretools.Tool { return newWebSearchTool(webSearchRouter) }
+func webSearchTool() coretools.Tool { return newWebSearchTool(nil) }
 
 // WebSearchRouter exposes the process-wide router so callers can read its
 // per-provider stats (for SLA reporting) without rebuilding the chain.
-func WebSearchRouter() *websearch.Router { return webSearchRouter }
+func WebSearchRouter() *websearch.Router {
+	webSearchMu.RLock()
+	defer webSearchMu.RUnlock()
+	return webSearchRouter
+}
+
+// SetWebSearchConfig rebuilds the search chain from cfg.
+//
+// Called at agent-build time and again on every tool refresh, which is what
+// makes the settings page live: without it the chain would be frozen at
+// process start. The cooldown table is intentionally not carried over — a
+// settings change means the operator re-picked the backends, so stale
+// penalties would only keep a just-fixed backend out of the chain.
+func SetWebSearchConfig(cfg websearch.Config) {
+	webSearchMu.Lock()
+	defer webSearchMu.Unlock()
+	webSearchRouter = websearch.NewRouter(cfg.RouterOptions())
+}
 
 // newWebSearchTool builds WebSearch over a router. This is the test seam that
 // the provider-registry design exists for: the tool shell never changes, only
 // what sits behind it.
+//
+// A nil router means "resolve the process-wide router on every call". That is
+// how a rebuilt chain reaches an already-registered tool: the tool set is built
+// once per agent, but the router behind it is swapped in place.
 func newWebSearchTool(r *websearch.Router) coretools.Tool {
 	t := MustTool(coretools.FromFunc("WebSearch", webSearchDescription,
 		func(ctx context.Context, a webSearchArgs) (coretools.Result, error) {
-			results, err := r.Search(ctx, a.Query, 0)
+			router := r
+			if router == nil {
+				router = WebSearchRouter()
+			}
+			results, err := router.Search(ctx, a.Query, 0)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("search %q: %w", a.Query, err)
 			}
