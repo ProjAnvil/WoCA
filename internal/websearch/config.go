@@ -10,9 +10,9 @@ import (
 // Environment variables that configure the search chain.
 //
 // These are a first surface, not the final one: woca has a settings layer that
-// does not yet expose search at all (gap G8 in docs/websearch-research.md). Env
-// vars are what CI and containers can set today; the settings keys should land
-// on top of this Config, not replace it.
+// does not expose search at all yet. Env vars are what CI and containers can
+// set today; the settings keys should land on top of this Config, not replace
+// it.
 const (
 	// EnvProviders sets the chain order explicitly, comma-separated, for
 	// example "searxng,ddg-html". Unset means the built-in default order.

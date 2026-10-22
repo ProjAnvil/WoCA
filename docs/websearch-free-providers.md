@@ -1,6 +1,6 @@
 # WebSearch 后端：免费 provider 链
 
-代码：`internal/websearch/`　调研依据：`docs/websearch-research.md`
+代码：`internal/websearch/`
 
 ## 1. 它解决什么
 
@@ -141,7 +141,7 @@ curl -sS -o /tmp/ddg.html -w '%{http_code}\n' \
   另：`maxWebChars = 20000` 名不副实，它是字节数（中文约 6,667 字），且 `out[:20000]` 会切坏汉字。
 - **SSRF**：`security.ValidateURL` 只校验 hostname 不解析 IP，DNS rebinding 可绕过；
   `SSRFSafeTransport` 库里有但 `fetchHTTP` 未用。
-- **settings 层**：目前只有环境变量，没有 `internal/settings` 键（调研 G8）。
+- **settings 层**：目前只有环境变量，没有 `internal/settings` 键。
 - **`openrouter:web_search`**：它是给 OpenRouter chat completions 请求加
   `plugins:[{"id":"web"}]`，属于 `internal/llm` 层不是工具层；已确认 `internal/` 下
   没有 openrouter 相关代码，本分支不具备接入条件。

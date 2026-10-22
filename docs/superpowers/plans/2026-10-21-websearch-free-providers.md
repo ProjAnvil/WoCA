@@ -2,7 +2,7 @@
 
 分支 `feat/websearch-free-providers`（from `main` @ `b748484`）
 工作区 `.worktrees/websearch-free-providers`
-调研依据：`docs/websearch-research.md`
+（已合并到 main，分支与 worktree 已删除）
 
 ---
 
@@ -121,7 +121,7 @@ func Failover(err error) bool
 | 网络错 / 401 / 403 / 其他 5xx | 原始错误 | 否 |
 | 正常但 0 条 | **成功**，空切片 → 渲染 `No results found for this query.` | 否 |
 
-**P0 的准确表述**（比调研文档更精确，实测读 `web.go` 后修正）：
+**P0 的准确表述**（实测读 `web.go` 后修正）：
 
 当前 `fetchHTTP` 对非 200 直接返回 `HTTP %d` 错误，所以 **HTTP 202 路径其实已经报错了**，
 只是报了个没用的 `HTTP 202`，模型不知道那是限流、会去重试。
@@ -194,8 +194,7 @@ func (r *Router) Search(ctx, query string, limit int) ([]Result, error)
 
 - [x] `go build ./...` 与 `go vet ./internal/...` 干净。
 - [x] `go test ./internal/websearch/` 79 个用例全绿（含 `-race`）。
-- [x] 新增测试全部用 `httptest` 驱动，**不依赖真实网络**（调研 §4.2 教训：本地住宅 IP
-      跑通不构成验证）。
+- [x] 新增测试全部用 `httptest` 驱动，**不依赖真实网络**（本地住宅 IP 跑通不构成验证）。
 - [x] 「被拦」与「搜不到」在工具层有专门的回归用例
       （`TestWebSearchToolRateLimitIsNeverNoResults`）。
 - [x] `ci/deps-personal.txt` 已重生成（+8 行，其中 6 行本分支、2 行 main 既有漂移）。
@@ -214,7 +213,7 @@ func (r *Router) Search(ctx, query string, limit int) ([]Result, error)
 | 6 | 接线 + 统计 | `internal/tools/web.go`、`agentbuild/build.go`、`generic.go`；事件落到 zerolog |
 | 7 | 回归 + CI + 文档 | 见上 |
 
-**执行中修正的一处设计**：调研文档说「DDG 返回 challenge 页时谎报 No results」。
+**执行中修正的一处设计**：动手前的判断是「DDG 返回 challenge 页时谎报 No results」。
 读代码后确认更精确的两条路径——非 200 时 `fetchHTTP` 本来就返回错误（只是报了个没用的
 裸 `HTTP 202`），真正说谎的是 **200 + 挑战页** 那条。所以 P0 是两半：
 ① 200+0 条+标记 → `ErrRateLimited`；② 202/429/503 → `ErrRateLimited`（不是裸状态码）。
