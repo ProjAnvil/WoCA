@@ -303,7 +303,9 @@ internal/sdkout          机器可读的无头输出（json / stream-json）
 # Web 与 API 管线
 internal/server          web 服务器：会话、运行、SSE、设置 API
 internal/gateway         所有部署共享的 L1 边缘中间件
-internal/searchapi       通用 JSON web 搜索 API 客户端
+internal/websearch       WebSearch 后端：provider 注册表、故障转移、冷却、
+                         限流（免费/免 key 链路）
+internal/searchapi       通用 JSON web 搜索 API 客户端（--search-api）
 internal/fsb             工作区文件浏览器（jailed，os.OpenRoot）
 
 # 存储与状态

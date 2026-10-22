@@ -12,6 +12,8 @@ github.com/ProjAnvil/LadyM/providers
 github.com/ProjAnvil/LadyM/schema
 github.com/ProjAnvil/LadyM/secrets
 github.com/ProjAnvil/LadyM/storage
+github.com/PuerkitoBio/goquery
+github.com/andybalholm/cascadia
 github.com/aymanbagabas/go-osc52/v2
 github.com/charmbracelet/bubbles/spinner
 github.com/charmbracelet/bubbletea
@@ -80,6 +82,7 @@ github.com/projanvil/langchain-golang/core/retry
 github.com/projanvil/langchain-golang/core/runnables
 github.com/projanvil/langchain-golang/core/schema
 github.com/projanvil/langchain-golang/core/security
+github.com/projanvil/langchain-golang/core/stores
 github.com/projanvil/langchain-golang/core/streamevents
 github.com/projanvil/langchain-golang/core/structuredoutput
 github.com/projanvil/langchain-golang/core/tools
@@ -143,6 +146,7 @@ github.com/projanvil/woca/internal/promptref
 github.com/projanvil/woca/internal/quota
 github.com/projanvil/woca/internal/relayclient
 github.com/projanvil/woca/internal/repl
+github.com/projanvil/woca/internal/runexec
 github.com/projanvil/woca/internal/runner
 github.com/projanvil/woca/internal/runstate
 github.com/projanvil/woca/internal/runws
@@ -164,6 +168,7 @@ github.com/projanvil/woca/internal/tui
 github.com/projanvil/woca/internal/webd
 github.com/projanvil/woca/internal/webfx
 github.com/projanvil/woca/internal/webgui
+github.com/projanvil/woca/internal/websearch
 github.com/projanvil/woca/internal/wocadb
 github.com/projanvil/woca/web
 github.com/remyoudompheng/bigfft
@@ -184,6 +189,8 @@ golang.org/x/image/riff
 golang.org/x/image/vp8
 golang.org/x/image/vp8l
 golang.org/x/image/webp
+golang.org/x/net/html
+golang.org/x/net/html/atom
 golang.org/x/sync/semaphore
 golang.org/x/sync/singleflight
 golang.org/x/sys/unix
@@ -201,6 +208,7 @@ golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
 golang.org/x/text/width
+golang.org/x/time/rate
 modernc.org/libc
 modernc.org/libc/errno
 modernc.org/libc/fcntl

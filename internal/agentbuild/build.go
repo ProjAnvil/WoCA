@@ -29,10 +29,10 @@ import (
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/plugins"
 	"github.com/projanvil/woca/internal/prompt"
-	"github.com/projanvil/woca/internal/searchapi"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/skills"
 	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/websearch"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -174,16 +174,36 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	pluginMgr := pluginrt.NewManagerWithExecutor(pluginHome, cfg.WorkDir, log, x)
 	extraTools = append(extraTools, pluginMgr.Tools(dbSettings.BuiltinPlugins)...)
 
-	reg := tools.NewRegistryWithExecutor(cfg.WorkDir, x)
-	if opts.SearchAPI != "" {
-		sc := searchapi.New(searchapi.Config{Endpoint: opts.SearchAPI, APIKey: opts.SearchAPIKey})
-		reg.Register(tools.WebSearchToolWithBackend(func(ctx context.Context, q string) (string, error) {
-			results, err := sc.Search(ctx, q)
-			if err != nil {
-				return "", err
+	// Search telemetry. Backends fail in ways that are invisible without a
+	// record — an anti-bot page looks like an empty result, and a provider stuck
+	// in cooldown looks like a slow search — so every attempt is logged.
+	websearch.SetEventHook(func(e websearch.Event) {
+		ev := log.Debug().
+			Str("provider", e.Provider).
+			Str("kind", string(e.Kind)).
+			Dur("latency", e.Latency).
+			Int("results", e.Results)
+		switch e.Kind {
+		case websearch.EventRateLimited, websearch.EventFailure, websearch.EventNoBackend:
+			ev = log.Warn()
+			if e.Err != nil {
+				ev = ev.Err(e.Err)
 			}
-			return searchapi.Format(results), nil
-		}))
+			ev.Str("provider", e.Provider).Str("kind", string(e.Kind)).Msg("web search degraded")
+			return
+		}
+		ev.Msg("web search")
+	})
+
+	reg := tools.NewRegistryWithExecutor(cfg.WorkDir, x)
+	// --search-api replaces the free chain outright (see
+	// tools.WebSearchToolWithProviders): an explicitly configured endpoint is a
+	// deliberate choice, so it must not fall back to a public backend.
+	if opts.SearchAPI != "" {
+		reg.Register(tools.WebSearchToolWithProviders(websearch.NewGeneric(websearch.GenericOptions{
+			Endpoint: opts.SearchAPI,
+			APIKey:   opts.SearchAPIKey,
+		})))
 	}
 
 	checkpointer, memory := openStorageBackends(ctx, opts, dbSettings, st, log)

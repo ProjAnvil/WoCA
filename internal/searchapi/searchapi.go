@@ -18,6 +18,20 @@ type Result struct {
 	Snippet string
 }
 
+// HTTPError is a non-200 response from the search API.
+//
+// It exposes StatusCode because callers need to tell throttling (429/503) apart
+// from a genuine failure: only the former is worth failing over to another
+// backend.
+type HTTPError struct {
+	StatusCode int
+	Query      string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("search %q: HTTP %d", e.Query, e.StatusCode)
+}
+
 // Client queries a generic JSON web-search API.
 type Client struct {
 	endpoint   string
@@ -73,7 +87,7 @@ func (c *Client) Search(ctx context.Context, query string) ([]Result, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search %q: HTTP %d", query, resp.StatusCode)
+		return nil, &HTTPError{StatusCode: resp.StatusCode, Query: query}
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {

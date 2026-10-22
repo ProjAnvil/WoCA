@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/projanvil/woca/internal/websearch"
 )
 
 // withPermissiveWebURL swaps the SSRF validator so hermetic httptest servers
@@ -128,131 +131,131 @@ func TestWebFetchTool(t *testing.T) {
 	}
 }
 
-func TestWebSearchToolViaTestServer(t *testing.T) {
-	withPermissiveWebURL(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("q") != "golang" {
-			w.Write([]byte("<html>no anchors at all</html>"))
-			return
-		}
-		w.Write([]byte(`<html><body>
-<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fgo.dev%2Fdoc">Go <b>Documentation</b></a>
-<a class="result__snippet" href="#">The <em>official</em> docs</a>
-<a class="result__a" href="https://example.org/plain">Plain Link</a>
-</body></html>`))
+// ---------- WebSearch over the provider router ----------
+
+// stubProvider is a scripted websearch.Provider for tool-layer tests. The real
+// providers are exercised in internal/websearch.
+type stubProvider struct {
+	id      string
+	results []websearch.Result
+	err     error
+	calls   int
+}
+
+func (s *stubProvider) ID() string      { return s.id }
+func (s *stubProvider) Name() string    { return s.id }
+func (s *stubProvider) Available() bool { return true }
+
+func (s *stubProvider) Search(_ context.Context, _ string, _ int) ([]websearch.Result, error) {
+	s.calls++
+	return s.results, s.err
+}
+
+func TestWebSearchToolRendersResults(t *testing.T) {
+	p := &stubProvider{id: "stub", results: []websearch.Result{
+		{Title: "Go Documentation", URL: "https://go.dev/doc", Snippet: "The official docs"},
+	}}
+	tool := newWebSearchTool(websearch.NewRouter(websearch.RouterOptions{
+		Providers:   []websearch.Provider{p},
+		MinInterval: time.Millisecond,
 	}))
-	defer srv.Close()
-
-	orig := webSearchEndpoint
-	webSearchEndpoint = srv.URL + "/"
-	t.Cleanup(func() { webSearchEndpoint = orig })
-
-	reg := NewRegistry(t.TempDir())
-	tool, ok := reg.Get("WebSearch")
-	if !ok {
-		t.Fatal("WebSearch tool missing")
-	}
 	res, err := tool.Invoke(t.Context(), map[string]any{"query": "golang"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Go Documentation", "https://go.dev/doc", "The official docs", "Plain Link", "https://example.org/plain"} {
+	for _, want := range []string{"Go Documentation", "https://go.dev/doc", "The official docs"} {
 		if !strings.Contains(res.Content, want) {
-			t.Fatalf("WebSearch result missing %q:\n%s", want, res.Content)
+			t.Fatalf("output missing %q:\n%s", want, res.Content)
 		}
 	}
+	if p.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", p.calls)
+	}
+}
 
-	res, err = tool.Invoke(t.Context(), map[string]any{"query": "no-results-query"})
+// TestWebSearchToolEmptyIsNotAnError: a search that genuinely finds nothing is
+// a success, and the model must be told so in words it cannot confuse with a
+// failure.
+func TestWebSearchToolEmptyIsNotAnError(t *testing.T) {
+	tool := newWebSearchTool(websearch.NewRouter(websearch.RouterOptions{
+		Providers:   []websearch.Provider{&stubProvider{id: "stub"}},
+		MinInterval: time.Millisecond,
+	}))
+	res, err := tool.Invoke(t.Context(), map[string]any{"query": "zzzz"})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("empty result set = %v, want nil error", err)
 	}
-	if res.Content != "No results found." {
-		t.Fatalf("WebSearch no results = %q", res.Content)
-	}
-}
-
-func TestWebSearchToolFetchError(t *testing.T) {
-	withPermissiveWebURL(t)
-	orig := webSearchEndpoint
-	webSearchEndpoint = "http://127.0.0.1:1/"
-	t.Cleanup(func() { webSearchEndpoint = orig })
-
-	reg := NewRegistry(t.TempDir())
-	tool, _ := reg.Get("WebSearch")
-	if _, err := tool.Invoke(t.Context(), map[string]any{"query": "x"}); err == nil || !strings.Contains(err.Error(), `search "x"`) {
-		t.Fatalf("WebSearch fetch error = %v, want search error wrapping", err)
+	if res.Content != noResultsText {
+		t.Fatalf("content = %q, want %q", res.Content, noResultsText)
 	}
 }
 
-func TestParseDuckDuckGoLimitsResults(t *testing.T) {
-	var b strings.Builder
-	for i := range 10 {
-		b.WriteString(`<a class="result__a" href="https://example.com/` + string(rune('a'+i)) + `">Result ` + string(rune('0'+i)) + `</a>`)
-		if i > 4 { // results 6+ have no matching snippet entries
-			continue
-		}
-		b.WriteString(`<a class="result__snippet">snip ` + string(rune('0'+i)) + `</a>`)
+// TestWebSearchToolRateLimitIsNeverNoResults is the regression guard for the
+// bug this refactor fixes: a throttled backend used to render as an empty
+// result set, which makes models conclude the information does not exist.
+func TestWebSearchToolRateLimitIsNeverNoResults(t *testing.T) {
+	tool := newWebSearchTool(websearch.NewRouter(websearch.RouterOptions{
+		Providers:   []websearch.Provider{&stubProvider{id: "stub", err: &websearch.RateLimitError{Provider: "stub"}}},
+		MinInterval: time.Millisecond,
+	}))
+	_, err := tool.Invoke(t.Context(), map[string]any{"query": "golang"})
+	if err == nil {
+		t.Fatal("rate-limited search = nil error")
 	}
-	out := parseDuckDuckGo(b.String())
-	if strings.Contains(out, "Result 9") || strings.Contains(out, "Result 8") {
-		t.Fatalf("more than 8 results kept:\n%s", out)
+	if strings.Contains(err.Error(), noResultsText) {
+		t.Fatalf("throttling reported as no-results: %v", err)
 	}
-	if !strings.Contains(out, "Result 0") || !strings.Contains(out, "snip 0") {
-		t.Fatalf("first result/snippet missing:\n%s", out)
-	}
-	if got := strings.Count(out, "\n   https://example.com/"); got != 8 {
-		t.Fatalf("got %d result URLs, want 8:\n%s", got, out)
-	}
-}
-
-func TestParseDuckDuckGoEmpty(t *testing.T) {
-	if out := parseDuckDuckGo("<html>nothing</html>"); out != "" {
-		t.Fatalf("parseDuckDuckGo empty = %q", out)
+	if !strings.Contains(err.Error(), "do not retry or rephrase") {
+		t.Fatalf("error = %v, want the actionable rate-limit wording", err)
 	}
 }
 
-func TestCleanDuckDuckGoURL(t *testing.T) {
-	cases := []struct {
-		href, want string
-	}{
-		{"https://example.com/page", "https://example.com/page"},
-		{"//duckduckgo.com/l/?uddg=https%3A%2F%2Fgo.dev%2Fdoc", "https://go.dev/doc"},
-		{"//duckduckgo.com/l/?uddg=not%zz-escapable", "//duckduckgo.com/l/?uddg=not%zz-escapable"}, // invalid escape: dropped, href kept
-		{"ht tp://bad url", "ht tp://bad url"},                                                     // url.Parse failure: passthrough
+func TestWebSearchToolNoBackend(t *testing.T) {
+	tool := newWebSearchTool(websearch.NewRouter(websearch.RouterOptions{MinInterval: time.Millisecond}))
+	_, err := tool.Invoke(t.Context(), map[string]any{"query": "golang"})
+	if err == nil {
+		t.Fatal("router with no providers = nil error")
 	}
-	for _, c := range cases {
-		if got := cleanDuckDuckGoURL(c.href); got != c.want {
-			t.Errorf("cleanDuckDuckGoURL(%q) = %q, want %q", c.href, got, c.want)
-		}
+	if !strings.Contains(err.Error(), "no search backend") {
+		t.Fatalf("error = %v, want it to say no backend is configured", err)
 	}
 }
 
-func TestWebSearchToolWithBackend(t *testing.T) {
-	tool := WebSearchToolWithBackend(func(ctx context.Context, query string) (string, error) {
-		if query == "boom" {
-			return "", context.DeadlineExceeded
-		}
-		if query == "empty" {
-			return "", nil
-		}
-		return "1. result\n   https://example.com", nil
-	})
-	res, err := tool.Invoke(t.Context(), map[string]any{"query": "go"})
+// TestWebSearchToolWithProvidersIsExclusive: --search-api means "use this and
+// nothing else", so a hard failure must not be papered over by another backend.
+func TestWebSearchToolWithProvidersIsExclusive(t *testing.T) {
+	failing := &stubProvider{id: "configured", err: context.DeadlineExceeded}
+	tool := WebSearchToolWithProviders(failing)
+	if _, err := tool.Invoke(t.Context(), map[string]any{"query": "golang"}); err == nil {
+		t.Fatal("configured backend failure = nil error")
+	}
+	if failing.calls != 1 {
+		t.Fatalf("configured provider calls = %d, want 1", failing.calls)
+	}
+}
+
+func TestWebSearchToolFailsOverToSecondProvider(t *testing.T) {
+	first := &stubProvider{id: "first", err: &websearch.RateLimitError{Provider: "first"}}
+	second := &stubProvider{id: "second", results: []websearch.Result{
+		{Title: "From second", URL: "https://example.org"},
+	}}
+	tool := WebSearchToolWithProviders(first, second)
+	res, err := tool.Invoke(t.Context(), map[string]any{"query": "golang"})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("failover failed: %v", err)
 	}
-	if res.Content != "1. result\n   https://example.com" {
-		t.Fatalf("backend result = %q", res.Content)
+	if !strings.Contains(res.Content, "From second") {
+		t.Fatalf("output = %q, want the second provider's result", res.Content)
 	}
-	res, err = tool.Invoke(t.Context(), map[string]any{"query": "empty"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Content != "No results found." {
-		t.Fatalf("empty backend = %q", res.Content)
-	}
-	if _, err := tool.Invoke(t.Context(), map[string]any{"query": "boom"}); err == nil ||
-		!strings.Contains(err.Error(), `search "boom"`) || !strings.Contains(err.Error(), "deadline") {
-		t.Fatalf("backend error = %v, want wrapped search error", err)
+}
+
+func TestWebSearchToolWrapsQueryInError(t *testing.T) {
+	tool := newWebSearchTool(websearch.NewRouter(websearch.RouterOptions{
+		Providers:   []websearch.Provider{&stubProvider{id: "stub", err: context.DeadlineExceeded}},
+		MinInterval: time.Millisecond,
+	}))
+	_, err := tool.Invoke(t.Context(), map[string]any{"query": "go mcp"})
+	if err == nil || !strings.Contains(err.Error(), `search "go mcp"`) {
+		t.Fatalf("error = %v, want it to name the query", err)
 	}
 }

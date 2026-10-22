@@ -209,17 +209,6 @@ func TestNewBackgroundShellsDefault(t *testing.T) {
 	}
 }
 
-// --- web helpers ---
-
-// TestCleanDuckDuckGoURLDoubleUnescapeFails: uddg=%25zz unescapes once to
-// "%zz"; the second unescape fails, so the raw (once-unescaped) target is
-// returned unchanged.
-func TestCleanDuckDuckGoURLDoubleUnescapeFails(t *testing.T) {
-	if got := cleanDuckDuckGoURL("//duckduckgo.com/l/?uddg=%25zz"); got != "%zz" {
-		t.Fatalf("cleanDuckDuckGoURL = %q, want %%zz", got)
-	}
-}
-
 // --- image ---
 
 // TestProcessImageUnsupportedFormat: a valid 1x1 BMP decodes via

@@ -5,23 +5,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/security"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
+
+	"github.com/projanvil/woca/internal/websearch"
 )
 
 const maxWebChars = 20000
 
-var (
-	tagRe     = regexp.MustCompile(`(?s)<script.*?</script>|<style.*?</style>|<[^>]+>`)
-	ddgLinkRe = regexp.MustCompile(`(?s)<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
-	ddgSnipRe = regexp.MustCompile(`(?s)<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>`)
-	ddgFormRe = regexp.MustCompile(`<[^>]+>`)
-)
+var tagRe = regexp.MustCompile(`(?s)<script.*?</script>|<style.*?</style>|<[^>]+>`)
 
 // validateWebURL rejects URLs that fail the default SSRF policy before any
 // network request is made.
@@ -32,14 +28,10 @@ func validateWebURL(rawurl string) error {
 	return nil
 }
 
-// Test seams: the default SSRF policy hard-blocks loopback/private hosts and
-// the search endpoint is a fixed remote URL, so hermetic tests cannot reach
-// the fetch paths at all. Tests may swap these two vars (restoring them
-// afterwards); production behavior is identical to the defaults below.
-var (
-	webURLValidate    = validateWebURL
-	webSearchEndpoint = "https://html.duckduckgo.com/html/"
-)
+// Test seam: the default SSRF policy hard-blocks loopback/private hosts, so
+// hermetic tests cannot reach the fetch path at all. Tests may swap this var
+// (restoring it afterwards); production behavior is identical to the default.
+var webURLValidate = validateWebURL
 
 func fetchHTTP(ctx context.Context, rawurl string) (string, error) {
 	if err := webURLValidate(rawurl); err != nil {
@@ -99,82 +91,52 @@ func webFetchTool() coretools.Tool {
 
 const webSearchDescription = `Search the web and return a short list of titles, URLs, and snippets.`
 
+// noResultsText is what the model sees for a search that succeeded and found
+// nothing. It is deliberately unlike every error message: telling the model
+// "no results" when a backend actually refused us makes it conclude the
+// information does not exist and invent it instead.
+const noResultsText = "No results found for this query."
+
 type webSearchArgs struct {
 	Query string `json:"query"`
 }
 
-func webSearchTool() coretools.Tool {
+// webSearchRouter is the process-wide router behind WebSearch. It is a var so
+// tests can install a router over fake providers without touching the network;
+// the default is built from the environment (see websearch.LoadConfig).
+var webSearchRouter = websearch.NewRouter(websearch.LoadConfig().RouterOptions())
+
+func webSearchTool() coretools.Tool { return newWebSearchTool(webSearchRouter) }
+
+// WebSearchRouter exposes the process-wide router so callers can read its
+// per-provider stats (for SLA reporting) without rebuilding the chain.
+func WebSearchRouter() *websearch.Router { return webSearchRouter }
+
+// newWebSearchTool builds WebSearch over a router. This is the test seam that
+// the provider-registry design exists for: the tool shell never changes, only
+// what sits behind it.
+func newWebSearchTool(r *websearch.Router) coretools.Tool {
 	t := MustTool(coretools.FromFunc("WebSearch", webSearchDescription,
 		func(ctx context.Context, a webSearchArgs) (coretools.Result, error) {
-			q := url.Values{}
-			q.Set("q", a.Query)
-			html, err := fetchHTTP(ctx, webSearchEndpoint+"?"+q.Encode())
+			results, err := r.Search(ctx, a.Query, 0)
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("search %q: %w", a.Query, err)
 			}
-			out := parseDuckDuckGo(html)
+			out := websearch.Format(results)
 			if out == "" {
-				out = "No results found."
+				out = noResultsText
 			}
 			return coretools.Result{Content: out}, nil
 		}))
 	return t
 }
 
-func parseDuckDuckGo(html string) string {
-	links := ddgLinkRe.FindAllStringSubmatch(html, -1)
-	snips := ddgSnipRe.FindAllStringSubmatch(html, -1)
-	n := len(links)
-	if n > 8 {
-		n = 8
-	}
-	var b strings.Builder
-	for i := range n {
-		href := cleanDuckDuckGoURL(links[i][1])
-		title := ddgFormRe.ReplaceAllString(links[i][2], "")
-		title = strings.TrimSpace(title)
-		snippet := ""
-		if i < len(snips) {
-			snippet = strings.TrimSpace(ddgFormRe.ReplaceAllString(snips[i][1], ""))
-		}
-		fmt.Fprintf(&b, "%d. %s\n   %s\n", i+1, title, href)
-		if snippet != "" {
-			fmt.Fprintf(&b, "   %s\n", snippet)
-		}
-	}
-	return b.String()
-}
-
-func cleanDuckDuckGoURL(href string) string {
-	u, err := url.Parse(href)
-	if err != nil {
-		return href
-	}
-	if target := u.Query().Get("uddg"); target != "" {
-		if decoded, err := url.QueryUnescape(target); err == nil {
-			return decoded
-		}
-		return target
-	}
-	return href
-}
-
-// SearchBackend runs a web search and returns formatted results.
-type SearchBackend func(ctx context.Context, query string) (string, error)
-
-// WebSearchToolWithBackend builds a WebSearch tool backed by a custom search
-// backend (used to override the default DuckDuckGo backend with a real API).
-func WebSearchToolWithBackend(backend SearchBackend) coretools.Tool {
-	t := MustTool(coretools.FromFunc("WebSearch", webSearchDescription,
-		func(ctx context.Context, a webSearchArgs) (coretools.Result, error) {
-			out, err := backend(ctx, a.Query)
-			if err != nil {
-				return coretools.Result{}, fmt.Errorf("search %q: %w", a.Query, err)
-			}
-			if out == "" {
-				out = "No results found."
-			}
-			return coretools.Result{Content: out}, nil
-		}))
-	return t
+// WebSearchToolWithProviders builds WebSearch over an explicit provider chain.
+//
+// Passing a single provider makes it an exclusive override, which is what
+// --search-api means. A configured endpoint is an explicit choice; silently
+// falling back from it to a public backend would send an operator's queries to
+// a third party they did not select.
+func WebSearchToolWithProviders(providers ...websearch.Provider) coretools.Tool {
+	return newWebSearchTool(websearch.NewRouter(websearch.RouterOptions{Providers: providers}))
 }
