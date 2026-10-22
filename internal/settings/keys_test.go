@@ -137,6 +137,9 @@ func TestKeyValueAllKeys(t *testing.T) {
 		CheckpointPGHost: "ck", CheckpointPGPort: "5433", CheckpointPGDB: "ckdb", CheckpointPGUser: "cku",
 		MemoryPGHost: "mm", MemoryPGPort: "5434", MemoryPGDB: "mmdb", MemoryPGUser: "mmu",
 		LangfuseEnabled: true, LangfuseBaseURL: "https://lf.example", LangfusePublicKey: "pk-lf",
+		SearchProviders: []string{"ddg-html"}, SearchSearXNGEndpoint: "https://searx.example",
+		SearchCustomEndpoint: "https://search.example/api", SearchAllowedDomains: []string{"go.dev"},
+		SearchDeniedDomains: []string{"spam.example"},
 	}
 	for _, k := range KeyNames() {
 		if _, ok := SecretFor(k); ok {

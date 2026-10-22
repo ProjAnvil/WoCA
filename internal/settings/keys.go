@@ -7,66 +7,77 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/projanvil/woca/internal/websearch"
 )
 
 // Setting keys shared by `woca config`, the TUI /settings command, and the
 // web settings API. Secret keys are stored encrypted in the secrets table.
 const (
-	KeyProvider              = "provider"
-	KeyModel                 = "model"
-	KeyMaxTokens             = "max-tokens"
-	KeyTemperature           = "temperature"
-	KeyThinkingBudget        = "thinking-budget"
-	KeyAnthropicBaseURL      = "anthropic-base-url"
-	KeyOpenAIBaseURL         = "openai-base-url"
-	KeyGLMBaseURL            = "glm-base-url"
-	KeyDeepSeekBaseURL       = "deepseek-base-url"
-	KeyAnthropicAPIKey       = "anthropic-api-key"
-	KeyOpenAIAPIKey          = "openai-api-key"
-	KeyGLMAPIKey             = "glm-api-key"
-	KeyDeepSeekAPIKey        = "deepseek-api-key"
-	KeyClaudeSkills          = "claude-skills"
-	KeyClaudeMCP             = "claude-mcp"
-	KeyBuiltinPlugins        = "builtin-plugins"
-	KeyBuiltinSkills         = "builtin-skills"
-	KeyCheckpoint            = "checkpoint"
-	KeyMemory                = "memory"
-	KeyCheckpointDir         = "checkpoint-dir"
-	KeyPostgresURL           = "postgres-url"
-	KeyMemoryEngine          = "memory-engine"
-	KeyLadyMDBPath           = "ladym-db-path"
-	KeyLadyMEmbedding        = "ladym-embedding"
-	KeyLadyMEmbeddingModel   = "ladym-embedding-model"
-	KeyLadyMEmbeddingBaseURL = "ladym-embedding-base-url"
-	KeyLadyMEmbeddingAPIKey  = "ladym-embedding-api-key"
-	KeyLadyMLLM              = "ladym-llm"
-	KeyLadyMAutoRetain       = "ladym-autoretain"
-	KeyLadyMTopK             = "ladym-topk"
-	KeyLadyMSystem2          = "ladym-system2"
-	KeyLadyMSystem2Interval  = "ladym-system2-interval"
-	KeyLadyMEndpoint         = "ladym-endpoint"
-	KeyLadyMAPIUsername      = "ladym-api-username"
-	KeyLadyMAPIPassword      = "ladym-api-password"
-	KeyDebugLog              = "debug-log"
-	KeyMsgPlaneMode          = "msg-plane-mode"
-	KeyCheckpointPGHost      = "checkpoint-pg-host"
-	KeyCheckpointPGPort      = "checkpoint-pg-port"
-	KeyCheckpointPGDB        = "checkpoint-pg-db"
-	KeyCheckpointPGUser      = "checkpoint-pg-user"
-	KeyMemoryPGHost          = "memory-pg-host"
-	KeyMemoryPGPort          = "memory-pg-port"
-	KeyMemoryPGDB            = "memory-pg-db"
-	KeyMemoryPGUser          = "memory-pg-user"
-	KeyMsgPlaneNATSURL       = "msg-plane-nats-url"
-	KeyMsgPlaneSubject       = "msg-plane-subject"
-	KeyModelWhitelist        = "model-whitelist"
-	KeyOutputStyle           = "output-style"
-	KeyRelayURL              = "relay-url"
-	KeyLangfuseEnabled       = "langfuse-enabled"
-	KeyLangfuseBaseURL       = "langfuse-base-url"
-	KeyLangfusePublicKey     = "langfuse-public-key"
-	KeyLangfuseSecretKey     = "langfuse-secret-key"
+	KeyProvider               = "provider"
+	KeyModel                  = "model"
+	KeyMaxTokens              = "max-tokens"
+	KeyTemperature            = "temperature"
+	KeyThinkingBudget         = "thinking-budget"
+	KeyAnthropicBaseURL       = "anthropic-base-url"
+	KeyOpenAIBaseURL          = "openai-base-url"
+	KeyGLMBaseURL             = "glm-base-url"
+	KeyDeepSeekBaseURL        = "deepseek-base-url"
+	KeyAnthropicAPIKey        = "anthropic-api-key"
+	KeyOpenAIAPIKey           = "openai-api-key"
+	KeyGLMAPIKey              = "glm-api-key"
+	KeyDeepSeekAPIKey         = "deepseek-api-key"
+	KeyClaudeSkills           = "claude-skills"
+	KeyClaudeMCP              = "claude-mcp"
+	KeyBuiltinPlugins         = "builtin-plugins"
+	KeyBuiltinSkills          = "builtin-skills"
+	KeyCheckpoint             = "checkpoint"
+	KeyMemory                 = "memory"
+	KeyCheckpointDir          = "checkpoint-dir"
+	KeyPostgresURL            = "postgres-url"
+	KeyMemoryEngine           = "memory-engine"
+	KeyLadyMDBPath            = "ladym-db-path"
+	KeyLadyMEmbedding         = "ladym-embedding"
+	KeyLadyMEmbeddingModel    = "ladym-embedding-model"
+	KeyLadyMEmbeddingBaseURL  = "ladym-embedding-base-url"
+	KeyLadyMEmbeddingAPIKey   = "ladym-embedding-api-key"
+	KeyLadyMLLM               = "ladym-llm"
+	KeyLadyMAutoRetain        = "ladym-autoretain"
+	KeyLadyMTopK              = "ladym-topk"
+	KeyLadyMSystem2           = "ladym-system2"
+	KeyLadyMSystem2Interval   = "ladym-system2-interval"
+	KeyLadyMEndpoint          = "ladym-endpoint"
+	KeyLadyMAPIUsername       = "ladym-api-username"
+	KeyLadyMAPIPassword       = "ladym-api-password"
+	KeyDebugLog               = "debug-log"
+	KeyMsgPlaneMode           = "msg-plane-mode"
+	KeyCheckpointPGHost       = "checkpoint-pg-host"
+	KeyCheckpointPGPort       = "checkpoint-pg-port"
+	KeyCheckpointPGDB         = "checkpoint-pg-db"
+	KeyCheckpointPGUser       = "checkpoint-pg-user"
+	KeyMemoryPGHost           = "memory-pg-host"
+	KeyMemoryPGPort           = "memory-pg-port"
+	KeyMemoryPGDB             = "memory-pg-db"
+	KeyMemoryPGUser           = "memory-pg-user"
+	KeyMsgPlaneNATSURL        = "msg-plane-nats-url"
+	KeyMsgPlaneSubject        = "msg-plane-subject"
+	KeyModelWhitelist         = "model-whitelist"
+	KeyOutputStyle            = "output-style"
+	KeyRelayURL               = "relay-url"
+	KeyLangfuseEnabled        = "langfuse-enabled"
+	KeyLangfuseBaseURL        = "langfuse-base-url"
+	KeyLangfusePublicKey      = "langfuse-public-key"
+	KeyLangfuseSecretKey      = "langfuse-secret-key"
 	KeySandboxArchiveMaxBytes = "sandbox-archive-max-bytes"
+	// Web search (internal/websearch). The provider list carries the
+	// enable/disable state: a backend is on when its id is present, so an
+	// enterprise overlay can pin the exact allowed set by listing it.
+	KeySearchProviders       = "search-providers"
+	KeySearchSearXNGEndpoint = "search-searxng-endpoint"
+	KeySearchCustomEndpoint  = "search-custom-endpoint"
+	KeySearchCustomKey       = "search-custom-key"
+	KeySearchAllowedDomains  = "search-allowed-domains"
+	KeySearchDeniedDomains   = "search-denied-domains"
 )
 
 // DefaultSandboxArchiveMaxBytes is the default workspace-archive size cap
@@ -96,6 +107,8 @@ func KeyNames() []string {
 		KeyMemoryPGHost, KeyMemoryPGPort, KeyMemoryPGDB, KeyMemoryPGUser,
 		KeyLangfuseEnabled, KeyLangfuseBaseURL, KeyLangfusePublicKey, KeyLangfuseSecretKey,
 		KeySandboxArchiveMaxBytes,
+		KeySearchProviders, KeySearchSearXNGEndpoint, KeySearchCustomEndpoint,
+		KeySearchCustomKey, KeySearchAllowedDomains, KeySearchDeniedDomains,
 	}
 }
 
@@ -123,6 +136,8 @@ func SecretFor(key string) (string, bool) {
 		return SecretMemoryPGPassword, true
 	case KeyLangfuseSecretKey:
 		return SecretLangfuseSecretKey, true
+	case KeySearchCustomKey:
+		return SecretSearchCustomKey, true
 	}
 	return "", false
 }
@@ -140,6 +155,7 @@ var ManagedSecretKeys = map[string]string{
 	"memory-pg-password":     SecretMemoryPGPassword,
 	"ladym-api-password":     SecretLadyMAPIPassword,
 	"langfuse-secret-key":    SecretLangfuseSecretKey,
+	"search-custom-key":      SecretSearchCustomKey,
 }
 
 // KeyHelp returns a short usage line for a key.
@@ -251,6 +267,18 @@ func KeyHelp(key string) string {
 		return "langfuse secret API key (stored encrypted)"
 	case KeySandboxArchiveMaxBytes:
 		return "max bytes of the workspace tar.gz the worker uploads to / downloads from a sandbox (default 536870912 = 512 MiB)"
+	case KeySearchProviders:
+		return "web-search backends in failover order as a JSON array (ddg-html, ddg-lite, searxng, tavily, custom); a backend is enabled by being listed"
+	case KeySearchSearXNGEndpoint:
+		return "base URL of the SearXNG instance used by the searxng web-search backend (for example https://searx.internal.example.com)"
+	case KeySearchCustomEndpoint:
+		return "JSON web-search API endpoint for the custom backend (the --search-api surface)"
+	case KeySearchCustomKey:
+		return "bearer key for search-custom-endpoint (stored encrypted)"
+	case KeySearchAllowedDomains:
+		return "web-search results are limited to these hosts; empty means unrestricted"
+	case KeySearchDeniedDomains:
+		return "web-search results from these hosts are dropped; wins over search-allowed-domains"
 	}
 	return "unknown key"
 }
@@ -294,7 +322,7 @@ func Apply(cfg *Settings, key, value string) error {
 		cfg.GLMBaseURL = value
 	case KeyDeepSeekBaseURL:
 		cfg.DeepSeekBaseURL = value
-	case KeyAnthropicAPIKey, KeyOpenAIAPIKey, KeyGLMAPIKey, KeyDeepSeekAPIKey, KeyPostgresURL, KeyLadyMEmbeddingAPIKey, KeyLangfuseSecretKey:
+	case KeyAnthropicAPIKey, KeyOpenAIAPIKey, KeyGLMAPIKey, KeyDeepSeekAPIKey, KeyPostgresURL, KeyLadyMEmbeddingAPIKey, KeyLangfuseSecretKey, KeySearchCustomKey:
 		return fmt.Errorf("%s is a secret; use SetSecret", key)
 	case KeyClaudeSkills:
 		list, err := ParseNameList(value)
@@ -471,8 +499,73 @@ func Apply(cfg *Settings, key, value string) error {
 			return fmt.Errorf("sandbox-archive-max-bytes must be a positive integer, got %q", value)
 		}
 		cfg.SandboxArchiveMaxBytes = n
+	case KeySearchProviders:
+		list, err := ParseNameList(value)
+		if err != nil {
+			return err
+		}
+		// Unknown ids are rejected so a typo cannot silently disable the
+		// whole chain — the same rule the plugin API applies.
+		known := map[string]bool{}
+		for _, id := range websearch.KnownProviderIDs() {
+			known[id] = true
+		}
+		seen := map[string]bool{}
+		for _, id := range list {
+			if !known[id] {
+				return fmt.Errorf("unknown web-search provider %q; known: %s",
+					id, strings.Join(websearch.KnownProviderIDs(), ", "))
+			}
+			if seen[id] {
+				return fmt.Errorf("web-search provider %q listed twice", id)
+			}
+			seen[id] = true
+		}
+		cfg.SearchProviders = list
+	case KeySearchSearXNGEndpoint, KeySearchCustomEndpoint:
+		if err := checkSearchEndpoint(key, value); err != nil {
+			return err
+		}
+		if key == KeySearchSearXNGEndpoint {
+			cfg.SearchSearXNGEndpoint = value
+		} else {
+			cfg.SearchCustomEndpoint = value
+		}
+	case KeySearchAllowedDomains:
+		list, err := ParseNameList(value)
+		if err != nil {
+			return err
+		}
+		cfg.SearchAllowedDomains = list
+	case KeySearchDeniedDomains:
+		list, err := ParseNameList(value)
+		if err != nil {
+			return err
+		}
+		cfg.SearchDeniedDomains = list
 	default:
 		return fmt.Errorf("unknown settings key %q", key)
+	}
+	return nil
+}
+
+// checkSearchEndpoint validates a web-search endpoint. Unlike the relay URL
+// these are reached over the open internet, so the TLS red line does not
+// apply; what matters is that the value parses as an http(s) URL, because a
+// garbage endpoint only shows up later as an opaque fetch failure.
+func checkSearchEndpoint(key, value string) error {
+	if value == "" {
+		return nil // clearing is allowed
+	}
+	u, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("%s must be a valid URL, got %q", key, value)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("%s must use http or https, got %q", key, value)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%s is missing a host, got %q", key, value)
 	}
 	return nil
 }
@@ -661,6 +754,16 @@ func KeyValue(cfg Settings, key string) string {
 		return cfg.LangfusePublicKey
 	case KeySandboxArchiveMaxBytes:
 		return strconv.FormatInt(cfg.SandboxArchiveMaxBytes, 10)
+	case KeySearchProviders:
+		return FormatNameList(cfg.SearchProviders)
+	case KeySearchSearXNGEndpoint:
+		return cfg.SearchSearXNGEndpoint
+	case KeySearchCustomEndpoint:
+		return cfg.SearchCustomEndpoint
+	case KeySearchAllowedDomains:
+		return FormatNameList(cfg.SearchAllowedDomains)
+	case KeySearchDeniedDomains:
+		return FormatNameList(cfg.SearchDeniedDomains)
 	}
 	return ""
 }

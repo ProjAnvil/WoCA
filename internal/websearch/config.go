@@ -116,7 +116,7 @@ func (c Config) Validate() error {
 
 // KnownProviderIDs lists the ids accepted in Order.
 func KnownProviderIDs() []string {
-	return []string{ddgHTMLID, ddgLiteID, searxngID, tavilyID}
+	return []string{ddgHTMLID, ddgLiteID, searxngID, tavilyID, genericID}
 }
 
 // order returns the effective chain: the explicit override, or the default —

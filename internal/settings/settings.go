@@ -78,6 +78,7 @@ const (
 	SecretMemoryPGPassword     = "memory_pg_password"
 	SecretRelayKey             = "relay_key"
 	SecretLangfuseSecretKey    = "langfuse_secret_key"
+	SecretSearchCustomKey      = "search_custom_key"
 )
 
 // Settings is the persisted configuration. Secrets (API keys, the postgres
@@ -162,6 +163,29 @@ type Settings struct {
 	// uploads to / downloads from a sandbox backend, in both directions
 	// (design §10.3 m-7). Zero means the DefaultSandboxArchiveMaxBytes.
 	SandboxArchiveMaxBytes int64 `json:"sandbox_archive_max_bytes"`
+	// SearchProviders is the ordered list of enabled web-search backends
+	// (internal/websearch provider ids, for example "ddg-html",
+	// "ddg-lite", "searxng", "tavily", "custom"). Order is the failover
+	// order. Empty means the built-in default chain.
+	//
+	// Enabling is expressed by presence in this list rather than by a
+	// per-backend bool: a managed overlay cannot lock a false or an empty
+	// value, because both are indistinguishable from "not managed".
+	// A non-empty list therefore pins the exact allowed set.
+	SearchProviders []string `json:"search_providers"`
+	// SearchSearXNGEndpoint is the base URL of a SearXNG instance
+	// (self-hosted or public). Required by the "searxng" provider.
+	SearchSearXNGEndpoint string `json:"search_searxng_endpoint"`
+	// SearchCustomEndpoint is a user-supplied JSON search API (the
+	// --search-api surface). This is the extension point for user-defined
+	// routes: today a single endpoint, later a named list.
+	// Its bearer key lives in the secrets table (SecretSearchCustomKey).
+	SearchCustomEndpoint string `json:"search_custom_endpoint"`
+	// SearchAllowedDomains / SearchDeniedDomains filter search results by
+	// host before they reach the model. Empty means no filtering;
+	// denied wins over allowed.
+	SearchAllowedDomains []string `json:"search_allowed_domains"`
+	SearchDeniedDomains  []string `json:"search_denied_domains"`
 }
 
 // Default returns the default settings: sqlite storage under ~/.woca.
@@ -534,6 +558,21 @@ func applyPairs(out *Settings, pairs map[string]string) {
 	if v, ok := pairs["ladym_api_username"]; ok {
 		out.LadyMAPIUsername = v
 	}
+	if v, ok := pairs["search_providers"]; ok {
+		out.SearchProviders = parseNameList(v)
+	}
+	if v, ok := pairs["search_searxng_endpoint"]; ok {
+		out.SearchSearXNGEndpoint = v
+	}
+	if v, ok := pairs["search_custom_endpoint"]; ok {
+		out.SearchCustomEndpoint = v
+	}
+	if v, ok := pairs["search_allowed_domains"]; ok {
+		out.SearchAllowedDomains = parseNameList(v)
+	}
+	if v, ok := pairs["search_denied_domains"]; ok {
+		out.SearchDeniedDomains = parseNameList(v)
+	}
 }
 
 // Save persists non-empty settings fields (empty fields are left unchanged so
@@ -600,7 +639,29 @@ func (s *Store) Save(cfg Settings) error {
 		field{"memory_pg_port", orDefaultStr(cfg.MemoryPGPort, "5432")},
 		field{"memory_pg_db", orDefaultStr(cfg.MemoryPGDB, "woca")},
 		field{"memory_pg_user", cfg.MemoryPGUser},
+		// Search lists always serialize to at least "[]", so they survive
+		// the empty-means-skip loop below and clearing one persists.
+		field{"search_providers", FormatNameList(cfg.SearchProviders)},
+		field{"search_allowed_domains", FormatNameList(cfg.SearchAllowedDomains)},
+		field{"search_denied_domains", FormatNameList(cfg.SearchDeniedDomains)},
 	)
+	// Search endpoints are plain strings, so the loop below would skip them
+	// when empty and a removed endpoint would come back on the next load.
+	// They are written (or deleted) explicitly instead.
+	for _, f := range []field{
+		{"search_searxng_endpoint", cfg.SearchSearXNGEndpoint},
+		{"search_custom_endpoint", cfg.SearchCustomEndpoint},
+	} {
+		if f.val == "" {
+			if err := s.Clear(f.key); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := s.put("settings", "key", f.key, f.val); err != nil {
+			return err
+		}
+	}
 	if cfg.MaxTokens != 0 {
 		fields = append(fields, field{"max_tokens", strconv.Itoa(cfg.MaxTokens)})
 	}
