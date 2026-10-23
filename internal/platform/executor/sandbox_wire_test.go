@@ -12,10 +12,8 @@ import (
 // wireCapture records the raw HTTP interactions issued by Sandbox so tests
 // can assert the contract v2 wire shape (CONTRACT.md).
 type wireCapture struct {
-	mu       sync.Mutex
-	reqs     []capturedRequest
-	sandbox  string
-	handlers map[string]func(w http.ResponseWriter, r *http.Request, body []byte)
+	mu   sync.Mutex
+	reqs []capturedRequest
 }
 
 type capturedRequest struct {

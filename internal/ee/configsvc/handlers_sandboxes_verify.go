@@ -192,8 +192,7 @@ func (s *Service) handleVerifySandbox(w http.ResponseWriter, r *http.Request) {
 			return fmt.Errorf("process output %q", string(out))
 		}
 		if err := p.Kill(); err != nil {
-			// The kill endpoint error is advisory; the session is torn
-			// down either way.
+			s.log.Warn().Err(err).Str("backend_id", id).Msg("sandbox verification: process kill failed")
 		}
 		return p.Wait()
 	}) {

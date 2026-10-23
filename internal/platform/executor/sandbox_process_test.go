@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -307,6 +308,145 @@ func TestSandboxStartKill(t *testing.T) {
 		// Kill-triggered exit; error value is implementation detail.
 	case <-time.After(5 * time.Second):
 		t.Fatal("Wait did not return after Kill")
+	}
+}
+
+func TestSandboxWaitDrainsOutputAfterKill(t *testing.T) {
+	for _, stream := range []string{"stdout", "stderr"} {
+		t.Run(stream, func(t *testing.T) {
+			sb := newMiniExecutor(t)
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(release) })
+			t.Cleanup(unblock)
+			signal := sync.OnceFunc(func() { close(entered) })
+			sink := writerFunc(func(p []byte) (int, error) {
+				signal()
+				<-release
+				return len(p), nil
+			})
+			opts := StartOptions{Stdout: sink}
+			command := "echo output; exec cat"
+			if stream == "stderr" {
+				opts = StartOptions{Stderr: sink}
+				command = "echo output >&2; exec cat"
+			}
+			p, err := sb.Start(t.Context(), ExecRequest{Name: "sh", Args: []string{"-c", command}}, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = p.Kill() })
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("output writer was not called")
+			}
+			if err := p.Kill(); err != nil {
+				t.Fatal(err)
+			}
+			waited := make(chan error, 1)
+			go func() { waited <- p.Wait() }()
+			select {
+			case err := <-waited:
+				t.Fatalf("Wait returned before the output writer finished: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			unblock()
+			select {
+			case err := <-waited:
+				if err != nil {
+					t.Fatalf("Wait after Kill: %v", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("Wait did not return after output finished")
+			}
+		})
+	}
+}
+
+func TestSandboxWaitReportsOutputErrors(t *testing.T) {
+	for _, stream := range []string{"stdout", "stderr"} {
+		for _, shortWrite := range []bool{false, true} {
+			t.Run(stream+"/short="+strconv.FormatBool(shortWrite), func(t *testing.T) {
+				sb := newMiniExecutor(t)
+				want := io.ErrClosedPipe
+				if shortWrite {
+					want = io.ErrShortWrite
+				}
+				sink := writerFunc(func([]byte) (int, error) {
+					if shortWrite {
+						return 0, nil
+					}
+					return 0, want
+				})
+				opts := StartOptions{Stdout: sink}
+				command := "echo output"
+				if stream == "stderr" {
+					opts = StartOptions{Stderr: sink}
+					command = "echo output >&2"
+				}
+				p, err := sb.Start(t.Context(), ExecRequest{Name: "sh", Args: []string{"-c", command}}, opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = p.Kill() })
+				if err := p.Wait(); !errors.Is(err, want) {
+					t.Fatalf("Wait = %v, want %v", err, want)
+				}
+			})
+		}
+	}
+}
+
+func TestSandboxKillCancelsOutputPoll(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/sandbox/create":
+			_, _ = io.WriteString(w, `{"sandbox_id":"blocked"}`)
+		case strings.HasSuffix(r.URL.Path, "/start"):
+			_, _ = io.WriteString(w, `{"session_id":"session"}`)
+		case strings.HasSuffix(r.URL.Path, "/output"):
+			close(started)
+			select {
+			case <-r.Context().Done():
+				close(canceled)
+			case <-release:
+			}
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(unblock)
+	sb, err := NewSandbox(SandboxConfig{Endpoint: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sb.Close() })
+	p, err := sb.Start(t.Context(), ExecRequest{Name: "cat"}, StartOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Kill() })
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("output poll did not start")
+	}
+	if err := p.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("Kill did not cancel the in-flight output request")
+	}
+	if err := p.Wait(); err != nil {
+		t.Fatalf("Wait after Kill: %v", err)
 	}
 }
 

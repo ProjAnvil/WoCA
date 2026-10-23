@@ -63,7 +63,10 @@ func runEnterprise() {
 		{"WOCA_EDGE_URL", edgeBase},
 		{"WOCA_EDGE_INSECURE", "1"},
 	} {
-		os.Setenv(kv[0], kv[1])
+		if err := os.Setenv(kv[0], kv[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "lab/enterprise: set %s: %v\n", kv[0], err)
+			os.Exit(1)
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -111,7 +114,10 @@ func runEnterprise() {
 		fmt.Fprintf(os.Stderr, "lab/enterprise: enrollment token: %v\n", err)
 		os.Exit(1)
 	}
-	os.Setenv("WOCA_ENROLL_TOKEN", enrollToken)
+	if err := os.Setenv("WOCA_ENROLL_TOKEN", enrollToken); err != nil {
+		fmt.Fprintf(os.Stderr, "lab/enterprise: set enrollment token: %v\n", err)
+		os.Exit(1)
+	}
 
 	coreMux := http.NewServeMux()
 	entrygw.NewRegistryHandler(reg).RegisterRoutes(coreMux)
@@ -218,7 +224,7 @@ func waitForChain() (string, error) {
 			lastErr = err
 			return false
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
 			lastErr = fmt.Errorf("%s = %d", url, resp.StatusCode)
 			return false
@@ -264,7 +270,7 @@ func probeLogin(key string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var out struct {
 		Token string `json:"token"`
 	}
@@ -282,7 +288,7 @@ func liveBridgeID(edge string) string {
 	if err != nil {
 		return ""
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var bridges []struct {
 		BridgeID string `json:"bridge_id"`
 		Live     bool   `json:"live"`
@@ -303,7 +309,7 @@ func seedSettings(path string, pairs ...[2]string) error {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	cfg := st.Load()
 	for _, p := range pairs {
 		if err := settings.Apply(&cfg, p[0], p[1]); err != nil {

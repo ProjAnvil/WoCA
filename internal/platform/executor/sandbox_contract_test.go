@@ -213,7 +213,7 @@ func TestContractProcessLifecycle(t *testing.T) {
 	}
 
 	// Kill unblocks Wait; redirected stdout + stderr sinks work
-	var outBuf, errBuf bytes.Buffer
+	var outBuf, errBuf safeBuffer
 	p, err = sb.Start(t.Context(), ExecRequest{Name: "sh", Args: []string{"-c", "echo to-out; echo to-err >&2; sleep 60"}}, StartOptions{Stdout: &outBuf, Stderr: &errBuf})
 	if err != nil {
 		t.Fatal(err)
@@ -224,7 +224,7 @@ func TestContractProcessLifecycle(t *testing.T) {
 	waited := make(chan error, 1)
 	go func() { waited <- p.Wait() }()
 	deadline := time.Now().Add(5 * time.Second)
-	for outBuf.Len() == 0 && time.Now().Before(deadline) {
+	for (outBuf.Len() == 0 || errBuf.Len() == 0) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if err := p.Kill(); err != nil {

@@ -376,7 +376,7 @@ func (b *Bridge) Start(ctx context.Context, req executor.ExecRequest, opts execu
 		exitCh:  make(chan error, 1),
 		stopCh:  make(chan struct{}),
 	}
-	go p.consume()
+	p.ioWG.Go(p.consume)
 	if ctx.Done() != nil {
 		go func() {
 			select {
@@ -399,6 +399,7 @@ type bridgeProcess struct {
 	exitCh    chan error
 	stopCh    chan struct{}
 	closeOnce sync.Once
+	ioWG      sync.WaitGroup
 }
 
 var _ executor.Process = (*bridgeProcess)(nil)
@@ -409,7 +410,11 @@ func (p *bridgeProcess) Stdin() io.WriteCloser { return discardWriteCloser{} }
 
 func (p *bridgeProcess) Stdout() io.Reader { return p.stdoutR }
 
-func (p *bridgeProcess) Wait() error { return <-p.exitCh }
+func (p *bridgeProcess) Wait() error {
+	err := <-p.exitCh
+	p.ioWG.Wait()
+	return err
+}
 
 // Kill aborts the SSE stream, which terminates the process bridge-side.
 // The wait result of a killed process is nil (the caller asked for
@@ -443,17 +448,25 @@ func (p *bridgeProcess) consume() {
 				p.finish(fmt.Errorf("cfbridge: stream %s event not base64: %w", name, err))
 				return false
 			}
+			var dst io.Writer
 			if name == "stdout" {
 				if p.opts.Stdout != nil {
-					_, _ = p.opts.Stdout.Write(chunk)
-				} else if p.stdoutW != nil {
-					if _, werr := p.stdoutW.Write(chunk); werr != nil {
-						p.finish(werr)
-						return false
-					}
+					dst = p.opts.Stdout
+				} else {
+					dst = p.stdoutW
 				}
-			} else if p.opts.Stderr != nil {
-				_, _ = p.opts.Stderr.Write(chunk)
+			} else {
+				dst = p.opts.Stderr
+			}
+			if dst != nil {
+				n, err := dst.Write(chunk)
+				if err == nil && n != len(chunk) {
+					err = io.ErrShortWrite
+				}
+				if err != nil {
+					p.finish(fmt.Errorf("cfbridge: forwarding %s: %w", name, err))
+					return false
+				}
 			}
 		case "exit":
 			var e struct {
@@ -666,7 +679,7 @@ func (b *Bridge) Grep(ctx context.Context, root string, pattern *regexp.Regexp) 
 		if rec == "" || len(matches) == 200 {
 			continue
 		}
-		path, rest := rec, ""
+		var path, rest string
 		if p, r, ok := strings.Cut(rec, "\x00"); ok {
 			path, rest = p, r
 		} else if parts := strings.SplitN(rec, ":", 3); len(parts) == 3 {

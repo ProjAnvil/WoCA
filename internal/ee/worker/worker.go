@@ -199,7 +199,7 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 			return w.ledger.Finish(ctx, run.RunID, w.id, "error")
 		}
 		if sbxDownload != nil {
-			defer sbxDownload(false) // error-path best-effort recovery
+			defer func() { _ = sbxDownload(false) }() // recovery logs its own errors
 		}
 		// Tag the execution ctx with the run/session identity so every
 		// telemetry span the agent records (chat, tools) carries it — in the

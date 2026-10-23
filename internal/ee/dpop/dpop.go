@@ -6,7 +6,6 @@
 package dpop
 
 import (
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -201,22 +200,20 @@ func (v *Verifier) Verify(proof string, req Request, accessToken, pinnedThumbpri
 	if xBig.BitLen() > 256 || yBig.BitLen() > 256 {
 		return ErrInvalidProof
 	}
-	// On-curve validation via crypto/ecdh (elliptic.IsOnCurve is deprecated):
-	// NewPublicKey rejects points that are not on P-256.
 	var raw [65]byte
 	raw[0] = 0x04 // uncompressed point: 0x04 || X || Y
 	xBig.FillBytes(raw[1:33])
 	yBig.FillBytes(raw[33:65])
-	if _, err := ecdh.P256().NewPublicKey(raw[:]); err != nil {
+	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), raw[:])
+	if err != nil {
 		return ErrInvalidProof
 	}
-	pub := ecdsa.PublicKey{Curve: elliptic.P256(), X: xBig, Y: yBig}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
 		return ErrInvalidProof
 	}
 	sum := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if !ecdsa.VerifyASN1(&pub, sum[:], sig) {
+	if !ecdsa.VerifyASN1(pub, sum[:], sig) {
 		return ErrInvalidProof
 	}
 

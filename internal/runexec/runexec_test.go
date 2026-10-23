@@ -21,10 +21,17 @@ func TestWithRunExecutorRoundTrip(t *testing.T) {
 }
 
 func TestRunExecutorFromEmpty(t *testing.T) {
-	if _, ok := RunExecutorFrom(context.Background()); ok {
-		t.Fatal("RunExecutorFrom on a bare context must report false")
-	}
-	if _, ok := RunExecutorFrom(nil); ok {
-		t.Fatal("RunExecutorFrom on nil ctx must report false")
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+	}{
+		{name: "bare", ctx: t.Context()},
+		{name: "nil"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, ok := RunExecutorFrom(tc.ctx); ok {
+				t.Fatal("RunExecutorFrom on an empty context must report false")
+			}
+		})
 	}
 }

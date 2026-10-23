@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -233,12 +234,36 @@ func TestClientRoundTrip(t *testing.T) {
 }
 
 func TestClientTerminalOnRevoked(t *testing.T) {
-	relay := newFakeRelay(t)
-	relay.setPollCode(http.StatusGone)
-	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler(), Workers: 2}, testLogger())
+	var received, attempts atomic.Int64
+	secondStarted := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	secondFinished := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(releaseSecond) })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch received.Add(1) {
+		case 1:
+			select {
+			case <-secondStarted:
+			case <-t.Context().Done():
+				return
+			}
+		case 2:
+			close(secondStarted)
+			<-releaseSecond
+			close(secondFinished)
+		}
+		w.WriteHeader(http.StatusGone)
+		_, _ = io.WriteString(w, `{"code":"revoked"}`)
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(unblock)
+	c := New(Config{URL: srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler(), Workers: 2}, testLogger())
+	ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+		GetConn: func(string) { attempts.Add(1) },
+	})
 	done := make(chan struct{})
 	go func() {
-		c.Run(context.Background())
+		c.Run(ctx)
 		close(done)
 	}()
 	select {
@@ -250,10 +275,18 @@ func TestClientTerminalOnRevoked(t *testing.T) {
 	if !st.Revoked || st.LastError != "key revoked" {
 		t.Fatalf("status: %+v (the status page reads 'key revoked')", st)
 	}
-	// Terminal means terminal: no more polls, ever (design §6.5).
-	polls := relay.polls.Load()
-	time.Sleep(200 * time.Millisecond)
-	if relay.polls.Load() != polls {
+	// An in-flight server handler can finish after cancellation. Observe
+	// client request attempts instead of delayed server-side bookkeeping.
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("poll attempts = %d, want the two initial workers only", got)
+	}
+	unblock()
+	select {
+	case <-secondFinished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("in-flight server request did not finish")
+	}
+	if attempts.Load() != 2 {
 		t.Fatal("terminal state kept polling")
 	}
 }

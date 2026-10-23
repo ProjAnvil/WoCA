@@ -2,10 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/projanvil/langchain-golang/core/language"
@@ -21,12 +19,9 @@ type recordingGuard struct {
 	before ToolDecision
 	after  ToolPostDecision
 
-	mu    chanMu
 	seenC []ToolCallInfo
 	seenR []ToolResultInfo
 }
-
-type chanMu struct{}
 
 func (g *recordingGuard) BeforeTool(_ context.Context, call ToolCallInfo) ToolDecision {
 	g.seenC = append(g.seenC, call)
@@ -398,10 +393,8 @@ type cacheWrapper struct {
 
 type cachedModel struct {
 	language.ChatModel
-	w    *cacheWrapper
-	key  string
-	once sync.Once
-	syn  bool
+	w   *cacheWrapper
+	key string
 }
 
 func (m *cachedModel) Stream(ctx context.Context, in []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
@@ -437,11 +430,6 @@ func (s *teeStream) Next(ctx context.Context) (messages.Message, bool, error) {
 		}
 	}
 	return msg, ok, err
-}
-
-func requestKey(in []messages.Message) string {
-	raw, _ := json.Marshal(in)
-	return string(raw)
 }
 
 func (w *cacheWrapper) WrapModel(m language.ChatModel) language.ChatModel {

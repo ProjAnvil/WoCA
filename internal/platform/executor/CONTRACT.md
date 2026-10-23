@@ -174,6 +174,11 @@ Terminates the process. Subsequent output polls return `done: true` with the
 final `exit_code` (`-1` is acceptable for killed processes). Killing an
 already-exited session is a no-op (2xx).
 
+The Go client cancels outstanding session I/O when killed. `Process.Wait`
+joins the I/O workers before returning, so redirected stdout and stderr
+are no longer being written at that point. Output writer failures and
+short writes are returned by `Wait`.
+
 ### 3.7 Read file — `GET /sandbox/{id}/read?path=`
 
 ```bash

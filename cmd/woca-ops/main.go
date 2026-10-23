@@ -110,9 +110,10 @@ func proxyAssembly(log zerolog.Logger, raw string) http.Handler {
 		log.Fatal().Str("upstream", resolved).Msg("woca-ops: WOCA_OPS_UPSTREAM must be an http(s) URL")
 	}
 	proxy := &httputil.ReverseProxy{
-		Director: func(r *http.Request) {
-			r.URL.Scheme = upstream.Scheme
-			r.URL.Host = upstream.Host
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.Out.URL.Scheme = upstream.Scheme
+			r.Out.URL.Host = upstream.Host
+			r.SetXForwarded()
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Warn().Err(err).Str("path", r.URL.Path).Msg("woca-ops: upstream unreachable")

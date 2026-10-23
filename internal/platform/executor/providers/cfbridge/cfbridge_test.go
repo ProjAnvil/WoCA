@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -647,6 +648,102 @@ func TestStartKill(t *testing.T) {
 		t.Fatalf("Wait after Kill = %v, want nil", err)
 	}
 	close(release)
+}
+
+type outputWriter func([]byte) (int, error)
+
+func (f outputWriter) Write(p []byte) (int, error) { return f(p) }
+
+func TestStartWaitDrainsOutputAfterKill(t *testing.T) {
+	for _, stream := range []string{"stdout", "stderr"} {
+		t.Run(stream, func(t *testing.T) {
+			fb := newFake(t)
+			fb.execFn = func(_ execCall, w sseResp) {
+				w.event(stream, b64("output"))
+				<-w.ctx.Done()
+			}
+			b := newBridge(t, fb)
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			unblock := sync.OnceFunc(func() { close(release) })
+			t.Cleanup(unblock)
+			sink := outputWriter(func(p []byte) (int, error) {
+				close(entered)
+				<-release
+				return len(p), nil
+			})
+			opts := executor.StartOptions{Stdout: sink}
+			if stream == "stderr" {
+				opts = executor.StartOptions{Stderr: sink}
+			}
+			p, err := b.Start(t.Context(), executor.ExecRequest{Name: "server"}, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = p.Kill() })
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("output writer was not called")
+			}
+			if err := p.Kill(); err != nil {
+				t.Fatal(err)
+			}
+			waited := make(chan error, 1)
+			go func() { waited <- p.Wait() }()
+			select {
+			case err := <-waited:
+				t.Fatalf("Wait returned before the output writer finished: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			unblock()
+			select {
+			case err := <-waited:
+				if err != nil {
+					t.Fatalf("Wait after Kill: %v", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("Wait did not return after output finished")
+			}
+		})
+	}
+}
+
+func TestStartWaitReportsOutputErrors(t *testing.T) {
+	for _, stream := range []string{"stdout", "stderr"} {
+		for _, shortWrite := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/short=%v", stream, shortWrite), func(t *testing.T) {
+				fb := newFake(t)
+				fb.execFn = func(_ execCall, w sseResp) {
+					w.event(stream, b64("output"))
+					w.exit(0)
+				}
+				b := newBridge(t, fb)
+				want := io.ErrClosedPipe
+				if shortWrite {
+					want = io.ErrShortWrite
+				}
+				sink := outputWriter(func([]byte) (int, error) {
+					if shortWrite {
+						return 0, nil
+					}
+					return 0, want
+				})
+				opts := executor.StartOptions{Stdout: sink}
+				if stream == "stderr" {
+					opts = executor.StartOptions{Stderr: sink}
+				}
+				p, err := b.Start(t.Context(), executor.ExecRequest{Name: "server"}, opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = p.Kill() })
+				if err := p.Wait(); !errors.Is(err, want) {
+					t.Fatalf("Wait = %v, want %v", err, want)
+				}
+			})
+		}
+	}
 }
 
 func TestStartCtxCancelKills(t *testing.T) {

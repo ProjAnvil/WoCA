@@ -97,7 +97,7 @@ type Process interface {
 	Stdout() io.Reader
 	// Wait blocks until the process exits: nil on exit status 0,
 	// *ExitError on a non-zero status. Wait must not run concurrently from
-	// multiple goroutines.
+	// multiple goroutines. Redirected output writes finish before Wait returns.
 	Wait() error
 	// Kill terminates the process. Killing an already-exited process
 	// returns an error the caller may ignore.

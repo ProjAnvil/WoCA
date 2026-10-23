@@ -54,7 +54,10 @@ func runRelay() {
 		{"WOCA_PLUGIN_ROOT", filepath.Join(home, "plugins")},
 		{"WOCA_NO_BROWSER", "1"},
 	} {
-		os.Setenv(kv[0], kv[1])
+		if err := os.Setenv(kv[0], kv[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "lab/relay: set %s: %v\n", kv[0], err)
+			os.Exit(1)
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -180,7 +183,7 @@ func waitForRelayChain(key string) error {
 			lastErr = err
 			return false
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
 			lastErr = fmt.Errorf("%s = %d", url, resp.StatusCode)
 			return false
@@ -214,7 +217,7 @@ func relayLogin(base, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var out struct {
 		Token string `json:"token"`
 	}
@@ -232,6 +235,6 @@ func tunneledGet(url, token string) int {
 	if err != nil {
 		return -1
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode
 }

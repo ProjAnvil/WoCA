@@ -53,6 +53,7 @@ func (s *Sandbox) Start(ctx context.Context, req ExecRequest, opts StartOptions)
 		pr, pw := io.Pipe()
 		stdoutR, stdoutW = pr, pw
 	}
+	ioCtx, stopIO := context.WithCancel(context.Background())
 	p := &sandboxProcess{
 		s:       s,
 		sid:     out.SessionID,
@@ -62,9 +63,14 @@ func (s *Sandbox) Start(ctx context.Context, req ExecRequest, opts StartOptions)
 		opts:    opts,
 		exitCh:  make(chan error, 1),
 		stopCh:  make(chan struct{}),
+		ioCtx:   ioCtx,
+		stopIO:  stopIO,
 	}
-	go p.pumpStdin(stdinR)
-	go p.pollOutput()
+	p.ioWG.Go(func() {
+		defer func() { _ = stdinR.Close() }()
+		p.pumpStdin(stdinR)
+	})
+	p.ioWG.Go(p.pollOutput)
 	if ctx.Done() != nil {
 		go func() {
 			select {
@@ -88,13 +94,18 @@ type sandboxProcess struct {
 	exitCh    chan error
 	stopCh    chan struct{}
 	closeOnce sync.Once
+	ioCtx     context.Context
+	stopIO    context.CancelFunc
+	ioWG      sync.WaitGroup
 }
 
 func (p *sandboxProcess) Stdin() io.WriteCloser { return p.stdinW }
 func (p *sandboxProcess) Stdout() io.Reader     { return p.stdoutR }
 
 func (p *sandboxProcess) Wait() error {
-	return <-p.exitCh
+	err := <-p.exitCh
+	p.ioWG.Wait()
+	return err
 }
 
 // Kill terminates the session. The wait result of a killed process is nil
@@ -104,7 +115,6 @@ func (p *sandboxProcess) Wait() error {
 func (p *sandboxProcess) Kill() error {
 	err := p.s.do(context.Background(), http.MethodPost,
 		p.sessionPath("/kill"), map[string]any{}, nil)
-	_ = p.stdinW.Close()
 	p.finish(nil)
 	return err
 }
@@ -113,11 +123,13 @@ func (p *sandboxProcess) Kill() error {
 // goroutines.
 func (p *sandboxProcess) finish(err error) {
 	p.closeOnce.Do(func() {
+		close(p.stopCh)
+		p.stopIO()
+		_ = p.stdinW.Close()
 		if p.stdoutW != nil {
 			_ = p.stdoutW.Close()
 		}
 		p.exitCh <- err
-		close(p.stopCh)
 	})
 }
 
@@ -151,7 +163,7 @@ func (p *sandboxProcess) sendInput(data []byte, eof bool) error {
 	if !eof {
 		body["data"] = base64.StdEncoding.EncodeToString(data)
 	}
-	return p.s.do(context.Background(), http.MethodPost,
+	return p.s.do(p.ioCtx, http.MethodPost,
 		p.sessionPath("/input"), body, nil)
 }
 
@@ -167,7 +179,7 @@ func (p *sandboxProcess) pollOutput() {
 			return
 		default:
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), pollRequestTimeout)
+		ctx, cancel := context.WithTimeout(p.ioCtx, pollRequestTimeout)
 		var out struct {
 			Events []struct {
 				Stream string `json:"stream"`
@@ -181,6 +193,9 @@ func (p *sandboxProcess) pollOutput() {
 			p.sessionPath("/output")+"?offset="+strconv.Itoa(offset), nil, &out)
 		cancel()
 		if err != nil {
+			if p.ioCtx.Err() != nil {
+				return
+			}
 			failures++
 			if failures > pollMaxFailures {
 				p.finish(fmt.Errorf("sandbox: polling session output: %w", err))
@@ -198,19 +213,25 @@ func (p *sandboxProcess) pollOutput() {
 				p.finish(fmt.Errorf("sandbox: session output not base64: %w", decErr))
 				return
 			}
+			var dst io.Writer
 			switch ev.Stream {
 			case "stdout":
 				if p.opts.Stdout != nil {
-					_, _ = p.opts.Stdout.Write(data)
-				} else if p.stdoutW != nil {
-					if _, werr := p.stdoutW.Write(data); werr != nil {
-						p.finish(werr)
-						return
-					}
+					dst = p.opts.Stdout
+				} else {
+					dst = p.stdoutW
 				}
 			case "stderr":
-				if p.opts.Stderr != nil {
-					_, _ = p.opts.Stderr.Write(data)
+				dst = p.opts.Stderr
+			}
+			if dst != nil {
+				n, err := dst.Write(data)
+				if err == nil && n != len(data) {
+					err = io.ErrShortWrite
+				}
+				if err != nil {
+					p.finish(fmt.Errorf("sandbox: forwarding session %s: %w", ev.Stream, err))
+					return
 				}
 			}
 		}
