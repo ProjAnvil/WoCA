@@ -207,6 +207,11 @@ func (s *Service) Handler() http.Handler {
 	r.Handle("DELETE /api/mcp/{name}", s.requireScope(authz.ScopeSettingsWrite, s.handleDeleteManagedMCP))
 	// Sandbox backends (§4.3): registration, the single-enabled toggle,
 	// and full-chain verify. Keys ride the encrypted secrets table.
+	// The web-search probe runs the same search a managed machine would, so
+	// an operator can confirm the chain they are about to ship actually
+	// answers. It reaches the public internet, hence the write scope (the
+	// same posture as the sandbox verify endpoint).
+	r.Handle("POST /api/websearch/test", s.requireScope(authz.ScopeSettingsWrite, s.handleTestWebSearch))
 	r.Handle("GET /api/sandboxes", s.requireScope(authz.ScopeSettingsRead, s.handleListSandboxes))
 	r.Handle("POST /api/sandboxes", s.requireScope(authz.ScopeSettingsWrite, s.handleCreateSandbox))
 	r.Handle("PUT /api/sandboxes/{id}", s.requireScope(authz.ScopeSettingsWrite, s.handleUpdateSandbox))

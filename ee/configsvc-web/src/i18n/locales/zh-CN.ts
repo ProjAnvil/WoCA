@@ -9,7 +9,7 @@ export default {
     connect: '登录',
     invalid: '用户名或密码错误',
   },
-  nav: { model: '模型', storage: '存储', memory: '记忆', msgplane: '消息面', langfuse: '可观测', skills: 'Skills & MCP', sandbox: '沙箱', ops: '运维' },
+  nav: { model: '模型', storage: '存储', memory: '记忆', msgplane: '消息面', langfuse: '可观测', skills: 'Skills & MCP', sandbox: '沙箱', websearch: '网络搜索', ops: '运维' },
   sandbox: {
     intro: '登记沙箱执行后端；启用的后端承接远端租户的任务执行。「测试连接」会对全链路探活（命令、文件、进程、归档）。',
     newBackend: '＋ 新建后端',
@@ -144,4 +144,27 @@ export default {
     imported: '已应用',
     debugLog: '调试日志',
   },
+  websearch: {
+    intro:
+      '为所有受管机器统一指定网络搜索链路。留空表示由用户自行选择；填写则会锁定该配置。',
+    backends: '后端（故障转移顺序）',
+    backendsHint: '拖动排序。非空列表会锁定可用后端集合 — 用户无法增删。',
+    needsEndpoint: '需要填端点',
+    searxng: 'SearXNG 实例地址',
+    searxngPlaceholder: 'https://searx.internal.example.com',
+    custom: '自定义 JSON 搜索接口',
+    customKey: 'Bearer key',
+    customKeySet: '已加密存储；留空表示不修改',
+    allowed: '只允许这些域名',
+    denied: '丢弃这些域名',
+    domainsHint: '逗号分隔。丢弃列表优先于允许列表。',
+    test: '验证',
+    testAction: '跑一次测试搜索',
+    testing: '搜索中…',
+    testOk: '{provider} 返回了 {results} 条结果，耗时 {ms} 毫秒',
+    testFailed: '测试搜索失败。',
+    save: '保存',
+    saving: '保存中…',
+  },
+
 }

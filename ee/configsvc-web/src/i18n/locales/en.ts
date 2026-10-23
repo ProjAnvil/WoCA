@@ -9,7 +9,7 @@ export default {
     connect: 'Sign in',
     invalid: 'Wrong username or password',
   },
-  nav: { model: 'Model', storage: 'Storage', memory: 'Memory', msgplane: 'Message plane', langfuse: 'Observability', skills: 'Skills & MCP', sandbox: 'Sandboxes', ops: 'Ops' },
+  nav: { model: 'Model', storage: 'Storage', memory: 'Memory', msgplane: 'Message plane', langfuse: 'Observability', skills: 'Skills & MCP', sandbox: 'Sandboxes', websearch: 'Web search', ops: 'Ops' },
   sandbox: {
     intro: 'Register sandbox execution backends; the enabled one runs remote tenants\' tasks. Verify probes the full chain (exec, files, processes, archives).',
     newBackend: '＋ New backend',
@@ -144,4 +144,28 @@ export default {
     imported: 'applied',
     debugLog: 'Debug log',
   },
+  websearch: {
+    intro:
+      'Pin the web-search chain every managed machine uses. Leave a field empty to let users choose for themselves; fill it in to lock it.',
+    backends: 'Backends (failover order)',
+    backendsHint:
+      'Drag to reorder. A non-empty list pins the exact allowed set — users cannot add or remove backends.',
+    needsEndpoint: 'needs endpoint',
+    searxng: 'SearXNG instance',
+    searxngPlaceholder: 'https://searx.internal.example.com',
+    custom: 'Custom JSON search API',
+    customKey: 'Bearer key',
+    customKeySet: 'stored encrypted; empty keeps it',
+    allowed: 'Only allow these hosts',
+    denied: 'Drop these hosts',
+    domainsHint: 'Comma-separated. Dropped hosts win over the allow list.',
+    test: 'Verify',
+    testAction: 'Run a test search',
+    testing: 'Searching…',
+    testOk: '{provider} answered with {results} result(s) in {ms} ms',
+    testFailed: 'The test search failed.',
+    save: 'Save',
+    saving: 'Saving…',
+  },
+
 }

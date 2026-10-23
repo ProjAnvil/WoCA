@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, provide, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, Box, Brain, Cpu, Database, MessageSquare, MessagesSquare, ServerCog, Settings2, Sparkles } from 'lucide-vue-next'
+import { Activity, Box, Brain, Cpu, Database, MessageSquare, MessagesSquare, Search, ServerCog, Settings2, Sparkles } from 'lucide-vue-next'
 import type { Settings } from './types'
 import type { CfgContext } from './inject'
 import ModelSection from './components/ModelSection.vue'
@@ -12,6 +12,7 @@ import LangfuseSection from './components/LangfuseSection.vue'
 import OpsSection from './components/OpsSection.vue'
 import SkillsSection from './components/SkillsSection.vue'
 import SandboxSection from './components/SandboxSection.vue'
+import WebSearchSection from './components/WebSearchSection.vue'
 
 const { t, locale } = useI18n()
 
@@ -188,6 +189,7 @@ const sections = computed(() => [
   { id: 'langfuse', label: t('nav.langfuse'), icon: Activity },
   { id: 'skills', label: t('nav.skills'), icon: Sparkles },
   { id: 'sandbox', label: t('nav.sandbox'), icon: Box },
+  { id: 'websearch', label: t('nav.websearch'), icon: Search },
   { id: 'ops', label: t('nav.ops'), icon: Settings2 },
 ])
 const active = ref('model')
@@ -262,6 +264,7 @@ onMounted(() => {
         <LangfuseSection v-if="active === 'langfuse'" />
         <SkillsSection v-if="active === 'skills'" />
         <SandboxSection v-if="active === 'sandbox'" />
+          <WebSearchSection v-if="active === 'websearch'" />
         <OpsSection v-if="active === 'ops'" />
         <div v-if="savedFlash" class="flash">
           <MessageSquare :size="12" style="vertical-align: -2px" /> {{ savedFlash }}

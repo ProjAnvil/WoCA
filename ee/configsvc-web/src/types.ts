@@ -29,6 +29,13 @@ export interface Settings {
   ladym_api_password_set: boolean
   ladym_embedding: string
   ladym_llm: string
+  search_providers: string[]
+  search_searxng_endpoint: string
+  search_custom_endpoint: string
+  search_custom_key_set: boolean
+  search_allowed_domains: string[]
+  search_denied_domains: string[]
+
   ladym_topk: number
   ladym_autoretain: boolean
   ladym_system2: boolean
