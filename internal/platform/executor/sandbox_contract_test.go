@@ -47,7 +47,7 @@ func TestContractExec(t *testing.T) {
 	// env override reaches the process
 	res, err = sb.Exec(t.Context(), ExecRequest{
 		Name: "sh", Args: []string{"-c", "printf %s $WOCATEST"},
-		Env:  []string{"WOCATEST=env-ok"},
+		Env: []string{"WOCATEST=env-ok"},
 	})
 	if err != nil || string(res.Stdout) != "env-ok" {
 		t.Fatalf("env exec: err=%v stdout=%q", err, res.Stdout)

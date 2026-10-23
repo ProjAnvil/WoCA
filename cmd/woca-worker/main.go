@@ -135,28 +135,28 @@ func newWorkerRoot() *cobra.Command {
 				states = &dbSessionStates{db: db}
 			}
 
-		w := worker.New(worker.Config{
-			Ledger:  ledger,
-			Agent:   ap.Agent,
-			Bus:     bus,
-			Logger:  log,
-			ID:      workerID(),
-			Metrics: workerMetrics(obsInst),
-			Sessions: sessions,
-			States:   states,
-			Idle:     idle,
-			// Per-run sandbox wiring (design §4.5): the materialized
-			// sandbox_backends table (nacos pack apply) plus the backend
-			// secrets landed in the settings store by the same apply.
-			DB:      db,
-			SecretFor: func(backendID string) string {
-				if ap.Settings == nil {
-					return ""
-				}
-				return ap.Settings.GetSecret("sandbox-api-key:" + backendID)
-			},
-			MaxArchiveBytes: ap.Settings.Load().SandboxArchiveMaxBytes,
-		})
+			w := worker.New(worker.Config{
+				Ledger:   ledger,
+				Agent:    ap.Agent,
+				Bus:      bus,
+				Logger:   log,
+				ID:       workerID(),
+				Metrics:  workerMetrics(obsInst),
+				Sessions: sessions,
+				States:   states,
+				Idle:     idle,
+				// Per-run sandbox wiring (design §4.5): the materialized
+				// sandbox_backends table (nacos pack apply) plus the backend
+				// secrets landed in the settings store by the same apply.
+				DB: db,
+				SecretFor: func(backendID string) string {
+					if ap.Settings == nil {
+						return ""
+					}
+					return ap.Settings.GetSecret("sandbox-api-key:" + backendID)
+				},
+				MaxArchiveBytes: ap.Settings.Load().SandboxArchiveMaxBytes,
+			})
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
@@ -173,17 +173,17 @@ func newWorkerRoot() *cobra.Command {
 			if obsAddr == "" || obsAddr == "off" {
 				return fmt.Errorf("worker requires --obs-addr (the advertise port) when registering with nacos")
 			}
-		rt, err := nacosrt.New(nacosrt.Config{
-			Server: nacosBase, Service: "woca-worker", Advertise: obsAddr,
-			St: ap.Settings, DB: db,
-			Identity: settingswatch.Identity{
-				ServiceID: workerID(), Role: "worker", Addr: obsAddr,
-				// Refreshed live by the heartbeat below: the marker rides
-				// every ack rewrite, so enabling/disabling a backend
-				// applies without a restart.
-				Capabilities: workerCapabilities(db),
-			},
-			OnChange: func() {
+			rt, err := nacosrt.New(nacosrt.Config{
+				Server: nacosBase, Service: "woca-worker", Advertise: obsAddr,
+				St: ap.Settings, DB: db,
+				Identity: settingswatch.Identity{
+					ServiceID: workerID(), Role: "worker", Addr: obsAddr,
+					// Refreshed live by the heartbeat below: the marker rides
+					// every ack rewrite, so enabling/disabling a backend
+					// applies without a restart.
+					Capabilities: workerCapabilities(db),
+				},
+				OnChange: func() {
 					if err := ap.RebuildModel(); err != nil {
 						log.Warn().Err(err).Msg("model hot-swap after config change failed")
 					}
@@ -198,19 +198,19 @@ func newWorkerRoot() *cobra.Command {
 			if err != nil {
 				return err
 			}
-		if err := rt.Start(ctx); err != nil {
-			return err
-		}
-		go rt.Loop(ctx)
+			if err := rt.Start(ctx); err != nil {
+				return err
+			}
+			go rt.Loop(ctx)
 
-		// Capability heartbeat (design §10.2 M-4): rewrite this worker's
-		// ack row every 10s — generation from the last applied pack,
-		// capabilities from the live enabled-sandbox state — so the
-		// dispatcher's 15s live window never prunes a healthy idle
-		// worker.
-		go w.AckHeartbeat(ctx, 0, rt.LastGeneration, func() string { return workerCapabilities(db) })
+			// Capability heartbeat (design §10.2 M-4): rewrite this worker's
+			// ack row every 10s — generation from the last applied pack,
+			// capabilities from the live enabled-sandbox state — so the
+			// dispatcher's 15s live window never prunes a healthy idle
+			// worker.
+			go w.AckHeartbeat(ctx, 0, rt.LastGeneration, func() string { return workerCapabilities(db) })
 
-		return w.Run(ctx)
+			return w.Run(ctx)
 		},
 	}
 	root.Flags().StringVar(&logLevel, "log-level", "info", "debug | info | warn | error")

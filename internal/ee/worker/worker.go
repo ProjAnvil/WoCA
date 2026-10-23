@@ -105,17 +105,17 @@ const idlePollEvery = 200 * time.Millisecond
 
 // Worker claims and executes runs from the queue.
 type Worker struct {
-	ledger   *runstate.Ledger
-	agent    *agent.Agent
-	bus      eventbus.Bus
-	log      zerolog.Logger
-	id       string
-	metrics  *Metrics
-	sessions Sessions
-	states   SessionStates
-	idle     IdleWaiter
-	db       *wocadb.DB
-	secretFor func(backendID string) string
+	ledger          *runstate.Ledger
+	agent           *agent.Agent
+	bus             eventbus.Bus
+	log             zerolog.Logger
+	id              string
+	metrics         *Metrics
+	sessions        Sessions
+	states          SessionStates
+	idle            IdleWaiter
+	db              *wocadb.DB
+	secretFor       func(backendID string) string
 	maxArchiveBytes int64
 }
 

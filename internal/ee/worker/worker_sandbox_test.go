@@ -80,13 +80,13 @@ func newSandboxWorker(t *testing.T, endpoint string, maxBytes int64, replies ...
 		t.Fatal(err)
 	}
 	w := New(Config{
-		Ledger:  ledger,
-		Agent:   a,
-		Logger:  zerolog.Nop(),
-		ID:      "worker-sbx",
-		DB:      db,
+		Ledger:          ledger,
+		Agent:           a,
+		Logger:          zerolog.Nop(),
+		ID:              "worker-sbx",
+		DB:              db,
 		MaxArchiveBytes: maxBytes,
-		SecretFor: func(id string) string { return "secret-for-" + id },
+		SecretFor:       func(id string) string { return "secret-for-" + id },
 	})
 	return w, ledger
 }

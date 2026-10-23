@@ -101,10 +101,10 @@ func TestKeyCreateDuplicateName(t *testing.T) {
 func TestKeyArgValidation(t *testing.T) {
 	db := tempDB(t)
 	for _, args := range [][]string{
-		{"key", "create"},          // missing name
+		{"key", "create"},           // missing name
 		{"key", "create", "a", "b"}, // extra arg
-		{"key", "revoke"},          // missing name
-		{"key", "list", "extra"},   // list takes no args
+		{"key", "revoke"},           // missing name
+		{"key", "list", "extra"},    // list takes no args
 	} {
 		if err := execRelayCmd(t, append([]string{"--db", db}, args...)...); err == nil {
 			t.Fatalf("args %v must fail", args)

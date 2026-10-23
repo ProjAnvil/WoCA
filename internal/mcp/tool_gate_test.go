@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/projanvil/langchain-golang/core/schema"
 	"github.com/projanvil/woca/internal/platform/executor"
 	"github.com/projanvil/woca/internal/platform/executor/fakesandbox"
 	"github.com/projanvil/woca/internal/runexec"
-	"github.com/projanvil/langchain-golang/core/schema"
 )
 
 // errTransport fails every round trip, so the un-gated local branch errors
@@ -20,8 +20,8 @@ type errTransport struct{}
 func (errTransport) roundTrip(context.Context, int64, []byte) (rpcResponse, error) {
 	return rpcResponse{}, errors.New("no connection")
 }
-func (errTransport) send([]byte) error                  { return errors.New("no connection") }
-func (errTransport) close() error                       { return nil }
+func (errTransport) send([]byte) error                         { return errors.New("no connection") }
+func (errTransport) close() error                              { return nil }
 func (errTransport) setNotifier(func(string, json.RawMessage)) {}
 
 // MCP stdio servers run as host processes spawned at build time — they

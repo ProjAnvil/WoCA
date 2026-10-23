@@ -304,6 +304,7 @@ func (s *Service) ConnectRelay(ctx context.Context, input ConnectionInput) (Boot
 	s.markReady(profile.BaseURL)
 	return BootstrapState{State: StateReady, ServerURL: profile.BaseURL}, nil
 }
+
 // connect page's entry ① needs it whenever the user re-connects).
 func (s *Service) SetEmbeddedBaseURL(rawURL string) {
 	s.mu.Lock()

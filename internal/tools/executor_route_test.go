@@ -64,7 +64,7 @@ func TestListDirRoutesThroughExecutor(t *testing.T) {
 			filepath.Join(dir, "*"): {filepath.Join(dir, "a.txt"), filepath.Join(dir, "sub")},
 		},
 		statInfo: map[string]fakeFileInfo{
-			dir:                        {name: filepath.Base(dir), dir: true},
+			dir:                         {name: filepath.Base(dir), dir: true},
 			filepath.Join(dir, "a.txt"): {name: "a.txt"},
 			filepath.Join(dir, "sub"):   {name: "sub", dir: true},
 		},
@@ -100,7 +100,7 @@ func TestListDirMissingDirSurfacesError(t *testing.T) {
 func TestGlobRoutesThroughExecutor(t *testing.T) {
 	dir := t.TempDir()
 	fake := fileDirFake(t, dir, map[string]bool{
-		filepath.Join(dir, "a.go"):               true,
+		filepath.Join(dir, "a.go"):                 true,
 		filepath.Join(dir, "deep", "nest", "b.go"): true,
 	})
 	reg := NewRegistryWithExecutor(dir, fake)

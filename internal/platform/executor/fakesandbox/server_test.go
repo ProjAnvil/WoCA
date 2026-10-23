@@ -126,8 +126,8 @@ func TestExecEnvStdinExitCode(t *testing.T) {
 	id := createSandbox(t, c)
 
 	code, out := c.json("POST", "/sandbox/"+id+"/exec", map[string]any{
-		"argv": []string{"sh", "-c", "echo $FAKEVAR; cat"},
-		"env":  map[string]string{"FAKEVAR": "woca"},
+		"argv":  []string{"sh", "-c", "echo $FAKEVAR; cat"},
+		"env":   map[string]string{"FAKEVAR": "woca"},
 		"stdin": b64("piped\n"),
 	})
 	if code != 200 {

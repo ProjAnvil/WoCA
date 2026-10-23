@@ -79,14 +79,14 @@ func (s *Sandbox) Start(ctx context.Context, req ExecRequest, opts StartOptions)
 
 // sandboxProcess is a Process backed by a contract v2 session.
 type sandboxProcess struct {
-	s        *Sandbox
-	sid      string
-	stdinW   io.WriteCloser
-	stdoutR  io.Reader // nil when StartOptions.Stdout redirected output
-	stdoutW  io.WriteCloser
-	opts     StartOptions
-	exitCh   chan error
-	stopCh   chan struct{}
+	s         *Sandbox
+	sid       string
+	stdinW    io.WriteCloser
+	stdoutR   io.Reader // nil when StartOptions.Stdout redirected output
+	stdoutW   io.WriteCloser
+	opts      StartOptions
+	exitCh    chan error
+	stopCh    chan struct{}
 	closeOnce sync.Once
 }
 
@@ -178,7 +178,7 @@ func (p *sandboxProcess) pollOutput() {
 			NextOffset int  `json:"next_offset"`
 		}
 		err := p.s.do(ctx, http.MethodGet,
-		p.sessionPath("/output")+"?offset="+strconv.Itoa(offset), nil, &out)
+			p.sessionPath("/output")+"?offset="+strconv.Itoa(offset), nil, &out)
 		cancel()
 		if err != nil {
 			failures++

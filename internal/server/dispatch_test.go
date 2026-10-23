@@ -165,7 +165,7 @@ func TestRunsOffHostGate(t *testing.T) {
 		runStatus, setStatus int
 	}{
 		{false, nil, false, http.StatusForbidden, http.StatusForbidden},
-		{true, nil, false, http.StatusForbidden, http.StatusForbidden},  // no sandbox backend: fail closed
+		{true, nil, false, http.StatusForbidden, http.StatusForbidden},                                  // no sandbox backend: fail closed
 		{true, func() bool { return true }, false, http.StatusServiceUnavailable, http.StatusForbidden}, // no capable worker
 		{true, func() bool { return true }, true, http.StatusOK, http.StatusForbidden},
 	} {

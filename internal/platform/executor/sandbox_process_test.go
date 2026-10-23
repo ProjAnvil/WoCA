@@ -378,4 +378,3 @@ func TestSandboxStartStderrSink(t *testing.T) {
 		t.Fatalf("stderr = %q", errBuf.String())
 	}
 }
-
