@@ -137,7 +137,14 @@ func TestGlobToRegexp(t *testing.T) {
 	}{
 		{"*.go", "main.go", true},
 		{"*.go", "sub/main.go", false}, // single * does not cross "/"
+		{"**/*.go", "main.go", true},
 		{"**/*.go", "deep/nest/main.go", true},
+		{"src/**/*.go", "src/main.go", true},
+		{"src/**/*.go", "src/deep/main.go", true},
+		{"src/**/*.go", "srcmain.go", false},
+		{"**/**/main.go", "main.go", true},
+		{"a**/main.go", "amain.go", false},
+		{"a**/main.go", "abc/main.go", true},
 		{"a?c", "abc", true},
 		{"a?c", "ac", false},
 		{"[abc].txt", "b.txt", true},
@@ -145,6 +152,12 @@ func TestGlobToRegexp(t *testing.T) {
 		{"a[b.txt", "a[b.txt", true}, // unclosed class is literal
 		{"a[b.txt", "ab.txt", false},
 		{"x+.txt", "x+.txt", true}, // + is quoted
+		{"\u62a5\u544a.md", "\u62a5\u544a.md", true},
+		{"\u8d44\u6599/*.md", "\u8d44\u6599/\u62a5\u544a.md", true},
+		{"\u8d44\u6599/*.md", "\u5176\u4ed6/\u62a5\u544a.md", false},
+		{"\U0001f4c4?.md", "\U0001f4c4\u62a5.md", true},
+		{"\u62a5+.md", "\u62a5+.md", true},
+		{"\u62a5+.md", "\u62a5\u62a5.md", false},
 	}
 	for _, c := range cases {
 		re, err := globToRegexp(c.pattern)
@@ -158,6 +171,101 @@ func TestGlobToRegexp(t *testing.T) {
 	}
 	if _, err := globToRegexp("[z-a]"); err == nil {
 		t.Error("globToRegexp([z-a]) = nil error, want invalid class")
+	}
+}
+
+func TestSearchToolsUnicodePatterns(t *testing.T) {
+	dir := t.TempDir()
+	if err := mkdirAllWrite(filepath.Join(dir, "\u8d44\u6599", "\u62a5\u544a.md"), "needle\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mkdirAllWrite(filepath.Join(dir, "other.md"), "needle\n"); err != nil {
+		t.Fatal(err)
+	}
+	reg := NewRegistry(dir)
+	for _, tc := range []struct {
+		name string
+		tool string
+		args map[string]any
+		want string
+	}{
+		{
+			name: "glob_basename",
+			tool: "Glob",
+			args: map[string]any{"pattern": "\u62a5\u544a.md"},
+			want: "\u8d44\u6599/\u62a5\u544a.md\n",
+		},
+		{
+			name: "glob_directory",
+			tool: "Glob",
+			args: map[string]any{"pattern": "\u8d44\u6599/*.md"},
+			want: "\u8d44\u6599/\u62a5\u544a.md\n",
+		},
+		{
+			name: "grep_include_directory",
+			tool: "Grep",
+			args: map[string]any{"pattern": "needle", "include": "\u8d44\u6599/*.md"},
+			want: "\u8d44\u6599/\u62a5\u544a.md:1:needle\n",
+		},
+		{
+			name: "grep_include_basename",
+			tool: "Grep",
+			args: map[string]any{"pattern": "needle", "include": "**/\u62a5\u544a.md"},
+			want: "\u8d44\u6599/\u62a5\u544a.md:1:needle\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if res := reg.Execute(t.Context(), tc.tool, tc.args); res.Content != tc.want {
+				t.Fatalf("%s = %q, want %q", tc.tool, res.Content, tc.want)
+			}
+		})
+	}
+}
+
+func TestSearchToolsGlobstarMatchesRootAndNestedFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"main.go", "pkg/main.go", "pkg/deep/main.go", "pkg/other.txt"} {
+		if err := mkdirAllWrite(filepath.Join(dir, filepath.FromSlash(name)), "needle\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg := NewRegistry(dir)
+	for _, tc := range []struct {
+		name string
+		tool string
+		args map[string]any
+		want string
+	}{
+		{
+			name: "glob_from_root",
+			tool: "Glob",
+			args: map[string]any{"pattern": "**/*.go"},
+			want: "main.go\npkg/deep/main.go\npkg/main.go\n",
+		},
+		{
+			name: "glob_from_subdirectory",
+			tool: "Glob",
+			args: map[string]any{"pattern": "pkg/**/*.go"},
+			want: "pkg/deep/main.go\npkg/main.go\n",
+		},
+		{
+			name: "grep_from_root",
+			tool: "Grep",
+			args: map[string]any{"pattern": "needle", "include": "**/*.go"},
+			want: "main.go:1:needle\npkg/deep/main.go:1:needle\npkg/main.go:1:needle\n",
+		},
+		{
+			name: "grep_from_subdirectory",
+			tool: "Grep",
+			args: map[string]any{"pattern": "needle", "include": "pkg/**/*.go"},
+			want: "pkg/deep/main.go:1:needle\npkg/main.go:1:needle\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if res := reg.Execute(t.Context(), tc.tool, tc.args); res.Content != tc.want {
+				t.Fatalf("%s = %q, want %q", tc.tool, res.Content, tc.want)
+			}
+		})
 	}
 }
 

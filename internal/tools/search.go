@@ -70,7 +70,7 @@ func listEntryNames(ctx context.Context, x executor.Executor, entries []string) 
 	return names
 }
 
-const globDescription = `Find files whose paths match a glob pattern. A pattern with no "/" matches basenames at any depth (e.g. "*.go"). Supports "**", "*", "?", and character classes.`
+const globDescription = `Find files whose paths match a glob pattern. A pattern with no "/" matches basenames at any depth (e.g. "*.go"). Supports "**", "*", "?", and character classes; "**/" matches zero or more directories.`
 
 type globArgs struct {
 	Pattern string `json:"pattern"`
@@ -90,7 +90,7 @@ func globTool(d *Dir, execFor func(context.Context) executor.Executor) coretools
 	return t
 }
 
-const grepDescription = `Search file contents with a regular expression. Returns file:line:content for each match. Optionally filter files with a glob include pattern.`
+const grepDescription = `Search file contents with a regular expression. Returns file:line:content for each match. Optionally filter files with a glob include pattern (use "**/" to match at any depth, including the root).`
 
 type grepArgs struct {
 	Pattern string `json:"pattern"`
@@ -239,17 +239,23 @@ func formatMatches(matches []string, empty string) string {
 }
 
 // globToRegexp compiles a glob (with "**", "*", "?", "[...]") into a regexp
-// anchored to the full path.
+// anchored to the full path. A "**/" path segment matches zero or more directories.
 func globToRegexp(pattern string) (*regexp.Regexp, error) {
 	var b strings.Builder
 	b.WriteString("^")
-	for i := 0; i < len(pattern); i++ {
-		c := pattern[i]
+	chars := []rune(pattern)
+	for i := 0; i < len(chars); i++ {
+		c := chars[i]
 		switch c {
 		case '*':
-			if i+1 < len(pattern) && pattern[i+1] == '*' {
-				b.WriteString(".*")
-				i++
+			if i+1 < len(chars) && chars[i+1] == '*' {
+				if (i == 0 || chars[i-1] == '/') && i+2 < len(chars) && chars[i+2] == '/' {
+					b.WriteString("(?:[^/]+/)*")
+					i += 2
+				} else {
+					b.WriteString(".*")
+					i++
+				}
 			} else {
 				b.WriteString("[^/]*")
 			}
@@ -257,11 +263,11 @@ func globToRegexp(pattern string) (*regexp.Regexp, error) {
 			b.WriteString("[^/]")
 		case '[':
 			j := i + 1
-			for j < len(pattern) && pattern[j] != ']' {
+			for j < len(chars) && chars[j] != ']' {
 				j++
 			}
-			if j < len(pattern) {
-				b.WriteString(pattern[i : j+1])
+			if j < len(chars) {
+				b.WriteString(string(chars[i : j+1]))
 				i = j
 			} else {
 				b.WriteString(`\[`)
