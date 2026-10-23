@@ -70,14 +70,35 @@ test-ui: web-test ee-web-test
 # Browser E2E over the four frontend forms (e2e/README.md): the personal
 # binary, the lab's real bridge/edge chain, the native-wizard shim, and —
 # with WOCA_E2E_NATIVE_DEV=1 — the real wails process (opens a window).
+#
+# E2E_ENV keeps loopback off the proxy. Every target here talks only to the
+# lab's fixed 127.0.0.1 ports, and Playwright's webServer readiness probe
+# inherits the environment too: with HTTP_PROXY set (corporate machines, CI
+# sandboxes) that probe otherwise reaches the proxy, gets a 502, and reports
+# the port as "already used" when nothing is listening on it. e2e-install is
+# deliberately NOT wrapped — downloading browsers needs the proxy.
+E2E_ENV := env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+	NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
+
+.PHONY: e2e-install e2e e2e-native-dev e2e-personal
 e2e-install:
 	cd e2e && npm install && npx playwright install chromium
 
+# Every target depends on `web`: the Go binary embeds web/dist, so skipping
+# the frontend build makes the browser tests drive the previous bundle.
 e2e: web
-	cd e2e && npx playwright test
+	cd e2e && $(E2E_ENV) npx playwright test
 
 e2e-native-dev: web
-	cd e2e && WOCA_E2E_NATIVE_DEV=1 npx playwright test
+	cd e2e && WOCA_E2E_NATIVE_DEV=1 $(E2E_ENV) npx playwright test
+
+# Just the personal form's specs, for iterating on one section. The webServers
+# still all start (Playwright starts every webServer the config declares,
+# whatever you select); what this saves is the other four forms' specs.
+# Pass extra args with ARGS, e.g.
+#   make e2e-personal ARGS=websearch.spec.ts
+e2e-personal: web
+	cd e2e && $(E2E_ENV) npx playwright test tests/personal $(ARGS)
 
 vet:
 	go vet ./...

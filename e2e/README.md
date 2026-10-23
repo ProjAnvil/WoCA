@@ -55,12 +55,24 @@ lab/                     # Go：一个进程一个拓扑
 
 ```sh
 make e2e-install     # 一次：npm install + playwright install chromium
-make e2e             # 五形态 24 例（含先 make web；relay 形态默认在内）
-make e2e-native-dev  # 追加真 wails 进程 2 例（opt-in）
+make e2e             # 五形态 31 例，其中 2 例 wails 真机默认跳过
+                     # （含先 make web；relay 形态默认在内）
+make e2e-native-dev  # 加上那 2 例真 wails 进程（opt-in，会开窗口）
+make e2e-personal    # 只跑个人形态的 8 例（改单个分区时省掉其余四形态）
 ```
 
 调试：`cd e2e && npx playwright test --headed`、失败自动留
 `test-results/`（ARIA 快照 + 上下文）、`npx playwright show-report`。
+
+### 两个会浪费半天的坑
+
+1. **改完 Vue 必须走 make 目标**（`make e2e*` 都依赖 `web`）。Go 二进制嵌的是
+   `web/dist`，直接 `bun run build` 之后不重新构建，浏览器里跑的是上一版产物，
+   新加的选择器全部落空——症状是所有用例一起超时找不到元素。
+2. **环境里设了 HTTP_PROXY 会假报「端口已被占用」**。Playwright 的 webServer
+   就绪探测继承环境变量，探测 `127.0.0.1:13711/api/health` 时请求被代理吃掉，
+   拿到 502 就被判定成端口冲突，而实际上端口是空的。make 目标里的 `E2E_ENV`
+   已经把回环排除在代理之外，绕开 make 直接跑 `npx playwright test` 时会遇到。
 
 ## 已锁定（并修正过测试预期）的产品行为
 
