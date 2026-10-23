@@ -483,3 +483,49 @@ export interface StatsResponse {
   sse_dropped: number
   lsp: { active: number; broken: number }
 }
+
+// --- web search (settings -> Web search) ---
+
+/** One entry in the web-search backend catalog. */
+export interface WebSearchProvider {
+  id: string
+  name: string
+  description: string
+  needs_endpoint: boolean
+  enabled: boolean
+  /** 1-based position in the failover order; 0 when not enabled. */
+  order: number
+}
+
+export interface WebSearchState {
+  providers: WebSearchProvider[]
+  /** The failover order — a subset of the catalog ids. */
+  enabled: string[]
+  searxng_endpoint: string
+  custom_endpoint: string
+  /** Whether a bearer key is stored; the key itself is never returned. */
+  custom_key_set: boolean
+  allowed_domains: string[]
+  denied_domains: string[]
+  /** Keys locked by the organization; the UI renders them read-only. */
+  managed_fields: string[]
+}
+
+export interface WebSearchUpdate {
+  providers: string[]
+  searxng_endpoint: string
+  custom_endpoint: string
+  /** Empty means "leave the stored key alone". */
+  custom_key?: string
+  allowed_domains: string[]
+  denied_domains: string[]
+}
+
+export interface WebSearchTestResult {
+  ok: boolean
+  provider?: string
+  results: number
+  latency_ms: number
+  sample?: string
+  error?: string
+}

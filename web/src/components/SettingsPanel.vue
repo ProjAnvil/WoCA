@@ -16,6 +16,7 @@ import {
   Plug,
   Puzzle,
   Radio,
+  Search,
   Server,
   Settings2,
   Unplug,
@@ -32,6 +33,7 @@ import PreferencesSection from './settings/PreferencesSection.vue'
 import ProviderSection from './settings/ProviderSection.vue'
 import ClaudeEnvSection from './settings/ClaudeEnvSection.vue'
 import PluginsSection from './settings/PluginsSection.vue'
+import WebSearchSection from './settings/WebSearchSection.vue'
 import StorageSection from './settings/StorageSection.vue'
 import AdminSection from './settings/AdminSection.vue'
 import CloudAccessSection from './settings/CloudAccessSection.vue'
@@ -62,6 +64,7 @@ const baseSections = [
   { id: 'provider', label: 'settings.nav.provider', icon: Server },
   { id: 'claudeenv', label: 'settings.nav.claudeenv', icon: Plug },
   { id: 'plugins', label: 'settings.nav.plugins', icon: Puzzle },
+  { id: 'websearch', label: 'settings.nav.websearch', icon: Search },
   { id: 'storage', label: 'settings.nav.storage', icon: Database },
   { id: 'msgplane', label: 'settings.nav.msgplane', icon: Radio },
   { id: 'memory', label: 'settings.nav.memory', icon: Brain },
@@ -280,6 +283,7 @@ onBeforeUnmount(() => {
               <ClaudeEnvSection v-if="active === 'claudeenv'" :bridge="isBridge" />
               <ManagedSection v-if="active === 'managed'" :status="statusInfo" />
               <PluginsSection v-if="active === 'plugins'" :bridge="isBridge" />
+              <WebSearchSection v-if="active === 'websearch'" />
               <StorageSection v-if="active === 'storage'" :bridge="isBridge" />
               <!-- Message plane is not a private-cloud concept (product design
                    §2 rule 2): the section disappears on managed bridges. -->

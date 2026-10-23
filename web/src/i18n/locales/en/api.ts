@@ -26,4 +26,8 @@ export default {
   streamConnectFailed: 'Stream connection failed: {status}',
   unknownError: 'Unknown error',
   revoked: 'credential revoked',
+  loadWebSearchFailed: 'Failed to load web search settings',
+  saveWebSearchFailed: 'Failed to save web search settings',
+  testWebSearchFailed: 'Failed to run the test search',
+
 }

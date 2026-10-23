@@ -154,3 +154,57 @@ describe('settings REST surface', () => {
     expect(JSON.parse(init.body)).toEqual({ skills: ['s'], mcp: ['m'] })
   })
 })
+
+describe('web search REST surface', () => {
+  it('reads the catalog and the failover order', () => {
+    void settings.getWebSearch()
+    expect(request).toHaveBeenCalledWith('/api/websearch', undefined, label('api.loadWebSearchFailed'))
+  })
+
+  it('replaces the whole search block on PUT', () => {
+    void settings.putWebSearch({
+      providers: ['searxng', 'ddg-html'],
+      searxng_endpoint: 'https://searx.example',
+      custom_endpoint: '',
+      allowed_domains: ['go.dev'],
+      denied_domains: [],
+    })
+    const [url, init] = lastCall(request)
+    expect(url).toBe('/api/websearch')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({
+      providers: ['searxng', 'ddg-html'],
+      searxng_endpoint: 'https://searx.example',
+      custom_endpoint: '',
+      allowed_domains: ['go.dev'],
+      denied_domains: [],
+    })
+  })
+
+  // The wrapper is a thin pass-through: dropping an empty key is the
+  // component's decision (it sends undefined), so what matters here is that
+  // undefined really does leave the body while a real key is forwarded.
+  it('forwards a custom key verbatim and drops an absent one', () => {
+    const base = {
+      providers: [],
+      searxng_endpoint: '',
+      custom_endpoint: 'https://api.example/s',
+      allowed_domains: [],
+      denied_domains: [],
+    }
+    void settings.putWebSearch({ ...base, custom_key: 'sk-live' })
+    expect(JSON.parse(lastCall(request)[1].body).custom_key).toBe('sk-live')
+
+    void settings.putWebSearch({ ...base })
+    const body = JSON.parse(lastCall(request)[1].body) as Record<string, unknown>
+    expect('custom_key' in body).toBe(false)
+  })
+
+  it('posts the probe query', () => {
+    void settings.testWebSearch('golang')
+    const [url, init] = lastCall(request)
+    expect(url).toBe('/api/websearch/test')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ query: 'golang' })
+  })
+})

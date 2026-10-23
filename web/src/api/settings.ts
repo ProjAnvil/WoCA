@@ -7,6 +7,9 @@ import type {
   AppSettingsUpdate,
   ClaudeEnvState,
   PluginsResponse,
+  WebSearchState,
+  WebSearchTestResult,
+  WebSearchUpdate,
 } from '../types'
 import { postJSON, request } from './transport'
 
@@ -113,4 +116,29 @@ export interface ManagedDelivery {
  */
 export function getManagedDelivery(): Promise<ManagedDelivery> {
   return request('/api/managed', undefined, i18n.global.t('api.requestFailed'))
+}
+
+// --- web search ---
+
+/** Lists the backend catalog and the current failover order. */
+export function getWebSearch(): Promise<WebSearchState> {
+  return request('/api/websearch', undefined, i18n.global.t('api.loadWebSearchFailed'))
+}
+
+/** Replaces the whole search block; the chain rebinds on the next turn. */
+export function putWebSearch(body: WebSearchUpdate): Promise<{ ok: boolean }> {
+  return request('/api/websearch', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, i18n.global.t('api.saveWebSearchFailed'))
+}
+
+/** Runs one real query so the user can confirm the configuration works. */
+export function testWebSearch(query: string): Promise<WebSearchTestResult> {
+  return request('/api/websearch/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query }),
+  }, i18n.global.t('api.testWebSearchFailed'))
 }

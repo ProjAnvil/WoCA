@@ -28,6 +28,7 @@ export default {
     provider: 'Model Provider',
     claudeenv: 'Skills & MCP',
     plugins: 'Plugins',
+    websearch: 'Web search',
     storage: 'Storage',
     msgplane: 'Message plane',
     memory: 'Memory',
@@ -300,4 +301,37 @@ export default {
     tunnelServing: 'serving ({n} requests)',
     tunnelOff: 'off',
   },
+  websearch: {
+    title: 'Web search',
+    intro:
+      'Choose which backends the WebSearch tool may use, and in what order. When the first one is blocked or throttled, woca moves to the next automatically.',
+    backends: 'Backends',
+    backendsHint: 'Drag to change the failover order. The list is tried top to bottom.',
+    needsEndpoint: 'needs endpoint',
+    endpoints: 'Endpoints',
+    searxngEndpoint: 'SearXNG instance',
+    searxngPlaceholder: 'https://searx.internal.example.com',
+    searxngHint:
+      'DuckDuckGo blocks many corporate and datacenter networks by IP reputation. A self-hosted SearXNG is the reliable option there.',
+    customEndpoint: 'Custom JSON search API',
+    customKey: 'Bearer key (optional)',
+    customKeyStored: 'a key is stored — leave blank to keep it',
+    customKeyEmpty: 'no key stored',
+    domains: 'Domain filters',
+    allowedDomains: 'Only allow these hosts',
+    deniedDomains: 'Drop these hosts',
+    domainsHint:
+      'Comma-separated. Empty means no filtering; dropped hosts win over the allow list.',
+    test: 'Verify',
+    testPlaceholder: 'Optional test query',
+    testAction: 'Run a test search',
+    testing: 'Searching…',
+    saving: 'Saving…',
+    testOk: '{provider} answered with {results} result(s) in {ms} ms',
+    testFailed: 'The test search failed.',
+    testFailedHint:
+      'If every backend reports throttling, this network is probably blocked by DuckDuckGo — enable SearXNG or Tavily and try again.',
+    saved: 'Saved — the new chain is used from the next message.',
+  },
+
 }

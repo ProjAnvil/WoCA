@@ -26,4 +26,8 @@ export default {
   streamConnectFailed: '流连接失败：{status}',
   unknownError: '未知错误',
   revoked: '凭证已被吊销',
+  loadWebSearchFailed: '加载网络搜索设置失败',
+  saveWebSearchFailed: '保存网络搜索设置失败',
+  testWebSearchFailed: '测试搜索失败',
+
 }
