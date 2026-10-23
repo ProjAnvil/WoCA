@@ -12,6 +12,8 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/websearch"
 )
 
 // newWebSearchServer builds a Server with a temp settings DB. WOCA_HOME is
@@ -174,6 +176,32 @@ func TestCustomKeyIsWriteOnly(t *testing.T) {
 	n, _ := body.Body.Read(buf)
 	if strings.Contains(string(buf[:n]), "sk-secret") {
 		t.Fatal("the stored key leaked into the GET response")
+	}
+}
+
+// TestPutWebSearchRebuildsTheLiveChain closes the loop: an HTTP save must
+// reach the chain the WebSearch tool actually uses, not just the database.
+// Without this the settings page could persist correctly and still leave the
+// agent searching with the old configuration.
+func TestPutWebSearchRebuildsTheLiveChain(t *testing.T) {
+	ts := newWebSearchServer(t)
+	t.Cleanup(func() { tools.SetWebSearchConfig(websearch.Config{}) })
+
+	res := putWebSearch(t, ts, `{
+		"providers": ["searxng"],
+		"searxng_endpoint": "https://searx.example.com"
+	}`)
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("PUT = %d", res.StatusCode)
+	}
+
+	providers := tools.WebSearchRouter().Providers()
+	if len(providers) != 1 {
+		t.Fatalf("live chain = %d providers, want 1", len(providers))
+	}
+	if providers[0].ID() != "searxng" {
+		t.Fatalf("live chain provider = %q, want searxng", providers[0].ID())
 	}
 }
 
