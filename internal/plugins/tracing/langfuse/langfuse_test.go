@@ -203,7 +203,7 @@ func TestSinkDropsOverflowAndAccountingHolds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		s.Record(context.Background(), spanAt(fmt.Sprintf("s%d", i), "llm", "r1", nil, nil))
 	}
 	if err := s.Close(); err != nil {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -104,9 +105,7 @@ func (s *memSessionState) Snapshot() map[string]wocadb.SessionState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make(map[string]wocadb.SessionState, len(s.rows))
-	for k, v := range s.rows {
-		out[k] = v
-	}
+	maps.Copy(out, s.rows)
 	return out
 }
 

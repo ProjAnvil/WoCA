@@ -472,7 +472,7 @@ func TestRunnerPromptTooLongRecovery(t *testing.T) {
 	}
 	r := New(a, nil, nil)
 	history := []messages.Message{messages.Human("start")}
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		history = append(history,
 			messages.AI(strings.Repeat("analysis ", 30)),
 			messages.Human(strings.Repeat("question ", 30)),

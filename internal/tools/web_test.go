@@ -24,7 +24,6 @@ func TestValidateWebURLBlocksSSRF(t *testing.T) {
 		"http://[64:ff9b:1::192.0.2.1]/",
 	}
 	for _, rawurl := range blocked {
-		rawurl := rawurl
 		t.Run(rawurl, func(t *testing.T) {
 			err := validateWebURL(rawurl)
 			if err == nil {
@@ -44,7 +43,6 @@ func TestValidateWebURLAllowsSafeHost(t *testing.T) {
 		"https://en.wikipedia.org/wiki/Go_(programming_language)",
 	}
 	for _, rawurl := range safe {
-		rawurl := rawurl
 		t.Run(rawurl, func(t *testing.T) {
 			if err := validateWebURL(rawurl); err != nil {
 				t.Errorf("validateWebURL(%q) = %v, want nil", rawurl, err)

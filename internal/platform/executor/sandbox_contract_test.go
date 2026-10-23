@@ -208,8 +208,7 @@ func TestContractProcessLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = p.Wait()
-	var exitErr *ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 5 {
+	if exitErr, ok := errors.AsType[*ExitError](err); !ok || exitErr.Code != 5 {
 		t.Fatalf("Wait err = %v, want *ExitError{5}", err)
 	}
 

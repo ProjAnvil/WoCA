@@ -57,10 +57,9 @@ func TestWatchAcksCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	t.Cleanup(func() { _ = st.Close() })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go Watch(ctx, st, st.DB(), Identity{ServiceID: "cap-worker", Role: "worker", Capabilities: "sandbox"}, zerolog.Nop(), nil, func() {})
 
 	deadline := time.Now().Add(3 * time.Second)

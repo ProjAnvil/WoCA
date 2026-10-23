@@ -7,6 +7,8 @@ package diffutil
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -72,8 +74,8 @@ func backtrack(trace []map[int]int, a, b []string) []Op {
 	}
 	var rev []move
 	x, y := len(a), len(b)
-	for d := len(trace) - 1; d >= 0; d-- {
-		v := trace[d]
+	for d, v := range slices.Backward(trace) {
+
 		k := x - y
 		var prevK int
 		if k == -d || (k != d && v[k-1] < v[k+1]) {
@@ -118,9 +120,7 @@ func replaceAll(a, b []string) []Op {
 
 func copyMap(m map[int]int) map[int]int {
 	out := make(map[int]int, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 

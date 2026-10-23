@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,8 +65,8 @@ func (f *fakePinch) handler(w http.ResponseWriter, r *http.Request) {
 func (f *fakePinch) lastQuery(path string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for i := len(f.paths) - 1; i >= 0; i-- {
-		if f.paths[i] == path {
+	for i, v := range slices.Backward(f.paths) {
+		if v == path {
 			return f.quests[i]
 		}
 	}

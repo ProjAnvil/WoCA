@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -219,10 +220,8 @@ func (s *Server) handleStats(w http.ResponseWriter, _ *http.Request) {
 	}
 	s.mu.Unlock()
 	queued, depths := s.admission.stats()
-	active := notDone - queued // queued runs are registered but not finished; exclude them from active
-	if active < 0 {
-		active = 0
-	}
+	// queued runs are registered but not finished; exclude them from active
+	active := max(notDone-queued, 0)
 	lspActive, lspBroken := 0, 0
 	teammates, background := 0, 0
 	if s.agent != nil {
@@ -548,10 +547,8 @@ func (s *Server) hasLiveSandboxWorker() bool {
 		if now-a.UpdatedAt > sandboxAckLiveWindow {
 			continue
 		}
-		for _, cap := range strings.Split(a.Capabilities, ",") {
-			if cap == "sandbox" {
-				return true
-			}
+		if slices.Contains(strings.Split(a.Capabilities, ","), "sandbox") {
+			return true
 		}
 	}
 	return false

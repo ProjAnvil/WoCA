@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -548,9 +549,9 @@ func run(ctx context.Context, opts agentbuild.Options, stdin io.Reader, stdout, 
 		if err != nil {
 			return err
 		}
-		for i := len(result) - 1; i >= 0; i-- {
-			if result[i].Role == messages.RoleAI && result[i].Content != "" {
-				fmt.Fprintln(stdout, result[i].Content)
+		for _, r := range slices.Backward(result) {
+			if r.Role == messages.RoleAI && r.Content != "" {
+				fmt.Fprintln(stdout, r.Content)
 				break
 			}
 		}

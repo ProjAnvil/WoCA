@@ -149,8 +149,7 @@ func (r *Router) Search(ctx context.Context, query string, limit int) ([]Result,
 
 		case Failover(err):
 			// Throttled: back this provider off and try the next one.
-			var rl *RateLimitError
-			errors.As(err, &rl)
+			rl, _ := errors.AsType[*RateLimitError](err)
 			d := r.cooldown
 			if rl != nil && rl.RetryAfter > 0 {
 				d = min(rl.RetryAfter, maxCooldown)

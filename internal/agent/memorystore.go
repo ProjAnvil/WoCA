@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -283,9 +284,9 @@ func (m *memoryRuntime) buildAttachments(entries []store.Entry, hits []memory.Hi
 // language: semantic recall wants the sentence, not the keywords.
 func lastHumanQuery(msgs []messages.Message) string {
 	last := ""
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == messages.RoleHuman {
-			last = msgs[i].Content
+	for _, msg := range slices.Backward(msgs) {
+		if msg.Role == messages.RoleHuman {
+			last = msg.Content
 			break
 		}
 	}
@@ -349,9 +350,9 @@ func trimJSONString(raw []byte) string {
 // last human message.
 func memoryTerms(msgs []messages.Message) []string {
 	last := ""
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == messages.RoleHuman {
-			last = msgs[i].Content
+	for _, msg := range slices.Backward(msgs) {
+		if msg.Role == messages.RoleHuman {
+			last = msg.Content
 			break
 		}
 	}

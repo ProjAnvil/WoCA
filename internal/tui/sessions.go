@@ -115,10 +115,7 @@ func (m *Model) sessionsView() string {
 	if m.sessionsSel >= max {
 		start = m.sessionsSel - max + 1
 	}
-	end := start + max
-	if end > len(entries) {
-		end = len(entries)
-	}
+	end := min(start+max, len(entries))
 	for i := start; i < end; i++ {
 		e := entries[i]
 		row := padRight(e.Name, 24) + "  " + e.ModTime.Format("2006-01-02 15:04")

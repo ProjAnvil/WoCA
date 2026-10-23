@@ -35,7 +35,7 @@ func TestCompactBelowThresholdNoop(t *testing.T) {
 func TestCompactSummarizesHead(t *testing.T) {
 	var msgs []messages.Message
 	msgs = append(msgs, messages.System("system prompt"))
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		msgs = append(msgs, messages.Human("old message number "+strings.Repeat("x", 100)))
 		msgs = append(msgs, messages.AI("old reply "+strings.Repeat("y", 100)))
 	}
@@ -132,7 +132,7 @@ func TestCompactNilWriterAndSmallInput(t *testing.T) {
 func TestCompactSummarizesOldMessages(t *testing.T) {
 	// Enough messages to exceed a tiny budget.
 	var msgs []messages.Message
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		msgs = append(msgs, messages.Human(strings.Repeat("word ", 20)))
 	}
 	out, err := Compact(context.Background(), msgs, 10, func(ctx context.Context, msgs []messages.Message) (string, error) {

@@ -1235,7 +1235,7 @@ func (a *Agent) modelNode() lggraph.NodeFunc {
 		// context injection or a short-circuit reply. Buffered mode (below)
 		// keeps the reply replaceable after the stream completes.
 		buffered := len(a.modelHooks) > 0
-		var prepend string
+		var prepend strings.Builder
 		if buffered {
 			turn := &ModelTurn{Model: a.CurrentModelName(), Prompt: lastHumanPrompt(msgs)}
 			for _, h := range a.modelHooks {
@@ -1248,11 +1248,11 @@ func (a *Agent) modelNode() lggraph.NodeFunc {
 					return map[string]any{"messages": []messages.Message{messages.AI(txt)}}, nil
 				}
 				if res.PrependContext != "" {
-					prepend += strings.TrimSpace(res.PrependContext) + "\n"
+					prepend.WriteString(strings.TrimSpace(res.PrependContext) + "\n")
 				}
 			}
-			if prepend != "" {
-				msgs = withInjectedContext(msgs, prepend)
+			if prepend.String() != "" {
+				msgs = withInjectedContext(msgs, prepend.String())
 			}
 		}
 		// Snapshot the bound model under a.mu: SetModel and tool refreshes

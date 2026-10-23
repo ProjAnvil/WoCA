@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -107,8 +108,8 @@ func newWorkerRoot() *cobra.Command {
 			defer ap.PluginMgr.Close()
 			defer ap.Agent.Close()
 			defer func() {
-				for i := len(ap.Teardown) - 1; i >= 0; i-- {
-					ap.Teardown[i]()
+				for _, v := range slices.Backward(ap.Teardown) {
+					v()
 				}
 			}()
 

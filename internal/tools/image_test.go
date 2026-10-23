@@ -75,10 +75,7 @@ func TestProcessImageResizesLongEdge(t *testing.T) {
 	if payload.MimeType != "image/jpeg" {
 		t.Fatalf("resized images re-encode as jpeg, got %s", payload.MimeType)
 	}
-	long := payload.Width
-	if payload.Height > long {
-		long = payload.Height
-	}
+	long := max(payload.Height, payload.Width)
 	if long != maxImageEdge && long != maxImageEdge-1 {
 		t.Fatalf("long edge = %d, want ~%d", long, maxImageEdge)
 	}

@@ -153,7 +153,6 @@ func TestIsReadOnlyCommand(t *testing.T) {
 		{"kill", "kill 123", false},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			if got := IsReadOnlyCommand(c.command); got != c.want {
 				t.Errorf("IsReadOnlyCommand(%q) = %v, want %v", c.command, got, c.want)
@@ -225,7 +224,6 @@ func TestIsDestructiveCommand(t *testing.T) {
 		{"unknown", "someunknowncommand", false},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			if got := IsDestructiveCommand(c.command); got != c.want {
 				t.Errorf("IsDestructiveCommand(%q) = %v, want %v", c.command, got, c.want)

@@ -26,7 +26,7 @@ func TestHeartbeatInjectsPingAfterIdle(t *testing.T) {
 	}
 	// Pings are standalone comment lines — never torn into data frames
 	// (design §6.3 frame safety).
-	for _, line := range strings.Split(strings.TrimRight(got, "\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(got, "\n"), "\n") {
 		if line != "" && line != ": ping" {
 			t.Fatalf("torn frame line %q in %q", line, got)
 		}
@@ -44,7 +44,7 @@ func TestHeartbeatResetsOnData(t *testing.T) {
 	}()
 	hb.arm()
 	// Frames flow more often than the interval: no ping may interleave.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := hb.Write([]byte("data: frame\n\n")); err != nil {
 			t.Fatal(err)
 		}

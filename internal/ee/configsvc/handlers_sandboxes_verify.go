@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/projanvil/woca/internal/platform/executor"
@@ -141,10 +142,8 @@ func (s *Service) handleVerifySandbox(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
-		for _, m := range matches {
-			if m == "/workspace/.woca-verify" {
-				return nil
-			}
+		if slices.Contains(matches, "/workspace/.woca-verify") {
+			return nil
 		}
 		return fmt.Errorf("glob missed the probe file: %v", matches)
 	}) {

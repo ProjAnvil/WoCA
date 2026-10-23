@@ -43,8 +43,8 @@ func (t *Translate) toSandbox(path string) string {
 	if p == host {
 		return root
 	}
-	if strings.HasPrefix(p, host+"/") {
-		return root + "/" + strings.TrimPrefix(p, host+"/")
+	if after, ok := strings.CutPrefix(p, host+"/"); ok {
+		return root + "/" + after
 	}
 	return path
 }
@@ -61,8 +61,8 @@ func (t *Translate) toSandboxPattern(pattern string) string {
 	if pattern == host {
 		return root
 	}
-	if strings.HasPrefix(pattern, host+"/") {
-		return root + "/" + strings.TrimPrefix(pattern, host+"/")
+	if after, ok := strings.CutPrefix(pattern, host+"/"); ok {
+		return root + "/" + after
 	}
 	return pattern
 }
@@ -77,8 +77,8 @@ func (t *Translate) toHost(path string) string {
 	if p == root {
 		return filepath.Clean(t.HostRoot)
 	}
-	if strings.HasPrefix(p, root+"/") {
-		return filepath.Join(t.HostRoot, filepath.FromSlash(strings.TrimPrefix(p, root+"/")))
+	if after, ok := strings.CutPrefix(p, root+"/"); ok {
+		return filepath.Join(t.HostRoot, filepath.FromSlash(after))
 	}
 	return path
 }

@@ -240,10 +240,7 @@ func (m *Model) Init() tea.Cmd { return m.spinner.Tick }
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.height = msg.Height - 2
-		if m.height < 1 {
-			m.height = 1
-		}
+		m.height = max(msg.Height-2, 1)
 		m.viewport.SetHeight(m.height)
 	case tea.KeyMsg:
 		// A pending interrupt resolves first: y/enter approves, n/esc denies

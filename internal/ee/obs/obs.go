@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -343,8 +344,8 @@ func (o *Obs) Shutdown(ctx context.Context) error {
 	fns := append([]func(context.Context) error(nil), o.shut...)
 	o.mu.Unlock()
 	var errs []error
-	for i := len(fns) - 1; i >= 0; i-- {
-		if err := fns[i](ctx); err != nil {
+	for _, fn := range slices.Backward(fns) {
+		if err := fn(ctx); err != nil {
 			errs = append(errs, err)
 		}
 	}

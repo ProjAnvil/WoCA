@@ -147,13 +147,13 @@ func (c *Client) CallTool(ctx context.Context, name string, args map[string]any)
 	if out.IsError {
 		return "", fmt.Errorf("mcp: tool %s returned an error", name)
 	}
-	result := ""
+	var result strings.Builder
 	for _, block := range out.Content {
 		if block.Type == "text" {
-			result += block.Text
+			result.WriteString(block.Text)
 		}
 	}
-	return result, nil
+	return result.String(), nil
 }
 
 // Close releases the underlying transport.

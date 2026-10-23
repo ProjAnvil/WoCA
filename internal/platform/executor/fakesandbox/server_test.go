@@ -386,7 +386,7 @@ func TestGrepMaxMatches(t *testing.T) {
 	c, _ := newClient(t)
 	id := createSandbox(t, c)
 	base := "/sandbox/" + id
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if code, _ := c.json("POST", base+"/write", map[string]any{
 			"path": fmt.Sprintf("/workspace/f%d.txt", i), "content": b64("needle\n"), "mode": 0o644,
 		}); code >= 300 {

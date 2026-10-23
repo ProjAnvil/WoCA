@@ -143,7 +143,7 @@ func TestSearchTruncatesToMaxResults(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		results := make([]map[string]any, 0, 5)
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			results = append(results, map[string]any{
 				"title": "T", "url": "https://x.example", "snippet": "s",
 			})

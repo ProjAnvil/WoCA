@@ -56,8 +56,7 @@ func (p *GenericProvider) Search(ctx context.Context, query string, limit int) (
 	if err != nil {
 		// Surface throttling as a rate-limit so the router can cool this
 		// provider down. Everything else stays a plain failure.
-		var he *searchapi.HTTPError
-		if errors.As(err, &he) && isRateLimitStatus(he.StatusCode) {
+		if he, ok := errors.AsType[*searchapi.HTTPError](err); ok && isRateLimitStatus(he.StatusCode) {
 			return nil, &RateLimitError{Provider: genericID, Reason: err.Error()}
 		}
 		return nil, err

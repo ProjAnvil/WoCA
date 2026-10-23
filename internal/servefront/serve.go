@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -402,8 +403,8 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 	defer ap.PluginMgr.Close()
 	defer ap.Agent.Close()
 	defer func() {
-		for i := len(ap.Teardown) - 1; i >= 0; i-- {
-			ap.Teardown[i]()
+		for _, v := range slices.Backward(ap.Teardown) {
+			v()
 		}
 	}()
 

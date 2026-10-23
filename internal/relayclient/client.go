@@ -223,10 +223,7 @@ func (c *Client) worker(ctx context.Context) {
 
 // backoff is 1s doubling to 60s with ±20% jitter (design §6.5).
 func backoff(attempt int) time.Duration {
-	d := backoffMin << min(attempt, 6)
-	if d > backoffMax {
-		d = backoffMax
-	}
+	d := min(backoffMin<<min(attempt, 6), backoffMax)
 	return time.Duration(float64(d) * (0.8 + 0.4*mrand.Float64()))
 }
 

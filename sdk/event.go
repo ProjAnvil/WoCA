@@ -10,6 +10,7 @@ package sdk
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
@@ -116,9 +117,9 @@ func resultEvent(transcript []messages.Message, u agent.UsageTotals, model strin
 
 // lastAIText returns the content of the last non-empty assistant message.
 func lastAIText(transcript []messages.Message) string {
-	for i := len(transcript) - 1; i >= 0; i-- {
-		if transcript[i].Role == messages.RoleAI && transcript[i].Content != "" {
-			return transcript[i].Content
+	for _, t := range slices.Backward(transcript) {
+		if t.Role == messages.RoleAI && t.Content != "" {
+			return t.Content
 		}
 	}
 	return ""

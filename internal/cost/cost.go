@@ -72,10 +72,7 @@ func Estimate(model string, u Usage) (cost float64, known bool) {
 	if !known {
 		return 0, false
 	}
-	fresh := u.InputTokens - u.CacheReadTokens - u.CacheWriteTokens
-	if fresh < 0 {
-		fresh = 0
-	}
+	fresh := max(u.InputTokens-u.CacheReadTokens-u.CacheWriteTokens, 0)
 	cost = float64(fresh) / 1e6 * p.Input
 	cost += float64(u.OutputTokens) / 1e6 * p.Output
 	if p.CacheReadFactor > 0 {

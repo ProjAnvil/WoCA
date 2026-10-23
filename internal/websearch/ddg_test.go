@@ -117,8 +117,7 @@ func TestDDGSearchBlockedPageIsNotNoResults(t *testing.T) {
 	if !Failover(err) {
 		t.Error("blocked page must be failover-able so the router tries the next backend")
 	}
-	var rl *RateLimitError
-	if errors.As(err, &rl) && rl.Provider != ddgHTMLID {
+	if rl, ok := errors.AsType[*RateLimitError](err); ok && rl.Provider != ddgHTMLID {
 		t.Errorf("RateLimitError.Provider = %q, want %q", rl.Provider, ddgHTMLID)
 	}
 }
@@ -147,8 +146,8 @@ func TestDDGSearchRetryAfterPropagates(t *testing.T) {
 
 	p := NewDDGHTML(DDGOptions{Endpoint: srv.URL + "/"})
 	_, err := p.Search(t.Context(), "golang", 0)
-	var rl *RateLimitError
-	if !errors.As(err, &rl) {
+	rl, ok := errors.AsType[*RateLimitError](err)
+	if !ok {
 		t.Fatalf("HTTP 429 error = %T, want *RateLimitError", err)
 	}
 	if rl.RetryAfter != 45*time.Second {

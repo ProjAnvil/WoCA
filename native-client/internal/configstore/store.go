@@ -1126,11 +1126,11 @@ func containsDefaultIgnorable(value string) bool {
 }
 
 func rawAuthority(rawURL string) string {
-	schemeEnd := strings.Index(rawURL, "://")
-	if schemeEnd < 0 {
+	_, after, ok := strings.Cut(rawURL, "://")
+	if !ok {
 		return ""
 	}
-	authority := rawURL[schemeEnd+3:]
+	authority := after
 	if end := strings.IndexAny(authority, "/?#"); end >= 0 {
 		return authority[:end]
 	}
@@ -1142,8 +1142,8 @@ func isNumericLookingIPv4(host string) bool {
 	if host == "" {
 		return false
 	}
-	components := strings.Split(host, ".")
-	for _, component := range components {
+	components := strings.SplitSeq(host, ".")
+	for component := range components {
 		if !isIPv4NumberComponent(component) {
 			return false
 		}

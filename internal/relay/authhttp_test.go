@@ -151,7 +151,7 @@ func TestLoginRateLimit(t *testing.T) {
 	ks := openTestKeyStore(t)
 	a := NewAuthService(ks, false, testLogger())
 	// All attempts from one source IP (httptest.NewRequest default).
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if rec := loginFor(t, a, "bad"); rec.Code == http.StatusTooManyRequests {
 			t.Fatalf("attempt %d rate-limited inside the allowance", i+1)
 		}

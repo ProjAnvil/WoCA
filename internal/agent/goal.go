@@ -516,10 +516,7 @@ func FormatGoal(g *Goal) string {
 	}
 	if len(g.Progress) > 0 {
 		b.WriteString("  cycles:\n")
-		start := len(g.Progress) - 5
-		if start < 0 {
-			start = 0
-		}
+		start := max(len(g.Progress)-5, 0)
 		for _, p := range g.Progress[start:] {
 			summary := p.Summary
 			if summary == "" {

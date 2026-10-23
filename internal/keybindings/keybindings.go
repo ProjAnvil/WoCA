@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,9 +52,7 @@ func (m Map) Action(key string) string {
 // Bindings returns a copy of the effective key->action map, for display.
 func (m Map) Bindings() map[string]string {
 	out := make(map[string]string, len(m.bindings))
-	for k, v := range m.bindings {
-		out[k] = v
-	}
+	maps.Copy(out, m.bindings)
 	return out
 }
 

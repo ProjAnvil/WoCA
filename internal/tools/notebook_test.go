@@ -144,7 +144,6 @@ func TestNotebookEditErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			_, err := tool.Invoke(t.Context(), c.args)
 			if err == nil || !strings.Contains(err.Error(), c.want) {

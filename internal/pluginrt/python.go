@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -278,13 +279,7 @@ func (p *PythonRuntime) Run(ctx context.Context, plugin, script string, args []s
 	if !ok || b.Kind != "python" {
 		return "", "", fmt.Errorf("unknown python plugin %q", plugin)
 	}
-	allowed := false
-	for _, s := range b.Scripts {
-		if s == script {
-			allowed = true
-			break
-		}
-	}
+	allowed := slices.Contains(b.Scripts, script)
 	if !allowed {
 		return "", "", fmt.Errorf("script %q is not declared by plugin %q", script, plugin)
 	}

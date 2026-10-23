@@ -89,10 +89,7 @@ func (a *Agent) ContextBreakdown(ctx context.Context, history []messages.Message
 		}
 	}
 
-	sysBase := sysTokens - mem.TotalTokens
-	if sysBase < 0 {
-		sysBase = 0
-	}
+	sysBase := max(sysTokens-mem.TotalTokens, 0)
 	cats := []ContextCategory{
 		{Key: "system", Label: "系统提示词", Tokens: sysBase, Detail: "基础段落 + git 状态 + skills 清单"},
 		{Key: "memory", Label: "记忆文件", Tokens: mem.TotalTokens, Count: mem.Files, Detail: "CLAUDE.md / AGENTS.md"},

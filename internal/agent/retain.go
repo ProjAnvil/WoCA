@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -160,11 +161,11 @@ func (m *memoryRuntime) system2Due(ws string, intervalS int64) bool {
 // runQuestion returns the run's actual request: the last human message at
 // runner entry, skipping known synthetic wrappers injected by the harness.
 func runQuestion(msgs []messages.Message) string {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != messages.RoleHuman {
+	for _, msg := range slices.Backward(msgs) {
+		if msg.Role != messages.RoleHuman {
 			continue
 		}
-		c := strings.TrimSpace(msgs[i].Content)
+		c := strings.TrimSpace(msg.Content)
 		if c == "" || strings.HasPrefix(c, "<relevant-memory>") ||
 			strings.HasPrefix(c, "<queued-user-input") ||
 			strings.HasPrefix(c, "<stop-hook>") ||

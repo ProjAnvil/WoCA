@@ -50,10 +50,7 @@ func Compact(ctx context.Context, msgs []messages.Message, maxTokens int, write 
 	}
 
 	// Keep the recent tail within half the budget; always keep the last message.
-	keep := maxTokens / 2
-	if keep < 1 {
-		keep = 1
-	}
+	keep := max(maxTokens/2, 1)
 	cut := len(msgs)
 	used := estimateMessage(msgs[len(msgs)-1])
 	for i := len(msgs) - 2; i >= 0; i-- {
@@ -113,11 +110,8 @@ func Microcompact(msgs []messages.Message, keepRecent, maxChars int) []messages.
 			toolIdx = append(toolIdx, i)
 		}
 	}
-	skip := len(toolIdx) - keepRecent
-	if skip < 0 {
-		skip = 0
-	}
-	for i := 0; i < skip; i++ {
+	skip := max(len(toolIdx)-keepRecent, 0)
+	for i := range skip {
 		idx := toolIdx[i]
 		if len(out[idx].Content) > maxChars {
 			out[idx].Content = "[truncated tool result]"

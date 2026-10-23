@@ -194,10 +194,7 @@ var retryBaseDelay = 500 * time.Millisecond
 
 // nextDelay is the backoff before retry number attempts (1-based), capped.
 func nextDelay(attempts int) time.Duration {
-	d := retryBaseDelay << (attempts - 1)
-	if d > 8*time.Second {
-		d = 8 * time.Second
-	}
+	d := min(retryBaseDelay<<(attempts-1), 8*time.Second)
 	return d
 }
 

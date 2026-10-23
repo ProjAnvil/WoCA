@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -139,7 +139,7 @@ func TestMergeMCPSpecs(t *testing.T) {
 		[]string{"dup=user-cmd", "useronly=user-cmd"},
 		zerolog.New(&buf),
 	)
-	sort.Strings(got)
+	slices.Sort(got)
 	want := []string{"dup2=flag-a", "dup=flag-cmd", "flagonly=flag-cmd", "useronly=user-cmd", "wsonly=ws-cmd"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)

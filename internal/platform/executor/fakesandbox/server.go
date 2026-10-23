@@ -16,13 +16,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,11 +250,7 @@ func (s *Server) buildCommand(argv []string, cwd string, env map[string]string, 
 }
 
 func envSlice(env map[string]string) []string {
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	keys := slices.Sorted(maps.Keys(env))
 	out := make([]string, 0, len(env))
 	for _, k := range keys {
 		out = append(out, k+"="+env[k])
@@ -551,26 +548,16 @@ func (s *Server) handleGlob(w http.ResponseWriter, r *http.Request, sbx *fakeSan
 		}
 	}
 	sbx.mu.Unlock()
-	sort.Strings(matches)
+	slices.Sort(matches)
 	writeJSON(w, http.StatusOK, map[string]any{"matches": matches})
 }
 
 func (sbx *fakeSandbox) fileKeys() []string {
-	keys := make([]string, 0, len(sbx.files))
-	for k := range sbx.files {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(sbx.files))
 }
 
 func (sbx *fakeSandbox) dirKeys() []string {
-	keys := make([]string, 0, len(sbx.dirs))
-	for k := range sbx.dirs {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(sbx.dirs))
 }
 
 func (s *Server) handleGrep(w http.ResponseWriter, r *http.Request, sbx *fakeSandbox) {
@@ -626,7 +613,7 @@ func (s *Server) handleGrep(w http.ResponseWriter, r *http.Request, sbx *fakeSan
 func hiddenUnderRoot(p, root string) bool {
 	rel := strings.TrimPrefix(p, root)
 	rel = strings.TrimPrefix(rel, "/")
-	for _, seg := range strings.Split(rel, "/") {
+	for seg := range strings.SplitSeq(rel, "/") {
 		if strings.HasPrefix(seg, ".") {
 			return true
 		}
@@ -694,9 +681,7 @@ func (s *Server) handleGetArchive(w http.ResponseWriter, _ *http.Request, sbx *f
 	// Synthesize every parent directory of every entry so unpackers that
 	// need them (and round-trip comparisons) see a complete tree.
 	entryDirs := map[string]int64{}
-	for key, mode := range dirs {
-		entryDirs[key] = mode
-	}
+	maps.Copy(entryDirs, dirs)
 	for key := range files {
 		for p := path.Dir(key); ; p = path.Dir(p) {
 			if p == workspaceRoot || p == "/" || p == "." {
@@ -713,7 +698,7 @@ func (s *Server) handleGetArchive(w http.ResponseWriter, _ *http.Request, sbx *f
 			dirNames = append(dirNames, key)
 		}
 	}
-	sort.Strings(dirNames)
+	slices.Sort(dirNames)
 	seen := map[string]bool{}
 	for _, key := range dirNames {
 		if seen[key] {
@@ -723,12 +708,7 @@ func (s *Server) handleGetArchive(w http.ResponseWriter, _ *http.Request, sbx *f
 		name := strings.TrimPrefix(key, workspaceRoot+"/")
 		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: entryDirs[key], Typeflag: tar.TypeDir, ModTime: time.UnixMilli(0)})
 	}
-	fileNames := make([]string, 0, len(files))
-	for key := range files {
-		fileNames = append(fileNames, key)
-	}
-	sort.Strings(fileNames)
-	for _, key := range fileNames {
+	for _, key := range slices.Sorted(maps.Keys(files)) {
 		f := files[key]
 		name := strings.TrimPrefix(key, workspaceRoot+"/")
 		hdr := &tar.Header{

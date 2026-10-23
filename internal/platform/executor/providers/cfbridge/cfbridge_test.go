@@ -912,7 +912,7 @@ func TestGrepCappedAt200(t *testing.T) {
 	fb := newFake(t)
 	fb.execFn = func(call execCall, w sseResp) {
 		var sb strings.Builder
-		for i := 0; i < 205; i++ {
+		for i := range 205 {
 			fmt.Fprintf(&sb, "/workspace/f.go\x00%d:TODO\n", i+1)
 		}
 		w.stdout(sb.String())

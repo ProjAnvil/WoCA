@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,7 +17,7 @@ func TestWorkerAckHeartbeat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = db.Close() }()
+	t.Cleanup(func() { _ = db.Close() })
 	if err := db.SetConfigAck(wocadb.ConfigAck{
 		ServiceID: "hb-worker", Role: "worker", Generation: "g0", UpdatedAt: wocadb.Now(),
 	}); err != nil {
@@ -29,8 +28,7 @@ func TestWorkerAckHeartbeat(t *testing.T) {
 		log: zerolog.Nop(),
 		db:  db,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go w.AckHeartbeat(ctx, 10*time.Millisecond,
 		func() string { return "g9" },
 		func() string { return "sandbox" },

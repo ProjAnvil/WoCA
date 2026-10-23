@@ -22,8 +22,7 @@ func TestServiceRunStartsAndStopsTunnel(t *testing.T) {
 	svc := NewService()
 	svc.SetSettings(st)
 	svc.SetHandler(http.NotFoundHandler())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go svc.Run(ctx, st, testLogger())
 
 	waitFor(t, "first poll", func() bool { return relay.polls.Load() > 0 })
@@ -121,8 +120,7 @@ func TestServiceRunWaitsForHandler(t *testing.T) {
 	svc.SetSettings(st)
 	// Run starts before SetHandler (wiring drift defense): it waits for
 	// the handler instead of racing ahead with a nil one.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	done := make(chan struct{})
 	go func() {
 		svc.Run(ctx, st, testLogger())

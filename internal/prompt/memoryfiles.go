@@ -3,6 +3,7 @@ package prompt
 import (
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/projanvil/woca/internal/merge"
 	"github.com/projanvil/woca/internal/tokens"
@@ -38,9 +39,9 @@ func collectMemoryFiles(workDir string) []memoryFile {
 		}
 	}
 	dirs := merge.WorkspaceDirs(workDir)
-	for i := len(dirs) - 1; i >= 0; i-- { // git root first, workDir last
+	for _, dir := range slices.Backward(dirs) { // git root first, workDir last
 		for _, name := range []string{"CLAUDE.md", "AGENTS.md", ".claude/CLAUDE.md"} {
-			p := filepath.Join(dirs[i], filepath.FromSlash(name))
+			p := filepath.Join(dir, filepath.FromSlash(name))
 			if fileExists(p) && !seen[p] {
 				seen[p] = true
 				out = append(out, memoryFile{Path: p, Kind: "Project", Label: name})

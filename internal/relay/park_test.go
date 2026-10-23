@@ -70,9 +70,8 @@ func TestParkTakeComplete(t *testing.T) {
 
 func TestParkQueueFull(t *testing.T) {
 	q := NewParkingQueue(2)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	for i := 0; i < 2; i++ {
+	ctx := t.Context()
+	for i := range 2 {
 		go func(i int) {
 			_, _, _, _ = q.Park(ctx, 7, testRequest(fmt.Sprintf("r%d", i)))
 		}(i)
@@ -135,7 +134,7 @@ func TestTakeTimeout(t *testing.T) {
 // streamDone concurrently must not panic with "close of closed channel"
 // (a panic in any goroutine crashes the test binary).
 func TestDoneFailAllConcurrentNoDoubleClose(t *testing.T) {
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		q := NewParkingQueue(ParkCapacity)
 		ctx := context.Background()
 		parked := make(chan func(), 1)
@@ -159,13 +158,11 @@ func TestDoneFailAllConcurrentNoDoubleClose(t *testing.T) {
 			t.Fatal("park failed")
 		}
 		var wg sync.WaitGroup
-		for g := 0; g < 8; g++ {
-			wg.Add(1)
-			go func() { defer wg.Done(); done() }()
+		for range 8 {
+			wg.Go(func() { done() })
 		}
-		for g := 0; g < 2; g++ {
-			wg.Add(1)
-			go func() { defer wg.Done(); q.FailAll(7, ErrRevoked) }()
+		for range 2 {
+			wg.Go(func() { q.FailAll(7, ErrRevoked) })
 		}
 		wg.Wait()
 		select {
@@ -207,7 +204,7 @@ func TestCompleteDuplicateIsNoOp(t *testing.T) {
 		t.Fatalf("client received %+v, want the first respond to win", resp)
 	}
 	second := &ParkedResponse{Status: http.StatusTeapot}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		blocked := make(chan error, 1)
 		go func() {
 			_, err := q.Complete(7, "gen-a", "r1", second)
@@ -243,7 +240,7 @@ func TestFailAll(t *testing.T) {
 		}
 	}
 	q.FailAll(7, ErrRevoked)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := <-errs; !errors.Is(err, ErrRevoked) {
 			t.Fatalf("drained park: %v, want ErrRevoked", err)
 		}

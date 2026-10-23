@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"maps"
 	"strings"
 
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -68,9 +69,7 @@ func mergeToolCall(calls *[]messages.ToolCall, tc messages.ToolCall) {
 				if (*calls)[i].Args == nil {
 					(*calls)[i].Args = map[string]any{}
 				}
-				for k, v := range tc.Args {
-					(*calls)[i].Args[k] = v
-				}
+				maps.Copy((*calls)[i].Args, tc.Args)
 				return
 			}
 		}

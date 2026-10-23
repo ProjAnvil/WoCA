@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"slices"
 	"strings"
 )
 
@@ -123,12 +124,7 @@ func IsDestructiveCommand(command string) bool {
 
 	body := stripEnvAndChaining(trimmed)
 	segments := splitCompound(body)
-	for _, seg := range segments {
-		if isDestructiveSegment(seg) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(segments, isDestructiveSegment)
 }
 
 // isDestructiveSegment classifies a single segment (no compound operators) as

@@ -80,8 +80,8 @@ func AttachEnrollmentPin(base, pin string) string {
 // (hash it for storage/lookup); the pin is carried information the bridge
 // verifies the edge against. Legacy tokens have no suffix.
 func SplitEnrollment(token string) (base, pin string) {
-	if i := strings.IndexByte(token, '.'); i >= 0 {
-		return token[:i], token[i+1:]
+	if before, after, ok := strings.Cut(token, "."); ok {
+		return before, after
 	}
 	return token, ""
 }

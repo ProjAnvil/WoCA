@@ -52,10 +52,7 @@ func ctxPercent(info *agent.ContextInfo) int {
 	if limit <= 0 {
 		return 0
 	}
-	pct := info.EstimatedTotal * 100 / limit
-	if pct > 999 {
-		pct = 999
-	}
+	pct := min(info.EstimatedTotal*100/limit, 999)
 	return pct
 }
 
@@ -82,10 +79,7 @@ func ctxFooter(info *agent.ContextInfo) string {
 	default:
 		style = dimStyle
 	}
-	filled := pct * ctxBarCells / 100
-	if filled > ctxBarCells {
-		filled = ctxBarCells
-	}
+	filled := min(pct*ctxBarCells/100, ctxBarCells)
 	bar := strings.Repeat("▓", filled) + strings.Repeat("░", ctxBarCells-filled)
 	s := fmt.Sprintf("ctx %s %d%%", bar, pct)
 	if limit > 0 && info != nil {

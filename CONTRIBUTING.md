@@ -30,6 +30,9 @@ Go binary — the frontend is embedded at compile time.
 - Keep comments about *why*, not *what*.
 - `gofmt`-clean code; CI runs `go vet` and the race detector, so run
   `go test -race ./...` for anything touching concurrency.
+- Review modernizations with `go fix -diff ./...` before applying them
+  (`-diff` returns a nonzero status when changes are available). Check both
+  the root module and `native-client`, then format and test both modules.
 - New behavior comes with tests. The project keeps high unit coverage on
   purpose — most packages have table-driven tests next to the code.
 - Commit messages follow [Conventional Commits]

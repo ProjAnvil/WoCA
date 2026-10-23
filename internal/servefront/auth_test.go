@@ -83,7 +83,7 @@ func TestServeAuthnEditionSeam(t *testing.T) {
 	// Wait for the real handler (health answers from port bind already);
 	// /api/sessions is within the viewer scope.
 	up := false
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		if code := get("/api/sessions", "viewer-token"); code == http.StatusOK {
 			up = true
 			break

@@ -203,8 +203,7 @@ func TestClientRoundTrip(t *testing.T) {
 		fmt.Fprintf(w, `{"path":%q}`, r.URL.Path)
 	})
 	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: handler, Workers: 1}, testLogger())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go c.Run(ctx)
 
 	relay.offer(pollPayload{
@@ -289,8 +288,7 @@ func TestClientReconnectsWithNewGeneration(t *testing.T) {
 	// on hc.Do errors; this test therefore uses the hijack-close mode.
 	relay.setHijackClose(true)
 	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler(), Workers: 1}, testLogger())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go c.Run(ctx)
 	first := c.generation()
 	waitFor(t, "generation rotation", func() bool { return c.generation() != first })
@@ -310,8 +308,7 @@ func TestClient5xxKeepsGeneration(t *testing.T) {
 	// with the bridge's own live generation for up to 45s).
 	relay.setPollCode(http.StatusInternalServerError)
 	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler(), Workers: 1}, testLogger())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go c.Run(ctx)
 	first := c.generation()
 	waitFor(t, "retry polls", func() bool { return relay.polls.Load() >= 2 })
@@ -326,8 +323,7 @@ func TestClient5xxKeepsGeneration(t *testing.T) {
 func TestClient204KeepsPolling(t *testing.T) {
 	relay := newFakeRelay(t) // default: 204
 	c := New(Config{URL: relay.srv.URL, Key: "wcr_test", Handler: http.NotFoundHandler(), Workers: 1}, testLogger())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go c.Run(ctx)
 	waitFor(t, "repeat polls", func() bool { return relay.polls.Load() >= 3 })
 	if st := c.Status(); !st.Connected || st.Revoked {
@@ -336,7 +332,7 @@ func TestClient204KeepsPolling(t *testing.T) {
 }
 
 func TestBackoffBounds(t *testing.T) {
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		if d := backoff(0); d < 800*time.Millisecond || d > 1200*time.Millisecond {
 			t.Fatalf("attempt 0: %v outside ±20%% of 1s", d)
 		}

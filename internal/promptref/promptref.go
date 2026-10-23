@@ -216,10 +216,5 @@ func inside(root, path string) bool {
 }
 
 func containsParentPath(path string) bool {
-	for _, part := range strings.FieldsFunc(filepath.ToSlash(path), func(r rune) bool { return r == '/' }) {
-		if part == ".." {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.FieldsFunc(filepath.ToSlash(path), func(r rune) bool { return r == '/' }), "..")
 }

@@ -107,8 +107,7 @@ func TestSearXNGRateLimited(t *testing.T) {
 	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("429 = %v, want ErrRateLimited", err)
 	}
-	var rl *RateLimitError
-	if errors.As(err, &rl) && rl.RetryAfter != 120*time.Second {
+	if rl, ok := errors.AsType[*RateLimitError](err); ok && rl.RetryAfter != 120*time.Second {
 		t.Errorf("RetryAfter = %v, want 120s", rl.RetryAfter)
 	}
 }

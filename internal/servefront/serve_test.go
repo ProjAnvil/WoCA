@@ -48,7 +48,7 @@ func TestServeAPIDrivesClosures(t *testing.T) {
 	// real handler (and the closures under test) only swaps in once the
 	// agent build finishes, so wait for an API route instead.
 	healthOK := false
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		resp, err := http.Get(base + "/api/quota")
 		if err == nil {
 			resp.Body.Close()
@@ -239,7 +239,7 @@ func TestServeDirectTLS(t *testing.T) {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}}
 	var ok bool
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		resp, err := client.Get("https://" + addr + "/api/health")
 		if err == nil {
 			resp.Body.Close()

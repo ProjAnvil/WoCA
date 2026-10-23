@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/projanvil/woca/internal/wocadb"
@@ -25,12 +26,7 @@ var sandboxTypes = []string{
 }
 
 func validSandboxType(t string) bool {
-	for _, v := range sandboxTypes {
-		if v == t {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(sandboxTypes, t)
 }
 
 // sandboxKeySecret is the settings secret name holding a backend's key.

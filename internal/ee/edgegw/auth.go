@@ -240,10 +240,7 @@ func (e *Edge) handleClientLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
-	maxAge := int(time.Until(time.UnixMilli(out.ExpiresAt)).Seconds())
-	if maxAge < 0 {
-		maxAge = 0
-	}
+	maxAge := max(int(time.Until(time.UnixMilli(out.ExpiresAt)).Seconds()), 0)
 	// The login IS a validation: cache it, so an established session has
 	// something to degrade along when the core goes dark (§2.1).
 	e.auth.put(out.Token, authEntry{

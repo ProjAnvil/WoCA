@@ -614,7 +614,7 @@ func (b *Bridge) Glob(ctx context.Context, pattern string) ([]string, error) {
 		return nil, fmt.Errorf("cfbridge: find %s: %s", root, strings.TrimSpace(string(res.Stderr)))
 	}
 	var matches []string
-	for _, line := range strings.Split(string(res.Stdout), "\n") {
+	for line := range strings.SplitSeq(string(res.Stdout), "\n") {
 		if line == "" {
 			continue
 		}
@@ -662,7 +662,7 @@ func (b *Bridge) Grep(ctx context.Context, root string, pattern *regexp.Regexp) 
 		return nil, fmt.Errorf("cfbridge: grep %s: %s", root, strings.TrimSpace(string(res.Stderr)))
 	}
 	matches := make([]executor.GrepMatch, 0, 16)
-	for _, rec := range strings.Split(string(res.Stdout), "\n") {
+	for rec := range strings.SplitSeq(string(res.Stdout), "\n") {
 		if rec == "" || len(matches) == 200 {
 			continue
 		}
@@ -782,7 +782,7 @@ func scanSSE(r io.Reader, fn func(name, data string) bool) error {
 // data lines; ok is false for blocks with neither field (comments).
 func parseSSEBlock(block []byte) (name string, data string, ok bool) {
 	var dataLines []string
-	for _, line := range strings.Split(string(block), "\n") {
+	for line := range strings.SplitSeq(string(block), "\n") {
 		line = strings.TrimSuffix(line, "\r")
 		if line == "" || strings.HasPrefix(line, ":") {
 			continue

@@ -1,7 +1,6 @@
 package relayclient
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -54,8 +53,7 @@ func TestFullChain(t *testing.T) {
 		Workers:           2,
 		HeartbeatInterval: 100 * time.Millisecond,
 	}, testLogger())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go c.Run(ctx)
 
 	jar, err := cookiejar.New(nil)

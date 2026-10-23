@@ -397,9 +397,7 @@ func TestConcurrentPublishSubscribe(t *testing.T) {
 	defer reader.Unsubscribe()
 	stop := make(chan struct{})
 	var readerWG sync.WaitGroup
-	readerWG.Add(1)
-	go func() {
-		defer readerWG.Done()
+	readerWG.Go(func() {
 		for {
 			select {
 			case _, ok := <-reader.C():
@@ -410,7 +408,7 @@ func TestConcurrentPublishSubscribe(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 
 	seqCh := make(chan int64, publishers*eventsPerPub)
 	var wg sync.WaitGroup

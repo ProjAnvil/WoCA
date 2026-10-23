@@ -80,10 +80,8 @@ func TestForwardBridgeBusyQueueFull(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var wg sync.WaitGroup
-	for i := 0; i < ParkCapacity; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range ParkCapacity {
+		wg.Go(func() {
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, tr.srv.URL+"/api/fill", nil)
 			if err != nil {
 				return
@@ -92,7 +90,7 @@ func TestForwardBridgeBusyQueueFull(t *testing.T) {
 			if err == nil {
 				_ = resp.Body.Close()
 			}
-		}()
+		})
 	}
 	waitForLen(t, tr, ParkCapacity)
 

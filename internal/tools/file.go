@@ -43,16 +43,10 @@ func readTool(d *Dir, execFor func(context.Context) executor.Executor) coretools
 			}
 			lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 
-			start := a.Offset
-			if start < 0 {
-				start = 0
-			}
+			start := max(a.Offset, 0)
 			end := len(lines)
 			if a.Limit > 0 {
-				end = start + a.Limit
-				if end > len(lines) {
-					end = len(lines)
-				}
+				end = min(start+a.Limit, len(lines))
 			}
 			if start > len(lines) {
 				start = len(lines)

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -34,10 +35,7 @@ type changeFile struct {
 const binaryScanLimit = 8192
 
 func isBinary(b []byte) bool {
-	limit := len(b)
-	if limit > binaryScanLimit {
-		limit = binaryScanLimit
-	}
+	limit := min(len(b), binaryScanLimit)
 	for i := range limit {
 		if b[i] == 0 {
 			return true
@@ -146,8 +144,8 @@ func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 		// Roll the conversation back to before the final user turn: keep
 		// everything up to (not including) the last human message.
 		keep = len(msgs)
-		for i := len(msgs) - 1; i >= 0; i-- {
-			if msgs[i].Role == messages.RoleHuman {
+		for i, msg := range slices.Backward(msgs) {
+			if msg.Role == messages.RoleHuman {
 				keep = i
 				break
 			}

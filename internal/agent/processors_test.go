@@ -459,7 +459,7 @@ func TestModelWrapperCacheShortCircuit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("same question")}, fmt.Sprintf("t%d", i))
 		if err != nil {
 			t.Fatal(err)

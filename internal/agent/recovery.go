@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"slices"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 )
@@ -44,11 +45,11 @@ func IsMaxOutputTokensTruncated(m messages.Message) bool {
 // TruncatedTail reports whether the last AI message of a transcript was
 // truncated by the output-token cap.
 func TruncatedTail(msgs []messages.Message) bool {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == messages.RoleAI {
-			return IsMaxOutputTokensTruncated(msgs[i])
+	for _, msg := range slices.Backward(msgs) {
+		if msg.Role == messages.RoleAI {
+			return IsMaxOutputTokensTruncated(msg)
 		}
-		if msgs[i].Role == messages.RoleHuman || msgs[i].Role == messages.RoleTool {
+		if msg.Role == messages.RoleHuman || msg.Role == messages.RoleTool {
 			return false
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -261,9 +262,7 @@ func (s *sessionStore) flushIndex() {
 	}
 	s.mu.Lock()
 	snapshot := make(map[string]sessionMeta, len(s.index))
-	for k, v := range s.index {
-		snapshot[k] = v
-	}
+	maps.Copy(snapshot, s.index)
 	s.mu.Unlock()
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

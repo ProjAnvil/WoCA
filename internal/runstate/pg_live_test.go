@@ -146,7 +146,7 @@ func TestRacingClaimsOnPostgres(t *testing.T) {
 	const racers = 8
 	start := make(chan struct{})
 	results := make(chan *Run, racers)
-	for i := 0; i < racers; i++ {
+	for i := range racers {
 		go func(i int) {
 			<-start
 			run, err := l.Claim(ctx, fmt.Sprintf("w-%d", i), time.Minute)
@@ -159,7 +159,7 @@ func TestRacingClaimsOnPostgres(t *testing.T) {
 	}
 	close(start)
 	winners := 0
-	for i := 0; i < racers; i++ {
+	for range racers {
 		if r := <-results; r != nil {
 			winners++
 		}

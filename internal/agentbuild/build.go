@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -506,11 +507,8 @@ func syncMCPConfig(root string, selected []string) ([]string, error) {
 	}
 	keep := make([]claudeenv.MCPServer, 0, len(selected))
 	for _, s := range all {
-		for _, name := range selected {
-			if s.Name == name {
-				keep = append(keep, s)
-				break
-			}
+		if slices.Contains(selected, s.Name) {
+			keep = append(keep, s)
 		}
 	}
 	if err := claudeenv.WriteMCPConfig(root, keep); err != nil {

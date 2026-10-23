@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -138,9 +139,9 @@ func (w *Writer) write(ev event) {
 }
 
 func lastAItext(transcript []messages.Message) string {
-	for i := len(transcript) - 1; i >= 0; i-- {
-		if transcript[i].Role == messages.RoleAI && transcript[i].Content != "" {
-			return transcript[i].Content
+	for _, t := range slices.Backward(transcript) {
+		if t.Role == messages.RoleAI && t.Content != "" {
+			return t.Content
 		}
 	}
 	return ""

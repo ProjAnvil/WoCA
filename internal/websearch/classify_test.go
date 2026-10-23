@@ -28,8 +28,8 @@ func TestClassifyStatusRateLimited(t *testing.T) {
 		if !Failover(err) {
 			t.Errorf("classifyStatus(%d) should be failover-able", c.status)
 		}
-		var rl *RateLimitError
-		if !errors.As(err, &rl) {
+		rl, ok := errors.AsType[*RateLimitError](err)
+		if !ok {
 			t.Fatalf("classifyStatus(%d) = %T, want *RateLimitError", c.status, err)
 		}
 		if !strings.Contains(rl.Reason, c.want) {
@@ -69,8 +69,8 @@ func TestClassifyStatusSuccessIsNil(t *testing.T) {
 
 func TestClassifyStatusRetryAfterPropagates(t *testing.T) {
 	err := classifyStatus("p", 429, 30*time.Second)
-	var rl *RateLimitError
-	if !errors.As(err, &rl) {
+	rl, ok := errors.AsType[*RateLimitError](err)
+	if !ok {
 		t.Fatalf("classifyStatus(429) = %T, want *RateLimitError", err)
 	}
 	if rl.RetryAfter != 30*time.Second {

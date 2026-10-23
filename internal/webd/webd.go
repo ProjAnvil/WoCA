@@ -78,11 +78,12 @@ func New() *Manager {
 }
 
 func filepathJoin(parts ...string) string {
-	out := parts[0]
+	var out strings.Builder
+	out.WriteString(parts[0])
 	for _, p := range parts[1:] {
-		out += string(os.PathSeparator) + p
+		out.WriteString(string(os.PathSeparator) + p)
 	}
-	return out
+	return out.String()
 }
 
 func (m *Manager) recordPath() string { return filepathJoin(m.DataDir, "web.json") }

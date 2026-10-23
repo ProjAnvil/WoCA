@@ -104,10 +104,7 @@ func ProcessImageData(data []byte) (ImagePayload, error) {
 		return ImagePayload{}, fmt.Errorf("unsupported image format %q", format)
 	}
 
-	long := cfg.Width
-	if cfg.Height > long {
-		long = cfg.Height
-	}
+	long := max(cfg.Height, cfg.Width)
 	if long <= maxImageEdge {
 		return ImagePayload{
 			Base64:   base64.StdEncoding.EncodeToString(data),

@@ -54,10 +54,7 @@ func (v *Viewport) Visible() []string {
 	if len(v.lines) == 0 {
 		return nil
 	}
-	end := v.offset + v.height
-	if end > len(v.lines) {
-		end = len(v.lines)
-	}
+	end := min(v.offset+v.height, len(v.lines))
 	return v.lines[v.offset:end]
 }
 

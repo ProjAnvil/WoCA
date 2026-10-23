@@ -12,6 +12,7 @@ package webfx
 
 import (
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -186,8 +187,8 @@ func (r *Router) Handler() http.Handler {
 // framework needs; exported for callers (the server core) that mount the
 // middleware around an existing handler rather than through a Router.
 func Chain(h http.Handler, mw ...Middleware) http.Handler {
-	for i := len(mw) - 1; i >= 0; i-- {
-		h = mw[i](h)
+	for _, m := range slices.Backward(mw) {
+		h = m(h)
 	}
 	return h
 }

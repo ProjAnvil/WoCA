@@ -145,10 +145,7 @@ func (m *Model) paletteView() string {
 	if m.paletteSel >= max {
 		start = m.paletteSel - max + 1
 	}
-	end := start + max
-	if end > len(entries) {
-		end = len(entries)
-	}
+	end := min(start+max, len(entries))
 	for i := start; i < end; i++ {
 		c := entries[i]
 		if i == m.paletteSel {

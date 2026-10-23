@@ -610,9 +610,9 @@ func NewThreadID() string {
 }
 
 func lastAIText(msgs []messages.Message) string {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == messages.RoleAI && msgs[i].Content != "" {
-			return msgs[i].Content
+	for _, msg := range slices.Backward(msgs) {
+		if msg.Role == messages.RoleAI && msg.Content != "" {
+			return msg.Content
 		}
 	}
 	return ""

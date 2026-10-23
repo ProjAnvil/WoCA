@@ -316,7 +316,7 @@ func (l *Ledger) Append(ctx context.Context, runID string, ev Event) (int64, err
 	if ev.Kind == "" {
 		return 0, errors.New("runstate: event kind is required")
 	}
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := range 5 {
 		var next int64
 		err := l.db.DB.QueryRowContext(ctx,
 			`SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = `+l.ph(0), runID).Scan(&next)

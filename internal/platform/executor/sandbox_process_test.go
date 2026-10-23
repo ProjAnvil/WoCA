@@ -286,8 +286,7 @@ func TestSandboxStartExitError(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = p.Wait()
-	var exitErr *ExitError
-	if !errors.As(err, &exitErr) || exitErr.Code != 3 {
+	if exitErr, ok := errors.AsType[*ExitError](err); !ok || exitErr.Code != 3 {
 		t.Fatalf("Wait err = %v, want *ExitError{3}", err)
 	}
 }

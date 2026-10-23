@@ -104,6 +104,6 @@ func (e *RateLimitError) Unwrap() error { return ErrRateLimited }
 // caller as-is. Hopping providers on arbitrary errors would hide real
 // misconfiguration behind apparent flakiness.
 func Failover(err error) bool {
-	var rl *RateLimitError
-	return errors.As(err, &rl)
+	_, ok := errors.AsType[*RateLimitError](err)
+	return ok
 }

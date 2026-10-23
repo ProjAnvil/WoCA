@@ -116,10 +116,7 @@ func (m *Model) modelsView() string {
 	if m.modelsSel >= max {
 		start = m.modelsSel - max + 1
 	}
-	end := start + max
-	if end > len(entries) {
-		end = len(entries)
-	}
+	end := min(start+max, len(entries))
 	for i := start; i < end; i++ {
 		e := entries[i]
 		marker := "  "

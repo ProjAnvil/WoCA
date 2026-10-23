@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
 	"time"
 
@@ -363,10 +364,7 @@ func (a *Agent) goalAssessNode() lggraph.NodeFunc {
 			b.WriteString("Progress so far: none yet — this is the first cycle. Start by proposing 3-6 concrete, verifiable done-criteria for the goal as a markdown checklist, then plan the first actions.\n\n")
 		} else {
 			b.WriteString("Progress so far (most recent last):\n")
-			start := len(goal.Progress) - 5
-			if start < 0 {
-				start = 0
-			}
+			start := max(len(goal.Progress)-5, 0)
 			for _, p := range goal.Progress[start:] {
 				fmt.Fprintf(&b, "  cycle %d [%s] %s\n", p.Cycle, p.Verdict, p.Summary)
 			}
@@ -747,10 +745,7 @@ func (a *Agent) goalRefreshTokens(base int64) {
 	total := int64(a.usage.snapshot().TotalTokens)
 	a.goal.mu.Lock()
 	if a.goal.goal != nil {
-		used := total - base
-		if used < 0 {
-			used = 0
-		}
+		used := max(total-base, 0)
 		a.goal.goal.TokensUsed = used
 	}
 	a.goal.mu.Unlock()
@@ -839,8 +834,8 @@ func goalReport(status GoalStatus, v goalVerdict, cycle int) string {
 // goalCycleMessages returns this cycle's messages: everything from the last
 // <goal-cycle> human message onward.
 func goalCycleMessages(msgs []messages.Message) []messages.Message {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == messages.RoleHuman && strings.HasPrefix(msgs[i].Content, "<goal-cycle") {
+	for i, msg := range slices.Backward(msgs) {
+		if msg.Role == messages.RoleHuman && strings.HasPrefix(msg.Content, "<goal-cycle") {
 			return msgs[i:]
 		}
 	}
@@ -889,8 +884,8 @@ func goalTruncate(s string, max int) string {
 }
 
 func firstLine(s string) string {
-	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
-		return s[:idx]
+	if before, _, ok := strings.Cut(s, "\n"); ok {
+		return before
 	}
 	return s
 }

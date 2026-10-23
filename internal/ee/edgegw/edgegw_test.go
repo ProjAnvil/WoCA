@@ -707,13 +707,6 @@ func TestRespondIsBridgeScoped(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // TestClientBodyLimit: a request too large for the tunnel is shed with
 // 413 before any memory is parked beyond the cap.
 func TestClientBodyLimit(t *testing.T) {

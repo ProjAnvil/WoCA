@@ -11,7 +11,7 @@ func TestRateLimiterWindow(t *testing.T) {
 	l := NewRateLimiter(10, 100)
 	l.now = func() time.Time { return now }
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		if !l.Allow("1.2.3.4") {
 			t.Fatalf("attempt %d denied inside the 10/min window", i+1)
 		}
@@ -33,7 +33,7 @@ func TestRateLimiterBounded(t *testing.T) {
 	l := NewRateLimiter(10, 50)
 	// A spray of distinct source IPs must not grow the table without
 	// bound (memory-DoS posture, design §4.4).
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		l.Allow(fmt.Sprintf("10.0.%d.%d", i/256, i%256))
 	}
 	l.mu.Lock()

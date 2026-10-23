@@ -59,8 +59,7 @@ func TestRelayLoginUnreachable(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	var lerr *RelayLoginError
-	if errors.As(err, &lerr) {
+	if _, ok := errors.AsType[*RelayLoginError](err); ok {
 		t.Fatalf("transport failure misclassified as RelayLoginError: %v", err)
 	}
 }

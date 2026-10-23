@@ -1,6 +1,10 @@
 package settings
 
-import "github.com/projanvil/woca/internal/websearch"
+import (
+	"slices"
+
+	"github.com/projanvil/woca/internal/websearch"
+)
 
 // SearchConfig builds the web-search chain configuration from a settings
 // snapshot.
@@ -40,10 +44,5 @@ func SearchConfigWithOverride(cfg websearch.Config, endpoint, key string) websea
 }
 
 func containsProvider(order []string, id string) bool {
-	for _, got := range order {
-		if got == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(order, id)
 }
