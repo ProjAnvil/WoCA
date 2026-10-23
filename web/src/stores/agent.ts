@@ -154,8 +154,11 @@ export const useAgentStore = defineStore('agent', () => {
 
   // Multi-line text for the /quota command and the quota popover.
   const quotaText = computed(() => {
+    // Guarded on q.quota, not just q: the /api/quota payload can arrive with
+    // an outer envelope and no quota block, and quotaText is a computed —
+    // throwing here takes the whole composer chip down with it.
     const q = quota.value
-    if (!q) return i18n.global.t('agent.quota.notLoaded')
+    if (!q?.quota) return i18n.global.t('agent.quota.notLoaded')
     const lines: string[] = []
     if (q.quota.available) {
       if (q.quota.type === 'balance') {
