@@ -182,6 +182,7 @@ onMounted(() => {
           :key="p.id"
           class="ws-row"
           :class="{ 'ws-row-on': enabledOf(p.id), 'ws-row-locked': providersLocked }"
+          :data-testid="'ws-row-' + p.id"
         >
           <span
             v-if="enabledOf(p.id)"
@@ -215,6 +216,7 @@ onMounted(() => {
             :disabled="providersLocked || saving"
             :aria-label="p.name"
             :aria-checked="enabledOf(p.id)"
+            :data-testid="'ws-switch-' + p.id"
             @click="toggle(p.id)"
           ></button>
         </div>
@@ -312,10 +314,10 @@ onMounted(() => {
           />
         </div>
         <div class="ws-actions">
-          <button class="btn" :disabled="testing || saving" @click="runTest">
+          <button class="btn" data-testid="ws-test" :disabled="testing || saving" @click="runTest">
             {{ testing ? t('settings.websearch.testing') : t('settings.websearch.testAction') }}
           </button>
-          <button class="btn btn-primary" :disabled="saving || testing" @click="save">
+          <button class="btn btn-primary" data-testid="ws-save" :disabled="saving || testing" @click="save">
             {{ saving ? t('settings.websearch.saving') : t('settings.footer.save') }}
           </button>
         </div>
