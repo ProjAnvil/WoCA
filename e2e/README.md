@@ -98,9 +98,26 @@ make e2e-personal    # 只跑个人形态的 8 例（改单个分区时省掉其
   据是登录响应 200 + 登录门在自我 reload 之后的新页面上消失（跨过
   380ms 交接窗），否则后续点击会撞上导航被清掉（edge 用例曾因此偶发）。
 
+## CI
+
+`.github/workflows/ci.yml` 里的 `e2e` job（ubuntu-latest）：装 Go + bun，
+`npx playwright install --with-deps chromium`，然后 `make e2e`。每次
+push/PR 都跑，与其它 job 同等待遇。失败/取消时上传 `playwright-report`
+和 `test-results`（保留 7 天）——五个形态里定位不到是哪个形态出问题时，
+报告是最省事的办法。
+
+两处与本地的差异，都是刻意的：
+
+- CI 用 `--with-deps`（需要 sudo 装系统库），本地用 `make e2e-install`
+  只装浏览器——开发机上系统库本来就有。
+- CI 不跑 `make ee-web`：`cmd/woca` 和 `e2e/lab` 都不引入企业控制台 SPA，
+  嵌进去的空目录不影响这两个二进制。
+
+不稳定性的兜底在 `playwright.config.ts` 里：`retries: CI ? 1 : 0`，
+一次重试足以吸收端口就绪和首次导航的抖动。
+
 ## 边界与后续
 
-- CI 接线（Playwright 浏览器安装 + `make e2e` 进 CI job）留作后续拍板。
 - 真 wails 层 `reuseExistingServer: true`：若开发者自留 `wails dev` 在跑，
   用例会复用其状态（可能直接 ready 而无向导），属 opt-in 已知行为。
 - relay 的运行中吊销级联（登录成功后再吊销 → 会话 401 回落登录门）由

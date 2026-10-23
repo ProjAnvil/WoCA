@@ -81,8 +81,11 @@ E2E_ENV := env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
 	NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
 
 .PHONY: e2e-install e2e e2e-native-dev e2e-personal
+# Dev-machine install. CI uses `--with-deps` instead (see .github/workflows),
+# which additionally needs root to install the system libraries headless
+# Chromium links against — pointless on a machine that already has them.
 e2e-install:
-	cd e2e && npm install && npx playwright install chromium
+	cd e2e && bun install --frozen-lockfile && npx playwright install chromium
 
 # Every target depends on `web`: the Go binary embeds web/dist, so skipping
 # the frontend build makes the browser tests drive the previous bundle.

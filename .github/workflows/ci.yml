@@ -78,6 +78,50 @@ jobs:
             (cd "$d" && bun install --frozen-lockfile && bun run test) || exit 1
           done
 
+  # Browser E2E over the five frontend forms (e2e/README.md): the same
+  # `make e2e` a developer runs, against the real binaries.
+  #
+  # Runs on every push/PR like the other jobs. `cmd/woca` and `e2e/lab` do not
+  # import the enterprise console SPAs, so — unlike the `test` job — this one
+  # does not need `make ee-web`.
+  e2e:
+    runs-on: ubuntu-latest
+    # Bounded: a hung lab topology would otherwise sit on the runner until the
+    # job's default six hours.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: oven-sh/setup-bun@v2
+
+      # --with-deps differs from `make e2e-install` on purpose: it also pulls
+      # the system libraries headless Chromium needs, which requires sudo
+      # (passwordless on runners).
+      - name: Install Playwright and Chromium
+        run: cd e2e && bun install --frozen-lockfile && npx playwright install --with-deps chromium
+
+      # `make e2e` depends on `web`: the woca binary embeds web/dist, so the
+      # frontend has to be built before Playwright compiles the binary.
+      - name: Run the browser E2E suite
+        run: make e2e
+
+      # Kept even on success: the report is the cheapest way to see which of
+      # the five forms a failure belongs to, and ARIA snapshots of failed
+      # steps only exist in test-results.
+      - name: Upload the Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 7
+
   native:
     runs-on: macos-latest
     steps:
