@@ -237,6 +237,17 @@ type payload struct {
 	LangfuseBaseURL      string `json:"langfuse_base_url"`
 	LangfusePublicKey    string `json:"langfuse_public_key"`
 	LangfuseSecretKeySet bool   `json:"langfuse_secret_key_set"`
+
+	// Web search — the enterprise default chain. A non-empty provider list
+	// pins the exact allowed set on every managed machine; the endpoints are
+	// the ones that need one. The custom endpoint's bearer key is write-only
+	// (search_custom_key_set only reports whether one is stored).
+	SearchProviders       []string `json:"search_providers"`
+	SearchSearXNGEndpoint string   `json:"search_searxng_endpoint"`
+	SearchCustomEndpoint  string   `json:"search_custom_endpoint"`
+	SearchCustomKeySet    bool     `json:"search_custom_key_set"`
+	SearchAllowedDomains  []string `json:"search_allowed_domains"`
+	SearchDeniedDomains   []string `json:"search_denied_domains"`
 }
 
 // update is the PUT body. Pointer fields distinguish "unchanged" (absent)
@@ -298,6 +309,16 @@ type update struct {
 	LangfuseBaseURL   *string `json:"langfuse_base_url"`
 	LangfusePublicKey *string `json:"langfuse_public_key"`
 	LangfuseSecretKey *string `json:"langfuse_secret_key"`
+
+	// Web search. Present pins the value on managed machines; absent leaves
+	// it to the user. Lists are replaced wholesale, not merged.
+	SearchProviders       *[]string `json:"search_providers"`
+	SearchSearXNGEndpoint *string   `json:"search_searxng_endpoint"`
+	SearchCustomEndpoint  *string   `json:"search_custom_endpoint"`
+	SearchAllowedDomains  *[]string `json:"search_allowed_domains"`
+	SearchDeniedDomains   *[]string `json:"search_denied_domains"`
+
+	SearchCustomKey *string `json:"search_custom_key"`
 }
 
 type patch struct {
@@ -324,4 +345,18 @@ func (u *update) boolPtr(p *bool) *string {
 		return nil
 	}
 	return new(strconv.FormatBool(*p))
+}
+
+// jsonListPtr renders a list patch as the JSON array string settings.Apply
+// expects. A nil pointer means "not in the request" and is dropped; a non-nil
+// empty list means "clear".
+func jsonListPtr(p *[]string) *string {
+	if p == nil {
+		return nil
+	}
+	raw, err := json.Marshal(*p)
+	if err != nil {
+		return nil
+	}
+	return new(string(raw))
 }

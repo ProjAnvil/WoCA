@@ -293,8 +293,8 @@ func (s *Service) finishVerify(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":              ok,
+		"ok":               ok,
 		"total_latency_ms": total,
-		"steps":           steps,
+		"steps":            steps,
 	})
 }

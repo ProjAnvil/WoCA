@@ -101,12 +101,12 @@ func New(st *settings.Store, ts *tenant.Store, db *wocadb.DB, log zerolog.Logger
 				body TEXT NOT NULL,
 				updated_at ` + tsCol + ` NOT NULL
 			)`,
-		`CREATE TABLE IF NOT EXISTS managed_mcp (
+			`CREATE TABLE IF NOT EXISTS managed_mcp (
 			name TEXT PRIMARY KEY,
 			spec TEXT NOT NULL,
 			updated_at ` + tsCol + ` NOT NULL
 		)`,
-		`CREATE TABLE IF NOT EXISTS sandbox_backends (
+			`CREATE TABLE IF NOT EXISTS sandbox_backends (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
 			type TEXT NOT NULL DEFAULT 'contract-http',
@@ -305,14 +305,17 @@ func (u *update) patches() []patch {
 		{settings.KeyLangfuseEnabled, u.boolPtr(u.LangfuseEnabled)},
 		{settings.KeyLangfuseBaseURL, u.LangfuseBaseURL},
 		{settings.KeyLangfusePublicKey, u.LangfusePublicKey},
+		{settings.KeySearchProviders, jsonListPtr(u.SearchProviders)},
+		{settings.KeySearchSearXNGEndpoint, u.SearchSearXNGEndpoint},
+		{settings.KeySearchCustomEndpoint, u.SearchCustomEndpoint},
+		{settings.KeySearchAllowedDomains, jsonListPtr(u.SearchAllowedDomains)},
+		{settings.KeySearchDeniedDomains, jsonListPtr(u.SearchDeniedDomains)},
 	}
 	// The enterprise plugin set (a JSON array of enabled built-ins) rides
 	// as one settings key; present means "pin this set", absent leaves
 	// plugins to the bridge's users.
-	if u.BuiltinPlugins != nil {
-		if raw, err := json.Marshal(*u.BuiltinPlugins); err == nil {
-			p = append(p, patch{key: settings.KeyBuiltinPlugins, value: new(string(raw))})
-		}
+	if raw := jsonListPtr(u.BuiltinPlugins); raw != nil {
+		p = append(p, patch{key: settings.KeyBuiltinPlugins, value: raw})
 	}
 	out := make([]patch, 0, len(p))
 	for _, e := range p {
@@ -336,6 +339,7 @@ func (u *update) secretPatches() []patch {
 		{settings.SecretDeepSeekAPIKey, u.DeepSeekAPIKey},
 		{settings.SecretLadyMEmbeddingAPIKey, u.LadyMEmbeddingAPIKey},
 		{settings.SecretLangfuseSecretKey, u.LangfuseSecretKey},
+		{settings.SecretSearchCustomKey, u.SearchCustomKey},
 	}
 }
 

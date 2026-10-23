@@ -92,6 +92,13 @@ func (s *Service) handleGet(w http.ResponseWriter, _ *http.Request) {
 		LangfuseBaseURL:      cfg.LangfuseBaseURL,
 		LangfusePublicKey:    cfg.LangfusePublicKey,
 		LangfuseSecretKeySet: s.settings.HasSecret(settings.SecretLangfuseSecretKey),
+
+		SearchProviders:       cfg.SearchProviders,
+		SearchSearXNGEndpoint: cfg.SearchSearXNGEndpoint,
+		SearchCustomEndpoint:  cfg.SearchCustomEndpoint,
+		SearchCustomKeySet:    s.settings.HasSecret(settings.SecretSearchCustomKey),
+		SearchAllowedDomains:  cfg.SearchAllowedDomains,
+		SearchDeniedDomains:   cfg.SearchDeniedDomains,
 	})
 }
 

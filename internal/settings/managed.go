@@ -155,6 +155,26 @@ func (m *managedState) applyOverlay(out *Settings) {
 	if o.LangfusePublicKey != "" {
 		out.LangfusePublicKey = o.LangfusePublicKey
 	}
+	// Web search: the provider list rides the overlay as the enterprise
+	// default chain. Same zero-value constraint as BuiltinPlugins — an empty
+	// list means "not managed", so an org can pin a set but not force an
+	// empty one. The custom endpoint's bearer key is a secret and travels
+	// through the managed-secrets channel instead.
+	if len(o.SearchProviders) > 0 {
+		out.SearchProviders = o.SearchProviders
+	}
+	if o.SearchSearXNGEndpoint != "" {
+		out.SearchSearXNGEndpoint = o.SearchSearXNGEndpoint
+	}
+	if o.SearchCustomEndpoint != "" {
+		out.SearchCustomEndpoint = o.SearchCustomEndpoint
+	}
+	if len(o.SearchAllowedDomains) > 0 {
+		out.SearchAllowedDomains = o.SearchAllowedDomains
+	}
+	if len(o.SearchDeniedDomains) > 0 {
+		out.SearchDeniedDomains = o.SearchDeniedDomains
+	}
 }
 
 // lockedFields lists the setting keys the overlay currently manages. The
@@ -197,6 +217,17 @@ func (m *managedState) lockedFields() []string {
 	}
 	add(KeyLangfuseBaseURL, o.LangfuseBaseURL)
 	add(KeyLangfusePublicKey, o.LangfusePublicKey)
+	if len(o.SearchProviders) > 0 {
+		out = append(out, KeySearchProviders)
+	}
+	add(KeySearchSearXNGEndpoint, o.SearchSearXNGEndpoint)
+	add(KeySearchCustomEndpoint, o.SearchCustomEndpoint)
+	if len(o.SearchAllowedDomains) > 0 {
+		out = append(out, KeySearchAllowedDomains)
+	}
+	if len(o.SearchDeniedDomains) > 0 {
+		out = append(out, KeySearchDeniedDomains)
+	}
 	if o.MaxTokens != 0 {
 		out = append(out, KeyMaxTokens)
 	}
@@ -240,6 +271,8 @@ func (m *managedState) checkWritable(cfg Settings) error {
 		{"ladym_llm", o.LadyMLLM, cfg.LadyMLLM},
 		{KeyLangfuseBaseURL, o.LangfuseBaseURL, cfg.LangfuseBaseURL},
 		{KeyLangfusePublicKey, o.LangfusePublicKey, cfg.LangfusePublicKey},
+		{KeySearchSearXNGEndpoint, o.SearchSearXNGEndpoint, cfg.SearchSearXNGEndpoint},
+		{KeySearchCustomEndpoint, o.SearchCustomEndpoint, cfg.SearchCustomEndpoint},
 	}
 	for _, c := range checks {
 		if c.managed == "" {
@@ -263,6 +296,15 @@ func (m *managedState) checkWritable(cfg Settings) error {
 	}
 	if len(o.BuiltinPlugins) > 0 && len(cfg.BuiltinPlugins) > 0 && !slices.Equal(o.BuiltinPlugins, cfg.BuiltinPlugins) {
 		return fmt.Errorf("%w: builtin-plugins (set to %v)", ErrManagedLocked, o.BuiltinPlugins)
+	}
+	if len(o.SearchProviders) > 0 && len(cfg.SearchProviders) > 0 && !slices.Equal(o.SearchProviders, cfg.SearchProviders) {
+		return fmt.Errorf("%w: search-providers (set to %v)", ErrManagedLocked, o.SearchProviders)
+	}
+	if len(o.SearchAllowedDomains) > 0 && len(cfg.SearchAllowedDomains) > 0 && !slices.Equal(o.SearchAllowedDomains, cfg.SearchAllowedDomains) {
+		return fmt.Errorf("%w: search-allowed-domains (set to %v)", ErrManagedLocked, o.SearchAllowedDomains)
+	}
+	if len(o.SearchDeniedDomains) > 0 && len(cfg.SearchDeniedDomains) > 0 && !slices.Equal(o.SearchDeniedDomains, cfg.SearchDeniedDomains) {
+		return fmt.Errorf("%w: search-denied-domains (set to %v)", ErrManagedLocked, o.SearchDeniedDomains)
 	}
 	// LangfuseEnabled is only-true (a managed false is unset): locking the
 	// switch means an overlay-enabled plugin cannot be turned off locally.
