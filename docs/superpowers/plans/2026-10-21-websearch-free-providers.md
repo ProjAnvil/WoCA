@@ -198,7 +198,9 @@ func (r *Router) Search(ctx, query string, limit int) ([]Result, error)
 - [x] 「被拦」与「搜不到」在工具层有专门的回归用例
       （`TestWebSearchToolRateLimitIsNeverNoResults`）。
 - [x] `ci/deps-personal.txt` 已重生成（+8 行，其中 6 行本分支、2 行 main 既有漂移）。
-- [x] 运维文档 `docs/websearch-free-providers.md`：数据中心 IP 下 DDG 大概率失败、
+- [x] ~~运维文档 `docs/websearch-free-providers.md`~~ —— 本轮已写，下一轮
+      （`feat/websearch-settings`）把它删了：配置搬进产品设置页后这份文档没用了，
+      「数据中心 IP 会被拦」那条搬进了两个设置页的帮助文案。
       如何配 searxng/tavily、生产验证清单。
 
 ## 7. 执行结果

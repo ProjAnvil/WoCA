@@ -358,7 +358,7 @@ sandboxlab:
 # The failure semantics for the networked components are deliberate: no
 # internet -> skip (environment problem); internet present but every free
 # backend blocked -> FAIL (a real finding: this network needs a self-hosted
-# SearXNG or Tavily keyless). See docs/websearch-free-providers.md.
+# SearXNG or Tavily keyless) — see the Web search section in the settings UI.
 .PHONY: complab complab-offline
 complab:
 	go test -tags complab -count=1 -timeout 10m -v ./e2e/complab

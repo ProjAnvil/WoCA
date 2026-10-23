@@ -329,7 +329,7 @@ internal/sdkout          machine-readable headless output (json /
 internal/server          web server: sessions, runs, SSE, settings API
 internal/gateway         L1 edge middlewares shared by every deployment
 internal/websearch       WebSearch backends: provider registry, failover,
-                         cooldown, throttling (free/keyless chain)
+                         cooldown, throttling (configured from Settings)
 internal/searchapi       generic JSON web-search API client (--search-api)
 internal/fsb             workspace folder browser (jailed, os.OpenRoot)
 
