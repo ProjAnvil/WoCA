@@ -57,7 +57,7 @@ func TestRetainRunUsesCtxWorkspace(t *testing.T) {
 	a.SetMemoryWorkspace("/ws/field")
 	ctx := WithRunWorkspace(t.Context(), "/ws/ctx")
 	a.RetainRun(ctx,
-		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, nil)
 
 	if calls := f.recordedRememberCalls(); len(calls) != 0 {
 		t.Fatalf("auto-retain must not write facts directly: %v", calls)
@@ -75,7 +75,7 @@ func TestRetainRunCtxWorkspaceSurvivesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(WithRunWorkspace(t.Context(), "/ws/ctx"))
 	cancel()
 	a.RetainRun(context.WithoutCancel(ctx),
-		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, nil)
 	if wss := f.recordedEventWSs(); len(wss) != 1 || wss[0] != "/ws/ctx" {
 		t.Fatalf("eventWSs = %v, want [/ws/ctx]", wss)
 	}
@@ -86,7 +86,7 @@ func TestRetainGoalUsesCtxWorkspace(t *testing.T) {
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws/workdir"}
 	a.SetMemoryWorkspace("/ws/field")
 	ctx := WithRunWorkspace(t.Context(), "/ws/goal-ctx")
-	a.RetainGoal(ctx, "objective", "complete", "summary", nil)
+	a.RetainGoal(ctx, "objective", "complete", "summary", nil, nil)
 	if calls := f.recordedRememberCalls(); len(calls) != 0 {
 		t.Fatalf("auto-retain must not write facts directly: %v", calls)
 	}

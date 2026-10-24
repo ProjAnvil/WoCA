@@ -1,9 +1,16 @@
 import { toErrorMessage } from '../lib/errors'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { forgetMemory, listMemory, memoryStats, rememberMemory } from '../api/client'
+import {
+  downloadMemoryDict,
+  forgetMemory,
+  listMemory,
+  memoryDictStatus,
+  memoryStats,
+  rememberMemory,
+} from '../api/client'
 import i18n from '../i18n'
-import type { MemoryItem, MemoryStats, RememberResponse } from '../types'
+import type { CJKDictStatus, MemoryItem, MemoryStats, RememberResponse } from '../types'
 
 // Workspace-scoped memory panel state. open(ws) fixes the workspace for the
 // panel's lifetime; reopening refreshes it.
@@ -17,6 +24,8 @@ export const useMemoryStore = defineStore('memory', () => {
   const layerFilter = ref('')
   const loading = ref(false)
   const engine = ref('ladym')
+  const dictStatus = ref<CJKDictStatus | null>(null)
+  const dictLoading = ref(false)
   const error = ref('')
   const notice = ref('') // e.g. gate-drop feedback after a manual "remember"
   let offset = 0
@@ -34,6 +43,7 @@ export const useMemoryStore = defineStore('memory', () => {
     layerFilter.value = ''
     notice.value = ''
     void reload()
+    void loadDict()
   }
 
   function close() {
@@ -131,6 +141,43 @@ export const useMemoryStore = defineStore('memory', () => {
     return res.id
   }
 
+  // The CJK dictionary is process-global (not workspace-scoped): one status
+  // read per panel open, one explicit download per click.
+  async function loadDict() {
+    if (engine.value === 'none') return
+    try {
+      const res = await memoryDictStatus()
+      engine.value = res.engine
+      dictStatus.value = res.dict
+    } catch {
+      // The dict chip is cosmetic; a failed status read stays silent.
+    }
+  }
+
+  async function downloadDict() {
+    if (dictLoading.value) return
+    dictLoading.value = true
+    error.value = ''
+    try {
+      const res = await downloadMemoryDict()
+      dictStatus.value = res.dict
+      notice.value = i18n.global.t('memoryStore.dict.installed', {
+        size: fmtMB(dictStatus.value?.bytes ?? 0),
+      })
+    } catch (e) {
+      error.value =
+        e instanceof Error
+          ? i18n.global.t('memoryStore.dict.failed', { message: e.message })
+          : i18n.global.t('memoryStore.dict.failedRetry')
+    } finally {
+      dictLoading.value = false
+    }
+  }
+
+  function fmtMB(bytes: number): string {
+    return (bytes / (1024 * 1024)).toFixed(1)
+  }
+
   async function remove(id: string) {
     try {
       await forgetMemory(id)
@@ -147,7 +194,8 @@ export const useMemoryStore = defineStore('memory', () => {
 
   return {
     panelOpen, workspace, workspaceName, items, stats, query, layerFilter,
-    loading, engine, error, notice,
+    loading, engine, error, notice, dictStatus, dictLoading,
     open, close, reload, searchDebounced, loadMore, hasMore, add, remove,
+    loadDict, downloadDict,
   }
 })

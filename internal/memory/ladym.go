@@ -35,6 +35,10 @@ type BuildInput struct {
 	ChatModel        language.ChatModel // woca's active model (LLM=inherit)
 	OpenAIKey        string
 	OpenAIBaseURL    string
+	// DictDir overrides the CJK dictionary directory; empty resolves to
+	// DefaultDictDir() (~/.woca/dict). Tests point it at a temp dir so the
+	// global tokenizer state stays deterministic.
+	DictDir string
 }
 
 // DefaultDBPath returns ~/.woca/ladym.db (empty string on home-dir failure).
@@ -144,6 +148,12 @@ func Build(in BuildInput) (*LadyM, error) {
 	// The LLM is injected per-op below (host model), never resolved by
 	// ladyM's own provider factories.
 	cfg.LLMProvider = "none"
+	// The CJK dictionary lives under woca's home; engine open routes it via
+	// storage.SetCJKDictDir. Empty (home-dir failure) keeps LadyM's default.
+	dictDir := orDefault(in.DictDir, DefaultDictDir())
+	if dictDir != "" {
+		cfg.CJKDictDir = dictDir
+	}
 
 	var (
 		eng *ladymengine.Engine
@@ -159,21 +169,24 @@ func Build(in BuildInput) (*LadyM, error) {
 	if err != nil {
 		return nil, fmt.Errorf("memory: build ladyM engine: %w", err)
 	}
-	return &LadyM{eng: eng, path: in.DBPath, defWs: in.DefaultWorkspace}, nil
+	return &LadyM{eng: eng, path: in.DBPath, defWs: in.DefaultWorkspace, dictDir: dictDir}, nil
 }
 
 // LadyM implements Engine over an in-process ladyM engine.
 //
-// ladyM v0.3.1 is entirely unsynchronized (the vector index is a bare slice,
-// and Remember/RecordEvent write to whatever workspace Config.Workspace
-// currently names), so mu guards every engine call and defWs snapshots the
-// default workspace at Build time: writes retarget the engine with
-// SetWorkspace and restore it before the lock is released.
+// ladyM v0.6.0 made the engine safe for concurrent front-ends: layer state
+// lives behind the storage backend (SQLite WAL single-writer, Postgres
+// parallel), the engine mutex guards only lazy LLM-agent wiring, and
+// Engine.Scope(ws) hands out workspace-bound handles so writes never
+// retarget shared state. This wrapper therefore takes no lock on operation
+// paths and routes every write through a Scope; mu serializes Close against
+// itself only — Close is a teardown-time call, not interleaved with ops.
 type LadyM struct {
-	mu    sync.Mutex
-	eng   *ladymengine.Engine
-	path  string
-	defWs string
+	mu      sync.Mutex
+	eng     *ladymengine.Engine
+	path    string
+	defWs   string
+	dictDir string
 }
 
 var _ Engine = (*LadyM)(nil)
@@ -186,28 +199,12 @@ func (l *LadyM) workspace(ws string) string {
 	return ws
 }
 
-// withWorkspace runs fn under the engine lock with the engine retargeted to
-// ws, restoring the default workspace before the lock is released. Used for
-// the write path (Remember/RecordEvent), the only ops whose ladyM entry
-// points do not take an explicit workspace.
-func (l *LadyM) withWorkspace(ws string, fn func() error) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if ws != l.defWs {
-		l.eng.SetWorkspace(ws)
-		defer l.eng.SetWorkspace(l.defWs)
-	}
-	return fn()
-}
-
 // Recall runs the two-tier semantic retrieval (heuristic, no LLM).
 func (l *LadyM) Recall(_ context.Context, query, workspace string, topK int) ([]Hit, error) {
 	if topK <= 0 {
 		topK = 6
 	}
-	l.mu.Lock()
 	resp, err := l.eng.Recall(query, l.workspace(workspace), topK, nil, nil, 0)
-	l.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("memory: recall: %w", err)
 	}
@@ -219,9 +216,7 @@ func (l *LadyM) SearchCode(_ context.Context, query, workspace string, topK int)
 	if topK <= 0 {
 		topK = 8
 	}
-	l.mu.Lock()
 	resp, err := l.eng.SearchCode(query, topK, l.workspace(workspace))
-	l.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("memory: search code: %w", err)
 	}
@@ -233,36 +228,27 @@ func (l *LadyM) SearchCode(_ context.Context, query, workspace string, topK int)
 // ladyM hands back an unpersisted memory marked Metadata["gated"]=="dropped",
 // which this adapter never reports as stored.
 func (l *LadyM) Remember(_ context.Context, workspace, content string, tags []string, source string) (string, error) {
-	var id string
-	err := l.withWorkspace(l.workspace(workspace), func() error {
-		m, err := l.eng.Remember(content, schema.LayerSemantic, schema.TypeFact, tags, nil, source, "")
-		if err != nil {
-			return fmt.Errorf("memory: remember: %w", err)
-		}
-		if m == nil {
-			return fmt.Errorf("memory: remember returned no memory")
-		}
-		if m.Metadata["gated"] == "dropped" {
-			return nil // dropped by the attention gate; nothing was persisted
-		}
-		id = m.ID
-		return nil
-	})
+	scope := l.eng.Scope(l.workspace(workspace))
+	m, err := scope.Remember(content, schema.LayerSemantic, schema.TypeFact, tags, nil, source, "")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("memory: remember: %w", err)
 	}
-	return id, nil
+	if m == nil {
+		return "", fmt.Errorf("memory: remember returned no memory")
+	}
+	if m.Metadata["gated"] == "dropped" {
+		return "", nil // dropped by the attention gate; nothing was persisted
+	}
+	return m.ID, nil
 }
 
 // RecordEvent stores an L1 episodic tuple (food for consolidation).
 func (l *LadyM) RecordEvent(_ context.Context, workspace, agentName, action, observation, outcome string) error {
-	return l.withWorkspace(l.workspace(workspace), func() error {
-		_, err := l.eng.RecordEvent(agentName, action, observation, outcome, nil, nil)
-		if err != nil {
-			return fmt.Errorf("memory: record event: %w", err)
-		}
-		return nil
-	})
+	scope := l.eng.Scope(l.workspace(workspace))
+	if _, err := scope.RecordEvent(agentName, action, observation, outcome, nil, nil); err != nil {
+		return fmt.Errorf("memory: record event: %w", err)
+	}
+	return nil
 }
 
 // List returns recent memories newest-first (layer may be "" for all).
@@ -275,9 +261,7 @@ func (l *LadyM) List(_ context.Context, workspace, layer string, limit, offset i
 		ly := schema.Layer(layer)
 		layerPtr = &ly
 	}
-	l.mu.Lock()
 	items, err := l.eng.List(l.workspace(workspace), layerPtr, limit, offset)
-	l.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("memory: list: %w", err)
 	}
@@ -293,10 +277,7 @@ func (l *LadyM) List(_ context.Context, workspace, layer string, limit, offset i
 
 // Forget deletes one memory by id.
 func (l *LadyM) Forget(_ context.Context, id string) error {
-	l.mu.Lock()
-	err := l.eng.Forget(id)
-	l.mu.Unlock()
-	if err != nil {
+	if err := l.eng.Forget(id); err != nil {
 		return fmt.Errorf("memory: forget: %w", err)
 	}
 	return nil
@@ -304,9 +285,7 @@ func (l *LadyM) Forget(_ context.Context, id string) error {
 
 // Stats counts memories per layer for one workspace.
 func (l *LadyM) Stats(_ context.Context, workspace string) (*Stats, error) {
-	l.mu.Lock()
 	st, err := l.eng.StatsFor(l.workspace(workspace))
-	l.mu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("memory: stats: %w", err)
 	}
@@ -315,9 +294,7 @@ func (l *LadyM) Stats(_ context.Context, workspace string) (*Stats, error) {
 
 // IndexCode (re)indexes a source root into code memories; returns a report.
 func (l *LadyM) IndexCode(_ context.Context, root, workspace string, force bool) (string, error) {
-	l.mu.Lock()
 	rep, err := l.eng.IndexCode(root, force, l.workspace(workspace), nil)
-	l.mu.Unlock()
 	if err != nil {
 		return "", fmt.Errorf("memory: index code: %w", err)
 	}
@@ -336,8 +313,6 @@ func (l *LadyM) IndexCode(_ context.Context, root, workspace string, force bool)
 // episode on every cycle.
 func (l *LadyM) Consolidate(_ context.Context, workspace string, since float64) (string, error) {
 	ws := l.workspace(workspace)
-	l.mu.Lock()
-	defer l.mu.Unlock()
 	cons, err := l.eng.Consolidate(ws, since)
 	if err != nil {
 		return "", fmt.Errorf("memory: consolidate: %w", err)
@@ -363,8 +338,15 @@ func (l *LadyM) Consolidate(_ context.Context, workspace string, since float64) 
 	if err != nil {
 		return "", fmt.Errorf("memory: consolidate: %w", err)
 	}
-	return fmt.Sprintf("facts_promoted=%d kept_episodes=%d skipped_llm_steps=%v decay=%+v",
-		cons.PromotedToSemantic, cons.KeptEpisodes, skipped, decay), nil
+	// L4 self-maintenance: drop edges whose endpoint memories are gone
+	// (legacy pre-FK databases accumulate them; the sweep is a no-op on a
+	// healthy graph).
+	swept, err := l.eng.MaintainL4(ws)
+	if err != nil {
+		return "", fmt.Errorf("memory: consolidate: %w", err)
+	}
+	return fmt.Sprintf("facts_promoted=%d kept_episodes=%d skipped_llm_steps=%v decay=%+v edges_swept=%d",
+		cons.PromotedToSemantic, cons.KeptEpisodes, skipped, decay, swept.Swept), nil
 }
 
 // Description names the engine for /memory stats output.

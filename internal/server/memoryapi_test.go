@@ -492,3 +492,226 @@ func TestMemoryEngineResolvedThroughAgent(t *testing.T) {
 		t.Fatalf("agent-resolved engine body = %+v", body)
 	}
 }
+
+// fakeOpsEngine adds the recall_ops capability to the base fake; the base
+// fakeMemEngine stays capability-free so tests can pin both engine shapes.
+type fakeOpsEngine struct {
+	*fakeMemEngine
+	ops    []memory.Operation
+	opHits []memory.OperationHit
+	opErr  error
+	lastOp struct {
+		ws       string
+		resource string
+		topK     int
+	}
+}
+
+func (f *fakeOpsEngine) RecordOperation(ctx context.Context, ws string, op memory.Operation) (string, error) {
+	if f.opErr != nil {
+		return "", f.opErr
+	}
+	f.ops = append(f.ops, op)
+	return "op-1", nil
+}
+
+func (f *fakeOpsEngine) RecallOperations(ctx context.Context, ws, resource string, topK int) ([]memory.OperationHit, error) {
+	f.lastOp.ws, f.lastOp.resource, f.lastOp.topK = ws, resource, topK
+	if f.opErr != nil {
+		return nil, f.opErr
+	}
+	return f.opHits, nil
+}
+
+func TestMemoryOperationsEndpoint(t *testing.T) {
+	// An engine without the capability (the remote data-plane shape)
+	// answers 501 Not Implemented.
+	bare := &fakeMemEngine{}
+	srv := newMemoryTestServer(t, bare)
+	resp, err := http.Get(srv.URL + "/api/memory/operations?resource=a.go&workspace=/ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("capability-less engine status = %d, want 501", resp.StatusCode)
+	}
+
+	// With the capability, the query resolves and hits pass through.
+	fo := &fakeOpsEngine{
+		fakeMemEngine: bare,
+		opHits: []memory.OperationHit{{
+			ID: "op-1", Action: "update", Summary: "Q: q", Outcome: "success", Score: 0.9,
+		}},
+	}
+	srv2 := newMemoryTestServer(t, fo)
+	resp2, err := http.Get(srv2.URL + "/api/memory/operations?workspace=/ws&resource=src%2Fa.go&top_k=3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp2.StatusCode)
+	}
+	var body struct {
+		Engine    string                `json:"engine"`
+		Workspace string                `json:"workspace"`
+		Items     []memory.OperationHit `json:"items"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Engine != "ladym" || body.Workspace != "/ws" || len(body.Items) != 1 || body.Items[0].ID != "op-1" {
+		t.Fatalf("body = %+v", body)
+	}
+	if fo.lastOp.ws != "/ws" || fo.lastOp.resource != "src/a.go" || fo.lastOp.topK != 3 {
+		t.Fatalf("lastOp = %+v", fo.lastOp)
+	}
+
+	// A missing resource is a bad request, not an engine error.
+	resp3, err := http.Get(srv2.URL + "/api/memory/operations?workspace=/ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusBadRequest {
+		t.Fatalf("missing resource status = %d, want 400", resp3.StatusCode)
+	}
+
+	// A disabled engine degrades to the empty "none" shape (mirror of the
+	// list endpoint).
+	srv3 := newMemoryTestServer(t, nil)
+	resp4, err := http.Get(srv3.URL + "/api/memory/operations?resource=a.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp4.Body.Close()
+	var none struct {
+		Engine string `json:"engine"`
+	}
+	if err := json.NewDecoder(resp4.Body).Decode(&none); err != nil {
+		t.Fatal(err)
+	}
+	if resp4.StatusCode != http.StatusOK || none.Engine != "none" {
+		t.Fatalf("disabled engine: status=%d engine=%q", resp4.StatusCode, none.Engine)
+	}
+}
+
+// fakeDictEngine adds the CJK dictionary capability to the base fake.
+type fakeDictEngine struct {
+	*fakeMemEngine
+	status    memory.CJKDictStatus
+	dlStatus  memory.CJKDictStatus
+	dlErr     error
+	downloads int
+}
+
+func (f *fakeDictEngine) CJKDictStatus() memory.CJKDictStatus { return f.status }
+
+func (f *fakeDictEngine) CJKDictDownload(ctx context.Context) (memory.CJKDictStatus, error) {
+	f.downloads++
+	if f.dlErr != nil {
+		return memory.CJKDictStatus{}, f.dlErr
+	}
+	return f.dlStatus, nil
+}
+
+func TestMemoryDictEndpoints(t *testing.T) {
+	// A capability-less engine (the remote data-plane shape) answers 501
+	// on both verbs.
+	bare := &fakeMemEngine{}
+	srv := newMemoryTestServer(t, bare)
+	resp, err := http.Get(srv.URL + "/api/memory/dict")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("GET capability-less status = %d, want 501", resp.StatusCode)
+	}
+	postResp, err := http.Post(srv.URL+"/api/memory/dict", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	postResp.Body.Close()
+	if postResp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("POST capability-less status = %d, want 501", postResp.StatusCode)
+	}
+
+	// With the capability, GET reports the state and POST downloads once.
+	fd := &fakeDictEngine{
+		fakeMemEngine: bare,
+		status:        memory.CJKDictStatus{Available: false, Source: "none", Dir: "/home/u/.woca/dict"},
+		dlStatus:      memory.CJKDictStatus{Available: true, Source: "file", Variant: "zh", Dir: "/home/u/.woca/dict", Bytes: 8643748},
+	}
+	srv2 := newMemoryTestServer(t, fd)
+	resp2, err := http.Get(srv2.URL + "/api/memory/dict")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	var got struct {
+		Engine string               `json:"engine"`
+		Dict   memory.CJKDictStatus `json:"dict"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Engine != "ladym" || got.Dict.Available || got.Dict.Source != "none" {
+		t.Fatalf("GET body = %+v", got)
+	}
+
+	resp3, err := http.Post(srv2.URL+"/api/memory/dict", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp3.Body.Close()
+	var dl struct {
+		Dict memory.CJKDictStatus `json:"dict"`
+	}
+	if err := json.NewDecoder(resp3.Body).Decode(&dl); err != nil {
+		t.Fatal(err)
+	}
+	if !dl.Dict.Available || dl.Dict.Variant != "zh" || dl.Dict.Bytes != 8643748 {
+		t.Fatalf("POST body = %+v", dl)
+	}
+	if fd.downloads != 1 {
+		t.Fatalf("downloads = %d, want 1", fd.downloads)
+	}
+
+	// A download failure surfaces as 502 with the message.
+	fd.dlErr = errors.New("mirror unreachable")
+	resp4, err := http.Post(srv2.URL+"/api/memory/dict", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp4.Body.Close()
+	if resp4.StatusCode != http.StatusBadGateway {
+		t.Fatalf("failed download status = %d, want 502", resp4.StatusCode)
+	}
+
+	// A disabled memory subsystem degrades on GET and refuses POST.
+	srv3 := newMemoryTestServer(t, nil)
+	resp5, err := http.Get(srv3.URL + "/api/memory/dict")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp5.Body.Close()
+	var none struct {
+		Engine string `json:"engine"`
+	}
+	if err := json.NewDecoder(resp5.Body).Decode(&none); err != nil {
+		t.Fatal(err)
+	}
+	if resp5.StatusCode != http.StatusOK || none.Engine != "none" {
+		t.Fatalf("disabled GET: status=%d engine=%q", resp5.StatusCode, none.Engine)
+	}
+	resp6, err := http.Post(srv3.URL+"/api/memory/dict", "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp6.Body.Close()
+	if resp6.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("disabled POST status = %d, want 503", resp6.StatusCode)
+	}
+}

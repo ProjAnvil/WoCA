@@ -1,12 +1,15 @@
 package memory
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	_ "modernc.org/sqlite" // database/sql driver name "sqlite"
 
 	"github.com/projanvil/langchain-golang/core/language"
 )
@@ -315,6 +318,11 @@ func TestConcurrentWorkspaces(t *testing.T) {
 				t.Errorf("B write %d: id=%q err=%v", i, id, err)
 			}
 		})
+		wg.Go(func() { // episodic writers race the semantic writers
+			if err := eng.RecordEvent(ctx, "/ws/A", "woca", "run", fmt.Sprintf("episode %d for auth work", i), "success"); err != nil {
+				t.Errorf("A event %d: %v", i, err)
+			}
+		})
 		wg.Go(func() { // concurrent readers on both workspaces
 			for range 3 {
 				if _, err := eng.Recall(ctx, "auth flows", "/ws/A", 5); err != nil {
@@ -322,6 +330,9 @@ func TestConcurrentWorkspaces(t *testing.T) {
 				}
 				if _, err := eng.Recall(ctx, "graphql", "/ws/B", 5); err != nil {
 					t.Errorf("recall B: %v", err)
+				}
+				if _, err := eng.List(ctx, "/ws/B", "", 5, 0); err != nil {
+					t.Errorf("list B: %v", err)
 				}
 			}
 		})
@@ -336,8 +347,8 @@ func TestConcurrentWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stA.Total != perWS || stA.Layers["L2_semantic"] != perWS {
-		t.Fatalf("Stats(/ws/A) = %+v, want %d semantic facts", stA, perWS)
+	if stA.Total != 2*perWS || stA.Layers["L2_semantic"] != perWS || stA.Layers["L1_episodic"] != perWS {
+		t.Fatalf("Stats(/ws/A) = %+v, want %d semantic + %d episodic", stA, perWS, perWS)
 	}
 	if stB.Total != perWS || stB.Layers["L2_semantic"] != perWS {
 		t.Fatalf("Stats(/ws/B) = %+v, want %d semantic facts", stB, perWS)
@@ -716,5 +727,53 @@ func TestConsolidatePromotesEpisodeMaterialIntoFacts(t *testing.T) {
 	}
 	if len(facts) != 1 {
 		t.Fatalf("repeated cycle duplicated facts: %+v", facts)
+	}
+}
+
+func TestConsolidateSweepsDanglingEdges(t *testing.T) {
+	eng := newEngine(t)
+	ctx := t.Context()
+
+	id1, err := eng.Remember(ctx, "", "fact one about auth flows", nil, "test")
+	if err != nil || id1 == "" {
+		t.Fatalf("Remember one: id=%q err=%v", id1, err)
+	}
+	id2, err := eng.Remember(ctx, "", "fact two about auth flows", nil, "test")
+	if err != nil || id2 == "" {
+		t.Fatalf("Remember two: id=%q err=%v", id2, err)
+	}
+
+	// Insert edges behind the engine's back: one valid, one pointing at a
+	// memory that does not exist (the legacy pre-FK shape the sweep fixes).
+	db, err := sql.Open("sqlite", eng.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(
+		`INSERT INTO edges (id, src_id, relation, dst_id, weight, valid_from)
+		 VALUES ('e-ok', ?, 'relates_to', ?, 1.0, 0)`, id1, id2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO edges (id, src_id, relation, dst_id, weight, valid_from)
+		 VALUES ('e-dangling', ?, 'relates_to', 'memory-that-never-existed', 1.0, 0)`, id1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := eng.Consolidate(ctx, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM edges WHERE id = 'e-dangling'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("Consolidate left the dangling edge behind")
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM edges WHERE id = 'e-ok'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatal("Consolidate removed the valid edge")
 	}
 }

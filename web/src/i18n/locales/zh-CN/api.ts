@@ -22,6 +22,7 @@ export default {
   loadGoalFailed: '加载目标失败',
   loadMemoryFailed: '加载记忆失败',
   loadMemoryStatsFailed: '加载记忆统计失败',
+  loadDictFailed: '加载分词字典状态失败',
   deleteFailed: '删除失败',
   streamConnectFailed: '流连接失败：{status}',
   unknownError: '未知错误',

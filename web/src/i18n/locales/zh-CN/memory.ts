@@ -16,6 +16,12 @@ export default {
   tagsPlaceholder: '标签（可选，逗号分隔）',
   remember: '记住',
   privacy: '所有记忆只保存在本地（~/.woca/ladym.db），随时查看或删除。',
+  dict: {
+    label: '中文分词',
+    installedShort: '已启用（{size} MB）',
+    download: '下载中文字典',
+    downloading: '下载中…',
+  },
   layer: {
     episodic: 'L1 经历',
     semantic: 'L2 事实',

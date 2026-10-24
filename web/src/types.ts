@@ -330,6 +330,19 @@ export interface MemoryStatsResponse {
   workspace?: string
 }
 
+export interface CJKDictStatus {
+  available: boolean
+  source: string // file | embedded | none
+  variant: string
+  dir: string
+  bytes: number
+}
+
+export interface DictStatusResponse {
+  engine: string
+  dict: CJKDictStatus | null
+}
+
 export interface RememberResponse {
   id: string
   dropped?: boolean

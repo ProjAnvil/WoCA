@@ -9,6 +9,8 @@ const api = vi.hoisted(() => ({
   memoryStats: vi.fn(),
   rememberMemory: vi.fn(),
   forgetMemory: vi.fn(),
+  memoryDictStatus: vi.fn(),
+  downloadMemoryDict: vi.fn(),
 }))
 vi.mock('../api/client', () => ({ ...api }))
 
@@ -27,9 +29,40 @@ beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
   api.memoryStats.mockResolvedValue({ stats: { total: 0, layers: {} } })
+  api.memoryDictStatus.mockResolvedValue({
+    engine: 'ladym',
+    dict: { available: false, source: 'none', variant: '', dir: '/d', bytes: 0 },
+  })
+  api.downloadMemoryDict.mockReset()
 })
 
 describe('memory store', () => {
+  it('open() loads the CJK dict status and downloadDict() refreshes it', async () => {
+    const m = useMemoryStore()
+    m.open('/ws')
+    await flushMicrotasks()
+    expect(api.memoryDictStatus).toHaveBeenCalledTimes(1)
+    expect(m.dictStatus?.available).toBe(false)
+
+    api.downloadMemoryDict.mockResolvedValueOnce({
+      engine: 'ladym',
+      dict: { available: true, source: 'file', variant: 'zh', dir: '/d', bytes: 9 * 1024 * 1024 },
+    })
+    await m.downloadDict()
+    expect(api.downloadMemoryDict).toHaveBeenCalledTimes(1)
+    expect(m.dictStatus?.available).toBe(true)
+    expect(m.notice).toContain('9.0')
+    expect(m.dictLoading).toBe(false)
+  })
+
+  it('downloadDict() writes the error and keeps loading=false on failure', async () => {
+    const m = useMemoryStore()
+    api.downloadMemoryDict.mockRejectedValueOnce(new Error('mirror unreachable'))
+    await m.downloadDict()
+    expect(m.error).toContain('mirror unreachable')
+    expect(m.dictLoading).toBe(false)
+  })
+
   it('open() resets filters, loads the first page and the stats', async () => {
     resolveList(page(20))
     api.memoryStats.mockResolvedValueOnce({ stats: { total: 42, layers: { facts: 42 } } })

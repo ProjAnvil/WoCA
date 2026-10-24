@@ -96,11 +96,15 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 	// One run = one memory-prefetch scope: concurrent runs on the shared
 	// agent each get their own slot (see agent.WithMemoryScope).
 	ctx = agent.WithMemoryScope(ctx)
+	// File-mutation watermark: resolved into the run's changed-file delta at
+	// retain time (the recall_ops operation record's resources).
+	fhBase := r.agent.FileHistoryWatermark(ctx)
 	// Auto-retain (single write choke point): every return path stores the
 	// run's Q/A + outcome into long-term memory. Detached ctx so graph
 	// teardown doesn't cancel the writes.
 	defer func() {
-		r.agent.RetainRun(context.WithoutCancel(ctx), history, final, err)
+		r.agent.RetainRun(context.WithoutCancel(ctx), history, final, err,
+			r.agent.FileChangesSince(ctx, fhBase))
 	}()
 	hist := history
 	// One Run = one turn for the agent's MaxTurns accounting.

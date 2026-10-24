@@ -9,7 +9,9 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
+	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/settings"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // The retain layer: completed runs/goals/tasks stored into long-term memory.
@@ -39,8 +41,10 @@ func (m *memoryRuntime) autoRetain() bool {
 // cancelled runs record the request and outcome only: a failed answer must
 // never distill into a durable fact. Writes are best-effort: errors are
 // dropped (the memory subsystem must never fail a run), logged to obs when
-// wired.
-func (m *memoryRuntime) RetainRun(ctx context.Context, ws string, history, final []messages.Message, runErr error) {
+// wired. changes is the run's file mutation delta (from the caller's
+// FileHistory watermark); when non-empty and the engine carries the
+// recall_ops capability, one structured operation record joins the episode.
+func (m *memoryRuntime) RetainRun(ctx context.Context, ws string, history, final []messages.Message, runErr error, changes []tools.FileChange) {
 	eng := m.Engine()
 	if eng == nil {
 		return
@@ -68,6 +72,7 @@ func (m *memoryRuntime) RetainRun(ctx context.Context, ws string, history, final
 	if err := eng.RecordEvent(ctx, ws, "woca", "run", obs, outcome); err != nil {
 		m.warn("retain_write_error", map[string]any{"op": "record_event", "error": err.Error()})
 	}
+	m.recordFileOperation(ctx, eng, ws, question, outcome, changes)
 	// System 2 (opportunistic, per-workspace throttle): promote the fresh
 	// episodes into facts/playbooks/insights in the background. since=0 puts
 	// the cycle in mark mode — the engine's consolidated_at stamp decides
@@ -89,13 +94,67 @@ func (m *memoryRuntime) RetainRun(ctx context.Context, ws string, history, final
 	}
 }
 
+// recordFileOperation stores the run's file mutations as one structured
+// operation record (LadyM v0.7.0 resource slots) — the recall_ops capability
+// answers "how did I last operate on X?". Engines without the capability
+// (the remote data-plane) skip silently; failures only warn, like every
+// retain write. Resources are deduplicated paths capped at 20; the action
+// maps the delta's shape onto the canonical vocabulary (create/delete/update).
+// The paths enter the same trust boundary as the rest of memory: with an
+// inherited classifier (LLM=inherit) System 2 consolidation sends episode
+// material — including these paths — to the user's own configured model.
+func (m *memoryRuntime) recordFileOperation(ctx context.Context, eng memory.Engine, ws, question, outcome string, changes []tools.FileChange) {
+	ops, ok := eng.(memory.OperationEngine)
+	if !ok || len(changes) == 0 {
+		return
+	}
+	resources := make([]string, 0, len(changes))
+	seen := make(map[string]bool, len(changes))
+	created, deleted := true, true
+	for _, c := range changes {
+		if c.Path == "" || seen[c.Path] {
+			continue
+		}
+		seen[c.Path] = true
+		resources = append(resources, c.Path)
+		if c.Before != nil {
+			created = false
+		}
+		if c.After != nil {
+			deleted = false
+		}
+		if len(resources) == 20 {
+			break
+		}
+	}
+	if len(resources) == 0 {
+		return
+	}
+	action := "update"
+	switch {
+	case deleted:
+		action = "delete"
+	case created:
+		action = "create"
+	}
+	op := memory.Operation{
+		Resources: resources,
+		Action:    action,
+		Summary:   clampUTF8(question, 200),
+		Outcome:   outcome,
+	}
+	if _, err := ops.RecordOperation(context.WithoutCancel(ctx), ws, op); err != nil {
+		m.warn("retain_write_error", map[string]any{"op": "record_operation", "error": err.Error()})
+	}
+}
+
 // RetainGoal stores a completed goal-mode session into memory as one L1
 // episode, mirroring RetainRun's policy: the objective/result narrative is
 // consolidation material, not a direct fact, and only a successful goal
 // carries the result (a blocked or errored goal's narrative is episode
 // history). Goal runs bypass Runner.Run (they execute the goal graph
 // directly), so RunGoal's defer is their only retain hook.
-func (m *memoryRuntime) RetainGoal(ctx context.Context, ws, objective, status, summary string, runErr error) {
+func (m *memoryRuntime) RetainGoal(ctx context.Context, ws, objective, status, summary string, runErr error, changes []tools.FileChange) {
 	eng := m.Engine()
 	if eng == nil {
 		return
@@ -119,6 +178,7 @@ func (m *memoryRuntime) RetainGoal(ctx context.Context, ws, objective, status, s
 	if err := eng.RecordEvent(ctx, ws, "woca", "goal:"+status, obs, outcome); err != nil {
 		m.warn("retain_write_error", map[string]any{"op": "goal_event", "error": err.Error()})
 	}
+	m.recordFileOperation(ctx, eng, ws, objective, outcome, changes)
 }
 
 // RecordTaskEvent logs a completed subagent task as an L1 episode (reads
@@ -181,20 +241,21 @@ func runQuestion(msgs []messages.Message) string {
 // resolution) lives here; the mechanics above stay agent-agnostic.
 
 // RetainRun stores a completed run (subagents never pass through the
-// runner, so the gate is belt-and-braces).
-func (a *Agent) RetainRun(ctx context.Context, history, final []messages.Message, runErr error) {
+// runner, so the gate is belt-and-braces). changes is the run's file
+// mutation delta from the caller's FileHistory watermark.
+func (a *Agent) RetainRun(ctx context.Context, history, final []messages.Message, runErr error, changes []tools.FileChange) {
 	if a.subagent {
 		return
 	}
-	a.mem.RetainRun(ctx, a.memoryWorkspaceCtx(ctx), history, final, runErr)
+	a.mem.RetainRun(ctx, a.memoryWorkspaceCtx(ctx), history, final, runErr, changes)
 }
 
 // RetainGoal stores a completed goal-mode session.
-func (a *Agent) RetainGoal(ctx context.Context, objective, status, summary string, runErr error) {
+func (a *Agent) RetainGoal(ctx context.Context, objective, status, summary string, runErr error, changes []tools.FileChange) {
 	if a.subagent {
 		return
 	}
-	a.mem.RetainGoal(ctx, a.memoryWorkspaceCtx(ctx), objective, status, summary, runErr)
+	a.mem.RetainGoal(ctx, a.memoryWorkspaceCtx(ctx), objective, status, summary, runErr, changes)
 }
 
 // recordTaskEvent reports a completed subagent task from the parent side

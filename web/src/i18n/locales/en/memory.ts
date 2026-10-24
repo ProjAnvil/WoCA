@@ -17,6 +17,12 @@ export default {
   tagsPlaceholder: 'Tags (optional, comma-separated)',
   remember: 'Remember',
   privacy: 'All memories are stored locally (~/.woca/ladym.db) and can be viewed or deleted at any time.',
+  dict: {
+    label: 'CJK tokenization',
+    installedShort: 'Enabled ({size} MB)',
+    download: 'Download Chinese dictionary',
+    downloading: 'Downloading…',
+  },
   layer: {
     episodic: 'L1 Episodic',
     semantic: 'L2 Facts',

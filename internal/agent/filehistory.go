@@ -70,6 +70,24 @@ func (a *Agent) FileHistory() *tools.FileHistory {
 	return a.registry.FileHistory()
 }
 
+// FileHistoryWatermark returns the pending-change count for the calling
+// run's workspace. Snapshot it at run start; FileChangesSince resolves it
+// into the run's file mutation delta at retain time.
+func (a *Agent) FileHistoryWatermark(ctx context.Context) int {
+	return len(a.PendingFiles(ctx))
+}
+
+// FileChangesSince returns the workspace's pending changes past the given
+// watermark: the run's file mutation delta. An undo during the run shrinks
+// the pending list, so the watermark clamps to the current length.
+func (a *Agent) FileChangesSince(ctx context.Context, watermark int) []tools.FileChange {
+	all := a.PendingFiles(ctx)
+	if watermark > len(all) {
+		watermark = len(all)
+	}
+	return all[watermark:]
+}
+
 // Close releases the agent's session-scoped background resources: teammates,
 // the cron scheduler loop, and pooled LSP servers. Call once when the session
 // ends (main's defers); after Close the agent must not start new runs.
