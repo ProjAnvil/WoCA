@@ -105,7 +105,7 @@ func TestNewMcpAuthRunnerNonHTTPSpec(t *testing.T) {
 
 func TestNewMcpAuthRunnerFullFlow(t *testing.T) {
 	home := isolateEnv(t)
-	fakeOpenBinary(t)
+	stubBrowserOpen(t, true)
 	auth := fakeAuthServerMux(t)
 	st, err := settings.Open(filepath.Join(home, "woca.db"))
 	if err != nil {

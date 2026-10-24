@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -34,7 +35,6 @@ func isolateEnv(t *testing.T) string {
 	t.Setenv("HOME", home)
 	t.Setenv("WOCA_DB", filepath.Join(home, "woca.db"))
 	t.Setenv("WOCA_PLUGIN_ROOT", filepath.Join(home, "plugins"))
-	t.Setenv("WOCA_NO_BROWSER", "1")
 	return home
 }
 
@@ -431,15 +431,27 @@ func fakeOpenAICustomToolFlow(t *testing.T, tool string, args string, final stri
 	})
 }
 
-func fakeOpenBinary(t *testing.T) {
+// stubBrowserOpen swaps agentbuild.OpenBrowser for the duration of t so no
+// browser is launched. It records every URL and, when fetch is true, issues a
+// GET so flows that need the URL visited still work.
+func stubBrowserOpen(t *testing.T, fetch bool) *[]string {
 	t.Helper()
-	dir := t.TempDir()
-	script := "#!/bin/sh\nexec /usr/bin/curl -s -o /dev/null -L \"$1\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "open"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	var got []string
+	old := agentbuild.OpenBrowser
+	agentbuild.OpenBrowser = func(url string) {
+		got = append(got, url)
+		if !fetch {
+			return
+		}
+		resp, err := http.Get(url)
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 	}
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-	t.Setenv("WOCA_NO_BROWSER", "")
+	t.Cleanup(func() { agentbuild.OpenBrowser = old })
+	return &got
 }
 
 func TestIsTerminalStdin(t *testing.T) {

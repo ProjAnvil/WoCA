@@ -24,6 +24,18 @@ make serve          # build web + binary, then run `woca serve`
 After changing anything under `web/src`, run `make web` before building the
 Go binary — the frontend is embedded at compile time.
 
+### Tests with external side effects
+
+Unit tests must not open desktop applications. Higher-level browser tests
+use the existing `OpenBrowser` stub and record the requested URLs; tests
+that replace this package variable must restore it with `t.Cleanup` and
+must not run in parallel. Test platform-specific browser commands through
+`openBrowserOnOS` with an injected recording function instead of calling
+the real `openBrowser` launcher. Assert the command, arguments, call count,
+and propagated startup error; unsupported platforms must not launch anything.
+This uses standard Go functions and `testing`, without generated mocks or
+PATH-dependent fake executables.
+
 ## Code style
 
 - Comments, identifiers, and documentation are in **English**.

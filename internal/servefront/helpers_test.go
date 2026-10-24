@@ -3,6 +3,7 @@ package servefront
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,16 +14,24 @@ import (
 	"github.com/projanvil/woca/internal/settings"
 )
 
+// TestMain swaps in a no-op browser opener for the whole package, so no test
+// can launch the real browser, whichever path it takes. Tests that need the
+// opener opt in with stubBrowserOpen.
+func TestMain(m *testing.M) {
+	agentbuild.OpenBrowser = func(string) {}
+	os.Exit(m.Run())
+}
+
 // isolateEnv points HOME and the woca env overrides at a temp directory so
-// tests never touch the developer's real ~/.woca state, and disables browser
-// opening. Returns the temp home.
+// tests never touch the developer's real ~/.woca state. Browser opening is
+// already inert: TestMain replaces OpenBrowser with a no-op. Returns the temp
+// home.
 func isolateEnv(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("WOCA_DB", filepath.Join(home, "woca.db"))
 	t.Setenv("WOCA_PLUGIN_ROOT", filepath.Join(home, "plugins"))
-	t.Setenv("WOCA_NO_BROWSER", "1")
 	return home
 }
 
@@ -91,13 +100,25 @@ func quoteJSONString(s string) string {
 	return string(b)
 }
 
-func fakeOpenBinary(t *testing.T) {
+// stubBrowserOpen swaps agentbuild.OpenBrowser for the duration of t so no
+// browser is launched. It records every URL and, when fetch is true, issues a
+// GET so flows that need the URL visited still work.
+func stubBrowserOpen(t *testing.T, fetch bool) *[]string {
 	t.Helper()
-	dir := t.TempDir()
-	script := "#!/bin/sh\nexec /usr/bin/curl -s -o /dev/null -L \"$1\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "open"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	var got []string
+	old := agentbuild.OpenBrowser
+	agentbuild.OpenBrowser = func(url string) {
+		got = append(got, url)
+		if !fetch {
+			return
+		}
+		resp, err := http.Get(url)
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 	}
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-	t.Setenv("WOCA_NO_BROWSER", "")
+	t.Cleanup(func() { agentbuild.OpenBrowser = old })
+	return &got
 }

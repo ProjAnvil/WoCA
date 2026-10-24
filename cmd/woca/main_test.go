@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/webgui"
 )
@@ -44,9 +45,8 @@ func TestMain(m *testing.M) {
 		_ = (&http.Server{Handler: mux}).Serve(ln)
 		os.Exit(0)
 	}
+	// Tests must never launch the real browser: start with a no-op opener and
+	// let individual tests opt in via stubBrowserOpen.
+	agentbuild.OpenBrowser = func(string) {}
 	os.Exit(m.Run())
 }
-
-// fakeOpenBinary installs a fake `open` command on PATH that fetches the URL
-// with curl (following redirects), standing in for a browser visit. The
-// WOCA_NO_BROWSER guard is cleared so the guarded openBrowser calls run.

@@ -153,7 +153,7 @@ func TestServeBuildAgentError(t *testing.T) {
 func TestServeOpensBrowserWithFakeOpen(t *testing.T) {
 	isolateEnv(t)
 	seedSettings(t, [2]string{"memory-engine", "none"})
-	fakeOpenBinary(t)
+	stubBrowserOpen(t, true)
 	opts := baseOpts(t, fakeOpenAI(t, "hi"))
 	ctx, cancel := context.WithTimeout(t.Context(), 700*time.Millisecond)
 	defer cancel()

@@ -16,9 +16,9 @@ import (
 func TestMcpAuthFlowCancelled(t *testing.T) {
 	home := isolateEnv(t)
 	db := filepath.Join(home, "woca.db")
-	// The authorization server discovery works, but no browser visit ever
-	// happens (WOCA_NO_BROWSER=1), so the callback wait hits the context
-	// deadline.
+	// The authorization server discovery works, but the no-op opener from
+	// TestMain means no browser visit ever happens, so the callback wait hits
+	// the context deadline.
 	mux := http_Mux(t,
 		"/.well-known/oauth-authorization-server", `{"authorization_endpoint":"/authorize","token_endpoint":"/token","registration_endpoint":"/register"}`,
 		"/register", `{"client_id":"dyn-1"}`,
@@ -47,7 +47,7 @@ func TestMcpAuthSettingsOpenError(t *testing.T) {
 func TestMcpAuthCmdFullFlow(t *testing.T) {
 	home := isolateEnv(t)
 	db := filepath.Join(home, "woca.db")
-	fakeOpenBinary(t)
+	stubBrowserOpen(t, true)
 	auth := fakeAuthServerMux(t)
 
 	if err := execCmd(t, "--db", db, "mcp", "auth", "srv", auth+"/mcp"); err != nil {

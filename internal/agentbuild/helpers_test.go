@@ -3,25 +3,44 @@ package agentbuild
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/projanvil/woca/internal/settings"
 )
 
+// TestMain swaps in a no-op browser opener for the whole package, so no test
+// can launch the real browser, whichever path it takes. Tests that need the
+// opener opt in with stubBrowserOpen.
+func TestMain(m *testing.M) {
+	OpenBrowser = func(string) {}
+	os.Exit(m.Run())
+}
+
+// TestBrowserOpenerIsStubbed guards the TestMain swap: if OpenBrowser ever
+// points back at DefaultOpenBrowser, tests start opening real browsers.
+func TestBrowserOpenerIsStubbed(t *testing.T) {
+	if reflect.ValueOf(OpenBrowser).Pointer() ==
+		reflect.ValueOf(DefaultOpenBrowser).Pointer() {
+		t.Fatal("OpenBrowser is the production opener; tests would launch a browser")
+	}
+}
+
 // isolateEnv points HOME and the woca env overrides at a temp directory so
-// tests never touch the developer's real ~/.woca state, and disables browser
-// opening. Returns the temp home.
+// tests never touch the developer's real ~/.woca state. Browser opening is
+// already inert: TestMain replaces OpenBrowser with a no-op. Returns the temp
+// home.
 func isolateEnv(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("WOCA_DB", filepath.Join(home, "woca.db"))
 	t.Setenv("WOCA_PLUGIN_ROOT", filepath.Join(home, "plugins"))
-	t.Setenv("WOCA_NO_BROWSER", "1")
 	return home
 }
 
@@ -89,16 +108,26 @@ func baseOpts(t *testing.T, url string) Options {
 	}
 }
 
-// fakeOpenBinary installs a fake `open` that fetches the URL (following
-// redirects) instead of opening a browser, so OAuth flows complete in
-// tests, and clears WOCA_NO_BROWSER so the open path runs.
-func fakeOpenBinary(t *testing.T) {
+// stubBrowserOpen swaps OpenBrowser for the duration of t so no browser is
+// ever launched. It records every URL passed to OpenBrowser and returns a
+// pointer to that slice. Set fetch when the flow needs the URL requested to
+// reach a local callback server (the MCP OAuth flows do).
+func stubBrowserOpen(t *testing.T, fetch bool) *[]string {
 	t.Helper()
-	dir := t.TempDir()
-	script := "#!/bin/sh\nexec /usr/bin/curl -s -o /dev/null -L \"$1\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "open"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	var got []string
+	old := OpenBrowser
+	OpenBrowser = func(url string) {
+		got = append(got, url)
+		if !fetch {
+			return
+		}
+		resp, err := http.Get(url)
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 	}
-	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-	t.Setenv("WOCA_NO_BROWSER", "")
+	t.Cleanup(func() { OpenBrowser = old })
+	return &got
 }

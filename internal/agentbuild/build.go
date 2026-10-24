@@ -349,27 +349,39 @@ func managedSettingsPath(flagValue string) string {
 
 // openBrowser opens url in the default browser (best-effort).
 func openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		return fmt.Errorf("unsupported platform %q", runtime.GOOS)
-	}
-	return cmd.Start()
+	return openBrowserOnOS(runtime.GOOS, url, func(name string, args ...string) error {
+		return exec.Command(name, args...).Start()
+	})
 }
 
-// OpenBrowser opens url in the default browser unless WOCA_NO_BROWSER is
-// set (shared by serve, the console /web command, and the MCP OAuth flows).
-func OpenBrowser(url string) {
+func openBrowserOnOS(goos, url string, start func(string, ...string) error) error {
+	switch goos {
+	case "darwin":
+		return start("open", url)
+	case "linux":
+		return start("xdg-open", url)
+	case "windows":
+		return start("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return fmt.Errorf("unsupported platform %q", goos)
+	}
+}
+
+// DefaultOpenBrowser is the production browser opener: it shells out to the
+// platform command unless WOCA_NO_BROWSER is set. WOCA_NO_BROWSER exists for
+// a parent process that spawns woca and does not want a window (see
+// native-client bridgeproc); it is not a test switch. Tests swap
+// OpenBrowser, which keeps the child process from ever being spawned.
+func DefaultOpenBrowser(url string) {
 	if os.Getenv("WOCA_NO_BROWSER") == "" {
 		_ = openBrowser(url)
 	}
 }
+
+// OpenBrowser opens url in the default browser. It is a variable, not a
+// function, so tests install a stub and no child process is ever spawned.
+// Tests opt in with stubBrowserOpen; nothing else may reach the real opener.
+var OpenBrowser = DefaultOpenBrowser
 
 // resolveMode maps the permission flags to a permission mode.
 func resolveMode(mode string, skipPerms, acceptEdits, readOnly, plan bool) config.PermissionMode {
