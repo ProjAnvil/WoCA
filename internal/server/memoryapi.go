@@ -140,3 +140,39 @@ func (s *Server) handleForgetMemory(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
+
+// handleMemoryOperations serves the recall_ops query (LadyM v0.7.0 resource
+// slots): "how did I last operate on X?". The capability is embedded-engine
+// only — engines without it answer 501 Not Implemented; a disabled memory
+// subsystem degrades to the empty "none" shape, mirroring the list endpoint.
+func (s *Server) handleMemoryOperations(w http.ResponseWriter, r *http.Request) {
+	eng := s.memEngineLive()
+	if eng == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"engine": "none", "items": []memory.OperationHit{}})
+		return
+	}
+	ops, ok := eng.(memory.OperationEngine)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "operation recall requires the embedded ladym engine")
+		return
+	}
+	resource := r.URL.Query().Get("resource")
+	if resource == "" {
+		writeError(w, http.StatusBadRequest, "resource is required")
+		return
+	}
+	ws := s.memoryWorkspace(r)
+	topK, _ := strconv.Atoi(r.URL.Query().Get("top_k"))
+	if topK <= 0 || topK > 100 {
+		topK = 10
+	}
+	items, err := ops.RecallOperations(r.Context(), ws, resource, topK)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if items == nil {
+		items = []memory.OperationHit{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"engine": "ladym", "workspace": ws, "items": items})
+}

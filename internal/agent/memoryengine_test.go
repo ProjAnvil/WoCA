@@ -25,12 +25,14 @@ type fakeEngine struct {
 	eventObs      []string // observation per RecordEvent call (parallel to events)
 	eventWSs      []string // workspace per RecordEvent call (parallel to events)
 	hits          []memory.Hit
-	consolidates  int       // number of Consolidate calls (System 2 cycles)
-	consSince     []float64 // since argument per Consolidate call
-	err           bool      // Recall returns an error when set
-	drop          bool      // Remember returns ("", nil): attention-gate drop
-	rememberErr   error     // Remember returns this error when set (overrides drop)
-	eventErr      error     // RecordEvent returns this error when set (still recorded)
+	consolidates  int                // number of Consolidate calls (System 2 cycles)
+	consSince     []float64          // since argument per Consolidate call
+	err           bool               // Recall returns an error when set
+	drop          bool               // Remember returns ("", nil): attention-gate drop
+	rememberErr   error              // Remember returns this error when set (overrides drop)
+	eventErr      error              // RecordEvent returns this error when set (still recorded)
+	ops           []memory.Operation // RecordOperation calls (recall_ops capability)
+	opErr         error              // RecordOperation returns this error when set (still recorded)
 }
 
 func (f *fakeEngine) Recall(ctx context.Context, query, workspace string, topK int) ([]memory.Hit, error) {
@@ -86,6 +88,20 @@ func (f *fakeEngine) Consolidate(ctx context.Context, ws string, since float64) 
 }
 func (f *fakeEngine) Description() string { return "fake" }
 func (f *fakeEngine) Close() error        { return nil }
+
+func (f *fakeEngine) RecordOperation(ctx context.Context, ws string, op memory.Operation) (string, error) {
+	f.mu.Lock()
+	f.ops = append(f.ops, op)
+	f.mu.Unlock()
+	if f.opErr != nil {
+		return "", f.opErr
+	}
+	return "op-1", nil
+}
+
+func (f *fakeEngine) RecallOperations(ctx context.Context, ws, resource string, topK int) ([]memory.OperationHit, error) {
+	return nil, nil
+}
 
 // recordedTopKs returns a copy of the Recall topK arguments (the prefetch
 // goroutine appends concurrently; test goroutines must not read f.topKs
@@ -285,7 +301,7 @@ func TestMemoryRuntimeStandalone(t *testing.T) {
 	}
 	// Retention: engine swap is visible through the same snapshot path.
 	m.RetainRun(t.Context(), "/ws",
-		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, nil)
 	if len(f.remembered) != 0 {
 		t.Fatalf("auto-retain must not write facts directly: %v", f.remembered)
 	}

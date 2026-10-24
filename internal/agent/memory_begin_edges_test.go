@@ -359,7 +359,7 @@ func TestRetainRunSystem2ConsolidateError(t *testing.T) {
 	m.RetainRun(t.Context(), "/ws-s2fail",
 		[]messages.Message{messages.Human("what is this about?")},
 		[]messages.Message{messages.AI("an answer")},
-		nil)
+		nil, nil)
 	select {
 	case <-e.called:
 	case <-time.After(2 * time.Second):

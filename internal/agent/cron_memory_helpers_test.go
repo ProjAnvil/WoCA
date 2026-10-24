@@ -421,7 +421,7 @@ func TestRetainRunAndGoalPaths(t *testing.T) {
 
 	// No engine: no-op.
 	bare := memoryRuntime{}
-	bare.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+	bare.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, nil)
 
 	// Only synthetic messages: no question, nothing retained.
 	f := &fakeEngine{}
@@ -432,13 +432,13 @@ func TestRetainRunAndGoalPaths(t *testing.T) {
 		messages.Human("<queued-user-input>\ny\n</queued-user-input>"),
 		messages.Human("<stop-hook>\nz\n</stop-hook>"),
 		messages.Human("<task-fork>\nw\n</task-fork>"),
-	}, nil, nil)
+	}, nil, nil, nil)
 	if len(f.events) != 0 {
 		t.Fatalf("synthetic-only run retained: %v", f.events)
 	}
 
 	// A cancelled run records a cancelled outcome; errors are dropped silently.
-	m.RetainRun(ctx, "/ws", []messages.Message{messages.Human("real question")}, nil, context.Canceled)
+	m.RetainRun(ctx, "/ws", []messages.Message{messages.Human("real question")}, nil, context.Canceled, nil)
 	if len(f.events) != 1 || !strings.HasSuffix(f.events[0], "cancelled") {
 		t.Fatalf("events = %v", f.events)
 	}
@@ -447,14 +447,14 @@ func TestRetainRunAndGoalPaths(t *testing.T) {
 	failing := &fakeEngine{eventErr: errors.New("e1"), rememberErr: errors.New("e2")}
 	m2 := memoryRuntime{}
 	m2.init(nil, failing, nil, nil)
-	m2.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q")}, []messages.Message{messages.AI("answer")}, nil)
+	m2.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q")}, []messages.Message{messages.AI("answer")}, nil, nil)
 	m2.RetainGoal(ctx, "/ws", "objective", string(GoalComplete), "summary", nil)
 	m2.RecordTaskEvent(ctx, "/ws", "sub", "desc", "report", errors.New("task boom"))
 	// A System 2 cycle with a failing Consolidate also only warns.
 	m3 := memoryRuntime{}
 	m3.init(nil, &consolidatingEngine{fakeEngine: &fakeEngine{}, err: errors.New("c1")},
 		func() settings.Settings { return settings.Settings{LadyMSystem2: true} }, nil)
-	m3.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q")}, nil, nil)
+	m3.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q")}, nil, nil, nil)
 
 	// RetainGoal outcome mapping and its subagent gates.
 	g := &fakeEngine{}
@@ -465,7 +465,7 @@ func TestRetainRunAndGoalPaths(t *testing.T) {
 		t.Fatalf("goal events = %v", g.events)
 	}
 	sub := &Agent{subagent: true}
-	sub.RetainRun(ctx, []messages.Message{messages.Human("q")}, nil, nil)
+	sub.RetainRun(ctx, []messages.Message{messages.Human("q")}, nil, nil, nil)
 	sub.RetainGoal(ctx, "obj", "complete", "sum", nil)
 	sub.recordTaskEvent(ctx, "n", "d", "r", nil)
 
@@ -1003,4 +1003,60 @@ func TestTaskListUpdateAndClaimEdges(t *testing.T) {
 	if next := l.Create("n", "", ""); next.ID != "task-10" {
 		t.Fatalf("next id = %s", next.ID)
 	}
+}
+
+func TestRetainRunRecordsFileOperation(t *testing.T) {
+	ctx := t.Context()
+
+	f := &fakeEngine{}
+	m := memoryRuntime{}
+	m.init(nil, f, nil, nil)
+
+	// A mixed create+update run maps to the canonical "update" action and
+	// carries the deduplicated touched paths as resources.
+	m.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, []tools.FileChange{
+		{Path: "a.go", Before: []byte("x"), After: []byte("y")},
+		{Path: "b.go", Before: nil, After: []byte("new")},
+	})
+	if len(f.ops) != 1 {
+		t.Fatalf("operations recorded = %d, want 1", len(f.ops))
+	}
+	op := f.ops[0]
+	if op.Action != "update" {
+		t.Fatalf("op action = %q, want update", op.Action)
+	}
+	if len(op.Resources) != 2 || op.Resources[0] != "a.go" || op.Resources[1] != "b.go" {
+		t.Fatalf("op resources = %v, want [a.go b.go]", op.Resources)
+	}
+	if op.Outcome != "success" {
+		t.Fatalf("op outcome = %q, want success", op.Outcome)
+	}
+
+	// A run with no file changes records no operation.
+	m.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q2")}, nil, nil, nil)
+	if len(f.ops) != 1 {
+		t.Fatalf("changeless run recorded an operation: %v", f.ops)
+	}
+
+	// A create-only run maps to "create".
+	m.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q3")}, nil, nil, []tools.FileChange{
+		{Path: "new.go", Before: nil, After: []byte("n")},
+	})
+	if f.ops[1].Action != "create" {
+		t.Fatalf("create-only action = %q, want create", f.ops[1].Action)
+	}
+
+	// A cancelled run keeps the operation outcome honest.
+	m.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q4")}, nil, context.Canceled, []tools.FileChange{
+		{Path: "a.go", Before: []byte("x"), After: []byte("z")},
+	})
+	if f.ops[2].Outcome != "cancelled" {
+		t.Fatalf("cancelled outcome = %q, want cancelled", f.ops[2].Outcome)
+	}
+
+	// RecordOperation failures only warn (best-effort, like RecordEvent).
+	f.opErr = errors.New("op boom")
+	m.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q5")}, nil, nil, []tools.FileChange{
+		{Path: "a.go", Before: []byte("x"), After: []byte("w")},
+	})
 }

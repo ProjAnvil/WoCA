@@ -30,7 +30,7 @@ func TestRetainRunStoresEpisodeMaterial(t *testing.T) {
 	a.SetMemoryWorkspace("/ws/run")
 	history := []messages.Message{messages.Human("fix the login bug")}
 	final := []messages.Message{messages.System("sys"), messages.AI("fixed by rotating the JWT secret")}
-	a.RetainRun(t.Context(), history, final, nil)
+	a.RetainRun(t.Context(), history, final, nil, nil)
 
 	// The L2 fact layer has a single reviewed door (System 2 consolidation);
 	// auto-retain writes the episode with the Q/A material only.
@@ -56,7 +56,7 @@ func TestRetainRunDisabled(t *testing.T) {
 		workdir: "/ws",
 	}
 	a.RetainRun(t.Context(),
-		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, nil)
 	if len(f.remembered) != 0 || len(f.events) != 0 {
 		t.Fatal("autoretain off should write nothing")
 	}
@@ -65,7 +65,7 @@ func TestRetainRunDisabled(t *testing.T) {
 func TestRetainRunEmptyAnswerKeepsQuestionOnly(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"} // loadSettings nil -> defaults (autoretain on)
-	a.RetainRun(t.Context(), []messages.Message{messages.Human("q")}, nil, nil)
+	a.RetainRun(t.Context(), []messages.Message{messages.Human("q")}, nil, nil, nil)
 	if obs := f.recordedEventObs(); len(obs) != 1 || obs[0] != "q" {
 		t.Fatalf("observation = %v, want the bare question", obs)
 	}
@@ -75,7 +75,7 @@ func TestRetainRunErrorOutcome(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.RetainRun(t.Context(),
-		[]messages.Message{messages.Human("q")}, nil, errors.New("boom"))
+		[]messages.Message{messages.Human("q")}, nil, errors.New("boom"), nil)
 	if len(f.events) != 1 || !strings.Contains(f.events[0], "error") {
 		t.Fatalf("events = %v", f.events)
 	}
@@ -88,7 +88,7 @@ func TestRetainRunErrorWithAnswerKeepsQuestionOnly(t *testing.T) {
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.RetainRun(t.Context(),
 		[]messages.Message{messages.Human("q")},
-		[]messages.Message{messages.AI("half-baked answer")}, errors.New("boom"))
+		[]messages.Message{messages.AI("half-baked answer")}, errors.New("boom"), nil)
 	if obs := f.recordedEventObs(); len(obs) != 1 || obs[0] != "q" {
 		t.Fatalf("observation = %v, want the bare question", obs)
 	}
@@ -101,7 +101,7 @@ func TestRetainRunCancelledOutcome(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
 	a.RetainRun(t.Context(),
-		[]messages.Message{messages.Human("q")}, nil, context.Canceled)
+		[]messages.Message{messages.Human("q")}, nil, context.Canceled, nil)
 	if len(f.events) != 1 || !strings.Contains(f.events[0], "cancelled") {
 		t.Fatalf("events = %v", f.events)
 	}
@@ -120,7 +120,7 @@ func TestRetainRunUsesLastQuestion(t *testing.T) {
 		// Synthetic wrappers from earlier turns must be skipped.
 		messages.Human("<relevant-memory>\nnoise\n</relevant-memory>"),
 	}
-	a.RetainRun(t.Context(), history, []messages.Message{messages.AI("second answer")}, nil)
+	a.RetainRun(t.Context(), history, []messages.Message{messages.AI("second answer")}, nil, nil)
 	obs := f.recordedEventObs()
 	if len(obs) != 1 {
 		t.Fatalf("observations = %v", obs)
@@ -140,7 +140,7 @@ func TestRetainRunLogsWriteErrors(t *testing.T) {
 	// Wire the runtime's obs sink the way New() does for real agents.
 	a.mem.log = a.obsLogSink()
 	a.RetainRun(t.Context(),
-		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, nil)
 	data, err := os.ReadFile(filepath.Join(root, "woca.log"))
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestRetainRunSubagentNoop(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws", subagent: true}
 	a.RetainRun(t.Context(),
-		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, nil)
 	if len(f.remembered) != 0 || len(f.events) != 0 {
 		t.Fatal("subagent must not retain (write choke point is the runner path)")
 	}
@@ -164,7 +164,7 @@ func TestRetainRunSubagentNoop(t *testing.T) {
 func TestRetainRunNilEngineNoop(t *testing.T) {
 	a := &Agent{workdir: "/ws"}
 	a.RetainRun(t.Context(),
-		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil) // must not panic
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, nil) // must not panic
 }
 
 func TestRetainGoalStoresEpisodeMaterial(t *testing.T) {
@@ -255,7 +255,7 @@ func TestSystem2ThrottledPerWorkspace(t *testing.T) {
 	}
 	hist := []messages.Message{messages.Human("q")}
 	fin := []messages.Message{messages.AI("a")}
-	a.RetainRun(t.Context(), hist, fin, nil)
+	a.RetainRun(t.Context(), hist, fin, nil, nil)
 	// fire-and-forget goroutine: poll for it to land
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && f.recordedConsolidates() == 0 {
@@ -270,14 +270,14 @@ func TestSystem2ThrottledPerWorkspace(t *testing.T) {
 		t.Fatalf("consolidate since args = %v, want [0]", since)
 	}
 	// second run within the interval: throttled
-	a.RetainRun(t.Context(), hist, fin, nil)
+	a.RetainRun(t.Context(), hist, fin, nil, nil)
 	time.Sleep(250 * time.Millisecond)
 	if got := f.recordedConsolidates(); got != 1 {
 		t.Fatalf("throttle failed: %d", got)
 	}
 	// different workspace: not throttled by the first
 	a.SetMemoryWorkspace("/ws2")
-	a.RetainRun(t.Context(), hist, fin, nil)
+	a.RetainRun(t.Context(), hist, fin, nil, nil)
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && f.recordedConsolidates() < 2 {
 		time.Sleep(10 * time.Millisecond)
@@ -296,7 +296,7 @@ func TestSystem2DisabledNoConsolidate(t *testing.T) {
 		workdir: "/ws",
 	}
 	a.RetainRun(t.Context(),
-		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, nil)
 	time.Sleep(250 * time.Millisecond)
 	if got := f.recordedConsolidates(); got != 0 {
 		t.Fatalf("consolidates = %d, want 0", got)
@@ -310,7 +310,7 @@ func TestSystem2RespectsIntervalSetting(t *testing.T) {
 	on.LadyMSystem2Interval = 60 // minimum allowed
 	a := &Agent{mem: memoryRuntime{engine: f, loadSettings: func() settings.Settings { return on }}, workdir: "/ws"}
 	a.RetainRun(t.Context(),
-		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil)
+		[]messages.Message{messages.Human("q")}, []messages.Message{messages.AI("a")}, nil, nil)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && f.recordedConsolidates() == 0 {
 		time.Sleep(10 * time.Millisecond)
