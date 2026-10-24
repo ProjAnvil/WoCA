@@ -428,6 +428,8 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/memory", authz.ScopeMemoryRead, s.handleListMemory)
 	s.route(mux, "GET /api/memory/stats", authz.ScopeMemoryRead, s.handleMemoryStats)
 	s.route(mux, "GET /api/memory/operations", authz.ScopeMemoryRead, s.handleMemoryOperations)
+	s.route(mux, "GET /api/memory/dict", authz.ScopeMemoryRead, s.handleMemoryDict)
+	s.route(mux, "POST /api/memory/dict", authz.ScopeMemoryWrite, s.handleMemoryDict)
 	s.route(mux, "GET /api/stats", authz.ScopeSettingsRead, s.handleStats)
 	s.route(mux, "POST /api/memory", authz.ScopeMemoryWrite, s.handleRememberMemory)
 	s.route(mux, "DELETE /api/memory/{id}", authz.ScopeMemoryWrite, s.handleForgetMemory)

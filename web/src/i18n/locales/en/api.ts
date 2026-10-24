@@ -22,6 +22,7 @@ export default {
   loadGoalFailed: 'Failed to load goal',
   loadMemoryFailed: 'Failed to load memories',
   loadMemoryStatsFailed: 'Failed to load memory stats',
+  loadDictFailed: 'Failed to load tokenizer dictionary status',
   deleteFailed: 'Delete failed',
   streamConnectFailed: 'Stream connection failed: {status}',
   unknownError: 'Unknown error',

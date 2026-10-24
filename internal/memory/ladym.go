@@ -35,6 +35,10 @@ type BuildInput struct {
 	ChatModel        language.ChatModel // woca's active model (LLM=inherit)
 	OpenAIKey        string
 	OpenAIBaseURL    string
+	// DictDir overrides the CJK dictionary directory; empty resolves to
+	// DefaultDictDir() (~/.woca/dict). Tests point it at a temp dir so the
+	// global tokenizer state stays deterministic.
+	DictDir string
 }
 
 // DefaultDBPath returns ~/.woca/ladym.db (empty string on home-dir failure).
@@ -144,6 +148,12 @@ func Build(in BuildInput) (*LadyM, error) {
 	// The LLM is injected per-op below (host model), never resolved by
 	// ladyM's own provider factories.
 	cfg.LLMProvider = "none"
+	// The CJK dictionary lives under woca's home; engine open routes it via
+	// storage.SetCJKDictDir. Empty (home-dir failure) keeps LadyM's default.
+	dictDir := orDefault(in.DictDir, DefaultDictDir())
+	if dictDir != "" {
+		cfg.CJKDictDir = dictDir
+	}
 
 	var (
 		eng *ladymengine.Engine
@@ -159,7 +169,7 @@ func Build(in BuildInput) (*LadyM, error) {
 	if err != nil {
 		return nil, fmt.Errorf("memory: build ladyM engine: %w", err)
 	}
-	return &LadyM{eng: eng, path: in.DBPath, defWs: in.DefaultWorkspace}, nil
+	return &LadyM{eng: eng, path: in.DBPath, defWs: in.DefaultWorkspace, dictDir: dictDir}, nil
 }
 
 // LadyM implements Engine over an in-process ladyM engine.
@@ -172,10 +182,11 @@ func Build(in BuildInput) (*LadyM, error) {
 // paths and routes every write through a Scope; mu serializes Close against
 // itself only — Close is a teardown-time call, not interleaved with ops.
 type LadyM struct {
-	mu    sync.Mutex
-	eng   *ladymengine.Engine
-	path  string
-	defWs string
+	mu      sync.Mutex
+	eng     *ladymengine.Engine
+	path    string
+	defWs   string
+	dictDir string
 }
 
 var _ Engine = (*LadyM)(nil)

@@ -8,6 +8,7 @@ import type {
   CreateRunResponse,
   MemoryListResponse,
   MemoryStatsResponse,
+  DictStatusResponse,
   QuotaResponse,
   RememberResponse,
   StatsResponse,
@@ -142,4 +143,14 @@ export function rememberMemory(body: {
 
 export function forgetMemory(id: string): Promise<void> {
   return request(`/api/memory/${encodeURIComponent(id)}`, { method: 'DELETE' }, i18n.global.t('api.deleteFailed'))
+}
+
+/** Reports the embedded engine's CJK tokenizer dictionary state. */
+export function memoryDictStatus(): Promise<DictStatusResponse> {
+  return request('/api/memory/dict', undefined, i18n.global.t('api.loadDictFailed'))
+}
+
+/** Downloads and installs the CJK dictionary (explicit user action; ~9MB). */
+export function downloadMemoryDict(): Promise<DictStatusResponse> {
+  return postJSON('/api/memory/dict', {})
 }

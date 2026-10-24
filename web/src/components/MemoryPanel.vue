@@ -89,6 +89,14 @@ async function addMemory() {
   }
 }
 
+function fmtMB(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1)
+}
+
+async function downloadDict() {
+  await memory.downloadDict()
+}
+
 function toggleLayer(layer: string) {
   memory.layerFilter = memory.layerFilter === layer ? '' : layer
   void memory.reload()
@@ -128,6 +136,21 @@ function toggleLayer(layer: string) {
               {{ c.label }} {{ c.count }}
             </button>
           </div>
+        </div>
+
+        <div v-if="memory.engine !== 'none' && memory.dictStatus" class="mem-dict">
+          <span class="mem-dict-label">{{ t('memory.dict.label') }}</span>
+          <span v-if="memory.dictStatus.available" class="mem-dict-state on">
+            {{ t('memory.dict.installedShort', { size: fmtMB(memory.dictStatus.bytes) }) }}
+          </span>
+          <button
+            v-else
+            class="mem-dict-btn"
+            :disabled="memory.dictLoading"
+            @click="downloadDict"
+          >
+            {{ memory.dictLoading ? t('memory.dict.downloading') : t('memory.dict.download') }}
+          </button>
         </div>
 
         <p v-if="memory.error" class="mem-error">{{ memory.error }}</p>
