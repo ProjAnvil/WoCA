@@ -12,9 +12,9 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/nats-io/nats-server/v2 v2.14.5
 	github.com/nats-io/nats.go v1.53.1
-	github.com/projanvil/langchain-golang v0.11.0
-	github.com/projanvil/langchain-golang/langgraph/checkpoint/postgres v0.3.7
-	github.com/projanvil/langchain-golang/langgraph/checkpoint/sqlite v0.3.7
+	github.com/projanvil/langchain-golang v0.11.1
+	github.com/projanvil/langchain-golang/langgraph/checkpoint/postgres v0.3.8
+	github.com/projanvil/langchain-golang/langgraph/checkpoint/sqlite v0.3.8
 	github.com/prometheus/client_golang v1.24.1
 	github.com/rs/zerolog v1.35.0
 	github.com/spf13/cobra v1.10.2
@@ -31,6 +31,7 @@ require (
 	golang.org/x/image v0.45.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/term v0.45.0
+	golang.org/x/time v0.15.0
 	modernc.org/sqlite v1.56.0
 )
 
@@ -96,7 +97,6 @@ require (
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d // indirect
 	google.golang.org/grpc v1.83.0 // indirect
