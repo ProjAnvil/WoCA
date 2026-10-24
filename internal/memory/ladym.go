@@ -327,8 +327,15 @@ func (l *LadyM) Consolidate(_ context.Context, workspace string, since float64) 
 	if err != nil {
 		return "", fmt.Errorf("memory: consolidate: %w", err)
 	}
-	return fmt.Sprintf("facts_promoted=%d kept_episodes=%d skipped_llm_steps=%v decay=%+v",
-		cons.PromotedToSemantic, cons.KeptEpisodes, skipped, decay), nil
+	// L4 self-maintenance: drop edges whose endpoint memories are gone
+	// (legacy pre-FK databases accumulate them; the sweep is a no-op on a
+	// healthy graph).
+	swept, err := l.eng.MaintainL4(ws)
+	if err != nil {
+		return "", fmt.Errorf("memory: consolidate: %w", err)
+	}
+	return fmt.Sprintf("facts_promoted=%d kept_episodes=%d skipped_llm_steps=%v decay=%+v edges_swept=%d",
+		cons.PromotedToSemantic, cons.KeptEpisodes, skipped, decay, swept.Swept), nil
 }
 
 // Description names the engine for /memory stats output.
