@@ -3,11 +3,13 @@ package model
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/language"
+	"github.com/projanvil/langchain-golang/core/lcerrors"
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/langchain-golang/core/runnables"
 	"github.com/projanvil/langchain-golang/core/schema"
@@ -112,6 +114,31 @@ func TestIsRetryable(t *testing.T) {
 	}
 	if IsRetryable(nil) {
 		t.Error("nil should not be retryable")
+	}
+}
+
+// Structured provider errors (langchain v0.10.0 model error kinds) classify
+// by kind, not by string sniffing: the kind wins where the text disagrees.
+func TestIsRetryableProviderErrors(t *testing.T) {
+	if !IsRetryable(lcerrors.NewProviderError("openai", "/v1/chat/completions", 408, "", 0)) {
+		t.Error("408 timeout should be retryable (the string sniff misses it)")
+	}
+	if IsRetryable(lcerrors.NewProviderError("openai", "/v1/chat/completions", 401, "", 0)) {
+		t.Error("auth failure should not be retryable")
+	}
+	if IsRetryable(lcerrors.NewProviderError("openai", "/v1/chat/completions", 400, "maximum context length exceeded", 0)) {
+		t.Error("context overflow should not be retryable")
+	}
+	// A 400 whose body merely mentions "timeout" is an invalid request, not
+	// a transient failure — the string sniff would retry it.
+	if IsRetryable(lcerrors.NewProviderError("openai", "/v1/chat/completions", 400, `invalid field "timeout": must be positive`, 0)) {
+		t.Error("invalid request mentioning timeout should not be retryable")
+	}
+	if !IsRetryable(fmt.Errorf("invoke failed: %w", lcerrors.NewProviderError("openai", "/v1/chat/completions", 429, "", 0))) {
+		t.Error("wrapped 429 should be retryable")
+	}
+	if IsRetryable(context.Canceled) {
+		t.Error("cancellation should not be retryable")
 	}
 }
 

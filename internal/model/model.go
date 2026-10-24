@@ -4,12 +4,14 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/language"
+	"github.com/projanvil/langchain-golang/core/lcerrors"
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/langchain-golang/core/runnables"
 	"github.com/projanvil/langchain-golang/core/schema"
@@ -55,11 +57,25 @@ func New(cfg Config) (*Router, error) {
 	}, nil
 }
 
-// IsRetryable reports whether an error looks transient (overload/rate/5xx/
-// timeout/connection).
+// IsRetryable reports whether an error looks transient. Structured provider
+// errors (langchain v0.10.0 model error kinds) classify by kind: rate limits,
+// server failures, connection errors, and timeouts retry; auth, permission,
+// invalid-request, not-found, and context-overflow do not — even when the
+// body text happens to contain a keyword like "timeout". Unclassified errors
+// (woca's own wrappers, plain transport failures) keep the legacy string
+// sniff.
 func IsRetryable(err error) bool {
 	if err == nil {
 		return false
+	}
+	var pe *lcerrors.ProviderError
+	if errors.As(err, &pe) {
+		return pe.IsModelRetryable()
+	}
+	if errors.Is(err, lcerrors.ErrTimeout) ||
+		errors.Is(err, lcerrors.ErrRateLimited) ||
+		errors.Is(err, lcerrors.ErrModelConnection) {
+		return true
 	}
 	s := strings.ToLower(err.Error())
 	for _, k := range []string{"overload", "rate", "429", "500", "502", "503", "504", "timeout", "connection", "temporarily"} {
