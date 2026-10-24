@@ -315,6 +315,11 @@ func TestConcurrentWorkspaces(t *testing.T) {
 				t.Errorf("B write %d: id=%q err=%v", i, id, err)
 			}
 		})
+		wg.Go(func() { // episodic writers race the semantic writers
+			if err := eng.RecordEvent(ctx, "/ws/A", "woca", "run", fmt.Sprintf("episode %d for auth work", i), "success"); err != nil {
+				t.Errorf("A event %d: %v", i, err)
+			}
+		})
 		wg.Go(func() { // concurrent readers on both workspaces
 			for range 3 {
 				if _, err := eng.Recall(ctx, "auth flows", "/ws/A", 5); err != nil {
@@ -322,6 +327,9 @@ func TestConcurrentWorkspaces(t *testing.T) {
 				}
 				if _, err := eng.Recall(ctx, "graphql", "/ws/B", 5); err != nil {
 					t.Errorf("recall B: %v", err)
+				}
+				if _, err := eng.List(ctx, "/ws/B", "", 5, 0); err != nil {
+					t.Errorf("list B: %v", err)
 				}
 			}
 		})
@@ -336,8 +344,8 @@ func TestConcurrentWorkspaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stA.Total != perWS || stA.Layers["L2_semantic"] != perWS {
-		t.Fatalf("Stats(/ws/A) = %+v, want %d semantic facts", stA, perWS)
+	if stA.Total != 2*perWS || stA.Layers["L2_semantic"] != perWS || stA.Layers["L1_episodic"] != perWS {
+		t.Fatalf("Stats(/ws/A) = %+v, want %d semantic + %d episodic", stA, perWS, perWS)
 	}
 	if stB.Total != perWS || stB.Layers["L2_semantic"] != perWS {
 		t.Fatalf("Stats(/ws/B) = %+v, want %d semantic facts", stB, perWS)
