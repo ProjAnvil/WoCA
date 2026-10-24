@@ -291,6 +291,65 @@ func (e *RemoteEngine) Consolidate(ctx context.Context, workspace string, since 
 		res.KeptEpisodes, res.PromotedToSemantic, res.SkippedConsolidated, res.Actions), nil
 }
 
+// RecallOperations implements OperationEngine over the v0.8.4 data plane
+// (POST /api/recall_ops): the same resource × action pivot the embedded
+// engine serves. Reads honor the recall breaker; an unknown resource rides
+// the server's fallback pivot and degrades to empty hits.
+func (e *RemoteEngine) RecallOperations(ctx context.Context, workspace, resource string, topK int) ([]OperationHit, error) {
+	if resource == "" {
+		return nil, errors.New("memory: operations query requires a resource")
+	}
+	if topK <= 0 {
+		topK = 10
+	}
+	if !e.allowRead() {
+		return nil, nil
+	}
+	rctx, cancel := context.WithTimeout(ctx, e.recallBudget)
+	defer cancel()
+	res, err := e.client.RecallOperations(rctx, ladymclient.OperationsQuery{
+		Workspace: workspaceKey(ctx, workspace),
+		Resource:  resource,
+		Limit:     topK,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("memory: remote recall operations: %w", err)
+	}
+	out := make([]OperationHit, 0, len(res.Items))
+	for _, item := range res.Items {
+		if item == nil || item.Memory == nil {
+			continue
+		}
+		hit := hitFromMemory(item.Memory, item.Score)
+		action, _ := item.Memory.Metadata["action"].(string)
+		outcome, _ := item.Memory.Metadata["outcome"].(string)
+		out = append(out, OperationHit{
+			ID: hit.ID, Action: action, Summary: hit.Summary,
+			Outcome: outcome, Score: hit.Score,
+		})
+	}
+	return out, nil
+}
+
+// RecordOperation implements OperationEngine over the v0.8.4 data plane
+// (POST /api/record_operation): a server-side rejection (blank resources)
+// surfaces as an error for the caller's best-effort warn path.
+func (e *RemoteEngine) RecordOperation(ctx context.Context, workspace string, op Operation) (string, error) {
+	wctx, cancel := context.WithTimeout(ctx, e.writeTimeout)
+	defer cancel()
+	res, err := e.client.RecordOperation(wctx, workspaceKey(ctx, workspace), ladymclient.RecordOperationInput{
+		Agent:       "woca",
+		Action:      op.Action,
+		Resources:   op.Resources,
+		Observation: op.Summary,
+		Outcome:     op.Outcome,
+	})
+	if err != nil {
+		return "", fmt.Errorf("memory: remote record operation: %w", err)
+	}
+	return res.ID, nil
+}
+
 // Description names the engine for /memory stats output.
 func (e *RemoteEngine) Description() string {
 	if u, err := url.Parse(e.endpoint); err == nil && u.Host != "" {

@@ -22,6 +22,11 @@ type fakeLadyM struct {
 	paths      []string
 	failAll    bool
 	server     *httptest.Server
+	// recall_ops / record_operation fixtures (v0.8.4 data plane).
+	opsItems    []map[string]any
+	opsFallback bool
+	opStatus    int
+	opID        string
 }
 
 func newFakeLadyM(t *testing.T) *fakeLadyM {
@@ -126,6 +131,42 @@ func newFakeLadyM(t *testing.T) *fakeLadyM {
 	mux.HandleFunc("POST /api/forget", func(w http.ResponseWriter, r *http.Request) {
 		f.record(r, "")
 		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/recall_ops", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Workspace string `json:"workspace"`
+			Resource  string `json:"resource"`
+			Action    string `json:"action"`
+			Limit     int    `json:"limit"`
+		}
+		decodeBody(r, &body)
+		f.record(r, body.Workspace)
+		f.mu.Lock()
+		status, items, fallback := f.opStatus, f.opsItems, f.opsFallback
+		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"error":"resource must not be blank"}`))
+			return
+		}
+		write(w, map[string]any{"resource": "res_1", "items": items, "fallback": fallback})
+	})
+	mux.HandleFunc("POST /api/record_operation", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Workspace string `json:"workspace"`
+			Action    string `json:"action"`
+		}
+		decodeBody(r, &body)
+		f.record(r, body.Workspace)
+		f.mu.Lock()
+		status := f.opStatus
+		f.mu.Unlock()
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"error":"resources must not be empty"}`))
+			return
+		}
+		write(w, map[string]any{"id": "op_1", "dropped": false})
 	})
 	f.server = httptest.NewServer(mux)
 	t.Cleanup(f.server.Close)
@@ -404,5 +445,87 @@ func TestRemoteDescriptionAndClosedEngineDegradation(t *testing.T) {
 	// orDefaultSource branches.
 	if orDefaultSource("x") != "x" || orDefaultSource("") != "woca:migration" {
 		t.Fatal("orDefaultSource branches")
+	}
+}
+
+// v0.8.4 brought recall_ops to the HTTP data plane; RemoteEngine implements
+// the OperationEngine capability over it (embedded-parity semantics:
+// unknown resource degrades to empty hits, failures degrade to errors the
+// caller's best-effort path warns about).
+
+func TestRemoteEngineRecallOperations(t *testing.T) {
+	f := newFakeLadyM(t)
+	eng := newTestRemote(t, f)
+
+	f.mu.Lock()
+	f.opsItems = []map[string]any{{
+		"memory": map[string]any{
+			"id": "e_9", "layer": "episodic", "type": "event",
+			"content": "agent=woca | action=update | observation=q | outcome=success",
+			"summary": "agent=woca | action=update | observation=q | outcome=success",
+			"source":  "http", "tags": []string{}, "updated_at": 5,
+			"metadata": map[string]any{
+				"action": "update", "outcome": "success", "agent": "woca",
+			},
+		},
+		"score": 0.87,
+	}}
+	f.mu.Unlock()
+
+	var ops OperationEngine = eng
+	hits, err := ops.RecallOperations(t.Context(), "woca:t:u:ws", "src/a.go", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("hits = %+v, want 1", hits)
+	}
+	if hits[0].ID != "e_9" || hits[0].Action != "update" || hits[0].Outcome != "success" {
+		t.Fatalf("hit = %+v", hits[0])
+	}
+
+	// An unknown resource rides the fallback pivot: empty hits, no error.
+	f.mu.Lock()
+	f.opsItems, f.opsFallback = nil, true
+	f.mu.Unlock()
+	hits, err = ops.RecallOperations(t.Context(), "woca:t:u:ws", "missing.txt", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf("fallback returned hits: %+v", hits)
+	}
+}
+
+func TestRemoteEngineRecordOperation(t *testing.T) {
+	f := newFakeLadyM(t)
+	eng := newTestRemote(t, f)
+
+	var ops OperationEngine = eng
+	id, err := ops.RecordOperation(t.Context(), "woca:t:u:ws", Operation{
+		Resources: []string{"src/a.go", "src/b.go"},
+		Action:    "update",
+		Summary:   "q",
+		Outcome:   "success",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "op_1" {
+		t.Fatalf("id = %q, want op_1", id)
+	}
+
+	// A server-side rejection (blank resources → 400) surfaces as an error;
+	// the retain path warns and moves on.
+	f.mu.Lock()
+	f.opStatus = http.StatusBadRequest
+	f.mu.Unlock()
+	if _, err := ops.RecordOperation(t.Context(), "woca:t:u:ws", Operation{Action: "update"}); err == nil {
+		t.Fatal("blank resources must surface an error")
+	}
+
+	// A failed read degrades to an error too (caller warns, run continues).
+	if _, err := ops.RecallOperations(t.Context(), "woca:t:u:ws", "src/a.go", 5); err == nil {
+		t.Fatal("a 400 recall_ops must surface an error")
 	}
 }

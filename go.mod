@@ -3,7 +3,7 @@ module github.com/projanvil/woca
 go 1.26.4
 
 require (
-	github.com/ProjAnvil/LadyM v0.8.3
+	github.com/ProjAnvil/LadyM v0.8.4
 	github.com/PuerkitoBio/goquery v1.10.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10

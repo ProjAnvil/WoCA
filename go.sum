@@ -1,7 +1,7 @@
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/ProjAnvil/LadyM v0.8.3 h1:ZTEG1uRTvrd1Y6+Lo5RT/HW2RnOq85SI72xBqQzdrV4=
-github.com/ProjAnvil/LadyM v0.8.3/go.mod h1:w6eHcYHVBI+iEVPnIo5BDluz6HKkQXjU3hX3j+ko818=
+github.com/ProjAnvil/LadyM v0.8.4 h1:wXkFK41vuxqo+zc5kz8qS27AbexwWrJKVUQgcmOreG0=
+github.com/ProjAnvil/LadyM v0.8.4/go.mod h1:w6eHcYHVBI+iEVPnIo5BDluz6HKkQXjU3hX3j+ko818=
 github.com/PuerkitoBio/goquery v1.10.0 h1:6fiXdLuUvYs2OJSvNRqlNPoBm6YABE226xrbavY5Wv4=
 github.com/PuerkitoBio/goquery v1.10.0/go.mod h1:TjZZl68Q3eGHNBA8CWaxAN7rOU1EbDz3CWuolcO5Yu4=
 github.com/andybalholm/cascadia v1.3.2 h1:3Xi6Dw5lHF15JtdcmAHD3i1+T8plmv7BQ/nsViSLyss=
