@@ -171,7 +171,7 @@ func TestRetainGoalStoresEpisodeMaterial(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"} // loadSettings nil -> defaults (autoretain on)
 	a.SetMemoryWorkspace("/ws/goal")
-	a.RetainGoal(t.Context(), "ship the auth refactor", "complete", "tests pass: 3/3", nil)
+	a.RetainGoal(t.Context(), "ship the auth refactor", "complete", "tests pass: 3/3", nil, nil)
 
 	if calls := f.recordedRememberCalls(); len(calls) != 0 {
 		t.Fatalf("auto-retain must not Remember: %v", calls)
@@ -193,7 +193,7 @@ func TestRetainGoalStoresEpisodeMaterial(t *testing.T) {
 func TestRetainGoalBlockedOutcome(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
-	a.RetainGoal(t.Context(), "migrate the db", "blocked", "needs credentials", nil)
+	a.RetainGoal(t.Context(), "migrate the db", "blocked", "needs credentials", nil, nil)
 	if len(f.events) != 1 || f.events[0] != "woca/goal:blocked/blocked" {
 		t.Fatalf("events = %v", f.events)
 	}
@@ -213,7 +213,7 @@ func TestRetainGoalDisabled(t *testing.T) {
 		mem:     memoryRuntime{engine: f, loadSettings: func() settings.Settings { return off }},
 		workdir: "/ws",
 	}
-	a.RetainGoal(t.Context(), "objective", "complete", "summary", nil)
+	a.RetainGoal(t.Context(), "objective", "complete", "summary", nil, nil)
 	if len(f.remembered) != 0 || len(f.events) != 0 {
 		t.Fatal("autoretain off should write nothing")
 	}
@@ -221,13 +221,13 @@ func TestRetainGoalDisabled(t *testing.T) {
 
 func TestRetainGoalNilEngineNoop(t *testing.T) {
 	a := &Agent{workdir: "/ws"}
-	a.RetainGoal(t.Context(), "objective", "complete", "summary", nil) // must not panic
+	a.RetainGoal(t.Context(), "objective", "complete", "summary", nil, nil) // must not panic
 }
 
 func TestRetainGoalErrorOutcome(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
-	a.RetainGoal(t.Context(), "objective", "complete", "summary", errors.New("boom"))
+	a.RetainGoal(t.Context(), "objective", "complete", "summary", errors.New("boom"), nil)
 	if len(f.events) != 1 || f.events[0] != "woca/goal:complete/error" {
 		t.Fatalf("events = %v", f.events)
 	}
@@ -236,7 +236,7 @@ func TestRetainGoalErrorOutcome(t *testing.T) {
 func TestRetainGoalEmptySummaryKeepsObjectiveOnly(t *testing.T) {
 	f := &fakeEngine{}
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws"}
-	a.RetainGoal(t.Context(), "objective", "budget_limited", "", nil)
+	a.RetainGoal(t.Context(), "objective", "budget_limited", "", nil, nil)
 	if obs := f.recordedEventObs(); len(obs) != 1 || obs[0] != "objective" {
 		t.Fatalf("observation = %v, want the bare objective", obs)
 	}

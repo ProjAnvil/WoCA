@@ -448,7 +448,7 @@ func TestRetainRunAndGoalPaths(t *testing.T) {
 	m2 := memoryRuntime{}
 	m2.init(nil, failing, nil, nil)
 	m2.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q")}, []messages.Message{messages.AI("answer")}, nil, nil)
-	m2.RetainGoal(ctx, "/ws", "objective", string(GoalComplete), "summary", nil)
+	m2.RetainGoal(ctx, "/ws", "objective", string(GoalComplete), "summary", nil, nil)
 	m2.RecordTaskEvent(ctx, "/ws", "sub", "desc", "report", errors.New("task boom"))
 	// A System 2 cycle with a failing Consolidate also only warns.
 	m3 := memoryRuntime{}
@@ -460,13 +460,13 @@ func TestRetainRunAndGoalPaths(t *testing.T) {
 	g := &fakeEngine{}
 	agent := &Agent{mem: memoryRuntime{}}
 	agent.mem.init(nil, g, nil, nil)
-	agent.RetainGoal(ctx, "obj", string(GoalBlocked), "", nil)
+	agent.RetainGoal(ctx, "obj", string(GoalBlocked), "", nil, nil)
 	if len(g.events) != 1 || !strings.Contains(g.events[0], "goal:blocked") {
 		t.Fatalf("goal events = %v", g.events)
 	}
 	sub := &Agent{subagent: true}
 	sub.RetainRun(ctx, []messages.Message{messages.Human("q")}, nil, nil, nil)
-	sub.RetainGoal(ctx, "obj", "complete", "sum", nil)
+	sub.RetainGoal(ctx, "obj", "complete", "sum", nil, nil)
 	sub.recordTaskEvent(ctx, "n", "d", "r", nil)
 
 	// runQuestion skips known synthetic wrappers.
@@ -1059,4 +1059,42 @@ func TestRetainRunRecordsFileOperation(t *testing.T) {
 	m.RetainRun(ctx, "/ws", []messages.Message{messages.Human("q5")}, nil, nil, []tools.FileChange{
 		{Path: "a.go", Before: []byte("x"), After: []byte("w")},
 	})
+}
+
+func TestRetainGoalRecordsFileOperation(t *testing.T) {
+	ctx := t.Context()
+
+	f := &fakeEngine{}
+	m := memoryRuntime{}
+	m.init(nil, f, nil, nil)
+
+	// A goal that touched files records one operation with the goal's
+	// objective as the summary and the mapped goal status as the outcome.
+	m.RetainGoal(ctx, "/ws", "refactor the parser", string(GoalComplete), "done", nil, []tools.FileChange{
+		{Path: "parser.go", Before: []byte("x"), After: []byte("y")},
+	})
+	if len(f.ops) != 1 {
+		t.Fatalf("operations recorded = %d, want 1", len(f.ops))
+	}
+	op := f.ops[0]
+	if op.Action != "update" || op.Outcome != "success" {
+		t.Fatalf("op = %+v, want update/success", op)
+	}
+	if len(op.Resources) != 1 || op.Resources[0] != "parser.go" {
+		t.Fatalf("op resources = %v", op.Resources)
+	}
+
+	// No file changes: no operation record.
+	m.RetainGoal(ctx, "/ws", "objective", string(GoalBlocked), "blocked", nil, nil)
+	if len(f.ops) != 1 {
+		t.Fatalf("changeless goal recorded an operation: %v", f.ops)
+	}
+
+	// A blocked goal keeps its outcome string (the caller filters).
+	m.RetainGoal(ctx, "/ws", "objective", string(GoalBlocked), "blocked", nil, []tools.FileChange{
+		{Path: "a.go", Before: []byte("x"), After: []byte("y")},
+	})
+	if f.ops[1].Outcome != "blocked" {
+		t.Fatalf("blocked outcome = %q, want blocked", f.ops[1].Outcome)
+	}
 }

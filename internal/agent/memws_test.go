@@ -86,7 +86,7 @@ func TestRetainGoalUsesCtxWorkspace(t *testing.T) {
 	a := &Agent{mem: memoryRuntime{engine: f}, workdir: "/ws/workdir"}
 	a.SetMemoryWorkspace("/ws/field")
 	ctx := WithRunWorkspace(t.Context(), "/ws/goal-ctx")
-	a.RetainGoal(ctx, "objective", "complete", "summary", nil)
+	a.RetainGoal(ctx, "objective", "complete", "summary", nil, nil)
 	if calls := f.recordedRememberCalls(); len(calls) != 0 {
 		t.Fatalf("auto-retain must not write facts directly: %v", calls)
 	}

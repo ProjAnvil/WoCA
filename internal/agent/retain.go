@@ -154,7 +154,7 @@ func (m *memoryRuntime) recordFileOperation(ctx context.Context, eng memory.Engi
 // carries the result (a blocked or errored goal's narrative is episode
 // history). Goal runs bypass Runner.Run (they execute the goal graph
 // directly), so RunGoal's defer is their only retain hook.
-func (m *memoryRuntime) RetainGoal(ctx context.Context, ws, objective, status, summary string, runErr error) {
+func (m *memoryRuntime) RetainGoal(ctx context.Context, ws, objective, status, summary string, runErr error, changes []tools.FileChange) {
 	eng := m.Engine()
 	if eng == nil {
 		return
@@ -178,6 +178,7 @@ func (m *memoryRuntime) RetainGoal(ctx context.Context, ws, objective, status, s
 	if err := eng.RecordEvent(ctx, ws, "woca", "goal:"+status, obs, outcome); err != nil {
 		m.warn("retain_write_error", map[string]any{"op": "goal_event", "error": err.Error()})
 	}
+	m.recordFileOperation(ctx, eng, ws, objective, outcome, changes)
 }
 
 // RecordTaskEvent logs a completed subagent task as an L1 episode (reads
@@ -250,11 +251,11 @@ func (a *Agent) RetainRun(ctx context.Context, history, final []messages.Message
 }
 
 // RetainGoal stores a completed goal-mode session.
-func (a *Agent) RetainGoal(ctx context.Context, objective, status, summary string, runErr error) {
+func (a *Agent) RetainGoal(ctx context.Context, objective, status, summary string, runErr error, changes []tools.FileChange) {
 	if a.subagent {
 		return
 	}
-	a.mem.RetainGoal(ctx, a.memoryWorkspaceCtx(ctx), objective, status, summary, runErr)
+	a.mem.RetainGoal(ctx, a.memoryWorkspaceCtx(ctx), objective, status, summary, runErr, changes)
 }
 
 // recordTaskEvent reports a completed subagent task from the parent side

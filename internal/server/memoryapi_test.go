@@ -651,7 +651,7 @@ func TestMemoryDictEndpoints(t *testing.T) {
 	}
 	defer resp2.Body.Close()
 	var got struct {
-		Engine string             `json:"engine"`
+		Engine string               `json:"engine"`
 		Dict   memory.CJKDictStatus `json:"dict"`
 	}
 	if err := json.NewDecoder(resp2.Body).Decode(&got); err != nil {

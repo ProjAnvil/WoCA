@@ -52,6 +52,9 @@ func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) (final
 	// the writes.
 	started := false
 	var runID uint64
+	// File-mutation watermark: resolved into the goal run's changed-file
+	// delta at retain time (the recall_ops operation record's resources).
+	fhBase := r.agent.FileHistoryWatermark(ctx)
 	defer func() {
 		if !started {
 			return
@@ -65,7 +68,8 @@ func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) (final
 		if g == nil {
 			return // cleared before the loop ended: nothing to retain
 		}
-		r.agent.RetainGoal(context.WithoutCancel(ctx), g.Objective, string(g.Status), goalSummary(g), err)
+		r.agent.RetainGoal(context.WithoutCancel(ctx), g.Objective, string(g.Status), goalSummary(g), err,
+			r.agent.FileChangesSince(ctx, fhBase))
 	}()
 	stream, err := r.agent.GoalStream(ctx, history)
 	if err != nil {
