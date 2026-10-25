@@ -169,7 +169,7 @@ export function listAudit(limit = 100): Promise<AuditRow[]> {
   return request(`/api/audit?limit=${limit}`, undefined, i18n.global.t('api.requestFailed'))
 }
 
-// --- remote profiles (bridge 形态的接入点切换: saved remote origins in
+// --- remote profiles (access-point switching, bridge posture: saved remote origins in
 // the bridge's settings DB; switching is a full navigation, the target's
 // own login gate takes over) ---
 

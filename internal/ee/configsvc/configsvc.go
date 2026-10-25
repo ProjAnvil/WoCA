@@ -240,7 +240,7 @@ func (s *Service) Handler() http.Handler {
 		r.Handle("/", webfx.SPA(spaRoot))
 	}
 
-	// The config plane keeps the /gw/config pull (v1.5 拓扑拆分) plus the
+	// The config plane keeps the /gw/config pull (v1.5 topology split) plus the
 	// model catalog bridges pull on demand (§16: presets are config-plane
 	// assets — bridges fetch the list and verify their preferred model
 	// here; enrollment/renewal/heartbeat live on the service plane).

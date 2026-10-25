@@ -20,7 +20,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <!-- 远端配置: the config-plane delivery, read-only. It materializes as
+  <!-- Org config: the config-plane delivery, read-only. It materializes as
        the lowest merge layer — the user's own config always wins. -->
   <section class="setting-section">
     <div class="setting-section-title">

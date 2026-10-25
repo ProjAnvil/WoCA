@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { Loader2, ScrollText, Users } from 'lucide-vue-next'
 import { listAudit, listBridgeSessions, type AuditRow, type BridgeSession } from '../../api/client'
 
-// The bridge admin page (product design §5.1 管理页, v1.7): a READ-ONLY
+// The bridge admin page (product design §5.1 admin page, v1.7): a READ-ONLY
 // operations view — the live-session inventory and the local audit trail.
 // Key management is not here: organization credentials are issued by the
 // tenant ops console on the private core, never on the bridge.

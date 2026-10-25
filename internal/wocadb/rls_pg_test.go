@@ -192,7 +192,7 @@ func TestRLSLocalDefaultUnchanged(t *testing.T) {
 	}
 }
 
-// TestRLSTenantIsolation: the postgres-level 双租户互不可见 — transactions
+// TestRLSTenantIsolation: the postgres-level two-tenants-invisible guarantee — transactions
 // carrying SET LOCAL app.tenant_id see and write only their own rows; the
 // local default tenant cannot see tenant rows and vice versa.
 func TestRLSTenantIsolation(t *testing.T) {

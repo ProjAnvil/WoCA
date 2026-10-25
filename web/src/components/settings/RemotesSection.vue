@@ -11,7 +11,7 @@ import {
 } from '../../api/client'
 import WInfoTip from '../ui/WInfoTip.vue'
 
-// Remote profiles (bridge 形态): the saved remote origins this bridge's
+// Remote profiles (bridge posture): the saved remote origins this bridge's
 // embedded web can be pointed at — stored in the bridge's own settings
 // database, so the list follows the bridge rather than the browser.
 // Switching is a full navigation: the target origin serves its own web

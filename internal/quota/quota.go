@@ -78,7 +78,7 @@ func Fetch(ctx context.Context, provider, baseURL, apiKey string, client *http.C
 	default: // "", "glm"
 		if endpoint, ok := monitorEndpoint(baseURL); ok {
 			if apiKey == "" {
-				return Info{Available: false, Reason: "未配置 API Key，无法查询套餐额度"}, nil
+				return Info{Available: false, Reason: "API key not configured; cannot query plan quota"}, nil
 			}
 			return fetchEndpoint(ctx, endpoint, apiKey, client)
 		}
@@ -89,43 +89,42 @@ func Fetch(ctx context.Context, provider, baseURL, apiKey string, client *http.C
 func unavailableReason(provider string) string {
 	switch provider {
 	case "anthropic":
-		return "Anthropic API Key 账单无公开查询接口（官方订阅登录后可显示用量）"
+		return "Anthropic API-key billing has no public query endpoint (usage shows after signing in with the official subscription)"
 	case "openai":
-		return "OpenAI API Key 账单无公开查询接口（Codex 订阅登录后可显示用量）"
+		return "OpenAI API-key billing has no public query endpoint (usage shows after signing in with the Codex subscription)"
 	case "glm", "":
-		return "当前供应商没有已知的额度接口（支持 GLM Coding Plan：bigmodel.cn / z.ai）"
+		return "this provider has no known quota endpoint (GLM Coding Plan supported: bigmodel.cn / z.ai)"
 	default:
-		return fmt.Sprintf("供应商 %s 没有已知的额度接口", provider)
+		return fmt.Sprintf("provider %s has no known quota endpoint", provider)
 	}
 }
 
-// Format renders Info for terminals (/quota, the TUI). Chinese to match the
-// web UI's audience.
+// Format renders Info for terminals (/quota, the TUI).
 func Format(info Info) string {
 	if !info.Available {
-		return "套餐额度不可用：" + info.Reason + "\n（可运行 /cost 查看本会话用量）\n"
+		return "plan quota unavailable: " + info.Reason + "\n(run /cost to see this session's usage)\n"
 	}
 	if info.Type == TypeBalance {
 		var b strings.Builder
-		b.WriteString("账户余额：" + info.Balance + "\n")
+		b.WriteString("Account balance: " + info.Balance + "\n")
 		return b.String()
 	}
 	var b strings.Builder
 	if info.Level != "" {
-		fmt.Fprintf(&b, "GLM Coding Plan（%s）剩余额度：\n", info.Level)
+		fmt.Fprintf(&b, "GLM Coding Plan (%s) remaining quota:\n", info.Level)
 	} else {
-		b.WriteString("套餐剩余额度：\n")
+		b.WriteString("Remaining plan quota:\n")
 	}
 	for _, w := range info.Windows {
 		remaining := 100 - w.UsedPercent
 		if remaining < 0 {
 			remaining = 0
 		}
-		fmt.Fprintf(&b, "  %-6s 剩余 %5.1f%%（已用 %.1f%%", windowLabel(w.Kind), remaining, w.UsedPercent)
+		fmt.Fprintf(&b, "  %-6s remaining %5.1f%% (used %.1f%%", windowLabel(w.Kind), remaining, w.UsedPercent)
 		if w.NextResetMS > 0 {
-			fmt.Fprintf(&b, "，%s 重置", resetIn(w.NextResetMS))
+			fmt.Fprintf(&b, ", resets %s", resetIn(w.NextResetMS))
 		}
-		b.WriteString("）\n")
+		b.WriteString(")\n")
 	}
 	return b.String()
 }
@@ -133,9 +132,9 @@ func Format(info Info) string {
 func windowLabel(kind string) string {
 	switch kind {
 	case "5h":
-		return "5小时"
+		return "5h"
 	case "weekly":
-		return "每周"
+		return "weekly"
 	case "mcp":
 		return "MCP"
 	}
@@ -146,9 +145,9 @@ func windowLabel(kind string) string {
 func resetIn(ms int64) string {
 	d := time.Until(time.UnixMilli(ms)).Round(time.Minute)
 	if d <= 0 {
-		return "即将"
+		return "soon"
 	}
-	return d.String() + "后"
+	return "in " + d.String()
 }
 
 // parseResetMS accepts the reset-timestamp spellings providers actually use:

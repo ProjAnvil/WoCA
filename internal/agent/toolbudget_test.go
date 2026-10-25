@@ -147,9 +147,9 @@ func TestToolResultBudgetDisabled(t *testing.T) {
 }
 
 func TestTruncateRunesBoundaries(t *testing.T) {
-	s := "hello, 世界"
+	s := "hello, ああ"
 	got := truncateRunes(s, 8)
-	if got != "hello, 世" {
+	if got != "hello, あ" {
 		t.Fatalf("truncateRunes = %q", got)
 	}
 	if truncateRunes(s, 100) != s {

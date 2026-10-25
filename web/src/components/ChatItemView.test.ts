@@ -53,8 +53,8 @@ describe('bubble copy split button', () => {
     const write = stubClipboard()
     const w = mountAssistant()
     try {
-      await w.get('.bubble-action.copy-side').trigger('click') // span 上 toggle 打开
-      // 菜单 Teleport 到 body——从 document 查（wrapper 查不到）
+      await w.get('.bubble-action.copy-side').trigger('click') // toggle opens on the span
+      // the menu is teleported to body — query it from document (the wrapper can't see it)
       const items = Array.from(document.body.querySelectorAll('[role="menuitem"]'))
       expect(items).toHaveLength(2)
       items[1].dispatchEvent(new MouseEvent('click', { bubbles: true }))

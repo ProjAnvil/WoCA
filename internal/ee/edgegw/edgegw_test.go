@@ -392,7 +392,7 @@ func TestBridgeSelection(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if !strings.Contains(string(body), "选择目标 bridge") {
+	if !strings.Contains(string(body), "Select target bridge") {
 		t.Fatalf("selection page missing: %s", body[:min(200, len(body))])
 	}
 

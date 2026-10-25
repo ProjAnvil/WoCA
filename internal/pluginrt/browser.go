@@ -24,7 +24,7 @@ import (
 )
 
 // ErrBrowserNotInstalled is returned when the pinchtab binary is missing.
-var ErrBrowserNotInstalled = errors.New("browser plugin runtime is not installed — open Settings → 插件 and click 安装 (install)")
+var ErrBrowserNotInstalled = errors.New("browser plugin runtime is not installed — open Settings → Plugins and click Install")
 
 // ErrBrowserStopped is returned when the runtime was stopped and a client is
 // requested afterwards (the runtime does not resurrect after Stop).

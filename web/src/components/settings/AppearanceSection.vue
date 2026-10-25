@@ -45,7 +45,7 @@ const settings = useSettingsStore()
         @click="settings.setLocale('zh-CN')"
       >
         <Languages :size="16" />
-        <span>简体中文</span>
+        <span>{{ t('settings.appearance.langZh') }}</span>
       </button>
       <button
         class="theme-option"

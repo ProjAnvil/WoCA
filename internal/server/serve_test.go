@@ -728,9 +728,9 @@ func TestCompletionsBuiltinShadowsSkill(t *testing.T) {
 }
 
 func TestPreviewForLogTruncates(t *testing.T) {
-	long := strings.Repeat("字", 250)
+	long := strings.Repeat("あ", 250)
 	got := previewForLog(long)
-	if want := strings.Repeat("字", 200) + "…"; got != want {
+	if want := strings.Repeat("あ", 200) + "…"; got != want {
 		t.Fatalf("previewForLog len = %d, want %d runes + ellipsis", len([]rune(got)), 201)
 	}
 	if got := previewForLog("short"); got != "short" {

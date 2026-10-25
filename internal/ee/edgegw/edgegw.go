@@ -1,5 +1,5 @@
 // Package edgegw implements the edge access point (product design v1.5
-// 拓扑拆分): the control plane's only public component. It is stateless
+// topology split): the control plane's only public component. It is stateless
 // by construction (R7) — no database, no files, no registry copy, no
 // secrets. Every machine-token check calls home to the service plane;
 // config pulls forward to the config plane; client traffic (the bridge's
@@ -37,7 +37,7 @@ import (
 )
 
 // BridgeCookie carries the selected target bridge (browser flow, v1.6
-// 入口②: the direct-link form /edge/select?bridge=<id> sets it).
+// entry ②: the direct-link form /edge/select?bridge=<id> sets it).
 const BridgeCookie = "woca_edge_bridge"
 
 // BridgeHeader routes one request to a target bridge (native clients,
@@ -387,14 +387,14 @@ func (e *Edge) writeSelectionPage(w http.ResponseWriter, r *http.Request) {
 		rows.WriteString(`<li style="color:#8b93a1">No bridge is currently online.</li>`)
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>woca · 选择 bridge / Select bridge</title>
+	fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>woca · Select bridge</title>
 <style>body{font:14px/1.5 system-ui,sans-serif;background:#14161a;color:#e6e8ec;display:flex;justify-content:center;padding-top:12vh}
 .card{background:#1b1e24;border:1px solid #2a2e37;border-radius:14px;padding:28px;width:min(420px,90vw)}
 h1{font-size:18px;margin:0 0 6px}p{color:#9aa3b2;margin:0 0 18px;font-size:13px}
 ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
 a{color:#7fa5ff;text-decoration:none;display:flex;justify-content:space-between;padding:10px 12px;border:1px solid #2a2e37;border-radius:8px}
 a:hover{border-color:#4f7cff}code{font-size:13px}</style></head><body><div class="card">
-<h1>woca edge · 选择目标 bridge</h1><p>Select the bridge to command, or open a direct link carrying the bridge id.</p><ul>%s</ul></div></body></html>`,
+<h1>woca edge · Select target bridge</h1><p>Select the bridge to command, or open a direct link carrying the bridge id.</p><ul>%s</ul></div></body></html>`,
 		rows.String())
 }
 

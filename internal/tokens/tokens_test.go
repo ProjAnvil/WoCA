@@ -24,7 +24,7 @@ func TestEstimateText(t *testing.T) {
 		{"hello world this is a test", 6},
 		{"x := foo(bar)", 7}, // x : = foo ( bar ) = 7
 		{"if err != nil { return }", 8},
-		{"你好世界", 4}, // 4 CJK chars
+		{"あいうえお", 5}, // 5 kana chars (one token each, like Han)
 	}
 	for _, c := range cases {
 		if got := EstimateText(c.in); got != c.want {
@@ -75,7 +75,7 @@ func TestEstimateWithRealTiktokenThroughWrappers(t *testing.T) {
 		t.Fatalf("model.New: %v", err)
 	}
 	msgs := []messages.Message{
-		messages.Human("hello world, this is a tiktoken parity check 你好"),
+		messages.Human("hello world, this is a tiktoken parity check こんにちは"),
 	}
 	want, err := om.GetNumTokensFromMessages(msgs)
 	if err != nil {

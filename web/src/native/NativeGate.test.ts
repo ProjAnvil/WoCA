@@ -209,7 +209,7 @@ describe('NativeGate', () => {
 
     i18n.global.locale.value = 'zh-CN'
     await flushPromises()
-    expect(wrapper.get('button').text()).toBe('重试')
+    expect(wrapper.get('button').text()).toBe(i18n.global.t('native.retry'))
 
     await wrapper.get('button').trigger('click')
     await flushPromises()
@@ -266,8 +266,8 @@ describe('NativeGate', () => {
 
     i18n.global.locale.value = 'zh-CN'
     await flushPromises()
-    expect(fatal.text()).toContain('woca 无法读取本机配置。')
-    expect(fatal.text()).toContain('请检查本机文件权限后重启 woca；若仍失败，请联系管理员并附上下方路径。')
+    expect(fatal.text()).toContain(i18n.global.t('native.localDataFatalDescription'))
+    expect(fatal.text()).toContain(i18n.global.t('native.localDataFatalRecovery'))
   })
 
   it('uses fixed unavailable-path copy when the database path cannot be resolved', async () => {

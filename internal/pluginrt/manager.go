@@ -99,12 +99,12 @@ func (m *Manager) ready(b Builtin) (bool, string) {
 		if m.py.Ready(b.Name) {
 			return true, ""
 		}
-		return false, "Python 环境未安装（需要下载 uv 与 CPython 并安装依赖 wheel）"
+		return false, "Python environment is not installed (download uv and CPython, then install the dependency wheels)"
 	case "pinchtab":
 		if m.br.Installed() {
 			return true, ""
 		}
-		return false, "pinchtab 未安装（需要下载固定版本二进制）"
+		return false, "pinchtab is not installed (download the pinned-version binary)"
 	default:
 		return true, ""
 	}

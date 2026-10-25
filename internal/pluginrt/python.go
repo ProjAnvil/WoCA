@@ -26,7 +26,7 @@ const pythonPin = "3.12"
 
 // ErrNotInstalled is returned by Run when a plugin's Python environment has
 // not been provisioned (or its lock changed and it needs a reinstall).
-var ErrNotInstalled = errors.New("python plugin environment is not installed — open Settings → 插件 and click 安装 (install)")
+var ErrNotInstalled = errors.New("python plugin environment is not installed — open Settings → Plugins and click Install")
 
 // PythonRuntime follows the pipx / `uv tool` layout: heavy machinery (the uv
 // binary, managed CPython interpreters, the hard-link cache) is shared under

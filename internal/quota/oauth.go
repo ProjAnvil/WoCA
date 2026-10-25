@@ -28,12 +28,12 @@ var (
 func fetchAnthropicSubscription(ctx context.Context, baseURL string) (Info, error) {
 	info := Info{Type: TypePlan}
 	if u := strings.TrimSpace(baseURL); u != "" && !strings.Contains(strings.ToLower(u), "api.anthropic.com") {
-		info.Reason = "自定义 Anthropic 网关没有已知的额度接口"
+		info.Reason = "custom Anthropic gateway has no known quota endpoint"
 		return info, nil
 	}
 	token := claudeOAuthToken()
 	if token == "" {
-		info.Reason = "未找到 Claude Code 登录凭据（~/.claude/.credentials.json），API Key 账单无公开接口"
+		info.Reason = "Claude Code login credentials not found (~/.claude/.credentials.json); API-key billing has no public endpoint"
 		return info, nil
 	}
 	info.Source = anthropicUsageURL
@@ -48,7 +48,7 @@ func fetchAnthropicSubscription(ctx context.Context, baseURL string) (Info, erro
 		return info, err
 	}
 	if status != http.StatusOK {
-		return info, fmt.Errorf("订阅用量接口返回 %d", status)
+		return info, fmt.Errorf("subscription usage endpoint returned %d", status)
 	}
 
 	// {"windows":{"five_hour":{"utilization":0.42,"resets_at":"…"},
@@ -76,7 +76,7 @@ func fetchAnthropicSubscription(ctx context.Context, baseURL string) (Info, erro
 	}
 	if len(info.Windows) == 0 {
 		info.Available = false
-		info.Reason = "订阅用量接口未返回配额窗口"
+		info.Reason = "subscription usage endpoint returned no quota windows"
 	}
 	return info, nil
 }
@@ -87,12 +87,12 @@ func fetchAnthropicSubscription(ctx context.Context, baseURL string) (Info, erro
 func fetchCodexUsage(ctx context.Context, baseURL string) (Info, error) {
 	info := Info{Type: TypePlan}
 	if u := strings.TrimSpace(baseURL); u != "" && !strings.Contains(strings.ToLower(u), "api.openai.com") {
-		info.Reason = "自定义 OpenAI 网关没有已知的额度接口"
+		info.Reason = "custom OpenAI gateway has no known quota endpoint"
 		return info, nil
 	}
 	token, account := codexOAuthToken()
 	if token == "" {
-		info.Reason = "未找到 Codex 登录凭据（~/.codex/auth.json），API Key 账单无公开接口"
+		info.Reason = "Codex login credentials not found (~/.codex/auth.json); API-key billing has no public endpoint"
 		return info, nil
 	}
 	info.Source = codexUsageURL
@@ -110,7 +110,7 @@ func fetchCodexUsage(ctx context.Context, baseURL string) (Info, error) {
 		return info, err
 	}
 	if status != http.StatusOK {
-		return info, fmt.Errorf("订阅用量接口返回 %d", status)
+		return info, fmt.Errorf("subscription usage endpoint returned %d", status)
 	}
 
 	// {"rate_limit":{"primary_window":{"used_percent":42.5,
@@ -146,7 +146,7 @@ func fetchCodexUsage(ctx context.Context, baseURL string) (Info, error) {
 	}
 	if len(info.Windows) == 0 {
 		info.Available = false
-		info.Reason = "订阅用量接口未返回配额窗口"
+		info.Reason = "subscription usage endpoint returned no quota windows"
 	}
 	return info, nil
 }

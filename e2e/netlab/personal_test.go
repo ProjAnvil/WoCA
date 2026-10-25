@@ -9,10 +9,12 @@ import (
 	"time"
 )
 
-// TestPersonalRelayChain — 个人版网络层：外网 web frontend（client，仅
-// front 网络）→ 中转站 relay → 出站长轮询隧道 → 家庭内网 woca（仅 wan
-// 网络）。链路必须正向打通（登录、tunnel 业务 API、SSE 均穿透网络边界），
-// 而家庭侧地址对公网一侧必须不可达（docker 网络隔离即 NAT 语义）。
+// TestPersonalRelayChain — personal-edition network topology: the public
+// web frontend (client, front network only) → the relay → the outbound
+// long-poll tunnel → home-network woca (wan network only). The chain must
+// work end to end in the forward direction (login, tunnel business API and
+// SSE all cross the network boundary), while the home-side addresses must
+// be unreachable from the public side (docker network isolation = NAT).
 func TestPersonalRelayChain(t *testing.T) {
 	requireDocker(t)
 	requireTarballs(t, "woca", "woca-relay")

@@ -1,7 +1,7 @@
 package transport
 
 // BridgeCredentials authenticates against a woca-bridge login surface
-// (product design §2.2 通道一): POST /api/auth/login with the API key
+// (product design §2.2 channel 1): POST /api/auth/login with the API key
 // exchanges for a Bearer session token. Endpoints without the bridge
 // login route (enterprise DPoP deployments) fall through to the DPoP
 // provider, so one client serves both flavors.

@@ -101,7 +101,7 @@ func TestQuotaCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"pro", "5小时", "58.0%"} {
+	for _, want := range []string{"pro", "5h", "58.0%"} {
 		if !strings.Contains(res.Output, want) {
 			t.Fatalf("quota output missing %q:\n%s", want, res.Output)
 		}

@@ -33,7 +33,7 @@ type Credentials struct {
 const RequestIDHeader = "X-Woca-Native-Request-ID"
 
 // BridgeHeader routes requests to one target bridge behind an edge
-// access point (mirrors internal/ee/edgegw.BridgeHeader; v1.6 入口② —
+// access point (mirrors internal/ee/edgegw.BridgeHeader; v1.6 entry ② —
 // native clients hold no cookies by design).
 const BridgeHeader = "X-Woca-Bridge"
 

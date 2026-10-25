@@ -15,6 +15,7 @@ export default {
     dark: '深色',
     language: '语言',
     langAuto: '跟随系统',
+    langZh: '简体中文',
   },
   store: {
     saved: '已保存',

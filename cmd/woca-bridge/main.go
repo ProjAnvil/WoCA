@@ -12,7 +12,7 @@
 // — enrollment, managed-config pulls, heartbeats, and the scenario-four
 // tunnel that lets any-place web command this bridge through
 // https://edge.example.com — is bridge-local configuration, editable on
-// the settings page (云接入) or preset with WOCA_EDGE_URL /
+// the settings page (cloud access) or preset with WOCA_EDGE_URL /
 // WOCA_ENROLL_TOKEN.
 //
 // The serve-front edition wiring itself lives in internal/ee/bridge

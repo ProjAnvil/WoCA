@@ -75,7 +75,7 @@ func TestFetchParsesWindows(t *testing.T) {
 	}
 
 	out := Format(info)
-	for _, want := range []string{"pro", "5小时", "每周", "58.0%", "85.0%"} {
+	for _, want := range []string{"pro", "5h", "weekly", "58.0%", "85.0%"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("Format output missing %q:\n%s", want, out)
 		}
@@ -143,7 +143,7 @@ func TestDeepSeekBalance(t *testing.T) {
 	if !info.Available || info.Type != TypeBalance || info.Balance != "CNY 110.35" {
 		t.Errorf("info = %+v", info)
 	}
-	if out := Format(info); !strings.Contains(out, "账户余额：CNY 110.35") {
+	if out := Format(info); !strings.Contains(out, "Account balance: CNY 110.35") {
 		t.Errorf("Format = %q", out)
 	}
 }
@@ -214,10 +214,10 @@ func TestFetchDispatch(t *testing.T) {
 }
 
 func TestFormatAndHelpers(t *testing.T) {
-	if got := Format(Info{Available: false, Reason: "无接口"}); !strings.Contains(got, "套餐额度不可用") {
+	if got := Format(Info{Available: false, Reason: "no endpoint"}); !strings.Contains(got, "plan quota unavailable") {
 		t.Fatalf("unavailable format = %q", got)
 	}
-	if got := Format(Info{Available: true, Type: TypeBalance, Balance: "CNY 1.00"}); !strings.Contains(got, "账户余额：CNY 1.00") {
+	if got := Format(Info{Available: true, Type: TypeBalance, Balance: "CNY 1.00"}); !strings.Contains(got, "Account balance: CNY 1.00") {
 		t.Fatalf("balance format = %q", got)
 	}
 	plan := Format(Info{
@@ -229,17 +229,17 @@ func TestFormatAndHelpers(t *testing.T) {
 			{Kind: "mcp", UsedPercent: 10, NextResetMS: time.Now().Add(-time.Hour).UnixMilli()},
 		},
 	})
-	if !strings.Contains(plan, "GLM Coding Plan（max）") || !strings.Contains(plan, "0.0%（已用 120.0%") || !strings.Contains(plan, "即将") {
+	if !strings.Contains(plan, "GLM Coding Plan (max)") || !strings.Contains(plan, "0.0% (used 120.0%") || !strings.Contains(plan, ", resets soon") {
 		t.Fatalf("plan format = %q", plan)
 	}
 	plain := Format(Info{Available: true, Windows: []Window{{Kind: "5h", UsedPercent: 50}}})
-	if !strings.Contains(plain, "套餐剩余额度") {
+	if !strings.Contains(plain, "Remaining plan quota") {
 		t.Fatalf("plain format = %q", plain)
 	}
 
 	for _, c := range []struct {
 		kind, want string
-	}{{"5h", "5小时"}, {"weekly", "每周"}, {"mcp", "MCP"}, {"x", "x"}} {
+	}{{"5h", "5h"}, {"weekly", "weekly"}, {"mcp", "MCP"}, {"x", "x"}} {
 		if got := windowLabel(c.kind); got != c.want {
 			t.Errorf("windowLabel(%q) = %q", c.kind, got)
 		}

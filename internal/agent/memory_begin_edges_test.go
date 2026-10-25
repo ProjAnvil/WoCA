@@ -539,7 +539,7 @@ func TestRunTaskBackgroundCapReached(t *testing.T) {
 		}
 	}
 	_, err := a.runTask(t.Context(), taskArgs{Description: "overflow", RunInBackground: true})
-	if err == nil || !strings.Contains(err.Error(), "上限") {
+	if err == nil || !strings.Contains(err.Error(), "limit reached") {
 		t.Fatalf("cap error = %v", err)
 	}
 }

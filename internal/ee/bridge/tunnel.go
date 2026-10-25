@@ -49,7 +49,7 @@ type TunnelConfig struct {
 	// client request occupies one worker until its answer completes, so
 	// streams (SSE) must not starve plain requests.
 	Workers int
-	// Insecure accepts self-signed edges — development 联调 only.
+	// Insecure accepts self-signed edges — development only.
 	Insecure bool
 	// PinSource supplies the pinned edge SPKI (TOFU); the tunnel holds
 	// the same trust in the edge as the gateway channel.

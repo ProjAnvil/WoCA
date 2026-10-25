@@ -27,7 +27,7 @@ const providerHint = computed(
   <!-- Provider (persisted server-side; keys encrypted at rest).
        One Base URL + one API Key field target the selected provider.
        In the managed bridge form the whole domain is cloud-governed: the
-       catalog (模型区) is the selection surface and keys are delivered by
+       catalog (model section) is the selection surface and keys are delivered by
        the config plane, so the fields gray out instead of failing on save. -->
   <section class="setting-section">
     <div class="setting-section-title">

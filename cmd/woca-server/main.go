@@ -111,7 +111,7 @@ func main() {
 			row, err := nacosrt.EnabledSandbox(sandboxSettings.DB().DB)
 			return err == nil && row != nil
 		},
-		// Service-plane gateway listener (product design v1.5 拓扑拆分):
+		// Service-plane gateway listener (product design v1.5 topology split):
 		// the machine registry the edge access point calls home to —
 		// enrollment, renewal, heartbeats, /gw/resolve, /gw/bridges — plus
 		// the console management API (v1.7 §6.7): tenants, woca_ keys,

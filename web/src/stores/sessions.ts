@@ -362,9 +362,10 @@ export const useSessionStore = defineStore('sessions', () => {
     streamingId.value[sid] = null
 
     const s = sessions.value.find((x) => x.id === sid)
-    // The zh literal also matches sessions created before the i18n switch or
-    // under the other locale, so the default title is still replaced.
-    if (s && (s.title === '新会话' || s.title === i18n.global.t('sessions.newSession') || !s.title)) {
+    // Match every placeholder spelling: the pre-i18n zh literal (legacy
+    // sessions), the server's English default title, the active locale's
+    // rendering, and an empty title.
+    if (s && (s.title === '\u65B0\u4F1A\u8BDD' || s.title === 'New session' || s.title === i18n.global.t('sessions.newSession') || !s.title)) {
       s.title = truncate(prompt || attachments?.[0]?.name || i18n.global.t('sessions.imageMessage'), 40)
     }
 

@@ -129,10 +129,10 @@ func TestClampRunes(t *testing.T) {
 	if got := clampRunes(strings.Repeat("a", 100), 80); got != strings.Repeat("a", 80)+"…" {
 		t.Fatalf("ascii = %q", got)
 	}
-	// Multi-byte runes: 100 CJK chars (300 bytes) cut at 80 bytes backs off
+	// Multi-byte runes: 100 three-byte runes (300 bytes) cut at 80 bytes backs off
 	// to the rune boundary at byte 78 (26 runes), none split.
-	long := strings.Repeat("记", 100)
-	if got, want := clampRunes(long, 80), strings.Repeat("记", 26)+"…"; got != want {
+	long := strings.Repeat("あ", 100)
+	if got, want := clampRunes(long, 80), strings.Repeat("あ", 26)+"…"; got != want {
 		t.Fatalf("cjk = %q, want %q", got, want)
 	}
 }

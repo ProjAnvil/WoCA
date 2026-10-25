@@ -600,7 +600,7 @@ func TestTaskManagerCap(t *testing.T) {
 			t.Fatalf("start %d: %v", i, err)
 		}
 	}
-	if _, err := m.start("s", "d"); err == nil || !strings.Contains(err.Error(), "上限") {
+	if _, err := m.start("s", "d"); err == nil || !strings.Contains(err.Error(), "limit reached") {
 		t.Fatalf("err = %v, want cap error", err)
 	}
 	if n := m.RunningCount(); n != maxBackgroundTasks {

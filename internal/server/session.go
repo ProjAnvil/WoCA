@@ -316,7 +316,7 @@ func (s *sessionStore) writeIndex(index map[string]sessionMeta) {
 func workspaceDisplayName(workspace string) string {
 	ws := strings.TrimSpace(workspace)
 	if ws == "" {
-		return "未分类工作区"
+		return "Uncategorized workspace"
 	}
 	name := filepath.Base(ws)
 	if name == "." || name == string(filepath.Separator) || name == "" {
@@ -396,7 +396,7 @@ func (s *sessionStore) list() ([]sessionSummary, error) {
 		workspace, workspaceName := s.workspaceOfMeta(m)
 		title := m.Title
 		if title == "" {
-			title = "新会话"
+			title = "New session"
 		}
 		out = append(out, sessionSummary{
 			ID:            m.ID,
@@ -420,7 +420,7 @@ func (s *sessionStore) workspaceOfMeta(m sessionMeta) (string, string) {
 	if s.defaultWorkspace != "" {
 		return s.defaultWorkspace, workspaceDisplayName(s.defaultWorkspace)
 	}
-	return "", "未分类工作区"
+	return "", "Uncategorized workspace"
 }
 
 // workspaceOf resolves one session's absolute workspace path ("" when
@@ -442,7 +442,7 @@ func sessionTitle(msgs []messages.Message) string {
 			return truncateRunes(m.Content, 40)
 		}
 	}
-	return "新会话"
+	return "New session"
 }
 
 func truncateRunes(s string, n int) string {

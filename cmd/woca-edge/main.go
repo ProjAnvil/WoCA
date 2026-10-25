@@ -1,4 +1,4 @@
-// woca-edge is the edge access point (product design v1.5 拓扑拆分): the
+// woca-edge is the edge access point (product design v1.5 topology split): the
 // control plane's only public component — a stateless router (R7: no
 // database, no files, no secrets; every machine-token check calls home to
 // the service plane). It terminates client traffic into the bridges'

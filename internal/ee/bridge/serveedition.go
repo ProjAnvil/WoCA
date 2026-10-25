@@ -132,7 +132,8 @@ func (s *ServeState) Edition() servefront.Edition {
 		// Cloud access (design §6.5/§3.3) rides the settings database and
 		// is NOT auth-dependent: a local-trust bridge (the embedded
 		// default) still enrolls and pulls managed config, and its owner
-		// configures it from the wails app (§6.6 入口① 的配置落点).
+		// configures it from the wails app (§6.6 entry ①, where that
+		// configuration lands).
 		OnSettings: func(st *settings.Store) {
 			if st == nil {
 				return
@@ -235,12 +236,12 @@ func (s *ServeState) Edition() servefront.Edition {
 			if ca := s.CA.Load(); ca != nil {
 				CloudAccessRoutes(mux, ca, scoped)
 			}
-			// The managed-inventory view (远端配置): read-only,
+			// The managed-inventory view (the "remote configuration" page): read-only,
 			// settings:read — the environment-info class every member
 			// reads (the claudeenv page's scope).
 			ManagedInventoryRoutes(mux, scoped(authz.ScopeSettingsRead))
-			// Remote profiles for the embedded web (bridge 形态的接入点
-			// 切换): saved remote origins in the bridge's settings DB.
+			// Remote profiles for the embedded web (access-point switching
+			// in bridge form): saved remote origins in the bridge's settings DB.
 			if st := s.Store.Load(); st != nil {
 				WebProfileRoutes(mux, NewLocalKV(st.DB()), scoped)
 			}

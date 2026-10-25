@@ -14,7 +14,7 @@ declare global {
     server_url?: string
     message?: string
     database_path?: string
-    /** Target bridge for edge entries (v1.6 入口②; empty for direct). */
+    /** Target bridge for edge entries (v1.6 entry ②; empty for direct). */
     bridge_id?: string
     /** The embedded bridge's base URL (wails only; entry ① of the page). */
     embedded_url?: string

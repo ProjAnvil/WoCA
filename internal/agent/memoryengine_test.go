@@ -263,12 +263,12 @@ func TestClampUTF8(t *testing.T) {
 		{"exactly10!", 10, "exactly10!"}, // at the limit
 		{"0123456789abcdef", 10, "0123456789"},
 		{"aut-aut-aut-aut", 4, "aut-"}, // ASCII boundary
-		{"中文记忆引擎", 9, "中文记"},           // 3-byte runes, n=9 is a boundary
-		{"中文记忆引擎", 8, "中文"},            // n=8 splits a rune: back off to 6
-		{"中文记忆引擎", 7, "中文"},            // back off to 6
-		{"中文记忆引擎", 2, ""},              // backs off to empty
-		{"中文记忆引擎", 1, ""},              // no complete rune fits
-		{"中a中a中a", 5, "中a"},            // mixed widths
+		{"あいうえおか", 9, "あいう"},           // 3-byte runes, n=9 is a boundary
+		{"あいうえおか", 8, "あい"},            // n=8 splits a rune: back off to 6
+		{"あいうえおか", 7, "あい"},            // back off to 6
+		{"あいうえおか", 2, ""},              // backs off to empty
+		{"あいうえおか", 1, ""},              // no complete rune fits
+		{"あaあaあa", 5, "あa"},            // mixed widths
 		{"anything", -1, ""},           // negative n
 	}
 	for _, c := range cases {

@@ -1221,7 +1221,7 @@ type bridgeTarget struct {
 func (b bridgeTarget) ProfileBridge(context.Context, string) string { return b.bridge }
 
 // TestHandlerSendsProfileBridgeHeader: an edge entry's target bridge
-// rides X-Woca-Bridge on every proxied request (v1.6 入口② — native
+// rides X-Woca-Bridge on every proxied request (v1.6 entry ② — native
 // clients hold no cookies, the header is the routing signal).
 func TestHandlerSendsProfileBridgeHeader(t *testing.T) {
 	observed := make(chan string, 1)

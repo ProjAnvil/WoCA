@@ -236,7 +236,7 @@ func TestGatewayClientStaleKeepsCache(t *testing.T) {
 }
 
 // TestGatewayClientInsecureSelfSigned: with the development toggle the
-// channel enrolls against a self-signed HTTPS gateway (联调 posture);
+// channel enrolls against a self-signed HTTPS gateway (integration posture);
 // without it the same handshake fails.
 func TestGatewayClientInsecureSelfSigned(t *testing.T) {
 	gwdb, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "gw.db"))
@@ -273,7 +273,7 @@ func TestGatewayClientInsecureSelfSigned(t *testing.T) {
 		t.Fatal("self-signed gateway accepted with verification on")
 	}
 
-	// 联调 posture: a fresh token and the insecure toggle enroll fine.
+	// Integration posture: a fresh token and the insecure toggle enroll fine.
 	enroll2, err := store.IssueEnrollment(t.Context(), entrygw.EnrollmentTTL)
 	if err != nil {
 		t.Fatal(err)

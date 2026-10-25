@@ -219,7 +219,7 @@ func TestCloudAccessLifecycle(t *testing.T) {
 		t.Fatal("enrollment token not consumed")
 	}
 
-	// 注销: reset wipes the local identity.
+	// Sign-out: reset wipes the local identity.
 	if err := ca.Reset(); err != nil {
 		t.Fatal(err)
 	}

@@ -20,12 +20,20 @@
 8. Stop/Start 保留代码，不保留旧进程内存。
 9. 任一沙箱环节失败都不会回退到本地执行。
 
+个人开发者路径追加三个目标：
+
+10. 一个企业版 compose 文件里包含 OpenShell 全部服务。
+11. 一个 demo 容器内完成建 run、调工具、断言产物。
+12. 开发者不需要模型 key，也不改任何生产配置。
+
 ## 2. 已确认的决策
 
 | 决策点 | 选择 |
 |---|---|
 | 生命周期 | 持久 ExecutionWorkspace，不是每 run 一个临时沙箱 |
 | 首期部署 | 单台远程 Linux，Docker Compose |
+| 部署文件 | 直接写进企业版 `deploy/selfhosted/docker-compose.full.yml`，不另建文件 |
+| 开发者入口 | 同一文件里的 `demo` profile。demo 容器内完成沙箱调用，无需模型 key |
 | 代码权威副本 | 远程 woca 宿主共享目录 |
 | 运行环境 | OpenShell 沙箱持续保留，按需 Stop/Start |
 | 接入方式 | 独立 OpenShell adapter |
@@ -506,6 +514,8 @@ fresh EE 部署时，`openshell-bootstrap` 通过 config API 完成：
 
 bootstrap 失败必须让部署检查失败。不能显示“安装成功”但让首个 run 再失败。
 
+模型设置不属于 bootstrap。生产部署的模型由操作者提供。开发者路径用 `sandbox-init` 先发布模型设置，见 12.7。
+
 个人版和其他 backend 的行为不变。
 
 ### 12.5 默认拒绝本地执行
@@ -517,6 +527,122 @@ EE off-host 姿态继续保持：
 - adapter 或 OpenShell 失败：当前 run 失败。
 - 不支持持久模式的 backend：明确报错。
 - 任何情况下都不静默使用 worker 本地 Executor。
+
+### 12.6 开发者一条命令路径的服务清单
+
+OpenShell 的全部服务直接写进企业版 `deploy/selfhosted/docker-compose.full.yml`。不另建 compose 文件。
+
+生产栈常驻的服务：
+
+| 服务 | 作用 | 网络 | 宿主挂载 |
+|---|---|---|---|
+| `openshell-init` | 一次性生成 JWT 与 TLS 材料 | `openshell-control` | `/var/lib/openshell` |
+| `openshell-gateway` | OpenShell 控制面。持有 Docker socket | `openshell-control` | Docker socket、`/var/lib/openshell`、gateway.toml |
+| `openshell-adapter` | 唯一 OpenShell 客户端。实现归档、进程和服务转发 | `woca-app`、`woca-infra`、`openshell-control` | 客户端证书，只读 |
+| `openshell-bootstrap` | 一次性注册、verify 并启用 backend | `woca-infra` | 无 |
+
+`demo` profile 才启动的服务：
+
+| 服务 | 作用 | 网络 | 宿主挂载 |
+|---|---|---|---|
+| `fakemodel` | 脚本模型。复用 `e2e/sandboxlab/fakemodel` | `woca-infra` | 无 |
+| `sandbox-init` | 一次性写入模型设置 | `woca-infra` | 无 |
+| `sandbox-demo` | 跑完整断言后退出。退出码即结论 | `woca-app`、`woca-infra` | 共享工作区卷 |
+
+另外新增共享卷 `woca-workspaces`，挂到 `woca-server`、`woca-worker` 和 `sandbox-demo` 的 `/data`。这同时修掉企业栈当前缺少共享工作区的问题。
+
+demo 容器不挂 Docker socket。它只能通过 woca API、adapter 的只读接口和共享卷观察结果。
+
+### 12.7 启动顺序
+
+worker 启动时会构造模型。provider 为空时构造直接失败，worker 会退出。所以模型设置必须先于 worker 存在。
+
+Compose 的 `depends_on` 图无法表达“先写配置再起执行面”。因此开发者路径分四段，由一个 Make 目标驱动。
+
+```text
+阶段 1  基础面   pg、nacos、nacos-init、woca-config、woca-server-1、woca-edge、
+                 openshell-init、openshell-gateway、openshell-adapter、fakemodel
+阶段 2  配置面   sandbox-init 写入模型设置；openshell-bootstrap 注册并启用 backend
+阶段 3  执行面   woca-worker-1、woca-worker-2
+阶段 4  验收面   sandbox-demo
+```
+
+`sandbox-init` 做两件事：
+
+1. 通过 config API 写入模型设置。provider 指向 `http://fakemodel:8080`。
+2. 等待 config 发布新 pack，再退出。
+
+config 控制台默认开放。`.env` 里设了 `WOCA_CONSOLE_USER` 和 `WOCA_CONSOLE_PASSWORD` 时，`sandbox-init` 必须先登录再写入。
+
+`sandbox-init` 写入的模型 key 是脚本模型的固定值。它不进入任何日志或 run 事件。
+
+`openshell-bootstrap` 做的事：
+
+1. 等待 config 和 adapter 健康。
+2. 确认没有已存在的 backend。已有则跳过，不覆盖人工配置。
+3. 创建 `openshell-ee` backend。endpoint 指向 adapter 内部地址。
+4. 执行全量 verify。verify 会真实创建、调用、归档并销毁一个 OpenShell 沙箱。
+5. 启用该 backend。
+6. 失败时以非零退出，并打印 OpenShell 的原始错误。
+
+开发者入口是 `make ent-sandbox-demo`。该目标按四段顺序执行，并汇总每段结果。
+
+### 12.8 demo 容器内的步骤
+
+demo 容器是一个 Python 脚本，只用标准库。它按顺序完成：
+
+1. 等待 config、adapter、OpenShell gateway 健康。
+2. 通过 config API 确认 backend 已启用，且最近一次 verify 成功。
+3. 在 server 的开放 console 上铸造租户 key。沿用 sandboxlab 的做法。
+4. 提交一个 run。workspace 指向共享卷。
+5. 遇到 503 时按间隔重试。worker 的 capability ack 每 10 秒刷新一次。
+6. 轮询 run 的事件流。出现 error 事件立即失败并打印事件内容。
+7. 断言共享卷出现脚本模型写出的产物文件。
+8. 通过 adapter 的只读接口断言 OpenShell 侧确实存在过沙箱，并记录沙箱名和状态。
+9. 打印结论摘要和后续操作提示。成功退出 0，失败退出 1。
+
+演示流程不包含 403 姿态。bootstrap 已经启用了 backend，403 只在没有任何 backend 时出现。该姿态由 sandboxlab 覆盖。
+
+### 12.9 宿主前提
+
+| 前提 | 说明 |
+|---|---|
+| Docker 28+ | Docker Desktop 或 Docker Engine |
+| Landlock ABI 3+ | Linux 6.2+ 且 Landlock 启用 |
+| seccomp user notification | 内核提供，OpenShell 会主动探测 |
+| macOS 额外要求 | Docker Desktop，并开启 host networking |
+| 端口 | 宿主 18080 和 18081 空闲 |
+| 磁盘 | OpenShell 三个镜像约 2 GB |
+
+OrbStack 不在 OpenShell 官方支持矩阵内。开发者路径不能因此变成不可用。真实探测发生在第一步：verify 会创建沙箱，OpenShell 会做资格探测并给出原因。
+
+adapter 必须把 OpenShell 的资格失败翻译成可执行提示。例如内核缺少 Landlock 时，提示应写明需要 Linux 6.2+ 且启用 Landlock，而不是只回一句创建失败。
+
+### 12.10 与生产启动的关系
+
+- 生产启动不带 profile。OpenShell 四个服务照常启动。
+- 开发者路径用 `make ent-sandbox-demo`，它只额外启动 demo profile 的服务。
+- bootstrap 只在没有任何 backend 配置时创建和启用。已有部署的人工配置不被重启覆盖。
+- demo profile 不改变生产服务的环境变量和卷。
+- 同一个 compose 文件同时服务开发和生产。差异只在 profile 和 `.env` 开关。
+
+### 12.11 开发者路径的验收清单
+
+demo 容器内的断言：
+
+- config API 中出现 `openshell-ee` backend，且 verify 全步骤通过。
+- 租户 key 铸造成功。
+- run 提交成功，且没有出现本地执行。
+- 共享卷出现脚本模型写出的约定产物文件。
+- adapter 报告本次 run 用到的 OpenShell 沙箱。
+- demo 容器退出码为 0。
+
+由 Make 目标或 e2e 断言：
+
+- `docker compose -f docker-compose.full.yml config` 通过。
+- 四段启动全部成功。
+- worker 日志中没有本地 Executor 执行的记录。
+- `docker compose down` 后没有遗留 workload 或 supervisor 容器。
 
 ## 13. 安全边界
 
@@ -580,6 +706,13 @@ EE off-host 姿态继续保持：
 关键操作增加 OTel span：Acquire、Execute、ExportArchive、CommitRevision、Release、Stop、Start 和 RouteService。
 
 ## 16. 远程 Demo 脚本化验收
+
+demo 分两级。开发者路径用第一级。完整闭环用第二级。
+
+| 级别 | 模型 | 触发方式 | 证明内容 |
+|---|---|---|---|
+| 一级 | 脚本模型 | `make ent-sandbox-demo` | 沙箱调用链路真实可用。产物落到共享卷 |
+| 二级 | 真实模型 | 操作者在控制台配置 key 后执行 | 跨轮次复用、页面可访问、Stop/Start |
 
 ### 16.1 前置条件
 
@@ -695,6 +828,8 @@ port = 8000
 
 e2e 使用真实 full Compose 和 OpenShell。覆盖第 16 节的全部 demo 步骤。
 
+另有一套面向开发者的 e2e。它在企业版 compose 文件上跑 demo profile。断言内容与 12.11 一致。它的作用是让任何人克隆仓库后能自己验证整条链路。
+
 网络失败要区分：
 
 - 远程宿主或 Docker 不满足前提：测试环境失败。
@@ -706,15 +841,19 @@ e2e 使用真实 full Compose 和 OpenShell。覆盖第 16 节的全部 demo 步
 
 | 里程碑 | 内容 | 退出条件 |
 |---|---|---|
-| M0 | 远程宿主 preflight、镜像和 Compose 基线 | OpenShell 官方最小沙箱运行成功 |
+| M0 | 企业版 compose 加 OpenShell 服务、共享工作区卷和 preflight | compose 静态校验通过，OpenShell 官方最小沙箱在同宿主跑通 |
 | M1 | adapter 的临时 contract、exec、archive 和 verify | 现有 contract 与 verify 测试通过 |
-| M2 | ExecutionWorkspace、持久绑定、串行和 fencing | 两 worker 的并发与故障测试通过 |
-| M3 | Acquire/Release、宿主 revision 和 Stop/Start | 第二轮复用与同步测试通过 |
-| M4 | managed service 和 woca 鉴权代理 | Web URL、权限和重启测试通过 |
-| M5 | EE 默认 bootstrap 和完整远程 demo | 第 16 节全部通过 |
-| M6 | 故障注入、观测、部署文档和清理 | 无本地回退，无孤儿资源 |
+| M2 | `make ent-sandbox-demo` 四段启动与 demo 容器断言 | demo 退出码 0，12.11 全部通过 |
+| M3 | ExecutionWorkspace、持久绑定、串行和 fencing | 两 worker 的并发与故障测试通过 |
+| M4 | Acquire/Release、宿主 revision 和 Stop/Start | 第二轮复用与同步测试通过 |
+| M5 | managed service 和 woca 鉴权代理 | Web URL、权限和重启测试通过 |
+| M6 | EE 默认 bootstrap 和二级真实模型 demo | 第 16 节二级全部通过 |
+| M7 | 故障注入、观测、部署文档和清理 | 无本地回退，无孤儿资源 |
 
-最终完成不是“容器启动了”。最终完成是：用户本地无代码，从空工作区生成应用，跨轮次复用环境，页面可访问，宿主代码可恢复，故障不会静默改变执行边界。
+最终完成不是“容器启动了”。最终完成有两条线：
+
+- 开发者线：一个人克隆仓库，执行 `make ent-sandbox-demo`，在企业版 compose 上拿到一个退出码为 0 的沙箱调用结果。
+- 完整线：用户本地无代码，从空工作区生成应用，跨轮次复用环境，页面可访问，宿主代码可恢复，故障不会静默改变执行边界。
 
 ## 19. 主要代码改造面
 
@@ -729,12 +868,15 @@ e2e 使用真实 full Compose 和 OpenShell。覆盖第 16 节的全部 demo 步
 - `internal/ee/configsvc/`：OpenShell backend、verify 和 bootstrap 支持。
 - `ee/configsvc-web/`：backend 状态与持久能力展示。
 - `deploy/selfhosted/`：OpenShell 服务、网络、卷和默认配置。
+- `deploy/selfhosted/docker-compose.full.yml`：OpenShell 四个服务、共享工作区卷、demo profile。
+- `deploy/selfhosted/openshell/`：gateway.toml、证书生成和 adapter 镜像构建。
+- `deploy/selfhosted/demo/`：demo 容器脚本和 Make 目标。
 - `e2e/`：真实 OpenShell 的远程闭环套件。
 
 adapter 作为独立组件存放。其精确模块路径、API 路径和内部状态结构在实施计划中确定。
 
 ## 20. 后续实施计划的输入
 
-实施计划应按 M0 到 M6 排序。每个任务必须包含精确文件、先失败的测试、最小实现和验证命令。
+实施计划应按 M0 到 M7 排序。每个任务必须包含精确文件、先失败的测试、最小实现和验证命令。
 
 实施前先建立隔离 worktree，并记录测试基线。任何中途设计变化都要回到本 spec 修订，不能在实现中静默改变生命周期或安全边界。

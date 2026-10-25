@@ -507,7 +507,7 @@ func TestNormalizeBaseURLRejectsDefaultIgnorableUnicode(t *testing.T) {
 		}
 	}
 
-	got, err := NormalizeBaseURL("https://例子.测试")
+	got, err := NormalizeBaseURL("https://\u4f8b\u5b50.\u6d4b\u8bd5")
 	if err != nil || got != "https://xn--fsqu00a.xn--0zwm56d" {
 		t.Fatalf("NormalizeBaseURL(visible IDN) = %q, %v", got, err)
 	}
@@ -881,7 +881,7 @@ func TestStoreSchemaHasNoAPIKeyOrOAuthTokenColumns(t *testing.T) {
 	}
 }
 
-// ProfileBridge round-trip (v1.6 入口②): the per-profile target bridge
+// ProfileBridge round-trip (v1.6 entry ②): the per-profile target bridge
 // survives normalization and never bleeds between profiles.
 func TestProfileBridgeRoundTrip(t *testing.T) {
 	ctx := t.Context()

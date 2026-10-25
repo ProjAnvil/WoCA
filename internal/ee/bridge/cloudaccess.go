@@ -4,7 +4,7 @@
 // infrastructure settings, deliberately outside the config plane's
 // managed vocabulary. The two layers never mix: applyManaged drops any
 // edge.* key the config plane tries to push, and this layer writes only
-// the enumerated edge.* keys (越界写入拒绝并记审计, §3.3).
+// the enumerated edge.* keys (out-of-scope writes are rejected and audited, §3.3).
 //
 // Persistence lives in the settings database: edge.* keys in the plain
 // settings table, the machine private key in the encrypted secrets store.
@@ -526,7 +526,7 @@ func (c *CloudAccess) Configure(url, enrollmentToken string) error {
 	return nil
 }
 
-// Reset deregisters the local identity (注销): the edge.* keys and the
+// Reset deregisters the local identity (deregistration): the edge.* keys and the
 // machine key disappear; server-side revocation stays the admin's action.
 func (c *CloudAccess) Reset() error {
 	for _, k := range []string{KeyEdgeURL, KeyEdgeToken, KeyEdgeBridgeID, KeyEdgeAccess, KeyEdgeAccessExp, KeyEdgeSPKIPin} {

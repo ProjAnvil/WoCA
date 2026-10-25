@@ -269,7 +269,7 @@ func isLoopback(host string) bool {
 // mirrorSession is the bridge-side record of a core-issued session: a
 // validated RESULT (never key material), kept for request routing while
 // the core stays the authority. In-memory by design (§2.7: ≤60s
-// freshness, non-authoritative, 不落盘) — a bridge restart forgets
+// freshness, non-authoritative, not persisted to disk) — a bridge restart forgets
 // nothing the core does not remember, and re-validates online.
 type mirrorSession struct {
 	TokenHash string
@@ -430,7 +430,7 @@ func (s *sessionStore) remarkFor(userID string) string {
 	return best.Remark
 }
 
-// list returns the live mirror inventory (the "已登录设备" view).
+// list returns the live mirror inventory (the "logged-in devices" view).
 func (s *sessionStore) list() []mirrorSession {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

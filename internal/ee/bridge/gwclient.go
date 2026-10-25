@@ -56,7 +56,7 @@ type GatewayConfig struct {
 	// Persist overrides the file persistence when set.
 	Persist StatePersist
 	// Insecure skips TLS verification against the gateway — development
-	// 联调 only (self-signed gateways); the management page's
+	// use only (self-signed gateways); the management page's
 	// allow_insecure toggle declares the matching server posture.
 	Insecure bool
 	// PinSource supplies the pinned edge SPKI (TOFU, design §6.5): when
@@ -265,7 +265,7 @@ func (g *GatewayClient) Enroll(ctx context.Context, enrollmentToken string) erro
 	return nil
 }
 
-// RequestEnrollment runs the worker-led flow (product design §2.3 备选):
+// RequestEnrollment runs the worker-led flow (product design §2.3 alternative):
 // register this machine's key, print the fingerprint for the
 // administrator, then poll until the console approves — no token pasting.
 func (g *GatewayClient) RequestEnrollment(ctx context.Context, onFingerprint func(fp string)) error {
@@ -364,7 +364,7 @@ func (g *GatewayClient) PullWait(ctx context.Context, wait time.Duration) (*Conf
 // the plain pull, a positive wait parks server-side until the config
 // generation moves. The long-poll client outlives the wait window but
 // keeps the pinned (or explicitly insecure) transport — TOFU must hold on
-// the steady pull path, and self-signed 联调 edges must answer long polls
+// the steady pull path, and self-signed development edges must answer long polls
 // too.
 func (g *GatewayClient) pull(ctx context.Context, wait time.Duration) (*ConfigPayload, error) {
 	g.mu.Lock()
@@ -418,7 +418,8 @@ func (g *GatewayClient) pull(ctx context.Context, wait time.Duration) (*ConfigPa
 	}
 	var out ConfigPayload
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		// 解析失败绝不清缓存：坏包只标记 STALE，旧配置继续生效。
+		// Never clear the cache on a parse failure: a bad payload only marks the
+		// state STALE, and the previous configuration keeps applying.
 		g.markStale(err)
 		return nil, err
 	}

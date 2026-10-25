@@ -192,7 +192,7 @@ func KeyHelp(key string) string {
 	case KeyClaudeMCP:
 		return "enabled ~/.claude.json MCP server names as a JSON array (connected at startup)"
 	case KeyBuiltinPlugins:
-		return "enabled built-in tool plugins as a JSON array (browser, pdf, office; runtime installed from Settings → 插件)"
+		return "enabled built-in tool plugins as a JSON array (browser, pdf, office; runtime installed from Settings → Plugins)"
 	case KeyBuiltinSkills:
 		return "allowlist of built-in method skills as a JSON array (empty = all; user/workspace skills of the same name shadow them)"
 	case KeyCheckpoint:

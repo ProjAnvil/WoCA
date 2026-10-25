@@ -316,9 +316,9 @@ func ThinkingSupportNote(p Provider) string {
 	case ProviderOpenAI:
 		return "OpenAI reasoning_effort"
 	case ProviderGLM:
-		return "GLM thinking（预算由服务端裁剪）"
+		return "GLM thinking (budget trimmed server-side)"
 	case ProviderDeepSeek:
-		return "DeepSeek thinking（不细分预算）"
+		return "DeepSeek thinking (no budget breakdown)"
 	default:
 		return ""
 	}

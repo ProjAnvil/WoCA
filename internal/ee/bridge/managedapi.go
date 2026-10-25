@@ -107,7 +107,7 @@ func readManagedMCP(root string) []ManagedMCPServer {
 	return out
 }
 
-// ManagedInventoryRoutes mounts GET /api/managed — the 远端配置 page.
+// ManagedInventoryRoutes mounts GET /api/managed — the remote-configuration page.
 // wrap carries the caller's scope gate (settings:read, the same class as
 // the claudeenv page) and is nil on local-trust deployments.
 func ManagedInventoryRoutes(mux *http.ServeMux, wrap func(http.HandlerFunc) http.Handler) {

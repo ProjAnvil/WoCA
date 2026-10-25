@@ -553,9 +553,9 @@ func TestDocxWriteTool(t *testing.T) {
 	t.Setenv("FAKE_PYTHON_ARGS_FILE", argsFile)
 	out, err := invoke(t, write, map[string]any{
 		"path":  "out/report.docx",
-		"title": "季报",
+		"title": "Quarterly report",
 		"blocks": []any{
-			map[string]any{"type": "heading", "text": "第一章", "level": 1},
+			map[string]any{"type": "heading", "text": "Chapter 1", "level": 1},
 			map[string]any{"type": "bullets", "items": []any{"a", "b"}},
 			map[string]any{"type": "table", "header": []any{"A", "B"}, "rows": []any{[]any{"1", "2"}}},
 		},
@@ -571,7 +571,7 @@ func TestDocxWriteTool(t *testing.T) {
 		t.Fatalf("docx-write args = %q", got)
 	}
 	spec := got[4]
-	for _, want := range []string{`"title":"季报"`, `"text":"第一章"`, `"type":"bullets"`, `"header":["A","B"]`} {
+	for _, want := range []string{`"title":"Quarterly report"`, `"text":"Chapter 1"`, `"type":"bullets"`, `"header":["A","B"]`} {
 		if !strings.Contains(spec, want) {
 			t.Fatalf("spec missing %s: %s", want, spec)
 		}
@@ -605,7 +605,7 @@ func TestXlsxWriteTool(t *testing.T) {
 	t.Setenv("FAKE_PYTHON_ARGS_FILE", argsFile)
 	out, err := invoke(t, write, map[string]any{
 		"path":   "data.xlsx",
-		"sheets": []any{map[string]any{"name": "数据", "rows": []any{[]any{"名称", "数量"}, []any{"apple", "3"}}, "header_row": true}},
+		"sheets": []any{map[string]any{"name": "Data", "rows": []any{[]any{"Name", "Count"}, []any{"apple", "3"}}, "header_row": true}},
 	})
 	if err != nil {
 		t.Fatalf("xlsx write: %v", err)
@@ -617,7 +617,7 @@ func TestXlsxWriteTool(t *testing.T) {
 	if got[0] != "xlsx-write" || got[1] != "--output" || got[2] != "data.xlsx" || got[3] != "--spec" {
 		t.Fatalf("xlsx-write args = %q", got)
 	}
-	for _, want := range []string{`"name":"数据"`, `"header_row":true`, `"3"`} {
+	for _, want := range []string{`"name":"Data"`, `"header_row":true`, `"3"`} {
 		if !strings.Contains(got[4], want) {
 			t.Fatalf("spec missing %s: %s", want, got[4])
 		}

@@ -17,7 +17,7 @@ export function setStreamBase(base: string) {
 
 /**
  * setStreamBridge pins the target bridge for streaming requests aimed at
- * an edge access point (v1.6 入口②): native SSE bypasses the transport
+ * an edge access point (v1.6 entry ②): native SSE bypasses the transport
  * proxy, so the routing header rides along explicitly.
  */
 export function setStreamBridge(bridgeId: string) {
@@ -88,7 +88,7 @@ export async function request<T>(url: string, init?: RequestInit, label?: string
       .then((d) => d as { error?: string; code?: string })
       .catch(() => ({}) as { error?: string; code?: string })
     const msg = body.error || String(resp.status)
-    throw new ApiError(label ? `${label}：${msg}` : msg, body.code)
+    throw new ApiError(label ? `${label}: ${msg}` : msg, body.code)
   }
   const text = await resp.text()
   return (text ? JSON.parse(text) : undefined) as T

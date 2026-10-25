@@ -1,5 +1,5 @@
 // Phase 1 acceptance tests: tenant isolation on the API surface (design doc
-// §13, Phase 1: 双租户互不可见 + /api/workspace/file 越权).
+// §13, Phase 1: two tenants invisible to each other + /api/workspace/file cross-tenant access denied).
 package tenant_test
 
 import (
@@ -88,7 +88,7 @@ func TestUnauthenticatedRejected(t *testing.T) {
 // fully privileged non-local tenant is refused on every host surface (its
 // runs would execute unsandboxed tools, its workspace reads would reach
 // server-local paths, its settings reads would leak machine secrets). The
-// health probe stays open. This is the API-level 双租户互不可见: tenant A
+// health probe stays open. This is the API-level two-tenants-invisible guarantee: tenant A
 // can never observe anything belonging to the machine or another tenant.
 func TestRemoteTenantDeniedHostSurfaces(t *testing.T) {
 	tenantA := authn.NewStatic("key-a", tenancy.Context{

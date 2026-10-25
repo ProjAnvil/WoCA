@@ -180,7 +180,7 @@ func TestTeamSpawnCap(t *testing.T) {
 		}
 	}
 	err := team.Spawn(t.Context(), "one-too-many", "idle", nil)
-	if err == nil || !strings.Contains(err.Error(), "上限") {
+	if err == nil || !strings.Contains(err.Error(), "limit reached") {
 		t.Fatalf("err = %v, want cap error with guidance", err)
 	}
 	if n := team.ActiveCount(); n != maxActiveTeammates {

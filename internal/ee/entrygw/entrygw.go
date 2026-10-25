@@ -242,7 +242,7 @@ func (s *Store) RevokeBridge(_ context.Context, bridgeID string) error {
 }
 
 // SubmitEnrollmentRequest registers a worker-led enrollment (product
-// design §2.3 备选注册 UX): the bridge prints its key fingerprint and an
+// design §2.3 alternative enrollment UX): the bridge prints its key fingerprint and an
 // administrator approves it on the console — zero pre-shared secrets.
 func (s *Store) SubmitEnrollmentRequest(_ context.Context, pub []byte) (string, error) {
 	sum := sha256.Sum256(pub)
@@ -324,7 +324,7 @@ func (s *Store) PollApproval(_ context.Context, fingerprint string) (string, boo
 
 // SettingKeyAllowInsecure toggles development posture: bridges may
 // connect without a valid certificate chain (self-signed / plain TLS).
-// It exists for 联调 — production gateways keep it off (R6).
+// It exists for integration testing — production gateways keep it off (R6).
 const SettingKeyAllowInsecure = "allow_insecure_bridges"
 
 // SettingKeyEdgeSPKIPin carries the edge access point's certificate SPKI
@@ -397,7 +397,7 @@ type BridgeInfo struct {
 }
 
 // ListBridges returns the registered, unrevoked bridges with heartbeat
-// freshness — the edge's selection inventory (v1.6 入口②).
+// freshness — the edge's selection inventory (v1.6 entry ②).
 func (s *Store) ListBridges(_ context.Context) ([]BridgeInfo, error) {
 	rows, err := s.db.Query(`
 		SELECT b.id, b.created_at, COALESCE(h.at, 0), COALESCE(h.status, '')
@@ -570,7 +570,7 @@ type gwBase struct {
 }
 
 // RegistryHandler is the service-plane machine surface (product design
-// v1.5 拓扑拆分): enrollment, renewal, heartbeats, plus the core-internal
+// v1.5 topology split): enrollment, renewal, heartbeats, plus the core-internal
 // resolve/bridges routes the edge access point calls back over the private
 // network (R7: the edge keeps no registry copy — every check comes home).
 // Mounted on woca-server's gateway listener.

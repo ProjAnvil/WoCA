@@ -80,7 +80,7 @@ async function addMemory() {
   if (!content || adding.value) return
   adding.value = true
   try {
-    const tags = newTags.value.split(/[,，\s]+/).filter(Boolean)
+    const tags = newTags.value.split(/[,\uFF0C\s]+/).filter(Boolean)
     await memory.add(content, tags)
     newContent.value = ''
     newTags.value = ''

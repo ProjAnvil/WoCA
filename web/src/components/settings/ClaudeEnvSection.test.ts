@@ -66,9 +66,9 @@ describe('ClaudeEnvSection', () => {
   })
 
   it('surfaces a failed detection instead of an empty list', async () => {
-    api.getClaudeEnv.mockRejectedValue(new Error('读取失败：forbidden'))
+    api.getClaudeEnv.mockRejectedValue(new Error('read failed: forbidden'))
     const w = mountSection()
     await flushPromises()
-    expect(w.text()).toContain('读取失败：forbidden')
+    expect(w.text()).toContain('read failed: forbidden')
   })
 })

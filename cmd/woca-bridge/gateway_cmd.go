@@ -56,7 +56,7 @@ func newGatewayCmd() *cobra.Command {
 	enroll := cmd.Commands()[0]
 	enroll.Flags().String("url", "", "entry-gateway base URL")
 	enroll.Flags().String("token", "", "one-time enrollment token")
-	enroll.Flags().Bool("insecure", false, "skip gateway certificate verification (development 联调)")
+	enroll.Flags().Bool("insecure", false, "skip gateway certificate verification (development only)")
 
 	// Worker-led flow: no token pasting — the console approves the
 	// machine's key fingerprint (product design §2.3).
@@ -84,7 +84,7 @@ func newGatewayCmd() *cobra.Command {
 		},
 	}
 	req.Flags().String("url", "", "entry-gateway base URL")
-	req.Flags().Bool("insecure", false, "skip gateway certificate verification (development 联调)")
+	req.Flags().Bool("insecure", false, "skip gateway certificate verification (development only)")
 	cmd.AddCommand(req)
 	return cmd
 }

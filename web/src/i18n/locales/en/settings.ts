@@ -15,6 +15,7 @@ export default {
     dark: 'Dark',
     language: 'Language',
     langAuto: 'System',
+    langZh: '简体中文',
   },
   store: {
     saved: 'Saved',

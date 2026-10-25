@@ -50,7 +50,7 @@ describe('validateEnterpriseOrigin', () => {
     ['HTTPS origin', '  https://enterprise.example.com:8443/  ', 'https://enterprise.example.com:8443/'],
     ['HTTPS default port and DNS case', 'HTTPS://EXAMPLE.COM:443/', 'HTTPS://EXAMPLE.COM:443/'],
     ['HTTPS canonical dotted IPv4', 'https://127.0.0.1:8443', 'https://127.0.0.1:8443'],
-    ['HTTPS Unicode IDN', 'https://例子.测试', 'https://例子.测试'],
+    ['HTTPS Unicode IDN', 'https://exämple.test', 'https://exämple.test'],
     ['HTTPS punycode IDN', 'https://xn--fsqu00a.xn--0zwm56d', 'https://xn--fsqu00a.xn--0zwm56d'],
     ['HTTPS trailing-dot DNS', 'https://enterprise.example.com.', 'https://enterprise.example.com.'],
     ['HTTPS numeric DNS label', 'https://123.example.com', 'https://123.example.com'],

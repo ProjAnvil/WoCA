@@ -53,7 +53,7 @@ function blocks(tokens: Token[]): string {
       case 'table': {
         const tb = tk as Tokens.Table
         const rows = [tb.header, ...tb.rows].map((cells) =>
-          cells.map((c) => inline(c.tokens ?? [])).join(' ｜ '),
+          cells.map((c) => inline(c.tokens ?? [])).join(' | '),
         )
         parts.push(rows.join('\n'))
         break

@@ -1,5 +1,5 @@
 // admin.go is the bridge's read-only owner surface over HTTP (product
-// design §5.1 SPA 管理页, v1.7): the live-session inventory and the local
+// design §5.1 SPA admin page, v1.7): the live-session inventory and the local
 // audit trail. There is no key management here — organization
 // credentials are issued by the tenant ops console on the private core,
 // never on the bridge.
@@ -126,7 +126,7 @@ func (a *Auth) handleMe(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// SessionInfo is one live login session (the "已登录设备" inventory).
+// SessionInfo is one live login session (the "logged-in devices" inventory).
 // KeyPrefix carries the user id (the mirror keys on token hashes; the
 // console's per-credential view lives at the core).
 type SessionInfo struct {

@@ -199,7 +199,7 @@ func (t *TeamManager) Spawn(ctx context.Context, name, prompt string, def *agent
 	}
 	if active >= maxActiveTeammates {
 		t.mu.Unlock()
-		return fmt.Errorf("已达 teammate 上限（%d 个活跃）：请改用顺序 Task，或先 Stop 不需要的 teammate", maxActiveTeammates)
+		return fmt.Errorf("teammate limit reached (%d active): use sequential Task instead, or stop some teammates first", maxActiveTeammates)
 	}
 	t.mu.Unlock()
 

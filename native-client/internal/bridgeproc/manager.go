@@ -1,5 +1,5 @@
 // Package bridgeproc manages the embedded woca-bridge subprocess (product
-// design §5.1 native 项): install-on-first-run, spawn on a random loopback
+// design §5.1 native item): install-on-first-run, spawn on a random loopback
 // port, discover the bound URL through the WOCA_READY_FILE handshake, and
 // keep it alive for the app's lifetime. The loopback bind keeps the
 // zero-login posture — no key, no login page.
@@ -202,7 +202,8 @@ func waitHealthy(ctx context.Context, baseURL string, timeout time.Duration) err
 }
 
 // Install extracts the bundled bridge binary to the native bin directory
-// when missing or version-drifted (打包期绑定版本；启动校验自动覆盖更新).
+// when missing or version-drifted (version pinned at packaging time; the
+// startup check automatically picks up updates).
 func Install(source, version string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

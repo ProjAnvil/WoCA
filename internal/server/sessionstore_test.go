@@ -111,8 +111,8 @@ func TestSessionStoreDeleteVariants(t *testing.T) {
 
 func TestWorkspaceDisplayNameEdges(t *testing.T) {
 	cases := map[string]string{
-		"":             "未分类工作区",
-		"   ":          "未分类工作区",
+		"":             "Uncategorized workspace",
+		"   ":          "Uncategorized workspace",
 		"/":            "/",
 		".":            ".",
 		"/a/b/project": "project",
@@ -195,7 +195,7 @@ func TestSessionStoreListVariants(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A long first human message truncates for the title.
-	long := strings.Repeat("很长的会话标题", 12) // 60 runes > 40
+	long := strings.Repeat("あいうえおかき", 12) // 84 runes > 40
 	if err := st.save(t.Context(), "long-title", []messages.Message{messages.Human(long)}, "/ws/one"); err != nil {
 		t.Fatal(err)
 	}
@@ -211,8 +211,8 @@ func TestSessionStoreListVariants(t *testing.T) {
 	if _, ok := byID["corrupt"]; ok {
 		t.Fatal("corrupt transcript should be skipped")
 	}
-	if got := byID["only-ai"].Title; got != "新会话" {
-		t.Fatalf("AI-only title = %q, want 新会话", got)
+	if got := byID["only-ai"].Title; got != "New session" {
+		t.Fatalf("AI-only title = %q, want New session", got)
 	}
 	want := string([]rune(strings.TrimSpace(long))[:40]) + "…"
 	if got := byID["long-title"].Title; got != want {

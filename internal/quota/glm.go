@@ -75,7 +75,7 @@ func fetchEndpoint(ctx context.Context, endpoint, apiKey string, client *http.Cl
 		return info, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return info, fmt.Errorf("额度接口返回 %d", resp.StatusCode)
+		return info, fmt.Errorf("quota endpoint returned %d", resp.StatusCode)
 	}
 
 	var env struct {
@@ -98,7 +98,7 @@ func fetchEndpoint(ctx context.Context, endpoint, apiKey string, client *http.Cl
 	if !env.Success || env.Data == nil {
 		reason := env.Msg
 		if reason == "" {
-			reason = "额度接口返回失败"
+			reason = "quota endpoint reported failure"
 		}
 		info.Reason = reason
 		return info, nil
@@ -125,7 +125,7 @@ func fetchEndpoint(ctx context.Context, endpoint, apiKey string, client *http.Cl
 	}
 	if len(info.Windows) == 0 {
 		info.Available = false
-		info.Reason = "额度接口未返回配额窗口"
+		info.Reason = "quota endpoint returned no quota windows"
 	}
 	return info, nil
 }

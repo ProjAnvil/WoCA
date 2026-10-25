@@ -4,7 +4,7 @@
 // opaque short-TTL access tokens with lookup-table revocation, and
 // signature challenges. The same skeleton serves bridges today and
 // workers/executors tomorrow — that is why it lives in platform (design
-// §2.4 推论), stdlib-only, with persistence behind the Registry interface.
+// §2.4 corollary), stdlib-only, with persistence behind the Registry interface.
 //
 // Threat model (per the nine-product survey): enrollment tokens are
 // single-use, short-TTL, and stored server-side as hashes; the private

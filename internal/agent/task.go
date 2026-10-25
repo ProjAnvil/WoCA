@@ -253,7 +253,7 @@ func (m *TaskManager) start(subject, description string) (*backgroundTask, error
 		}
 	}
 	if running >= maxBackgroundTasks {
-		return nil, fmt.Errorf("已达后台 task 上限（%d 个运行中）：请先等待其完成或用 TaskStop 停止部分 task", maxBackgroundTasks)
+		return nil, fmt.Errorf("background task limit reached (%d running): wait or stop some with TaskStop", maxBackgroundTasks)
 	}
 	m.next++
 	t := &backgroundTask{

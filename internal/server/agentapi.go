@@ -160,7 +160,7 @@ func (s *Server) handleQuota(w http.ResponseWriter, r *http.Request) {
 	out := struct {
 		Quota   quota.Info     `json:"quota"`
 		Session map[string]any `json:"session"`
-	}{Quota: quota.Info{Available: false, Reason: "该部署未配置额度查询"}}
+	}{Quota: quota.Info{Available: false, Reason: "quota lookup is not configured for this deployment"}}
 
 	if s.quotaFetch != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), quotaTimeout)

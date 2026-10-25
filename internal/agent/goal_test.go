@@ -591,7 +591,7 @@ func TestParseGoalCommand(t *testing.T) {
 		{[]string{"budget", "tokens", "x"}, "", "", true},
 		// Free text without a verb is shorthand for "set" — the natural
 		// input users type first (whole sentences, flags, or single words).
-		{[]string{"测试，你能使用这个技能吗？"}, "set", "测试，你能使用这个技能吗？", false},
+		{[]string{"can you use this skill?"}, "set", "can you use this skill?", false},
 		{[]string{"make", "it", "work"}, "set", "make it work", false},
 		{[]string{"wibble"}, "set", "wibble", false},
 		{[]string{"--cycles", "3", "do", "things"}, "set", "do things", false},

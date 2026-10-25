@@ -91,7 +91,7 @@ export function applyModel(id: string): Promise<{ ok: boolean; provider: string;
   return postJSON(`/api/models/${encodeURIComponent(id)}/apply`, {})
 }
 
-// --- managed delivery (远端配置: config-plane skills & MCP) ---
+// --- managed delivery (Org config: config-plane skills & MCP) ---
 
 export interface ManagedSkill {
   name: string

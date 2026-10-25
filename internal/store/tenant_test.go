@@ -15,9 +15,10 @@ func ctxAs(t *testing.T, tenantID string) context.Context {
 	return tenancy.NewContext(t.Context(), tenancy.Context{TenantID: tenantID, UserID: "u1"})
 }
 
-// TestTenantIsolation exercises the Phase 1 acceptance criterion "双租户互
-// 不可见" at the store layer: entries written under one tenant are invisible
-// to the other tenant and to the local machine tenant, on every backend.
+// TestTenantIsolation exercises the Phase 1 acceptance criterion "two tenants
+// are invisible to each other" at the store layer: entries written under one
+// tenant are invisible to the other tenant and to the local machine tenant,
+// on every backend.
 func TestTenantIsolation(t *testing.T) {
 	newStore := func(t *testing.T) *Store {
 		t.Helper()

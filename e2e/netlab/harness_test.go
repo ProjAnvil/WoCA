@@ -116,7 +116,7 @@ func (s stack) execOK(t *testing.T, service string, args ...string) {
 
 // lifecycle installs the shared teardown: full log dump on failure, then
 // the zone-isolation rules are released while the bridges still exist,
-// then down -v (kept up instead when NETLAB_KEEP=1 for manual 排查).
+// then down -v (kept up instead when NETLAB_KEEP=1 for manual troubleshooting).
 func (s stack) lifecycle(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {

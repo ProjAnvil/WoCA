@@ -68,7 +68,7 @@ func setupEmbeddedBridge(ctx context.Context, dataDir string, spawnArgs []string
 }
 
 // loopbackCredentials serve loopback profiles without any credential
-// (trust the machine, product design §5.1 免登录).
+// (trust the machine, product design §5.1 zero-login).
 type loopbackCredentials struct{}
 
 func (loopbackCredentials) Credentials(context.Context, string, *url.URL) (transport.Credentials, error) {

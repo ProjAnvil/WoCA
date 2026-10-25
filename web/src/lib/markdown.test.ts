@@ -21,7 +21,7 @@ describe('markdownToPlain', () => {
     expect(markdownToPlain('1. a\n2. b')).toBe('1. a\n2. b')
   })
   it('joins table cells visibly', () => {
-    expect(markdownToPlain('| a | b |\n| --- | --- |\n| 1 | 2 |')).toBe('a ｜ b\n1 ｜ 2')
+    expect(markdownToPlain('| a | b |\n| --- | --- |\n| 1 | 2 |')).toBe('a | b\n1 | 2')
   })
   it('prefixes blockquote lines', () => {
     expect(markdownToPlain('> quoted')).toBe('> quoted')

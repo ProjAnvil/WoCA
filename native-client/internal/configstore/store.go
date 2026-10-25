@@ -170,7 +170,7 @@ func (s *Store) ActiveProfile(ctx context.Context) (Profile, bool, error) {
 }
 
 // SetProfileBridge records the target bridge for an edge entry (v1.6
-// 入口②: an edge may front several bridges; the choice belongs to the
+// entry ②: an edge may front several bridges; the choice belongs to the
 // connection profile). Stored as an internal preference row keyed by the
 // base URL — deliberately outside the Wails preference surface.
 func (s *Store) SetProfileBridge(ctx context.Context, rawURL, bridgeID string) error {

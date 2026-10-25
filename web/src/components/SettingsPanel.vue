@@ -75,7 +75,7 @@ const baseSections = [
 // when the server reports a dispatching deployment.
 const sections = computed(() => [
   ...baseSections.slice(0, 4), // through claudeenv
-  // The 远端配置 page (config-plane delivery, read-only): bridge only —
+  // The Org config page (config-plane delivery, read-only): bridge only —
   // personal and plain-server editions have no config-plane channel.
   ...(statusInfo.value?.edition === 'bridge'
     ? [{ id: 'managed', label: 'settings.nav.managed', icon: CloudDownload }]
@@ -85,13 +85,13 @@ const sections = computed(() => [
     ? [{ id: 'msgplane', label: 'settings.nav.msgplane', icon: Radio }]
     : []),
   ...baseSections.slice(7), // memory, model, stats
-  // The bridge switcher (接入点) appears only behind an edge access
+  // The bridge switcher (access point) appears only behind an edge access
   // point — the probe answers null on direct-bridge and personal
   // origins, so nothing else changes shape.
   ...(edgeBridges.value?.length
     ? [{ id: 'edge', label: 'settings.nav.edge', icon: Network }]
     : []),
-  // Remote profiles (接入点切换, bridge 形态): direct-bridge origins keep
+  // Remote profiles (access-point switching, bridge posture): direct-bridge origins keep
   // their own saved remote list in the bridge's settings database.
   ...(isBridge.value && !edgeBridges.value?.length
     ? [{ id: 'remotes', label: 'settings.nav.remotes', icon: Globe }]

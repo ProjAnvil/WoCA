@@ -40,7 +40,7 @@ func TestDoctorAndAgentctl(t *testing.T) {
 		return quota.Info{Available: true, Type: quota.TypeBalance, Balance: "CNY 1.00"}, nil
 	}
 	res, err = c3.Execute(ctx, "quota", nil, s)
-	if err != nil || !strings.Contains(res.Output, "账户余额") {
+	if err != nil || !strings.Contains(res.Output, "Account balance") {
 		t.Fatalf("quota = %q %v", res.Output, err)
 	}
 	// Without a closure: unavailable message, no crash.

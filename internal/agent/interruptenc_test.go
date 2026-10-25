@@ -16,7 +16,7 @@ func TestSubagentInterruptRoundTrip(t *testing.T) {
 		},
 	}
 	enc := encodeInterruptPayload(orig)
-	// 模拟持久 saver 的 JSON 往返。
+	// Simulate the JSON round-trip through a persistent saver.
 	blob, err := json.Marshal(enc)
 	if err != nil {
 		t.Fatal(err)

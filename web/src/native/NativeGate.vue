@@ -42,7 +42,7 @@ async function useBootstrapState(next: BootstrapState) {
   embeddedUrl.value = next.embedded_url ?? ''
   // SSE bypasses the Wails asset proxy (WebView2 buffers proxied
   // streams): stream straight at the bridge origin — edge entries pin
-  // their target bridge on the stream request too (v1.6 入口②).
+  // their target bridge on the stream request too (v1.6 entry ②).
   setStreamBase(next.server_url ?? '')
   setStreamBridge(next.bridge_id ?? '')
   // Remote profiles: the direct SSE connection needs the session Bearer

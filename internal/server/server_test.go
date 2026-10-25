@@ -298,12 +298,12 @@ func TestGoalCommandFreeTextSetsObjective(t *testing.T) {
 
 	// Free text (no "set" verb) is the objective — this exact input used to
 	// 400 with `unknown /goal subcommand`.
-	code, out := post("测试，你能使用这个技能吗？")
+	code, out := post("can you use this skill?")
 	if code != http.StatusOK {
 		t.Fatalf("free-text /goal status = %d, want 200 (out=%v)", code, out)
 	}
 	g, _ := out["goal"].(map[string]any)
-	if g == nil || g["objective"] != "测试，你能使用这个技能吗？" {
+	if g == nil || g["objective"] != "can you use this skill?" {
 		t.Fatalf("free-text objective = %v", out["goal"])
 	}
 	if id, _ := out["run_id"].(string); id == "" {

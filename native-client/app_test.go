@@ -367,7 +367,7 @@ func TestAppCancelRequestIsHarmlessWithoutRegistry(t *testing.T) {
 	}
 }
 
-// EdgeBridges (v1.6 入口②): the pre-auth inventory call goes to the edge's
+// EdgeBridges (v1.6 entry ②): the pre-auth inventory call goes to the edge's
 // own route and surfaces its list; garbage URLs are rejected locally.
 func TestEdgeBridges(t *testing.T) {
 	served := make(chan []EdgeBridge, 1)

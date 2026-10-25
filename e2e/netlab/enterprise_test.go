@@ -10,12 +10,15 @@ import (
 	"time"
 )
 
-// TestEnterpriseEdgeChain — 企业私有云版网络层：外网 web frontend
-// （client，仅 front）→ 无状态接入点 edge → 出站隧道 → 远端站点内网
-// bridge（仅 wan）；edge 同时把机器通道转发到私有云核心（core，internal
-// 网络）。注册（bridge→edge→core entrygw）、登录（在 bridge 应答、核心验
-// 证）与业务 API 全链必须穿透三层网络边界；核心与 bridge 的直连地址对
-// 公网一侧、bridge 对核心都必须不可达。
+// TestEnterpriseEdgeChain — enterprise private-cloud network topology: the
+// public web frontend (client, front network only) → the stateless edge
+// access point → the outbound tunnel → the remote-site bridge (wan network
+// only); the edge also forwards the machine channel to the private-cloud
+// core (internal network). Enrollment (bridge→edge→core entrygw), login
+// (answered at the bridge, verified at the core) and the business API must
+// all cross the three network boundaries; the core and bridge direct
+// addresses must be unreachable from the public side, and the bridge must
+// be unreachable from the core's direct address too.
 func TestEnterpriseEdgeChain(t *testing.T) {
 	requireDocker(t)
 	requireTarballs(t, "woca-server", "woca-config", "woca-edge", "woca-bridge")

@@ -34,7 +34,7 @@ type BootstrapState struct {
 	Message      string `json:"message,omitempty"`
 	DatabasePath string `json:"database_path,omitempty"`
 	// BridgeID is the active profile's target bridge (edge entries,
-	// v1.6 入口②; "" for direct/embedded profiles).
+	// v1.6 entry ②; "" for direct/embedded profiles).
 	BridgeID string `json:"bridge_id,omitempty"`
 	// EmbeddedURL exposes the embedded bridge's base URL so the connect
 	// page can offer entry ① (wails only; "" when not running).

@@ -43,11 +43,11 @@ describe('composer FLIP dock transition', () => {
       return { ...({} as DOMRect), top: calls === 1 ? 300 : 600 } as DOMRect
     })
     const wrapper = mountPanel()
-    calls = 0 // mount 后归零：首个调用即 watch 回调里的 First 量测
+    calls = 0 // reset after mount: the first call is the First measurement in the watch callback
     seedWithMessage()
     await new Promise((r) => setTimeout(r, 0))
-    // happy-dom 的 rAF 是真实 16ms 定时器：断言时双帧尚未 drain，transform
-    // 必须停在 Invert 相的补偿值上——这正是被测行为。
+    // happy-dom's rAF is a real 16ms timer: at assertion time the two frames
+    // have not drained, so the transform must sit on the Invert compensation value.
     const root = wrapper.get('.chat-input').element as HTMLElement
     expect(root.style.transform).toBe('translateY(-300px)')
     expect(root.style.transition).toContain('none')
