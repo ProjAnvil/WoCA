@@ -41,6 +41,7 @@ type Server struct {
 	nextID    int64
 	sandboxes map[string]*fakeSandbox
 	root      string // fallback cwd for spawned commands
+	syncs     int    // workspace sync calls served (for test assertions)
 }
 
 // New returns a Server with an empty sandbox table.
@@ -69,8 +70,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /sandbox/{id}/grep", s.withSandbox(s.handleGrep))
 	mux.HandleFunc("PUT /sandbox/{id}/archive", s.withSandbox(s.handlePutArchive))
 	mux.HandleFunc("GET /sandbox/{id}/archive", s.withSandbox(s.handleGetArchive))
+	mux.HandleFunc("POST /sandbox/{id}/workspace/sync", s.withSandbox(s.handleWorkspaceSync))
 	mux.HandleFunc("DELETE /sandbox/{id}", s.handleDestroy) // idempotent 2xx per CONTRACT.md §3.15
 	return mux
+}
+
+// SyncCalls reports how many workspace syncs were served across all
+// sandboxes, for contract-test assertions.
+func (s *Server) SyncCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.syncs
 }
 
 // Addr starts the fake on a random port, bound to t's lifetime, and
@@ -619,6 +629,19 @@ func hiddenUnderRoot(p, root string) bool {
 		}
 	}
 	return false
+}
+
+// --- workspace sync ------------------------------------------------------
+
+// handleWorkspaceSync serves POST /sandbox/{id}/workspace/sync (CONTRACT.md
+// §3.16): the real executor streams the container /workspace back to its
+// host-side workspace directory; the fake has no host-side directory, so it
+// records the call and answers 200 — enough to exercise the client shape.
+func (s *Server) handleWorkspaceSync(w http.ResponseWriter, _ *http.Request, _ *fakeSandbox) {
+	s.mu.Lock()
+	s.syncs++
+	s.mu.Unlock()
+	w.WriteHeader(http.StatusOK)
 }
 
 // --- archive surface -----------------------------------------------------

@@ -15,13 +15,20 @@ sandbox instance ID is `sbx_1`.
 - When the service requires authentication, clients send
   `Authorization: Bearer <key>`; the header is omitted when no key is
   configured. Servers treat a missing header as anonymous.
+- **Workspace routing (optional):** when a sandbox is created for a
+  workspace, clients also send `X-Woca-Workspace: <workspace id>` on
+  **every** request. The routing proxy in front of executors routes on this
+  header alone (it never parses request bodies) and is stateless; the
+  workspace identity itself comes from the binding table, not the header.
+  The header is omitted when the run is not workspace-routed, and servers
+  must not require it.
 - JSON request/response bodies use `Content-Type: application/json`.
 - Binary payloads (stdout, stderr, file content, stdin, grep line text) are
   **base64** (standard encoding) inside JSON strings, so frames stay
   binary-safe end to end.
 - `env` is a JSON **object** (`{"K":"V"}`), never an array.
 
-## 2. Endpoint table (15)
+## 2. Endpoint table (16)
 
 | # | Operation | Method & path |
 |---|---|---|
@@ -40,6 +47,7 @@ sandbox instance ID is `sbx_1`.
 | 13 | Upload archive | `PUT /sandbox/{id}/archive` |
 | 14 | Download archive | `GET /sandbox/{id}/archive` |
 | 15 | Destroy sandbox | `DELETE /sandbox/{id}` |
+| 16 | Sync workspace | `POST /sandbox/{id}/workspace/sync` |
 
 ## 3. Endpoints in detail
 
@@ -48,12 +56,20 @@ sandbox instance ID is `sbx_1`.
 Request body:
 
 ```json
-{"cwd": "/workspace"}
+{"workspace": "ws_42", "cwd": "/workspace"}
 ```
 
-`cwd` requests the sandbox working directory; backends that cannot honor it
-may ignore the field, but the archive endpoints (§3.13/3.14) always unpack
-relative to `/workspace`.
+| Field | Type | Meaning |
+|---|---|---|
+| `workspace` | string | optional workspace ID the sandbox is routed under (EE sandbox plane). The executor maps it to its own `workspace_root/<id>` directory and uploads that directory's archive into the container. IDs are restricted to letters, digits, `-`, `_` (no `/`, `..`, absolute paths). Omitted when the run is not workspace-routed; `cwd` keeps its own meaning regardless. |
+| `cwd` | string | sandbox working directory; backends that cannot honor it may ignore the field, but the archive endpoints (§3.13/3.14) always unpack relative to `/workspace`. |
+
+`workspace` and `cwd` are separate concepts on purpose: one is the routing/
+storage identity on the executor host, the other is the working directory
+inside the container.
+
+When `workspace` is set, the client also sends the `X-Woca-Workspace`
+header on every subsequent request (§1).
 
 Response:
 
@@ -314,6 +330,21 @@ curl -X DELETE http://sandbox.local/sandbox/sbx_1
 Destroys the sandbox and all sessions. Destroying an unknown or already
 destroyed id returns 2xx (idempotent). Response: `204`.
 
+### 3.16 Sync workspace — `POST /sandbox/{id}/workspace/sync`
+
+Flushes the sandbox `/workspace` back to the executor-side workspace
+directory (`workspace_root/<id>`, staged then atomically swapped). Runs sync
+before the scheduler counts their artifacts as delivered; a failed sync
+fails the run.
+
+```bash
+curl -X POST http://sandbox.local/sandbox/sbx_1/workspace/sync \
+  -H 'X-Woca-Sandbox-Contract: 2'
+```
+
+Empty request body (`Content-Length: 0` is fine). Response: `200` (or
+`204`). Unknown sandbox id → `404` (§5).
+
 ## 4. tar conventions
 
 - Archive entries are paths **relative to the workspace root** (no leading
@@ -358,3 +389,7 @@ destroyed id returns 2xx (idempotent). Response: `204`.
 - v2 (this document): the `X-Woca-Sandbox-Contract: 2` header on every
   request; argv/cwd/env/stdin/timeout_ms exec; start/output/input/kill
   session surface; full file surface; tar.gz archive round-trip.
+- v2 amendment (EE sandbox plane, 2026-10): the optional `workspace` field
+  on create (§3.1), the optional `X-Woca-Workspace` routing header (§1),
+  and endpoint 16, workspace sync (§3.16). The contract header stays `2`;
+  servers must accept requests without the workspace field/header.

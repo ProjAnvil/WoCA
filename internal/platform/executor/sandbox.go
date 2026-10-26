@@ -1,6 +1,6 @@
 // sandbox.go is the contract-v2 sandbox Executor (CONTRACT.md, design §4.1):
 // commands run in a remote sandbox behind a generic HTTP API instead of the
-// host. The concrete provider is any HTTP service implementing the 15
+// host. The concrete provider is any HTTP service implementing the 16
 // endpoints of the contract; E2B, Daytona, and friends fit with thin
 // adapters layered on the provider registry.
 package executor
@@ -57,14 +57,21 @@ type SandboxConfig struct {
 	// Timeout bounds each sandbox HTTP call (default 120s — sandbox
 	// provisioning can be slow).
 	Timeout time.Duration
+	// Workspace is the workspace ID this sandbox is routed under (EE
+	// sandbox plane, design §4): sent as the create body's workspace field
+	// and as the X-Woca-Workspace header on every request so the routing
+	// proxy can route statelessly. Empty = not workspace-routed; the field
+	// and header are omitted.
+	Workspace string
 }
 
 // Sandbox is an Executor backed by a remote sandbox service.
 type Sandbox struct {
-	client   *http.Client
-	endpoint string
-	apiKey   string
-	sbxID    string
+	client    *http.Client
+	endpoint  string
+	apiKey    string
+	workspace string
+	sbxID     string
 }
 
 // compile-time interface check.
@@ -82,9 +89,10 @@ func NewSandbox(cfg SandboxConfig) (*Sandbox, error) {
 		cfg.Timeout = 120 * time.Second
 	}
 	s := &Sandbox{
-		client:   &http.Client{Timeout: cfg.Timeout},
-		endpoint: strings.TrimRight(cfg.Endpoint, "/"),
-		apiKey:   cfg.APIKey,
+		client:    &http.Client{Timeout: cfg.Timeout},
+		endpoint:  strings.TrimRight(cfg.Endpoint, "/"),
+		apiKey:    cfg.APIKey,
+		workspace: cfg.Workspace,
 	}
 	if err := s.create(context.Background()); err != nil {
 		return nil, fmt.Errorf("sandbox: create: %w", err)
@@ -96,9 +104,14 @@ func (s *Sandbox) create(ctx context.Context) error {
 	var out struct {
 		SandboxID string `json:"sandbox_id"`
 	}
-	if err := s.do(ctx, http.MethodPost, "/sandbox/create", map[string]any{
-		"cwd": "/workspace",
-	}, &out); err != nil {
+	// workspace is the routing/workspace identity (CONTRACT.md §3.1); cwd
+	// keeps its container-working-directory meaning. Both defaults hold
+	// when the sandbox is not workspace-routed.
+	body := map[string]any{"cwd": "/workspace"}
+	if s.workspace != "" {
+		body["workspace"] = s.workspace
+	}
+	if err := s.do(ctx, http.MethodPost, "/sandbox/create", body, &out); err != nil {
 		return err
 	}
 	if out.SandboxID == "" {
@@ -108,12 +121,35 @@ func (s *Sandbox) create(ctx context.Context) error {
 	return nil
 }
 
+// SyncWorkspace flushes the sandbox /workspace back to the executor-side
+// workspace directory (POST /sandbox/{id}/workspace/sync, CONTRACT.md
+// §3.16). Runs call it before declaring success so artifacts are durably
+// on the executor host; a non-2xx is an error.
+func (s *Sandbox) SyncWorkspace(ctx context.Context) error {
+	return s.do(ctx, http.MethodPost, "/sandbox/"+s.sbxID+"/workspace/sync", nil, nil)
+}
+
 // Close destroys the sandbox.
 func (s *Sandbox) Close() error {
 	if s.sbxID == "" {
 		return nil
 	}
 	return s.do(context.Background(), http.MethodDelete, "/sandbox/"+s.sbxID, nil, nil)
+}
+
+// withHeaders stamps the per-request headers shared by every sandbox call
+// (do and doRaw): the contract version, optional bearer auth, and the
+// optional X-Woca-Workspace routing header (CONTRACT.md §1) — the routing
+// proxy routes on that header alone, so it must ride every request, not
+// just create.
+func (s *Sandbox) withHeaders(req *http.Request) {
+	req.Header.Set("X-Woca-Sandbox-Contract", "2")
+	if s.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+s.apiKey)
+	}
+	if s.workspace != "" {
+		req.Header.Set("X-Woca-Workspace", s.workspace)
+	}
 }
 
 func (s *Sandbox) do(ctx context.Context, method, path string, body, out any) error {
@@ -132,10 +168,7 @@ func (s *Sandbox) do(ctx context.Context, method, path string, body, out any) er
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Woca-Sandbox-Contract", "2")
-	if s.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.apiKey)
-	}
+	s.withHeaders(req)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return err
@@ -165,10 +198,7 @@ func (s *Sandbox) doRaw(ctx context.Context, method, path, contentType string, b
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	req.Header.Set("X-Woca-Sandbox-Contract", "2")
-	if s.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.apiKey)
-	}
+	s.withHeaders(req)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
