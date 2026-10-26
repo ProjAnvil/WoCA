@@ -33,6 +33,10 @@
 | 出口管控 | 首期不做。沙箱 `network=none`，无外网。模型调用在调度器侧 |
 | 硬隔离 | 首期不做。最高档是 gVisor，容器级内核共享 |
 | runtime 访问权 | executor 跑在容器里，直连宿主 runtime socket。权限收窄后续做 |
+| 工作区 ID | proxy 生成。ID 是执行环境的身份，不是聊天 session 的 ID |
+| 工作区放置 | proxy 按负载选 executor，绑定持久化。同一工作区固定落在一个 executor |
+| executor 规模 | 可横向扩容。扩容出的实例只接新工作区 |
+| 个人版 | 不接入这条路径。个人版继续本地执行 |
 | 外部方案 | 全部不接：OpenShell、E2B、Daytona、Runloop、CubeSandbox、OpenSandbox、agent-sandbox |
 
 ### 2.1 为什么自建
@@ -103,16 +107,41 @@ executor 不跑 agent 循环，不持有模型 key，不做授权判断。
 
 ### 3.2 executor-proxy 的定位
 
-proxy 是调度器与 executor 之间的转发层，职责两件：
+proxy 是调度器、队列与流控合在一起的转发层。四件事：
 
-1. 并发流控。每个 executor 同时在跑的 run 数有上限。超限的请求排队或快速失败。
-2. 路由。按工作区绑定的 executor 转发。
+1. **生成工作区 ID 并放置。** 新工作区第一次来时，proxy 生成 ID，选一个 executor，把绑定写进数据库。
+2. **亲和路由。** 已有工作区按绑定表走，回到同一个 executor。
+3. **准入与流控。** 每个 executor 有并发上限。超限的请求进有界队列，队列满则快速失败。
+4. **负载感知的选择。** 新工作区分配给当前在跑 run 最少的 executor。
 
-proxy 无状态。绑定关系记在 run 行上（`runs.workspace_id` 与分配到的 executor），proxy 读它，不自己维护一套。
+proxy 无状态。它不持有会话，不缓存文件，不保存工作区内容。绑定关系在数据库里，负载信息在 `config_acks` 表里。
 
-第一期单机部署时，proxy 与 scheduler 可以同进程，也可以是独立进程。协议与职责不变。
+### 3.3 队列与调度模型
 
-### 3.3 调度器不建第二个 agent
+微服务里有四种常见做法：
+
+| 做法 | 特点 | 我们的取舍 |
+|---|---|---|
+| 拉取式工作队列 | 任务方轮询领任务。谁空闲谁领，天然均衡，但没有放置决策 | woca 现在就是这个。任务是整个 run，没有亲和需求 |
+| 推送式调度器 | 中心选目标再派发。掌握全局状态，能做亲和与容量分配 | 采用。任务是工具调用，必须回到固定 executor |
+| 一致性哈希 | 按 key 哈希到实例。无需中心表，扩缩容要重映射 | 不采用。绑定要跨 proxy 重启保持，哈希做不到 |
+| 舱壁隔离加快速失败 | 每实例自己限流，超出直接拒绝，不排队 | 采用，作为有界队列的兜底 |
+
+我们的组合是：**推送式调度器 + 持久化绑定 + 舱壁限流 + 有界队列**。
+
+具体规则：
+
+1. **放置**：新工作区按在跑 run 数最少选 executor，在跑数相同则按已分配工作区数最少。选完写绑定表。
+2. **亲和**：绑定一旦建立就不改。同一个工作区的所有工具调用都回同一个 executor。
+3. **舱壁**：每个 executor 一个并发上限。超限的请求进该 executor 的队列。
+4. **有界队列**：每条队列有长度上限与排队超时。两者任一越界，返回 503。
+5. **公平**：每个租户在 proxy 侧的排队额度有上限。一个租户不能占满全部队列。
+6. **负载上报**：executor 每 10 秒刷新自己的 ack，带上当前在跑 run 数。复用现有的 `config_acks` 表与 15 秒存活窗口。
+7. **不健康**：ack 超过存活窗口的 executor 视为不健康。绑定到它的工作区标记为待恢复。
+
+横向扩容有一条硬约束：**新 executor 只接新工作区**。已绑定的工作区不能凭空换 executor，因为工作区目录在 executor 本地磁盘。要迁移得显式拷贝目录。
+
+### 3.4 调度器不建第二个 agent
 
 worker 今天的执行循环是这样调的（`internal/ee/worker/worker.go`）：
 
@@ -128,7 +157,7 @@ final, err := w.agent.Invoke(ctx, history, run.ThreadID)
 
 不建第二个 agent，不重写执行循环。agent 本身支持并发 run：run 作用域的 workspace 是 ctx 上的值装饰，system prompt 环境、文件与 shell 工具、记忆预取都按它解析。
 
-### 3.4 门控从 worker 改成 executor
+### 3.5 门控从 worker 改成 executor
 
 现在远端租户能不能建 run，看的是有没有活的 sandbox worker。`internal/server/runs.go` 的 `enqueueRun` 里调 `hasLiveSandboxWorker`，没有就返回 503。能力标记来自 worker 的 ack（`cmd/woca-worker/main.go` 的 `workerCapabilities`）。
 
@@ -296,11 +325,24 @@ executor 的 `OnChange` 里更新内存里的后端参数。调度器不需要�
 
 ## 7. 工作区模型
 
-### 7.1 工作区就是目录
+### 7.1 工作区 ID 与绑定
 
-工作区 ID 是唯一标识。调度器把它传给 executor，executor 映射到 `workspace_root/<id>` 目录。
+工作区 ID 由 proxy 生成，格式 `ws_<uuid>`。它标识一个执行环境，不是聊天 session 的 ID。多个聊天 session 可以指向同一个工作区，它们共享同一份代码和同一个 executor。
 
-第一版不建工作区表。需要的元数据放在两处：
+ID 与 executor 无关。绑定关系单独存，这样 executor 换机器后工作区 ID 不变。
+
+绑定要持久化，因为两次 run 之间工作区仍然属于某个 executor。所以要一张绑定表：
+
+| 列 | 用途 |
+|---|---|
+| `workspace_id` | 主键。proxy 生成的 ID |
+| `executor_id` | 绑定的 executor 实例 |
+| `state` | `active` 或 `degraded`（executor 不健康时） |
+| `created_at` / `updated_at` | 审计与运维 |
+
+工作区 ID 交给 executor 后，executor 映射到 `workspace_root/<id>` 目录。executor 校验 ID 只含安全字符集，拒绝 `/`、`..` 与绝对路径。
+
+其余元数据放在两处：
 
 - 工作区路径与 revision：executor 侧维护。
 - 工作区与活跃 run 的对应：调度器侧靠 `runs` 表的一列。
@@ -404,6 +446,11 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 | `woca-executor` | 原 `woca-worker` 改名。新增沙箱服务端口，不再领 run、不跑 agent 循环 |
 | `executor-proxy` | 新增。转发与流控 |
 | `woca-worker` | EE 首期不启动。角色代码保留，个人版与过渡期用 |
+| 个人版 `woca` | 不接入这条路径。个人版继续本地执行，不经过 scheduler、proxy、executor |
+
+executor 可横向扩容。扩容出的实例只接新工作区。已绑定的工作区留在原 executor 上。
+
+个人版与 EE 的边界：`internal/ee` 下的角色只进企业版。个人版二进制不链接它们。`make check-editions` 守这条边界。
 
 调度器内嵌的执行循环直接复用 `internal/ee/worker` 现有的 claim、事件镜像、transcript 保存逻辑。不重写一套。
 
@@ -515,10 +562,8 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 
 ## 16. 开放问题
 
-1. 调度器并发执行的 run 数上限。跟 executor 的上限是什么关系。
-2. executor 崩溃后遗留容器的清理时机。启动时清还是定时清。
-3. 工作区 ID 由谁生成、怎么保证全局唯一。调度器生成还是 executor 生成。
-4. 个人版的 `woca` 二进制是否也切到这条路径。它现在是本地执行。
+1. executor 崩溃后遗留容器的清理时机。启动时清还是定时清。
+2. proxy 的三个参数取什么默认值：每 executor 并发上限、每队列长度、排队超时。
 
 已定但有触发条件的：
 
@@ -527,15 +572,20 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 | 出口白名单代理 | 真实项目要在沙箱里装依赖、拉代码 | 沙箱请求过代理，按域名放行，代理在出口注入凭据 |
 | 硬隔离档位 | 开始跑第三方上传的代码，或对外开放租户 | Kata 轻量虚拟机或 microVM。宿主要支持虚拟化 |
 | runtime 权限收窄 | executor 所在节点不再完全受信 | socket 代理只放行沙箱需要的调用 |
+| 工作区跨 executor 迁移 | executor 长期下线，或要重平衡 | 显式拷贝工作区目录到目标 executor，再改绑定 |
 
 ## 17. 数据库改动清单
 
-只有两列加一个索引，不建新表。
+三处改动。
 
 | 改动 | 位置 | 用途 |
 |---|---|---|
 | `sandbox_backends.options` | 配置面表 | 后端参数。经 pack v2 下发 |
 | `runs.workspace_id` | run 队列表 | 工作区归属与互斥 |
-| 部分唯一索引 | `runs` | 同一工作区只允许一个 running run |
+| `workspace_bindings` | 新表 | 工作区到 executor 的绑定 |
+
+`runs` 上加一个部分唯一索引，只在 `status='running'` 时生效。同一工作区不可能有两个 running run。
+
+`workspace_bindings` 是这次唯一的新表。理由：工作区在两次 run 之间没有 run 行，但仍然属于某个 executor。绑定不持久化，工作区就会漂移到别的 executor，代码目录就找不到了。
 
 `runs.config_snapshot` 里已经带了 workspace 路径。加这一列是为了让数据库能做唯一约束。快照里的路径继续保留，旧调用不受影响。
