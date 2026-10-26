@@ -33,6 +33,7 @@ import (
 	"github.com/projanvil/woca/internal/ee/nativeauth"
 	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/ee/opsconsole"
+	"github.com/projanvil/woca/internal/ee/schedulerloop"
 	"github.com/projanvil/woca/internal/ee/skillsvc"
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/servefront"
@@ -98,6 +99,13 @@ func main() {
 		}(),
 		Authn: edition.Authn,
 		Plane: edition.Plane,
+		// Embedded run loop (the scheduler form, design §5.3): this
+		// process also claims dispatched runs off the shared queue and
+		// executes them through the agent the serve path built — the
+		// standalone woca-worker's claim→execute→finish cycle, sharing
+		// one process identity with the API surface. Without this
+		// injection the loop never starts.
+		RunLoop: schedulerloop.RunLoop,
 		// Dynamic sandbox gate (design §10.2 M-3): RunsOffHost posture is
 		// only as live as an enabled backend in the materialized
 		// sandbox_backends table (the nacos pack apply maintains it). The

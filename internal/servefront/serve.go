@@ -23,6 +23,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
+	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/fsb"
@@ -146,6 +147,13 @@ type Edition struct {
 	// healthz/metrics plane and the HTTP span middleware — one observability
 	// identity per process instead of per-listener ad-hoc setups.
 	Start func(ctx context.Context, obs Observability, st *settings.Store, log zerolog.Logger)
+	// RunLoop starts the edition's embedded run-execution loop (the
+	// scheduler role: this process also claims dispatched runs off the
+	// shared queue). It runs in its own goroutine until the serve context
+	// ends, after the registry posture settled at startup's tail. Nil keeps
+	// the personal posture — runs execute in-process, nothing claims the
+	// queue.
+	RunLoop func(ctx context.Context, deps RunLoopDeps)
 	// Audit receives sensitive-operation events (run creation, workspace
 	// writes) with the acting identity — the bridge wires it to its local
 	// audit trail (product design R5). Nil skips auditing.
@@ -200,6 +208,28 @@ type NacosWiring struct {
 type NacosRuntime interface {
 	Start(ctx context.Context) error
 	Loop(ctx context.Context)
+}
+
+// RunLoopDeps is what the serve path hands an edition's embedded run loop
+// (Edition.RunLoop): the built agent, the settings store and the run ledger
+// the loop claims from, the dispatch message plane (nil keeps the poll-only
+// cadence), the shared session directory, the observability assembly and
+// the logger. The loop implementation lives under internal/ee (the
+// scheduler's embedded worker loop); this package stays enterprise-free —
+// it only carries the pieces every posture agrees on.
+type RunLoopDeps struct {
+	Agent      *agent.Agent
+	Settings   *settings.Store
+	Ledger     *runstate.Ledger
+	Plane      server.MsgPlane
+	SessionDir string
+	Obs        Observability
+	Log        zerolog.Logger
+	// NacosGeneration, when set, reports the registry runtime's last
+	// applied config generation — the loop's capability heartbeat carries
+	// it so the config plane sees this scheduler live at its current pack.
+	// Nil (no registry posture) keeps the heartbeat's generation empty.
+	NacosGeneration func() string
 }
 
 // NewServeCmdWithEdition builds the serve command with an enterprise
@@ -582,6 +612,12 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 			ap.Agent.Obs().SetEnabled(ap.Settings.Load().DebugLog)
 		}
 	}
+	// The registry runtime's generation (optional surface, the same
+	// optional-interface pattern as the HTTP middleware seam above): the
+	// embedded run loop's heartbeat carries it so the config plane sees
+	// this scheduler at its current pack. Only the registry posture has
+	// one.
+	var nacosGen func() string
 	if ed.Nacos != nil {
 		// Full-stack posture: register with nacos (fail-closed — no
 		// registry, no process) and take configuration from the
@@ -603,11 +639,27 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 		if err := rt.Start(ctx); err != nil {
 			return err
 		}
+		if lg, ok := rt.(interface{ LastGeneration() string }); ok {
+			nacosGen = lg.LastGeneration
+		}
 		go rt.Loop(ctx)
 	} else {
 		go settingswatch.Watch(ctx, ap.Settings, ap.Settings.DB(), settingswatch.Identity{
 			ServiceID: "srv-" + shortHost(), Role: "server",
 		}, log, cfgWake, rebuild)
+	}
+
+	// Embedded run loop seam (Edition.RunLoop): the edition's loop starts
+	// here in its own goroutine, at startup's tail — after the registry
+	// posture settled (the generation binding above is direct, and the
+	// loop never starts on the fail-closed registry error path). Nil
+	// keeps the personal posture: nothing claims the run queue here.
+	if ed.RunLoop != nil {
+		go ed.RunLoop(ctx, RunLoopDeps{
+			Agent: ap.Agent, Settings: ap.Settings, Ledger: runLedger,
+			Plane: plane, SessionDir: sessionDir, Obs: obs, Log: log,
+			NacosGeneration: nacosGen,
+		})
 	}
 
 	return srv.ServeStarted(ctx, hs, serveErr)
