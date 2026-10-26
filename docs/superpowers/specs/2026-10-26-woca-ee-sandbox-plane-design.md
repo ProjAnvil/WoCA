@@ -42,6 +42,10 @@
 | workspace 身份映射 | `workspace_bindings.source_key`（tenant_id + 规范化路径）做查找键。session 创建时 allocate-or-bind（§7.1） |
 | 后端入口 | `sandbox_backends.Endpoint` 指向 proxy。真实 executor 地址在 `config_acks.addr`，不进配置表 |
 | 容器加固 | 默认 CapDrop=ALL、no-new-privileges、read-only rootfs、默认 seccomp、pids 上限。零新依赖（§8.4） |
+| Docker 依赖 | `github.com/moby/moby/client`（模块已拆分，v0.6.2 起 go.mod 干净）+ `moby/moby/api`。不用 `docker/docker` +incompatible 单体，不裸写 HTTP |
+| executor 角色形态 | 新增角色，不是 worker 改名（worker 的 agent/claim 装配对 executor 全是死代码）。worker 代码保留，EE 不启动 |
+| proxy 路由键 | woca 自有 client 每请求带 `X-Woca-Workspace` 内部头（CONTRACT.md 记一句）。proxy 完全无状态，重启不影响在跑 run。租户从绑定表解析，不信请求头 |
+| proxy 队列默认值 | 每 executor 并发 4、队列长 32、排队超时 30s（须小于后端调用超时） |
 | degraded 行为 | fail-closed。degraded 工作区的新 run 明确拒绝；ack 回窗自动恢复，或运维显式改绑定（§3.3） |
 | run 并发 | 首期每调度器副本串行（复用 `Worker.Step`）。并发旋钮进开放问题（§3.4、§16） |
 
@@ -183,7 +187,7 @@ EE 改成 executor 之后，这套要换：
 2. executor 侧要实现同样的 15 个端点。现成的服务端参考是 `internal/platform/executor/fakesandbox/server.go` 的 `Handler()`：它把 15 条路由挂在 `http.ServeMux` 上，executor 的服务照这个形状写，差别只在容器操作换成真实调用。
 3. `create` 的 body 加一个独立的 `workspace` 字段，承载**工作区 ID**。`cwd` 保持原语义（容器内工作目录，默认 `/workspace`）。不复用 `cwd` 装工作区 ID——那是语义复用，两个概念迟早分叉，契约反正要改（新增 sync 端点），一起改掉。executor 把 workspace ID 映射到自己的 `workspace_root/<id>` 目录，并校验 ID 只含安全字符集（字母、数字、连字符、下划线），拒绝 `/`、`..` 与绝对路径。调度器因此不需要知道 executor 的磁盘布局。
 
-client 侧要改一处：`internal/platform/executor/sandbox.go` 的 `create` 现在固定发 `{"cwd": "/workspace"}`。改成发 `{"workspace": "<本次 run 的工作区 ID>", "cwd": "/workspace"}`。`CONTRACT.md` 同步补字段。
+client 侧要改两处：`internal/platform/executor/sandbox.go` 的 `create` 现在固定发 `{"cwd": "/workspace"}`。改成发 `{"workspace": "<本次 run 的工作区 ID>", "cwd": "/workspace"}`。另外每个请求带 `X-Woca-Workspace: <id>` 内部头——proxy 靠它做无状态路由，不解析请求体。`CONTRACT.md` 同步补字段与头。
 
 需要加一个端点：
 
@@ -590,7 +594,7 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 | 服务 | 变化 |
 |---|---|
 | `woca-scheduler` | 原 `woca-server`。内嵌 run 执行循环：自己从队列 claim run，在进程内用已有的 agent 跑。保留 `WOCA_RUN_DISPATCH=queue` 与 `WOCA_RUNS_OFF_HOST=true`，只是领 run 的不再是独立 worker 进程 |
-| `woca-executor` | 原 `woca-worker` 改名。新增沙箱服务端口，不再领 run、不跑 agent 循环 |
+| `woca-executor` | 新增角色，取代 worker 在 EE 执行面的位置（不是改名）。沙箱服务端口，不领 run、不跑 agent 循环 |
 | `executor-proxy` | 新增。转发与流控 |
 | `woca-worker` | EE 首期不启动。角色代码保留，个人版与过渡期用 |
 | 个人版 `woca` | 不接入这条路径。个人版继续本地执行，不经过 scheduler、proxy、executor |
@@ -691,7 +695,7 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 |---|---|---|
 | M0 | 角色改名与编排位置调整 | 调度器本地跑通一个 run，事件走 PG |
 | M1 | contract 增补 sync 端点与测试 | contract 测试全绿 |
-| M2 | executor 沙箱服务（Docker driver）。M2 前拍板 Docker 依赖：`go.mod` 目前无 docker，`docker/docker` client（类型全、依赖重）还是裸 HTTP over unix socket（轻、自己写） | 15 端点与归档往返测试通过 |
+| M2 | executor 沙箱服务（Docker driver，依赖已定 `moby/moby/client`，Docker 操作走窄接口 `Backend`，单测打 fake、真 Docker 只进 `-tags dockerlab`） | 15+1 端点与归档往返测试通过 |
 | M3 | 工作区目录与工作区锁 | 串行与崩溃恢复测试通过 |
 | M4 | 管理台参数与热生效 | 改参数后新建沙箱用新参数 |
 | M5 | compose 改造与 demo profile | `make ent-sandbox-demo` 退出码 0 |
@@ -718,8 +722,7 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 ## 16. 开放问题
 
 1. executor 崩溃后遗留容器的清理时机。启动时清还是定时清。
-2. proxy 的三个参数取什么默认值：每 executor 并发上限、每队列长度、排队超时。
-3. 每调度器副本的并发 run 数旋钮。首期固定 1（串行，§3.4）；什么时候要、取值多少待定。
+2. 每调度器副本的并发 run 数旋钮。首期固定 1（串行，§3.4）；什么时候要、取值多少待定。
 
 已定但有触发条件的：
 
