@@ -11,13 +11,16 @@ import (
 // M-4): comfortably inside the dispatcher's 15s live window.
 const ackHeartbeatEvery = 10 * time.Second
 
-// AckHeartbeat rewrites this worker's config-ack row on a ticker until
-// ctx ends: the generation comes from the nacos runtime's last applied
-// pack, the capabilities from the live enabled-sandbox state. The row
-// doubles as the liveness heartbeat — without the refresh, a
-// healthy-but-idle worker's ack ages past the dispatcher's live window
-// and sandbox-capable runs get rejected.
-func (w *Worker) AckHeartbeat(ctx context.Context, every time.Duration, generation func() string, capabilities func() string) {
+// AckHeartbeat rewrites this service's config-ack row on a ticker until
+// ctx ends. The ack builder supplies the body — role, generation from the
+// nacos runtime's last applied pack, capabilities from the live
+// enabled-sandbox state, load from the caller's in-flight counter — so the
+// same loop serves worker and executor identities. Identity and freshness
+// belong to this process, so ServiceID/UpdatedAt are stamped at write time
+// whatever the body said. The row doubles as the liveness heartbeat —
+// without the refresh, a healthy-but-idle service's ack ages past the
+// dispatcher's live window and sandbox-capable runs get rejected.
+func (w *Worker) AckHeartbeat(ctx context.Context, every time.Duration, ack func() wocadb.ConfigAck) {
 	if every <= 0 {
 		every = ackHeartbeatEvery
 	}
@@ -28,18 +31,13 @@ func (w *Worker) AckHeartbeat(ctx context.Context, every time.Duration, generati
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			caps := ""
-			if capabilities != nil {
-				caps = capabilities()
+			a := wocadb.ConfigAck{}
+			if ack != nil {
+				a = ack()
 			}
-			gen := ""
-			if generation != nil {
-				gen = generation()
-			}
-			if err := w.db.SetConfigAck(wocadb.ConfigAck{
-				ServiceID: w.id, Role: "worker", Generation: gen,
-				Capabilities: caps, UpdatedAt: wocadb.Now(),
-			}); err != nil {
+			a.ServiceID = w.id
+			a.UpdatedAt = wocadb.Now()
+			if err := w.db.SetConfigAck(a); err != nil {
 				w.log.Warn().Err(err).Msg("capability ack heartbeat failed")
 			}
 		}

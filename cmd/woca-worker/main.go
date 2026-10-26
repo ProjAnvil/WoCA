@@ -209,7 +209,13 @@ func newWorkerRoot() *cobra.Command {
 			// capabilities from the live enabled-sandbox state — so the
 			// dispatcher's 15s live window never prunes a healthy idle
 			// worker.
-			go w.AckHeartbeat(ctx, 0, rt.LastGeneration, func() string { return workerCapabilities(db) })
+			go w.AckHeartbeat(ctx, 0, func() wocadb.ConfigAck {
+				return wocadb.ConfigAck{
+					Role:         "worker",
+					Generation:   rt.LastGeneration(),
+					Capabilities: workerCapabilities(db),
+				}
+			})
 
 			return w.Run(ctx)
 		},

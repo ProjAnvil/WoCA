@@ -29,10 +29,11 @@ func TestWorkerAckHeartbeat(t *testing.T) {
 		db:  db,
 	}
 	ctx := t.Context()
-	go w.AckHeartbeat(ctx, 10*time.Millisecond,
-		func() string { return "g9" },
-		func() string { return "sandbox" },
-	)
+	go w.AckHeartbeat(ctx, 10*time.Millisecond, func() wocadb.ConfigAck {
+		return wocadb.ConfigAck{
+			Role: "worker", Generation: "g9", Capabilities: "sandbox", Load: 2,
+		}
+	})
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -41,7 +42,8 @@ func TestWorkerAckHeartbeat(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, a := range acks {
-			if a.ServiceID == "hb-worker" && a.Generation == "g9" && a.Capabilities == "sandbox" {
+			if a.ServiceID == "hb-worker" && a.Role == "worker" && a.Generation == "g9" &&
+				a.Capabilities == "sandbox" && a.Load == 2 {
 				return
 			}
 		}
