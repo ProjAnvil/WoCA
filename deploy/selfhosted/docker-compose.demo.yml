@@ -1,0 +1,28 @@
+# woca-enterprise: sandbox demo posture override (spec §11.2/§12).
+#
+# NEVER applied by the plain self-hosted stack: only `make
+# ent-sandbox-demo` composes this file on top of docker-compose.full.yml.
+# It carries the one piece of demo posture that must not leak into a
+# real deployment — the unattended-runs tool allow ruleset
+# (Write/Read/Bash) mounted as the schedulers' project settings:
+# off-host runs have no human answer loop, so without it the scripted
+# model's tool calls would stall on permission prompts. In a production
+# self-hosted stack this file is the operator's decision surface: scope
+# the allow list per deployment (the sandbox is the containment
+# boundary, the ruleset is the blast radius).
+#
+# Usage (exactly what the make target does):
+#   docker compose -f docker-compose.full.yml -f docker-compose.demo.yml \
+#     --profile demo up -d <services>
+#
+# The demo profile's services (fakemodel, sandbox-init, sandbox-demo)
+# live in the base file; this override only widens the schedulers.
+
+services:
+  woca-scheduler-1:
+    volumes:
+      - ./demo/scheduler-settings.json:/opt/woca/.woca/settings.json:ro
+
+  woca-scheduler-2:
+    volumes:
+      - ./demo/scheduler-settings.json:/opt/woca/.woca/settings.json:ro

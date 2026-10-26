@@ -311,3 +311,16 @@ Reference e2e: `make sandboxlab` (e2e/sandboxlab) drives this whole
 chain against the containerized fakesandbox, including the 403/503
 gate postures.
 
+### Demo posture never rides this stack (security note)
+
+The EE sandbox demo (`make ent-sandbox-demo`, spec §12) runs unattended
+scripted runs, which need a tool allow ruleset (Write/Read/Bash) mounted
+as the schedulers' project settings — effectively allow-all tool
+permissions. That ruleset deliberately does **not** live in
+`docker-compose.full.yml`: it only mounts through the demo override
+(`docker-compose.demo.yml`), which nothing applies except the
+`ent-sandbox-demo` target. A plain self-hosted deployment (ent-full-up)
+never grants it — scoping unattended-run permissions in production is
+the operator's decision, made in that override file (or per-deployment
+equivalent), never inherited from the demo.
+

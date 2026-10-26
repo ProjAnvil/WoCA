@@ -239,7 +239,12 @@ ent-full-down:
 # e2e/sandboxlab/demo. Requires a linux-container docker engine
 # (OrbStack: hardening runs minimal, spec §11.3). ENT_SANDBOX_DEMO_KEEP=1
 # keeps a failing stack up for troubleshooting.
-ENT_DEMO_COMPOSE = docker compose -f deploy/selfhosted/docker-compose.full.yml --profile demo
+#
+# The demo override (docker-compose.demo.yml) carries the unattended-runs
+# allow ruleset — the one piece of demo posture that must never ride the
+# plain self-hosted stack, hence a separate -f and not a profile.
+ENT_DEMO_COMPOSE = docker compose -f deploy/selfhosted/docker-compose.full.yml \
+	-f deploy/selfhosted/docker-compose.demo.yml --profile demo
 ENT_DEMO_ENV = WOCA_PG_PASSWORD=woca-demo-pg \
 	WOCA_PG_REPL_PASSWORD=woca-demo-repl \
 	LADYM_PG_PASSWORD=woca-demo-ladym \

@@ -163,6 +163,28 @@ func TestAckFuncBuildsExecutorAck(t *testing.T) {
 	}
 }
 
+// TestAckFuncNormalizesAdvertise: the proxy routes on ack.Addr as a URL
+// (scheme + host required), so a bare host:port — which the flag default
+// produces — is normalized to an http:// URL inside the tested boundary,
+// not left to the caller's discipline.
+func TestAckFuncNormalizesAdvertise(t *testing.T) {
+	tests := []struct {
+		advertise string
+		want      string
+	}{
+		{"exec-1:8093", "http://exec-1:8093"}, // bare host:port (flag default shape)
+		{"http://e:1", "http://e:1"},          // already absolute
+		{"https://e:1", "https://e:1"},        // other schemes pass through
+		{"localhost", "http://localhost"},     // bare host, no port
+		{"", ""},                              // empty stays empty (unroutable by design)
+	}
+	for _, tt := range tests {
+		if a := AckFunc("exec-1", tt.advertise, nil, nil, nil)(); a.Addr != tt.want {
+			t.Fatalf("AckFunc advertise %q -> addr %q, want %q", tt.advertise, a.Addr, tt.want)
+		}
+	}
+}
+
 // TestExecutorAckHeartbeatRow: the parameterized worker heartbeat fed the
 // executor ack body writes the row the dispatcher/proxy read — Role=
 // executor, sandbox capability, load from the injected counter (design

@@ -8,6 +8,7 @@ package executor
 
 import (
 	"fmt"
+	"strings"
 	"sync/atomic"
 
 	"github.com/projanvil/woca/internal/ee/nacosrt"
@@ -96,12 +97,17 @@ func (p *ParamsSource) Refresh() {
 // AckFunc builds the executor's config-ack body for the heartbeat loop:
 // Role=executor, the "sandbox" capability exactly while the live params
 // are enabled, the caller-injected in-flight count as Load (design §3.3
-// rule 6), and the routable advertise address — the proxy dials ack.Addr,
-// so an ack without it is unroutable no matter how fresh. generation/
+// rule 6), and the routable advertise address — the proxy dials ack.Addr
+// as a URL (scheme + host required), so a bare host:port is normalized
+// to an http:// URL here rather than trusted to the caller; an ack
+// without any address is unroutable no matter how fresh. generation/
 // active may be nil (zero values); params may be nil (no capability
 // ever). ServiceID is stamped here so the ack is complete standalone;
 // the heartbeat loop owns UpdatedAt.
 func AckFunc(id, advertise string, generation func() string, params *ParamsSource, active func() int64) func() wocadb.ConfigAck {
+	if advertise != "" && !strings.Contains(advertise, "://") {
+		advertise = "http://" + advertise
+	}
 	return func() wocadb.ConfigAck {
 		ack := wocadb.ConfigAck{ServiceID: id, Role: "executor", Addr: advertise}
 		if generation != nil {

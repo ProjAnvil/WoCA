@@ -478,10 +478,10 @@ services:
       # The executor workspace volume (EE sandbox plane, §11.1): the
       # scheduler binds tenants onto it and reads products back from it.
       - woca-workspaces:/data/workspaces
-      # Off-host runs have no human answer loop: the allow ruleset for
-      # unattended tool execution (demo posture — operators scope it per
-      # deployment; sandboxed execution is the containment boundary).
-      - ./demo/scheduler-settings.json:/opt/woca/.woca/settings.json:ro
+      # NOTE: the unattended-runs allow ruleset (demo posture) is NOT
+      # mounted here — it rides the demo override file
+      # (docker-compose.demo.yml) so a plain self-hosted `up` never
+      # grants allow-all tool permissions. See make ent-sandbox-demo.
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
       interval: 10s
