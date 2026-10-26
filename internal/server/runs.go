@@ -94,8 +94,8 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session run queue is full", http.StatusConflict)
 		return
 	}
-	if errors.Is(err, errNoSandboxWorker) {
-		http.Error(w, errNoSandboxWorker.Error(), http.StatusServiceUnavailable)
+	if errors.Is(err, errNoSandboxExecutor) {
+		http.Error(w, errNoSandboxExecutor.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	if err != nil {
@@ -518,19 +518,20 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 	return run, sid, pos, nil
 }
 
-// errNoSandboxWorker is returned by enqueueRun (and surfaced as HTTP 503)
-// when no live sandbox-capable worker acked recently — a queued off-host
-// run must never wait on a worker that cannot execute it sandboxed.
-var errNoSandboxWorker = errors.New("no sandbox-capable worker available")
+// errNoSandboxExecutor is returned by enqueueRun (and surfaced as HTTP 503)
+// when no live sandbox-capable executor acked recently — a queued off-host
+// run must never wait on an executor that cannot execute it sandboxed.
+var errNoSandboxExecutor = errors.New("no sandbox-capable executor available")
 
-// sandboxAckLiveWindow bounds how old a worker's capability ack may be to
-// count as live (the worker heartbeat refreshes every 10s, design §10.2
-// M-4).
+// sandboxAckLiveWindow bounds how old an executor's capability ack may be
+// to count as live (the executor heartbeat refreshes every 10s, design
+// §10.2 M-4).
 const sandboxAckLiveWindow = 15 * 1000 // ms
 
-// hasLiveSandboxWorker reports whether a worker acked the sandbox
-// capability inside the live window.
-func (s *Server) hasLiveSandboxWorker() bool {
+// hasLiveExecutor reports whether an executor acked the sandbox capability
+// inside the live window (spec §3.5: only executor acks gate off-host
+// runs — the worker role does not qualify).
+func (s *Server) hasLiveExecutor() bool {
 	if s.ackDB == nil {
 		return false
 	}
@@ -541,7 +542,7 @@ func (s *Server) hasLiveSandboxWorker() bool {
 	}
 	now := wocadb.Now()
 	for _, a := range acks {
-		if a.Role != "worker" {
+		if a.Role != "executor" {
 			continue
 		}
 		if now-a.UpdatedAt > sandboxAckLiveWindow {
@@ -554,7 +555,7 @@ func (s *Server) hasLiveSandboxWorker() bool {
 	return false
 }
 
-// enqueueRun dispatches a run to the shared queue for a woca-worker to
+// enqueueRun dispatches a run to the shared queue for a woca executor to
 // execute (Phase 3 wiring): the run is born queued with its prompt and
 // execution environment in the config snapshot, the cross-instance
 // one_active_run_per_session constraint is the admission gate, and SSE
@@ -564,11 +565,11 @@ func (s *Server) hasLiveSandboxWorker() bool {
 // ledger path (a registered run with no local execution would subscribe
 // clients to a stream that never fires).
 func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace string, atts []runAttachment) (*Run, string, int, error) {
-	// Dispatch precondition (design §4.5): an off-host run may only queue
-	// when a live sandbox-capable worker exists — otherwise the run would
-	// sit queued behind workers that cannot execute it sandboxed.
-	if s.runsOffHost && !s.hasLiveSandboxWorker() {
-		return nil, sessionID, 0, errNoSandboxWorker
+	// Dispatch precondition (design §4.5 / spec §3.5): an off-host run may
+	// only queue when a live sandbox-capable executor exists — otherwise the
+	// run would sit queued behind executors that cannot execute it sandboxed.
+	if s.runsOffHost && !s.hasLiveExecutor() {
+		return nil, sessionID, 0, errNoSandboxExecutor
 	}
 	sid := sessionID
 	if sid == "" {

@@ -200,13 +200,13 @@ type Server struct {
 	streamReauth   func(string) error
 	ledger         *runstate.Ledger
 	workerID       string
-	// dispatch enqueues runs for a worker to execute (Phase 3 wiring);
+	// dispatch enqueues runs for an executor to execute (Phase 3 wiring);
 	// runsOffHost opens the run surface to remote tenants; sandboxEnabled
 	// is its live refinement (see Config.SandboxEnabled).
 	dispatch       bool
 	runsOffHost    bool
 	sandboxEnabled func() bool
-	ackDB          *wocadb.DB // config_acks reads for worker-capability dispatch checks
+	ackDB          *wocadb.DB // config_acks reads for executor-capability dispatch checks
 
 	mu            sync.Mutex
 	runs          map[string]*Run

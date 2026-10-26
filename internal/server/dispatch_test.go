@@ -156,17 +156,17 @@ func (p tenantProvider) Authenticate(context.Context, string) (tenancy.Context, 
 // host surface forbidden; without it the run surface stays local-gated.
 // With it, the dynamic sandbox gate applies (design §10.2 M-3): an
 // off-host deployment without an enabled sandbox backend fails closed,
-// and a sandboxed one needs a live sandbox-capable worker to dispatch.
+// and a sandboxed one needs a live sandbox-capable executor to dispatch.
 func TestRunsOffHostGate(t *testing.T) {
 	for _, tc := range []struct {
 		offHost              bool
 		sandbox              func() bool
-		liveSandboxWorker    bool
+		liveSandboxExecutor  bool
 		runStatus, setStatus int
 	}{
-		{false, nil, false, http.StatusForbidden, http.StatusForbidden},
+		{false, nil, false, http.StatusForbidden, http.StatusForbidden},                                 // no sandbox backend: fail closed
 		{true, nil, false, http.StatusForbidden, http.StatusForbidden},                                  // no sandbox backend: fail closed
-		{true, func() bool { return true }, false, http.StatusServiceUnavailable, http.StatusForbidden}, // no capable worker
+		{true, func() bool { return true }, false, http.StatusServiceUnavailable, http.StatusForbidden}, // no capable executor
 		{true, func() bool { return true }, true, http.StatusOK, http.StatusForbidden},
 	} {
 		db, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "runs.db"))
@@ -178,9 +178,9 @@ func TestRunsOffHostGate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if tc.liveSandboxWorker {
+		if tc.liveSandboxExecutor {
 			if err := db.SetConfigAck(wocadb.ConfigAck{
-				ServiceID: "wkr-gate", Role: "worker", Generation: "g1",
+				ServiceID: "exec-gate", Role: "executor", Generation: "g1",
 				Capabilities: "sandbox", UpdatedAt: wocadb.Now(),
 			}); err != nil {
 				t.Fatal(err)
