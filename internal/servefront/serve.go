@@ -175,6 +175,23 @@ type Edition struct {
 	// decides.
 	SandboxEnabled func() bool
 
+	// SandboxEndpoint returns the enabled sandbox backend's endpoint live
+	// ("" = none; server.Config.SandboxEndpoint). The enterprise entry
+	// closes over the materialized sandbox_backends table — this package
+	// stays enterprise-free, the field is a pure func() string signature.
+	// When the off-host posture is active, session creation calls the
+	// backend's executor proxy to allocate-or-bind sandbox workspace
+	// identities and dispatched runs carry them in runs.workspace_id. Nil
+	// keeps the personal posture: sessions never bind.
+	SandboxEndpoint func() string
+
+	// WorkspaceRoot is the executor volume root (EE sandbox plane;
+	// server.Config.WorkspaceRoot): when set, the workspace file surfaces
+	// resolve session → workspace id → <root>/<id> and never serve paths
+	// outside the volume, and the folder browser jails to it. Empty keeps
+	// the personal posture unchanged.
+	WorkspaceRoot string
+
 	// obs carries the built Observability from the cobra RunE into
 	// ServeWithEdition (unexported; callers pass only the factories).
 	obs Observability
@@ -505,16 +522,18 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 			}
 			return opts.Sandbox != nil
 		},
-		MsgPlane:     plane,
-		Agent:        ap.Agent,
-		Static:       ed.Static,
-		Logger:       log,
-		SessionDir:   sessionDir,
-		WorkDir:      ap.Cfg.WorkDir,
-		GrafanaURL:   os.Getenv("WOCA_GRAFANA_URL"),
-		Settings:     ap.Settings,
-		Memory:       ap.Memory,
-		MemoryEngine: ap.MemEngine,
+		SandboxEndpoint: ed.SandboxEndpoint,
+		WorkspaceRoot:   ed.WorkspaceRoot,
+		MsgPlane:        plane,
+		Agent:           ap.Agent,
+		Static:          ed.Static,
+		Logger:          log,
+		SessionDir:      sessionDir,
+		WorkDir:         ap.Cfg.WorkDir,
+		GrafanaURL:      os.Getenv("WOCA_GRAFANA_URL"),
+		Settings:        ap.Settings,
+		Memory:          ap.Memory,
+		MemoryEngine:    ap.MemEngine,
 		RebuildMemory: func() error {
 			return ap.RebuildMemory()
 		},

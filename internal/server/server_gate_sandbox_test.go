@@ -111,3 +111,51 @@ func TestSandboxGateAckReadFailure(t *testing.T) {
 		t.Fatalf("POST /api/runs = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
 	}
 }
+
+// TestSandboxGateBindingUnavailableFailsClosed: a session whose workspace
+// cannot be bound (proxy unreachable at enqueue time — a legacy session
+// with no recorded binding, or the proxy dropped between create and run)
+// never dispatches unbound: POST /api/runs answers 503, the fail-closed
+// class of the sandbox gate family.
+func TestSandboxGateBindingUnavailableFailsClosed(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unreachable", http.StatusBadGateway)
+	}))
+	url := dead.URL
+	dead.Close()
+
+	db, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "bindgate.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.SetConfigAck(wocadb.ConfigAck{
+		ServiceID: "exec-1", Role: "executor", Generation: "g1",
+		Capabilities: "sandbox", Addr: "10.0.0.9:8080", UpdatedAt: wocadb.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := runstate.New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{
+		Agent: newScriptedAgent(t, "x"), Static: nil, Logger: zerolog.Nop(),
+		SessionDir: t.TempDir(), WorkDir: t.TempDir(),
+		RunLedger: ledger, DispatchToQueue: true, RunsOffHost: true,
+		RunStateDB:      db,
+		SandboxEnabled:  func() bool { return true },
+		SandboxEndpoint: func() string { return url },
+		Auth:            tenantProvider{tenant: "tenant-remote"},
+	})
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	// The session carries no binding (never created through the binding
+	// path), so the enqueue must backfill — and the dead proxy fails it.
+	resp := dispatchPost(t, srv.URL, "s-bindgate", "hello")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("POST /api/runs with unbindable workspace = %d, want 503", resp.StatusCode)
+	}
+}

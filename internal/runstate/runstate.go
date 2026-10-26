@@ -40,8 +40,13 @@ type Run struct {
 	LeaseExpiresAt int64
 	ThreadID       string
 	ConfigSnapshot string
-	CreatedAt      int64
-	UpdatedAt      int64
+	// WorkspaceID is the sandbox workspace identity the run executes in
+	// (EE sandbox plane, Task 14): the execution-side channel the worker
+	// reads to route tool execution — session metadata never carries it
+	// across the queue. Empty on personal-edition runs.
+	WorkspaceID string
+	CreatedAt   int64
+	UpdatedAt   int64
 }
 
 // Event is one immutable fact in a run's event stream (seq is assigned by
@@ -146,16 +151,17 @@ func (l *Ledger) ph(i int) string {
 func (l *Ledger) nowMilli() int64 { return l.now().UnixMilli() }
 
 // Enqueue inserts a queued run. A second active run for the same session is
-// rejected by the one_active_run_per_session partial unique index.
+// rejected by the one_active_run_per_session partial unique index; the
+// run's workspace identity (when present) rides the row for the executor.
 func (l *Ledger) Enqueue(ctx context.Context, run Run) error {
 	if run.RunID == "" || run.SessionID == "" {
 		return errors.New("runstate: run id and session id are required")
 	}
 	now := l.nowMilli()
 	_, err := l.db.DB.ExecContext(ctx,
-		`INSERT INTO runs (run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, created_at, updated_at)
-		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusQueued+`', '', 0, `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`)`,
-		run.RunID, run.SessionID, run.ThreadID, run.ConfigSnapshot, now, now)
+		`INSERT INTO runs (run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, workspace_id, created_at, updated_at)
+		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusQueued+`', '', 0, `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`, `+l.ph(6)+`)`,
+		run.RunID, run.SessionID, run.ThreadID, run.ConfigSnapshot, run.WorkspaceID, now, now)
 	if err != nil && isUniqueViolation(err) {
 		if !isSessionConstraint(err) {
 			return fmt.Errorf("runstate: run id %s already exists (cross-process id collision)", run.RunID)
@@ -165,37 +171,63 @@ func (l *Ledger) Enqueue(ctx context.Context, run Run) error {
 	return err
 }
 
+// claimColumns is the run projection a claim returns (the postgres branch
+// RETURNs it, the sqlite branch SELECTs it) — workspace_id rides along so
+// the worker's Run.WorkspaceID has an execution-side source.
+const claimColumns = `run_id, session_id, thread_id, config_snapshot, workspace_id, created_at`
+
+// claimWorkspaceMutex is the per-workspace mutual-exclusion predicate every
+// claim candidate selection applies (EE sandbox plane): a queued run whose
+// workspace already has a running run is not a candidate. The residual race
+// (two workers selecting the same queued row under READ COMMITTED snapshots
+// while another run of that workspace is mid-commit) is caught by the
+// one_running_run_per_workspace partial unique index at UPDATE time — claim
+// returns that error and the caller's retry (Worker.Run's 1s backoff) skips
+// past it cleanly.
+const claimWorkspaceMutex = ` AND NOT EXISTS (SELECT 1 FROM runs r2 WHERE r2.workspace_id = runs.workspace_id AND r2.workspace_id <> '' AND r2.status='` + StatusRunning + `')`
+
+// claimUpdateSQL builds the single-statement postgres claim: the lease
+// columns flip in the same write, so two racing workers cannot both win.
+// The outer WHERE re-checks status = queued: under READ COMMITTED, two
+// racing UPDATEs can both select the same queued row from the subquery
+// (each with its own snapshot); the loser then blocks on the winner's
+// row lock, and without the status re-check EvalPlanQual would let it
+// steal the already-running row (observed live: two workers claimed one
+// run in the same millisecond and double-executed it).
+func (l *Ledger) claimUpdateSQL() string {
+	return `UPDATE runs SET status = '` + StatusRunning + `', owner = ` + l.ph(0) +
+		`, lease_expires_at = ` + l.ph(1) + `, updated_at = ` + l.ph(2) +
+		` WHERE run_id = (SELECT run_id FROM runs WHERE status = '` + StatusQueued + `'` +
+		claimWorkspaceMutex +
+		` ORDER BY updated_at, created_at LIMIT 1) AND status = '` + StatusQueued +
+		`' RETURNING ` + claimColumns
+}
+
+// claimSelectSQL builds the sqlite branch's candidate selection (no
+// UPDATE...RETURNING on every driver version used here; select-then-update
+// inside a transaction is equivalent because the whole ledger is a single
+// database with its own locking). The same per-workspace mutex applies.
+func (l *Ledger) claimSelectSQL() string {
+	return `SELECT ` + claimColumns + ` FROM runs WHERE status = '` + StatusQueued + `'` +
+		claimWorkspaceMutex + ` ORDER BY updated_at, created_at LIMIT 1`
+}
+
 // Claim atomically takes the oldest queued run (or one re-queued by the
-// reconciler) under a lease for workerID. It returns (nil, nil) when the
-// queue is empty.
+// reconciler) under a lease for workerID, skipping queued runs whose
+// workspace already has a running run. It returns (nil, nil) when the
+// queue has no claimable run.
 func (l *Ledger) Claim(ctx context.Context, workerID string, lease time.Duration) (*Run, error) {
 	if workerID == "" {
 		return nil, errors.New("runstate: worker id is required")
 	}
-	// Single-statement claim: newest-updated queued row wins; the lease
-	// columns flip in the same write, so two racing workers cannot both win.
-	// The outer WHERE re-checks status = queued: under READ COMMITTED, two
-	// racing UPDATEs can both select the same queued row from the subquery
-	// (each with its own snapshot); the loser then blocks on the winner's
-	// row lock, and without the status re-check EvalPlanQual would let it
-	// steal the already-running row (observed live: two workers claimed one
-	// run in the same millisecond and double-executed it).
 	now := l.nowMilli()
 	expires := now + lease.Milliseconds()
-	q := `UPDATE runs SET status = '` + StatusRunning + `', owner = ` + l.ph(0) +
-		`, lease_expires_at = ` + l.ph(1) + `, updated_at = ` + l.ph(2) +
-		` WHERE run_id = (SELECT run_id FROM runs WHERE status = '` + StatusQueued +
-		`' ORDER BY updated_at, created_at LIMIT 1) AND status = '` + StatusQueued +
-		`' RETURNING run_id, session_id, thread_id, config_snapshot, created_at`
 	if l.dialect != wocadb.DialectPostgres {
-		// sqlite has no UPDATE...RETURNING on every driver version used here;
-		// select-then-update inside a transaction is equivalent because the
-		// whole ledger is a single database with its own locking.
 		return l.claimSQLite(ctx, workerID, expires, now)
 	}
 	var run Run
-	err := l.db.DB.QueryRowContext(ctx, q, workerID, expires, now).
-		Scan(&run.RunID, &run.SessionID, &run.ThreadID, &run.ConfigSnapshot, &run.CreatedAt)
+	err := l.db.DB.QueryRowContext(ctx, l.claimUpdateSQL(), workerID, expires, now).
+		Scan(&run.RunID, &run.SessionID, &run.ThreadID, &run.ConfigSnapshot, &run.WorkspaceID, &run.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -216,10 +248,8 @@ func (l *Ledger) claimSQLite(ctx context.Context, workerID string, expires, now 
 	}
 	defer func() { _ = tx.Rollback() }()
 	var run Run
-	err = tx.QueryRowContext(ctx,
-		`SELECT run_id, session_id, thread_id, config_snapshot, created_at FROM runs
-		 WHERE status = '`+StatusQueued+`' ORDER BY updated_at, created_at LIMIT 1`).
-		Scan(&run.RunID, &run.SessionID, &run.ThreadID, &run.ConfigSnapshot, &run.CreatedAt)
+	err = tx.QueryRowContext(ctx, l.claimSelectSQL()).
+		Scan(&run.RunID, &run.SessionID, &run.ThreadID, &run.ConfigSnapshot, &run.WorkspaceID, &run.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -229,7 +259,10 @@ func (l *Ledger) claimSQLite(ctx context.Context, workerID string, expires, now 
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE runs SET status = '`+StatusRunning+`', owner = ?, lease_expires_at = ?, updated_at = ? WHERE run_id = ? AND status = '`+StatusQueued+`'`,
 		workerID, expires, now, run.RunID); err != nil {
-		return nil, err
+		// The workspace mutex's residual race lands here on sqlite too (the
+		// partial unique index fires on the UPDATE): a retryable unique
+		// violation, surfaced to the caller's backoff loop.
+		return nil, fmt.Errorf("runstate: claim: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -435,9 +468,9 @@ func (l *Ledger) Start(ctx context.Context, run Run, workerID string, lease time
 	}
 	now := l.nowMilli()
 	_, err := l.db.DB.ExecContext(ctx,
-		`INSERT INTO runs (run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, created_at, updated_at)
-		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusRunning+`', `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`, `+l.ph(6)+`, `+l.ph(7)+`)`,
-		run.RunID, run.SessionID, workerID, now+lease.Milliseconds(), run.ThreadID, run.ConfigSnapshot, now, now)
+		`INSERT INTO runs (run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, workspace_id, created_at, updated_at)
+		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusRunning+`', `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`, `+l.ph(6)+`, `+l.ph(7)+`, `+l.ph(8)+`)`,
+		run.RunID, run.SessionID, workerID, now+lease.Milliseconds(), run.ThreadID, run.ConfigSnapshot, run.WorkspaceID, now, now)
 	if err != nil && isUniqueViolation(err) {
 		if !isSessionConstraint(err) {
 			return fmt.Errorf("runstate: run id %s already exists (cross-process id collision)", run.RunID)

@@ -26,6 +26,15 @@ func (s *Server) registerFS(mux *http.ServeMux) {
 	s.route(mux, "GET /api/filesystem/watch", authz.ScopeWorkspaceRead, s.handleFSWatch)
 }
 
+// volumeFS builds the folder-browser service for the EE sandbox plane
+// (Config.WorkspaceRoot set): browsing is jailed to the executor volume
+// with os.OpenRoot containment — a remote tenant must never reach host
+// paths through /api/filesystem/*. Called from New, replacing any
+// configured service; the personal edition (empty root) keeps its own.
+func volumeFS(root string) *fsb.Service {
+	return fsb.New([]string{root}, false)
+}
+
 // auditEvent forwards a workspace event to the audit seam with the
 // caller's identity when the bridge installed one.
 func (s *Server) auditEvent(r *http.Request, action, detail string) {

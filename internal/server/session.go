@@ -210,9 +210,16 @@ type sessionMeta struct {
 	ID            string `json:"id"`
 	Workspace     string `json:"workspace"`      // absolute workdir path
 	WorkspaceName string `json:"workspace_name"` // display name (dir basename)
-	UpdatedAt     string `json:"updated_at"`
-	Title         string `json:"title,omitempty"`
-	MessageCount  int    `json:"message_count,omitempty"` // absent in old indexes shows 0; self-heals on next save
+	// WorkspaceID is the sandbox workspace identity (EE sandbox plane): the
+	// executor-proxy binding allocated at session creation, or backfilled at
+	// enqueue for sessions that predate the binding. Runs inherit it into
+	// runs.workspace_id — the execution-side channel. Absent in pre-binding
+	// index.json files; it self-heals on the next binding event, so old
+	// indexes stay readable without migration.
+	WorkspaceID  string `json:"workspace_id,omitempty"`
+	UpdatedAt    string `json:"updated_at"`
+	Title        string `json:"title,omitempty"`
+	MessageCount int    `json:"message_count,omitempty"` // absent in old indexes shows 0; self-heals on next save
 }
 
 // loadIndex reads the sidecar metadata index (empty map when absent).
@@ -245,6 +252,9 @@ func (s *sessionStore) recordMeta(meta sessionMeta) {
 			meta.Workspace = old.Workspace
 			meta.WorkspaceName = old.WorkspaceName
 		}
+		if meta.WorkspaceID == "" {
+			meta.WorkspaceID = old.WorkspaceID
+		}
 		if meta.Title == "" {
 			meta.Title = old.Title
 		}
@@ -252,6 +262,38 @@ func (s *sessionStore) recordMeta(meta sessionMeta) {
 	s.index[meta.ID] = meta
 	s.mu.Unlock()
 	s.flushIndex()
+}
+
+// workspaceIDOf resolves a session's sandbox workspace identity ("" when the
+// session is unknown or unbound).
+func (s *sessionStore) workspaceIDOf(id string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.index[id].WorkspaceID
+}
+
+// setWorkspaceID records the sandbox workspace identity on a session,
+// preserving every other recorded field (an enqueue-time backfill for
+// sessions that predate the binding, or the write-back of a fresh
+// allocation). Unknown sessions get a minimal entry so the binding survives
+// the next restart.
+func (s *sessionStore) setWorkspaceID(id, workspaceID string) {
+	if id == "" || workspaceID == "" {
+		return
+	}
+	s.mu.Lock()
+	meta, ok := s.index[id]
+	changed := !ok || meta.WorkspaceID != workspaceID
+	meta.ID = id
+	meta.WorkspaceID = workspaceID
+	if meta.UpdatedAt == "" {
+		meta.UpdatedAt = time.Now().Format(time.RFC3339)
+	}
+	s.index[id] = meta
+	s.mu.Unlock()
+	if changed {
+		s.flushIndex()
+	}
 }
 
 // flushIndex snapshots the index and rewrites index.json atomically. The

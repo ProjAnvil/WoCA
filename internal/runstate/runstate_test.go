@@ -2,7 +2,9 @@ package runstate
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,6 +188,176 @@ func TestPutEventExplicitSeqSemantics(t *testing.T) {
 	tail, _ := l.Replay(ctx, "r", 4, 10)
 	if len(tail) != 2 || tail[0].Seq != 5 || tail[1].Seq != 6 {
 		t.Fatalf("events after explicit seq = %+v", tail)
+	}
+}
+
+// --- Task 14: the workspace_id execution-side channel + claim mutex ---
+
+// TestEnqueuePersistsWorkspaceID: the workspace identity a dispatched run
+// inherits from its session lands in runs.workspace_id — the execution-side
+// channel the worker reads (Run.WorkspaceID); session metadata never
+// carries it across the queue.
+func TestEnqueuePersistsWorkspaceID(t *testing.T) {
+	l := openLedger(t)
+	ctx := context.Background()
+	if err := l.Enqueue(ctx, Run{RunID: "r-ws", SessionID: "s1", WorkspaceID: "ws-9"}); err != nil {
+		t.Fatal(err)
+	}
+	var wsID string
+	if err := l.db.QueryRow(`SELECT workspace_id FROM runs WHERE run_id = 'r-ws'`).Scan(&wsID); err != nil {
+		t.Fatal(err)
+	}
+	if wsID != "ws-9" {
+		t.Fatalf("runs.workspace_id = %q, want ws-9", wsID)
+	}
+}
+
+// TestLegacyRunsTableUpgradesForWorkspaceID: a database created by a
+// pre-sandbox-plane build (runs without workspace_id) upgrades on Open, and
+// enqueueing a run that carries a workspace identity does not fail with
+// "no such column".
+func TestLegacyRunsTableUpgradesForWorkspaceID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	raw, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE runs (
+			run_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			owner TEXT NOT NULL DEFAULT '',
+			lease_expires_at BIGINT NOT NULL DEFAULT 0,
+			thread_id TEXT NOT NULL DEFAULT '',
+			config_snapshot TEXT NOT NULL DEFAULT '',
+			created_at BIGINT NOT NULL,
+			updated_at BIGINT NOT NULL
+		)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := wocadb.Open("sqlite:" + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	l, err := New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Enqueue(context.Background(), Run{RunID: "r1", SessionID: "s1", WorkspaceID: "ws-1"}); err != nil {
+		t.Fatalf("enqueue on upgraded legacy db: %v", err)
+	}
+}
+
+// TestClaimSkipsRunsOfRunningWorkspace: the per-workspace mutex at claim
+// time — while one run of a workspace is running, a queued run of the SAME
+// workspace is not a claim candidate (an unrelated queued run claims
+// instead), and once the running run finishes the held run claims cleanly.
+func TestClaimSkipsRunsOfRunningWorkspace(t *testing.T) {
+	l := openLedger(t)
+	ctx := context.Background()
+	// r1 runs on ws-1; r2 queues behind it on ws-1; r3 queues on ws-2.
+	if err := l.Start(ctx, Run{RunID: "r1", SessionID: "s1", WorkspaceID: "ws-1"}, "w0", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Enqueue(ctx, Run{RunID: "r2", SessionID: "s2", WorkspaceID: "ws-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Enqueue(ctx, Run{RunID: "r3", SessionID: "s3", WorkspaceID: "ws-2"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := l.Claim(ctx, "w1", time.Minute)
+	if err != nil || got == nil {
+		t.Fatalf("claim = %v err=%v", got, err)
+	}
+	if got.RunID != "r3" {
+		t.Fatalf("claim picked %q, want the unrelated r3 (r2's workspace is mutex-held)", got.RunID)
+	}
+	if got.WorkspaceID != "ws-2" {
+		t.Fatalf("claimed run WorkspaceID = %q, want ws-2 (execution-side channel)", got.WorkspaceID)
+	}
+	if err := l.Finish(ctx, "r1", "w0", "done"); err != nil {
+		t.Fatal(err)
+	}
+	next, err := l.Claim(ctx, "w2", time.Minute)
+	if err != nil || next == nil || next.RunID != "r2" {
+		t.Fatalf("claim after release = %+v err=%v", next, err)
+	}
+	if next.WorkspaceID != "ws-1" {
+		t.Fatalf("released claim WorkspaceID = %q, want ws-1", next.WorkspaceID)
+	}
+}
+
+// TestClaimWorkspaceMutexCollisionIsRetryable: the residual claim race (two
+// workers selecting the same queued row under READ COMMITTED snapshots) is
+// caught by the one_running_run_per_workspace partial index at UPDATE time
+// on postgres; sqlite serializes writes so the equivalent path is simulated
+// here — claim's own UPDATE, aimed at a workspace that already has a
+// running run, fails with the unique violation the retry classification
+// recognizes, the row stays queued, and a retry after the running run
+// finishes claims it. That is exactly the contract Worker.Run's 1s backoff
+// relies on (claim may safely return the error).
+func TestClaimWorkspaceMutexCollisionIsRetryable(t *testing.T) {
+	l := openLedger(t)
+	ctx := context.Background()
+	if err := l.Start(ctx, Run{RunID: "r1", SessionID: "s1", WorkspaceID: "ws-1"}, "w0", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Enqueue(ctx, Run{RunID: "r2", SessionID: "s2", WorkspaceID: "ws-1"}); err != nil {
+		t.Fatal(err)
+	}
+	// The losing side of the race: its candidate snapshot predates r1's
+	// commit, so its UPDATE targets r2 while r1 already holds ws-1.
+	_, err := l.db.Exec(`UPDATE runs SET status = 'running', owner = 'w1', lease_expires_at = 0, updated_at = 0
+		WHERE run_id = 'r2' AND status = 'queued'`)
+	if err == nil {
+		t.Fatal("the workspace-mutex UPDATE must fail while another run holds the workspace")
+	}
+	if !isUniqueViolation(err) {
+		t.Fatalf("collision error not retry-classified: %v", err)
+	}
+	// The loser left no damage: r2 is still queued and claims after release.
+	var status string
+	if err := l.db.QueryRow(`SELECT status FROM runs WHERE run_id = 'r2'`).Scan(&status); err != nil || status != StatusQueued {
+		t.Fatalf("r2 status after failed claim = %q err=%v (want queued)", status, err)
+	}
+	if err := l.Finish(ctx, "r1", "w0", "done"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := l.Claim(ctx, "w2", time.Minute)
+	if err != nil || got == nil || got.RunID != "r2" {
+		t.Fatalf("retry claim = %+v err=%v", got, err)
+	}
+}
+
+// TestClaimSQLExcludesRunningWorkspaces: SQL shape review for both dialect
+// branches — the candidate selection carries the NOT EXISTS per-workspace
+// mutex, and the workspace_id column rides the claim projection (RETURNING
+// on postgres, SELECT on sqlite) so the worker's Run.WorkspaceID has an
+// execution-side source.
+func TestClaimSQLExcludesRunningWorkspaces(t *testing.T) {
+	pg := &Ledger{dialect: wocadb.DialectPostgres, now: time.Now}
+	sqlite := &Ledger{dialect: wocadb.DialectSQLite, now: time.Now}
+	for _, tc := range []struct {
+		name, q string
+	}{
+		{"postgres update", pg.claimUpdateSQL()},
+		{"sqlite select", sqlite.claimSelectSQL()},
+	} {
+		if !strings.Contains(tc.q, "NOT EXISTS (SELECT 1 FROM runs r2") {
+			t.Errorf("%s: no per-workspace mutex subquery: %s", tc.name, tc.q)
+		}
+		if !strings.Contains(tc.q, "r2.workspace_id = runs.workspace_id") ||
+			!strings.Contains(tc.q, "r2.workspace_id <> ''") ||
+			!strings.Contains(tc.q, "r2.status='"+StatusRunning+"'") {
+			t.Errorf("%s: mutex subquery malformed: %s", tc.name, tc.q)
+		}
+		if !strings.Contains(tc.q, "workspace_id") {
+			t.Errorf("%s: claim projection misses workspace_id: %s", tc.name, tc.q)
+		}
 	}
 }
 

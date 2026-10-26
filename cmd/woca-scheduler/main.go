@@ -119,6 +119,24 @@ func main() {
 			row, err := nacosrt.EnabledSandbox(sandboxSettings.DB().DB)
 			return err == nil && row != nil
 		},
+		// Session workspace identity (EE sandbox plane, Task 14): the
+		// enabled backend's endpoint feeds the executor proxy's
+		// allocate-or-bind API — session creation binds, dispatched runs
+		// inherit runs.workspace_id. The same materialized-table read as
+		// SandboxEnabled, resolved live per call.
+		SandboxEndpoint: func() string {
+			if sandboxSettings == nil {
+				return ""
+			}
+			row, err := nacosrt.EnabledSandbox(sandboxSettings.DB().DB)
+			if err != nil || row == nil {
+				return ""
+			}
+			return row.Endpoint
+		},
+		// The executor volume root: workspace browsing resolves session →
+		// workspace id → <root>/<id> and never leaves the volume.
+		WorkspaceRoot: os.Getenv("WOCA_WORKSPACE_ROOT"),
 		// Service-plane gateway listener (product design v1.5 topology split):
 		// the machine registry the edge access point calls home to —
 		// enrollment, renewal, heartbeats, /gw/resolve, /gw/bridges — plus

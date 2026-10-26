@@ -89,13 +89,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.auditEvent(r, "run_create", req.SessionID)
-	run, sid, pos, err := s.startRun(req.SessionID, human, req.Workspace, req.Attachments)
+	run, sid, pos, err := s.startRun(r.Context(), req.SessionID, human, req.Workspace, req.Attachments)
 	if err == errQueueFull {
 		http.Error(w, "session run queue is full", http.StatusConflict)
 		return
 	}
-	if errors.Is(err, errNoSandboxExecutor) {
-		http.Error(w, errNoSandboxExecutor.Error(), http.StatusServiceUnavailable)
+	if errors.Is(err, errNoSandboxExecutor) || errors.Is(err, errSandboxBinding) {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	if err != nil {
@@ -444,9 +444,9 @@ var errQueueFull = errors.New("session run queue is full")
 // session already has maxQueuedPerSession runs waiting.
 // In dispatch mode (DispatchToQueue) the run goes to the shared queue
 // instead — see enqueueRun.
-func (s *Server) startRun(sessionID string, human messages.Message, workspace string, atts []runAttachment) (*Run, string, int, error) {
+func (s *Server) startRun(ctx context.Context, sessionID string, human messages.Message, workspace string, atts []runAttachment) (*Run, string, int, error) {
 	if s.dispatch {
-		return s.enqueueRun(sessionID, human, workspace, atts)
+		return s.enqueueRun(ctx, sessionID, human, workspace, atts)
 	}
 	run, sid, workspace, _ := s.newRegisteredRun(sessionID, workspace) // preloaded history discarded: reloaded after acquiring the gate so the previous run's persisted reply is visible
 	s.log.Info().Str("run", run.id).Str("session", sid).Msg("run queued")
@@ -523,6 +523,13 @@ func (s *Server) startRun(sessionID string, human messages.Message, workspace st
 // run must never wait on an executor that cannot execute it sandboxed.
 var errNoSandboxExecutor = errors.New("no sandbox-capable executor available")
 
+// errSandboxBinding is returned by enqueueRun (and surfaced as HTTP 503)
+// when a dispatched run's workspace could not be bound to a sandbox
+// workspace identity (the executor proxy is unreachable or refused): the
+// run fails closed instead of dispatching without a workspace the executor
+// could route to.
+var errSandboxBinding = errors.New("sandbox workspace binding unavailable")
+
 // sandboxAckLiveWindow bounds how old an executor's capability ack may be
 // to count as live (the executor heartbeat refreshes every 10s, design
 // §10.2 M-4).
@@ -564,7 +571,7 @@ func (s *Server) hasLiveExecutor() bool {
 // deliberately not registered, so run-scoped SSE falls through to the
 // ledger path (a registered run with no local execution would subscribe
 // clients to a stream that never fires).
-func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace string, atts []runAttachment) (*Run, string, int, error) {
+func (s *Server) enqueueRun(ctx context.Context, sessionID string, human messages.Message, workspace string, atts []runAttachment) (*Run, string, int, error) {
 	// Dispatch precondition (design §4.5 / spec §3.5): an off-host run may
 	// only queue when a live sandbox-capable executor exists — otherwise the
 	// run would sit queued behind executors that cannot execute it sandboxed.
@@ -577,6 +584,16 @@ func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace 
 	}
 	if workspace == "" {
 		workspace = s.workdir
+	}
+	// Workspace identity (Task 14): the run inherits the session's bound
+	// sandbox workspace so the executor can route execution and the
+	// per-workspace claim mutex holds. Sessions that predate the binding
+	// plane backfill exactly once through the same allocate-or-bind API,
+	// and the identity is written back to the session meta. A binding
+	// failure fails the dispatch closed (503).
+	wsID, err := s.resolveRunWorkspace(ctx, sid, workspace)
+	if err != nil {
+		return nil, sid, 0, err
 	}
 	// The queued run's context derives from the server lifecycle (rootCtx),
 	// not the triggering request: a dispatched run must outlive its HTTP
@@ -610,6 +627,7 @@ func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace 
 		SessionID:      sid,
 		ThreadID:       thread,
 		ConfigSnapshot: blob,
+		WorkspaceID:    wsID,
 	}); err != nil {
 		// The session constraint is the cross-instance admission gate; the
 		// run-id collision is a process-wide outage signal.
@@ -633,6 +651,39 @@ func (s *Server) enqueueRun(sessionID string, human messages.Message, workspace 
 	// child stays registered on rootCtx until shutdown.
 	go s.cancelQueuedRunAtTerminal(runCtx, runCancel, run.id)
 	return run, sid, 0, nil
+}
+
+// resolveRunWorkspace returns the sandbox workspace identity a dispatched
+// run executes in: the session's recorded binding (the normal path — a
+// session created under the binding plane already carries it), or — for
+// sessions persisted before the binding plane existed — one allocate-or-
+// bind call backfilled into the session meta so later runs inherit. Empty
+// means the run carries no workspace identity (the personal posture: no
+// tenant plane, no executor volume). Binding failures are errSandboxBinding.
+func (s *Server) resolveRunWorkspace(ctx context.Context, sessionID, fallback string) (string, error) {
+	if wsID := s.sessions.workspaceIDOf(sessionID); wsID != "" {
+		return wsID, nil
+	}
+	tenant, endpoint, ok := s.bindingTarget(ctx)
+	if !ok {
+		return "", nil
+	}
+	// The source workspace is the session's recorded one (the canonical
+	// value createSession bound against), falling back to the request's
+	// workspace only for sessions with no metadata at all.
+	src := s.sessions.workspaceOf(sessionID)
+	if src == "" {
+		src = fallback
+	}
+	if src == "" {
+		return "", nil
+	}
+	wsID, err := s.bindWorkspace(ctx, endpoint, tenant, workspaceSourceKey(tenant, src))
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errSandboxBinding, err)
+	}
+	s.sessions.setWorkspaceID(sessionID, wsID)
+	return wsID, nil
 }
 
 // cancelQueuedRunAtTerminal releases a queue-dispatched run's context once

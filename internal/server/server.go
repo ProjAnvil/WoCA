@@ -75,6 +75,20 @@ type Config struct {
 	// require a live sandbox-capable worker (503 otherwise). Nil counts
 	// as no sandbox.
 	SandboxEnabled func() bool
+	// SandboxEndpoint returns the enabled sandbox backend's endpoint live
+	// ("" = none; the enterprise entry reads the materialized
+	// sandbox_backends table). When the off-host posture is active, session
+	// creation calls the backend's executor proxy to allocate-or-bind a
+	// sandbox workspace identity (POST {Endpoint}/internal/bindings) and
+	// dispatched runs carry it in runs.workspace_id. Nil keeps the personal
+	// posture: sessions never bind.
+	SandboxEndpoint func() string
+	// WorkspaceRoot is the executor volume root (EE sandbox plane): when
+	// set, the workspace file surfaces resolve session → workspace id →
+	// <root>/<id> and refuse anything outside the volume, and the folder
+	// browser jails to it. Empty keeps the personal posture (the request's
+	// workspace path resolves as-is) completely unchanged.
+	WorkspaceRoot string
 	// MsgPlane is the run dispatch message plane (internal/ee/msgplane). Nil
 	// keeps pure-PG queuing; with a plane, dispatched runs additionally
 	// notify NATS so idle workers wake instantly (progressive overlay —
@@ -202,11 +216,15 @@ type Server struct {
 	workerID       string
 	// dispatch enqueues runs for an executor to execute (Phase 3 wiring);
 	// runsOffHost opens the run surface to remote tenants; sandboxEnabled
-	// is its live refinement (see Config.SandboxEnabled).
-	dispatch       bool
-	runsOffHost    bool
-	sandboxEnabled func() bool
-	ackDB          *wocadb.DB // config_acks reads for executor-capability dispatch checks
+	// is its live refinement (see Config.SandboxEnabled); sandboxEndpoint
+	// feeds the session workspace binding; workspaceRoot jails the
+	// workspace surfaces to the executor volume.
+	dispatch        bool
+	runsOffHost     bool
+	sandboxEnabled  func() bool
+	sandboxEndpoint func() string
+	workspaceRoot   string
+	ackDB           *wocadb.DB // config_acks reads for executor-capability dispatch checks
 
 	mu            sync.Mutex
 	runs          map[string]*Run
@@ -282,50 +300,60 @@ func New(cfg Config) *Server {
 		authorizer = authz.NewLocal()
 	}
 	rootCtx, rootCancel := context.WithCancel(context.Background())
+	fsSvc := cfg.FS
+	if cfg.WorkspaceRoot != "" {
+		// EE sandbox plane: with an executor volume, the folder browser may
+		// only ever see that volume — a remote tenant must not browse host
+		// paths through /api/filesystem/*. The personal edition keeps the
+		// configured service untouched.
+		fsSvc = volumeFS(cfg.WorkspaceRoot)
+	}
 	s := &Server{
-		agent:          cfg.Agent,
-		static:         cfg.Static,
-		log:            cfg.Logger,
-		auth:           auth,
-		obsManaged:     cfg.ObservabilityConsoleManaged,
-		authz:          authorizer,
-		nativeAuth:     cfg.NativeAuth,
-		anonymousAPI:   cfg.AnonymousAPIPaths,
-		hostGateExempt: cfg.HostGateExemptPrefixes,
-		streamReauth:   cfg.StreamReauth,
-		fs:             cfg.FS,
-		extras:         cfg.Extras,
-		audit:          cfg.Audit,
-		ledger:         cfg.RunLedger,
-		msgplane:       cfg.MsgPlane,
-		workerID:       newWorkerID(),
-		dispatch:       cfg.DispatchToQueue && cfg.RunLedger != nil,
-		runsOffHost:    cfg.RunsOffHost,
-		sandboxEnabled: cfg.SandboxEnabled,
-		ackDB:          stateDB,
-		runs:           map[string]*Run{},
-		sessions:       store,
-		admission:      newAdmission(),
-		state:          state,
-		owner:          newStateOwner(),
-		hub:            eventbus.NewLocalWithRetention(1024),
-		workdir:        cfg.WorkDir,
-		grafanaURL:     cfg.GrafanaURL,
-		settings:       cfg.Settings,
-		memory:         cfg.Memory,
-		memEngine:      cfg.MemoryEngine,
-		rebuildMemory:  cfg.RebuildMemory,
-		rebuildModel:   cfg.RebuildModel,
-		modelCatalog:   cfg.ModelCatalog,
-		resolveModel:   cfg.ResolveModel,
-		cfgLive:        cfg.CfgLive,
-		setThinking:    cfg.SetThinkingBudget,
-		quotaFetch:     cfg.Quota,
-		applyClaudeEnv: cfg.ApplyClaudeEnv,
-		plugins:        cfg.Plugins,
-		installPlugin:  cfg.InstallPlugin,
-		rootCtx:        rootCtx,
-		rootCancel:     rootCancel,
+		agent:           cfg.Agent,
+		static:          cfg.Static,
+		log:             cfg.Logger,
+		auth:            auth,
+		obsManaged:      cfg.ObservabilityConsoleManaged,
+		authz:           authorizer,
+		nativeAuth:      cfg.NativeAuth,
+		anonymousAPI:    cfg.AnonymousAPIPaths,
+		hostGateExempt:  cfg.HostGateExemptPrefixes,
+		streamReauth:    cfg.StreamReauth,
+		fs:              fsSvc,
+		extras:          cfg.Extras,
+		audit:           cfg.Audit,
+		ledger:          cfg.RunLedger,
+		msgplane:        cfg.MsgPlane,
+		workerID:        newWorkerID(),
+		dispatch:        cfg.DispatchToQueue && cfg.RunLedger != nil,
+		runsOffHost:     cfg.RunsOffHost,
+		sandboxEnabled:  cfg.SandboxEnabled,
+		sandboxEndpoint: cfg.SandboxEndpoint,
+		workspaceRoot:   cfg.WorkspaceRoot,
+		ackDB:           stateDB,
+		runs:            map[string]*Run{},
+		sessions:        store,
+		admission:       newAdmission(),
+		state:           state,
+		owner:           newStateOwner(),
+		hub:             eventbus.NewLocalWithRetention(1024),
+		workdir:         cfg.WorkDir,
+		grafanaURL:      cfg.GrafanaURL,
+		settings:        cfg.Settings,
+		memory:          cfg.Memory,
+		memEngine:       cfg.MemoryEngine,
+		rebuildMemory:   cfg.RebuildMemory,
+		rebuildModel:    cfg.RebuildModel,
+		modelCatalog:    cfg.ModelCatalog,
+		resolveModel:    cfg.ResolveModel,
+		cfgLive:         cfg.CfgLive,
+		setThinking:     cfg.SetThinkingBudget,
+		quotaFetch:      cfg.Quota,
+		applyClaudeEnv:  cfg.ApplyClaudeEnv,
+		plugins:         cfg.Plugins,
+		installPlugin:   cfg.InstallPlugin,
+		rootCtx:         rootCtx,
+		rootCancel:      rootCancel,
 	}
 	// A nil SandboxEnabled counts as "no sandbox" (fail-closed), never as
 	// a nil-func panic on the request path.
