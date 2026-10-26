@@ -693,14 +693,24 @@ func TestServiceMaxConcurrent(t *testing.T) {
 	if code := call(t, srv, http.MethodPost, "/sandbox/create", map[string]any{"workspace": "ws_cap2", "cwd": "/workspace"}, nil); code != http.StatusServiceUnavailable {
 		t.Fatalf("create over capacity: status %d (want 503)", code)
 	}
-	// An external load hook counts too: active sandboxes 0, but ActiveRuns
-	// already reports saturation.
+
+	// The cfg.ActiveRuns hook never gates admission: it counts runs for
+	// the ack heartbeat, a different unit than the sandbox cap. A
+	// saturated hook with zero live sandboxes must still admit creates.
 	cfg2, _ := newTestConfig(t)
 	cfg2.MaxConcurrent = 1
-	cfg2.ActiveRuns = func() int { return 1 }
-	_, srv2 := startTestService(t, cfg2)
-	if code := call(t, srv2, http.MethodPost, "/sandbox/create", map[string]any{"cwd": "/workspace"}, nil); code != http.StatusServiceUnavailable {
-		t.Fatalf("create with external load saturated: status %d (want 503)", code)
+	cfg2.ActiveRuns = func() int { return 99 }
+	svc2, srv2 := startTestService(t, cfg2)
+	sbx2 := createSandbox(t, srv2, "") // saturated hook, zero sandboxes → 200
+	// The admission counter is the registry itself.
+	if got := svc2.ActiveRuns(); got != 1 {
+		t.Fatalf("ActiveRuns after create: %d (want 1)", got)
+	}
+	if code := call(t, srv2, http.MethodDelete, "/sandbox/"+sbx2, nil, nil); code != http.StatusNoContent {
+		t.Fatalf("destroy: status %d", code)
+	}
+	if got := svc2.ActiveRuns(); got != 0 {
+		t.Fatalf("ActiveRuns after destroy: %d (want 0)", got)
 	}
 }
 
@@ -1242,6 +1252,67 @@ func writeViaEndpoint(t *testing.T, srv *httptest.Server, sbx, p, content string
 		"path": p, "content": b64(content), "mode": 420,
 	}, nil); code != http.StatusNoContent {
 		t.Fatalf("write %s: status %d", p, code)
+	}
+}
+
+func TestServiceMaxFileBytes(t *testing.T) {
+	cfg, _ := newTestConfig(t)
+	cfg.MaxFileBytes = 4096
+	_, srv := startTestService(t, cfg)
+
+	// A sandbox with only small files: every file endpoint works.
+	small := createSandbox(t, srv, "ws_small_files")
+	writeViaEndpoint(t, srv, small, "/workspace/small.txt", "tiny")
+	var readOut struct {
+		Content string `json:"content"`
+	}
+	if code := call(t, srv, http.MethodGet, "/sandbox/"+small+"/read?path=/workspace/small.txt", nil, &readOut); code != http.StatusOK || unb64(t, readOut.Content) != "tiny" {
+		t.Fatalf("read small: code=%d content=%q", code, unb64(t, readOut.Content))
+	}
+	if code := call(t, srv, http.MethodGet, "/sandbox/"+small+"/stat?path=/workspace/small.txt", nil, nil); code != http.StatusOK {
+		t.Fatalf("stat small: status %d", code)
+	}
+	if code := call(t, srv, http.MethodPost, "/sandbox/"+small+"/grep", map[string]any{"root": "/workspace", "pattern": "tiny"}, nil); code != http.StatusOK {
+		t.Fatalf("grep small: status %d", code)
+	}
+
+	// A sandbox carrying an 8 KiB file against the 4 KiB cap. The
+	// refusal happens at the tar header's size field — before a single
+	// byte of the entry is read — and the error body names the file and
+	// the cap.
+	big := createSandbox(t, srv, "ws_big_file")
+	writeViaEndpoint(t, srv, big, "/workspace/huge.bin", strings.Repeat("z", 8192))
+	var errOut struct {
+		Error string `json:"error"`
+	}
+	if code := call(t, srv, http.MethodGet, "/sandbox/"+big+"/read?path=/workspace/huge.bin", nil, &errOut); code != http.StatusRequestEntityTooLarge ||
+		!strings.Contains(errOut.Error, "4096") || !strings.Contains(errOut.Error, "huge.bin") {
+		t.Fatalf("read huge: code=%d error=%q", code, errOut.Error)
+	}
+	if code := call(t, srv, http.MethodGet, "/sandbox/"+big+"/stat?path=/workspace/huge.bin", nil, &errOut); code != http.StatusRequestEntityTooLarge ||
+		!strings.Contains(errOut.Error, "4096") {
+		t.Fatalf("stat huge: code=%d error=%q", code, errOut.Error)
+	}
+	// Grep walks the tree and refuses the over-cap file even when the
+	// pattern would not have matched it.
+	if code := call(t, srv, http.MethodPost, "/sandbox/"+big+"/grep", map[string]any{"root": "/workspace", "pattern": "zz"}, &errOut); code != http.StatusRequestEntityTooLarge ||
+		!strings.Contains(errOut.Error, "huge.bin") {
+		t.Fatalf("grep huge: code=%d error=%q", code, errOut.Error)
+	}
+
+	// Glob only walks headers, so the capped file still lists fine.
+	var globOut struct {
+		Matches []string `json:"matches"`
+	}
+	if code := call(t, srv, http.MethodPost, "/sandbox/"+big+"/glob", map[string]any{"pattern": "/workspace/*.bin"}, &globOut); code != http.StatusOK || len(globOut.Matches) != 1 {
+		t.Fatalf("glob capped file: code=%d matches=%v", code, globOut.Matches)
+	}
+
+	// Zero config normalizes to the 8 MiB default.
+	cfg2, _ := newTestConfig(t)
+	svc2, _ := startTestService(t, cfg2)
+	if svc2.cfg.MaxFileBytes != 8<<20 {
+		t.Fatalf("default MaxFileBytes: %d (want %d)", svc2.cfg.MaxFileBytes, 8<<20)
 	}
 }
 

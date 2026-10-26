@@ -65,6 +65,13 @@ type ServiceConfig struct {
 	// MaxConcurrent caps concurrent live sandboxes; 0 means unlimited. A
 	// create past the cap answers 503 (design §3.3 rule 4).
 	MaxConcurrent int
+	// MaxFileBytes caps how many bytes of any single file the
+	// file-surface endpoints (read/grep/stat) may pull through CopyOut;
+	// a larger file answers 413 naming the file and the cap. Zero or
+	// negative defaults to 8 MiB — the same bound as the session output
+	// buffer. Glob and archive downloads stream headers/bytes through
+	// without buffering, so they are not subject to the per-file cap.
+	MaxFileBytes int64
 	// Logger receives lifecycle and error logs. The zero value disables
 	// logging.
 	Logger zerolog.Logger
@@ -78,10 +85,12 @@ type ServiceConfig struct {
 	// given identity — the workspace/run id the executor knows at create
 	// time. The service passes the map through into CreateSpec.Labels.
 	Labels func(runID string) map[string]string
-	// ActiveRuns, when set, is an external load signal consulted by the
-	// create admission check alongside the service's own live-sandbox
-	// count. The service's own count is exposed via (*Service).ActiveRuns
-	// for the executor ack heartbeat's Load field.
+	// ActiveRuns is a passive hook reporting the executor-side run count
+	// for the ack heartbeat's Load figure (design §10.1); a nil hook means
+	// the heartbeat reports 0. It is deliberately NOT consulted for
+	// admission: it counts runs, while MaxConcurrent caps sandboxes — a
+	// healthy executor with MaxConcurrent live runs and zero sandboxes
+	// must still accept creates.
 	ActiveRuns func() int
 	// APIKey enables bearer authentication on every endpoint (contract
 	// §1) when non-empty. Empty means explicitly unauthenticated — a WARN
@@ -115,6 +124,9 @@ func NewService(cfg ServiceConfig) http.Handler {
 	if cfg.APIKey == "" {
 		log.Warn().Msg("sandbox service authentication is disabled (empty API key); relying on network isolation")
 	}
+	if cfg.MaxFileBytes <= 0 {
+		cfg.MaxFileBytes = 8 << 20
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		cfg:       cfg,
@@ -136,8 +148,9 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.handler.ServeHTTP(w, r)
 }
 
-// ActiveRuns reports the number of live sandboxes — the executor ack
-// heartbeat's Load figure.
+// ActiveRuns reports the number of live sandboxes in the registry — the
+// admission counter for MaxConcurrent, and the figure an executor may
+// report as its ack Load when it has no separate run count.
 func (s *Service) ActiveRuns() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -311,14 +324,12 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Admission (§3.3 rule 4): own live sandboxes plus any external load
-	// signal, against the same cap.
-	if s.cfg.MaxConcurrent > 0 {
-		if s.ActiveRuns() >= s.cfg.MaxConcurrent ||
-			(s.cfg.ActiveRuns != nil && s.cfg.ActiveRuns() >= s.cfg.MaxConcurrent) {
-			writeErr(w, http.StatusServiceUnavailable, "sandbox service at capacity")
-			return
-		}
+	// Admission (§3.3 rule 4): this service's live sandboxes against the
+	// configured cap. The cfg.ActiveRuns hook is a different unit (runs
+	// for the ack heartbeat) and never gates this check.
+	if s.cfg.MaxConcurrent > 0 && s.ActiveRuns() >= s.cfg.MaxConcurrent {
+		writeErr(w, http.StatusServiceUnavailable, "sandbox service at capacity")
+		return
 	}
 
 	// The workspace lock is taken before anything is created and held
@@ -563,28 +574,31 @@ func (s *Service) handleKill(_ *sandbox, ses *procSession, w http.ResponseWriter
 
 // --- file surface -------------------------------------------------------------------
 
-// copyOutEntry streams CopyOut(p) and returns its first tar entry plus the
-// entry data for regular files — the generic Backend's only metadata-and-
-// content surface for a single path.
-func copyOutEntry(ctx context.Context, c Container, p string) (*tar.Header, []byte, error) {
+// copyOutHeader streams CopyOut(p) just far enough to return the first
+// tar entry's header, with the reader positioned at that entry's data.
+// The returned close function is always non-nil (a no-op on error), so
+// callers may defer it unconditionally; they read at most what they need,
+// which is what bounds memory on the file surface.
+func copyOutHeader(ctx context.Context, c Container, p string) (*tar.Header, *tar.Reader, func(), error) {
 	rc, err := c.CopyOut(ctx, p)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, func() {}, err
 	}
-	defer func() { _ = rc.Close() }()
+	closeFn := func() { _ = rc.Close() }
 	tr := tar.NewReader(rc)
 	hdr, err := tr.Next()
 	if err != nil {
-		return nil, nil, fmt.Errorf("copy out %s: no entry: %w", p, err)
+		closeFn()
+		return nil, nil, func() {}, fmt.Errorf("copy out %s: no entry: %w", p, err)
 	}
-	if hdr.Typeflag != tar.TypeReg {
-		return hdr, nil, nil
-	}
-	data, err := io.ReadAll(tr)
-	if err != nil {
-		return nil, nil, fmt.Errorf("copy out %s: read entry: %w", p, err)
-	}
-	return hdr, data, nil
+	return hdr, tr, closeFn, nil
+}
+
+// fileTooLarge writes the 413 error body naming the offending file and the
+// configured cap.
+func (s *Service) fileTooLarge(w http.ResponseWriter, p string, size int64) {
+	writeErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+		"%s: %d bytes exceeds the %d-byte per-file cap", p, size, s.cfg.MaxFileBytes))
 }
 
 func (s *Service) handleRead(sbx *sandbox, w http.ResponseWriter, r *http.Request) {
@@ -592,13 +606,25 @@ func (s *Service) handleRead(sbx *sandbox, w http.ResponseWriter, r *http.Reques
 	if !absolutePath(w, p) {
 		return
 	}
-	hdr, data, err := copyOutEntry(r.Context(), sbx.container, p)
+	hdr, tr, closeFn, err := copyOutHeader(r.Context(), sbx.container, p)
+	defer closeFn()
 	if err != nil {
 		writeCopyOutErr(w, err, "read")
 		return
 	}
 	if hdr.Typeflag == tar.TypeDir {
 		writeErr(w, http.StatusBadRequest, "path "+p+" is a directory")
+		return
+	}
+	// The entry size is known from the header: refuse over-cap files
+	// before any of their bytes are read.
+	if hdr.Size > s.cfg.MaxFileBytes {
+		s.fileTooLarge(w, p, hdr.Size)
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(tr, s.cfg.MaxFileBytes+1))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "read: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"content": base64.StdEncoding.EncodeToString(data)})
@@ -609,9 +635,15 @@ func (s *Service) handleStat(sbx *sandbox, w http.ResponseWriter, r *http.Reques
 	if !absolutePath(w, p) {
 		return
 	}
-	hdr, _, err := copyOutEntry(r.Context(), sbx.container, p)
+	// Metadata only: the header is read, the entry data never is.
+	hdr, _, closeFn, err := copyOutHeader(r.Context(), sbx.container, p)
+	defer closeFn()
 	if err != nil {
 		writeCopyOutErr(w, err, "stat")
+		return
+	}
+	if hdr.Typeflag != tar.TypeDir && hdr.Size > s.cfg.MaxFileBytes {
+		s.fileTooLarge(w, p, hdr.Size)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -820,6 +852,12 @@ func (s *Service) handleGrep(sbx *sandbox, w http.ResponseWriter, r *http.Reques
 		rel := strings.TrimPrefix(name, top+"/")
 		if rel == name || hiddenSegments(rel) {
 			continue
+		}
+		// Refuse over-cap files from the header size — before reading a
+		// single byte of the entry.
+		if hdr.Size > s.cfg.MaxFileBytes {
+			s.fileTooLarge(w, body.Root+"/"+rel, hdr.Size)
+			return
 		}
 		data, err := io.ReadAll(tr)
 		if err != nil {
