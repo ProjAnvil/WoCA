@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/projanvil/woca/internal/settings"
@@ -54,7 +55,11 @@ type Runtime struct {
 	cli  *Client
 	ip   string
 	port int
-	pack *Pack // last applied/received pack
+	// pack is the last applied/received pack. Whole-pack swap semantics:
+	// apply (Loop's subscription goroutine) publishes a complete new pack,
+	// readers (LastGeneration — the scheduler/worker heartbeats, watchLoop's
+	// md5 seed) load it — atomic pointer, never a torn or racy read.
+	pack atomic.Pointer[Pack]
 }
 
 // New validates the assembly and prepares the runtime without touching
@@ -167,8 +172,8 @@ func (r *Runtime) beatLoop(ctx context.Context) {
 
 func (r *Runtime) watchLoop(ctx context.Context) {
 	md5 := ""
-	if r.pack != nil {
-		if raw, err := r.pack.Encode(); err == nil {
+	if p := r.pack.Load(); p != nil {
+		if raw, err := p.Encode(); err == nil {
 			md5 = contentMD5(raw)
 		}
 	}
@@ -216,7 +221,7 @@ func (r *Runtime) watchLoop(ctx context.Context) {
 // small on purpose: settings overlay + secrets, then the shared tables,
 // then the ack — each independently readable.
 func (r *Runtime) apply(ctx context.Context, pack *Pack) error {
-	r.pack = pack
+	r.pack.Store(pack)
 	if r.cfg.RawPack != nil {
 		r.cfg.RawPack(pack)
 	}
@@ -346,13 +351,14 @@ func (r *Runtime) ack(pack *Pack) {
 }
 
 // LastGeneration returns the generation of the last applied pack ("" when
-// none was delivered yet) — the worker's capability heartbeat rewrites
-// its ack row with it between pack deliveries.
+// none was delivered yet) — the worker's and scheduler's capability
+// heartbeats rewrite their ack rows with it between pack deliveries, from
+// their own goroutines; the atomic load keeps that race-free.
 func (r *Runtime) LastGeneration() string {
-	if r.pack == nil {
-		return ""
+	if p := r.pack.Load(); p != nil {
+		return p.Generation
 	}
-	return r.pack.Generation
+	return ""
 }
 
 // autodetectIP picks the first non-loopback IPv4 address (container

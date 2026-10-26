@@ -6,7 +6,11 @@ package nacosrt
 
 import (
 	"context"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -127,8 +131,52 @@ func TestLastGeneration(t *testing.T) {
 	if got := r.LastGeneration(); got != "" {
 		t.Fatalf("empty runtime LastGeneration = %q, want \"\"", got)
 	}
-	r.pack = &Pack{Version: 2, Generation: "g7"}
+	r.pack.Store(&Pack{Version: 2, Generation: "g7"})
 	if got := r.LastGeneration(); got != "g7" {
 		t.Fatalf("LastGeneration = %q, want g7", got)
 	}
+}
+
+// TestRuntimePackConcurrent: pack swaps (the subscription loop's apply,
+// Loop's goroutine) race against LastGeneration readers (the scheduler's
+// and worker's heartbeat goroutines call it every 10s) — the whole-pack
+// pointer swap must be atomic. The old plain field made this a data race
+// the -race detector flags here.
+func TestRuntimePackConcurrent(t *testing.T) {
+	rt, err := New(Config{
+		Server: "http://nacos", Service: "woca-server", Advertise: "127.0.0.1:8080",
+	}, zerolog.Nop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var wg sync.WaitGroup
+	for range 4 { // writers: watchLoop-shaped apply churn
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; ctx.Err() == nil; i++ {
+				if err := rt.apply(ctx, &Pack{Version: packVersion, Generation: "g-" + strconv.Itoa(i)}); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	for range 4 { // readers: heartbeat-shaped generation polls
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				if g := rt.LastGeneration(); g != "" && !strings.HasPrefix(g, "g-") {
+					t.Errorf("LastGeneration = %q, want a g-<n> value", g)
+					return
+				}
+			}
+		}()
+	}
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	wg.Wait()
 }
