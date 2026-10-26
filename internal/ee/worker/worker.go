@@ -230,7 +230,10 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 		// would lie.
 		if sbxDownload != nil {
 			if err := sbxDownload(true); err != nil {
-				w.emitAndMirror(ctx, run.RunID, "error", map[string]any{"message": "sandbox download: " + err.Error()})
+				// The mode-neutral prefix: in workspace mode this is a
+				// sync confirmation, in archive mode a download — either
+				// way it is the sandbox's product handoff that failed.
+				w.emitAndMirror(ctx, run.RunID, "error", map[string]any{"message": "sandbox artifacts: " + err.Error()})
 				w.metrics.finish("error", time.Since(started))
 				if w.states != nil {
 					w.states.Clear(run.SessionID, run.RunID)

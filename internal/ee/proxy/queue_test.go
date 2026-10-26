@@ -186,7 +186,8 @@ func TestQueueFastPath(t *testing.T) {
 // TestQueueSetLazilyBuildsPerExecutor: one queue per executor id, shared.
 func TestQueueSetLazilyBuildsPerExecutor(t *testing.T) {
 	s := newQueueSet(Limits{PerExecutor: 2, QueueLen: 8, TenantQuota: 4, QueueTimeout: 5 * time.Second})
-	if s.get("e1") != s.get("e1") {
+	first := s.get("e1")
+	if s.get("e1") != first {
 		t.Fatal("queue set rebuilt an existing executor queue")
 	}
 	if s.get("e1") == s.get("e2") {

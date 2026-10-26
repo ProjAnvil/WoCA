@@ -277,11 +277,11 @@ run (today: `contract-http`, `cfbridge`).
 - **Run gating**: with `WOCA_RUN_DISPATCH=queue` +
   `WOCA_RUNS_OFF_HOST=true` on woca-scheduler, `POST /api/runs` from remote
   tenants answers 403 while no backend is enabled, and 503
-  ("no sandbox-capable worker available") while no live worker acks the
-  `sandbox` capability (the worker rewrites its capability ack every
-  10 s; the dispatcher's live window is 15 s). Queue dispatch is a hard
-  prerequisite for the off-host posture — runs execute on workers, not
-  in the server process.
+  ("no sandbox-capable executor available") while no live executor acks
+  the `sandbox` capability (the executor rewrites its capability ack
+  every 10 s; the dispatcher's live window is 15 s). Queue dispatch is a
+  hard prerequisite for the off-host posture — runs execute on the
+  sandbox plane, not in the server process.
 
 ### Pack version
 
@@ -306,10 +306,42 @@ any other version is refused outright instead of half-applying.
 - The run workspace must be a directory shared between the dispatching
   woca-scheduler and the executing workers (the same volume both roles
   mount); products land back in it after each run.
+- **Executor runtime hygiene**: the executor runs a periodic labeled GC
+  (every 60 s) removing sandbox containers it owns that are no longer in
+  its live registry (crash leftovers, failed teardowns) and crashed
+  sync staging directories off the workspace volume, plus a disk patrol
+  that WARN-alarms when the workspace-root filesystem passes its
+  watermark (default 85%, `WOCA_PATROL_DISK_PCT` to tune) or a single
+  workspace directory outgrows `sandbox-archive-max-bytes`. Alarms only
+  — enforcement stays with the archive cap and container teardown.
 
 Reference e2e: `make sandboxlab` (e2e/sandboxlab) drives this whole
 chain against the containerized fakesandbox, including the 403/503
 gate postures.
+
+### Host kernel & runtime upgrade discipline (spec §8.5)
+
+Sandboxes share the host kernel (the gVisor tier aside — see the
+isolation tiers in the design doc §8.1). The window between a
+runc/containerd escape-class CVE going public and the node being
+patched is woca's exposure window; the hardening profile narrows the
+attack surface but does not close the class. The discipline:
+
+1. Security updates for the node's container runtime (runc/containerd)
+   and host kernel are part of the routine maintenance flow — not an
+   incident-only activity.
+2. Escape-class high-severity container CVEs carry a response SLO:
+   complete a rolling upgrade of the affected nodes within **7 days**
+   of the patch being available.
+3. Rolling executor restarts lose no workspace state (workspaces live
+   on the shared volume, not in the executor): in-flight runs fail per
+   the fault semantics (the run ledger records the failure; nothing
+   falls back to local execution), and the executor's startup GC
+   removes the labeled leftover containers a crashed predecessor left
+   behind.
+4. There is deliberately no kernel-vulnerability scanning or automatic
+   upgrade: this is a manual discipline, executed and evidenced through
+   the regular log/audit trail.
 
 ### Demo posture never rides this stack (security note)
 

@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -60,6 +61,7 @@ const (
 	advertiseAddrEnv = "WOCA_EXECUTOR_ADVERTISE"
 	workspaceRootEnv = "WOCA_WORKSPACE_ROOT"
 	listenEnv        = "WOCA_EXECUTOR_LISTEN"
+	patrolDiskPctEnv = "WOCA_PATROL_DISK_PCT"
 )
 
 func main() {
@@ -136,9 +138,10 @@ func newExecutorRoot() *cobra.Command {
 				return err
 			}
 			id := executorID()
+			store := executor.NewWorkspaceStore(workspaceRoot, st.Load().SandboxArchiveMaxBytes)
 			cfg := executor.ServiceConfig{
 				Backend:       backend,
-				Store:         executor.NewWorkspaceStore(workspaceRoot, st.Load().SandboxArchiveMaxBytes),
+				Store:         store,
 				MaxConcurrent: maxConcurrent,
 				Logger:        log,
 				Hardening:     hardening,
@@ -152,16 +155,36 @@ func newExecutorRoot() *cobra.Command {
 			}
 			defer func() { _ = svc.Close() }()
 
-			// Startup sweep: remove the labeled leftovers a crashed
-			// predecessor of this (stable) identity left behind. Also the
-			// daemon-reachability gate: an unreachable docker socket is a
-			// configuration error, not a degraded mode.
-			if err := sweepLabeledSandboxes(backend, id, log); err != nil {
+			// Labeled GC (spec §8.4): the startup sweep removes what a
+			// crashed predecessor of this (stable) identity left behind and
+			// doubles as the daemon-reachability gate (an unreachable docker
+			// socket is a configuration error, not a degraded mode); the
+			// periodic pass collects anything torn down uncleanly later, and
+			// sweeps crashed staging/prev sync artifacts off the workspace
+			// volume.
+			collector := executor.NewCollector(executor.CollectorConfig{
+				Backend:    backend,
+				ExecutorID: id,
+				Store:      store,
+				Active:     svc.ActiveSandboxes,
+				Logger:     log,
+			})
+			if err := collector.StartupSweep(cmd.Context()); err != nil {
 				return err
 			}
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+
+			// Background maintenance: the periodic labeled GC pass and the
+			// disk patrol (spec §8.4's third disk closure — watermark and
+			// per-workspace size alarms).
+			go collector.Run(ctx)
+			go executor.PatrolLoop(ctx, executor.PatrolConfig{
+				Store:   store,
+				Logger:  log,
+				DiskPct: patrolDiskPct(log),
+			})
 
 			// Registry + config delivery: fail closed without nacos.
 			nacosBase := nacosrt.ServerFromEnv()
@@ -312,31 +335,22 @@ func apiKeyFor(db *wocadb.DB, st *settings.Store, params *executor.ParamsSource,
 	return st.GetSecret("sandbox-api-key:" + row.ID)
 }
 
-// sweepLabeledSandboxes removes every sandbox container this executor
-// identity created (label woca.executor=<id>): at boot the in-memory
-// registry is empty, so anything still labeled is a crashed
-// predecessor's leftover. This is the startup half of the labeled GC
-// (Task 18 adds the periodic pass); it doubles as the daemon gate — an
-// unreachable socket fails the start rather than surfacing mid-run.
-func sweepLabeledSandboxes(backend executor.Backend, executorID string, log zerolog.Logger) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	leftovers, err := backend.List(ctx, map[string]string{
-		executor.LabelSandbox:  "1",
-		executor.LabelExecutor: executorID,
-	})
-	if err != nil {
-		return fmt.Errorf("executor: startup sweep: docker daemon unreachable or unreadable: %w", err)
+// patrolDiskPct resolves the disk-watermark alarm threshold from
+// WOCA_PATROL_DISK_PCT (percent; default 85, spec §8.4). A missing or
+// malformed value falls back to the default with a WARN — the patrol is
+// an alarm plane, and a bad knob must not take the executor down.
+func patrolDiskPct(log zerolog.Logger) float64 {
+	v := strings.TrimSpace(os.Getenv(patrolDiskPctEnv))
+	if v == "" {
+		return 85
 	}
-	for _, c := range leftovers {
-		if err := c.Remove(ctx, true); err != nil {
-			log.Warn().Err(err).Str("sandbox", c.ID()).Msg("executor: startup sweep: leftover removal failed (the periodic GC retries)")
-		}
+	p, err := strconv.ParseFloat(v, 64)
+	if err != nil || p < 1 || p > 100 {
+		log.Warn().Str("env", patrolDiskPctEnv).Str("value", v).
+			Msg("executor: unparsable disk watermark threshold, using 85")
+		return 85
 	}
-	if len(leftovers) > 0 {
-		log.Info().Int("count", len(leftovers)).Msg("executor: startup sweep removed leftover sandbox containers")
-	}
-	return nil
+	return p
 }
 
 // advertiseAddr resolves the externally routable host:port the proxy

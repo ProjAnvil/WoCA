@@ -217,7 +217,7 @@ func (c *FakeContainer) CopyIn(ctx context.Context, dstDir string, tarball io.Re
 		if err != nil {
 			return fmt.Errorf("fake container %s: CopyIn gzip: %w", c.id, err)
 		}
-		defer gz.Close()
+		defer func() { _ = gz.Close() }() // read-side: the error carries nothing actionable
 		src = gz
 	}
 
@@ -517,7 +517,7 @@ func writeTarTree(tw *tar.Writer, name, host string, info os.FileInfo) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }() // read-only handle: nothing actionable
 		if _, err := io.Copy(tw, f); err != nil {
 			return err
 		}

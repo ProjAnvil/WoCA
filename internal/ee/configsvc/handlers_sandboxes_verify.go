@@ -72,7 +72,7 @@ func (s *Service) verifyWorkspace(ctx context.Context, row sandboxPayload) (stri
 		s.log.Warn().Err(err).Str("backend_id", row.ID).Msg("sandbox verification: binding call failed")
 		return "", errVerifyBindUnrep
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		var errOut struct {
 			Error string `json:"error"`

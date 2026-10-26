@@ -10,7 +10,7 @@ import "fmt"
 // the run dispatcher checks before queueing runs (design §10.2 M-4).
 type ConfigAck struct {
 	ServiceID    string
-	Role         string // server | worker | scheduler | config
+	Role         string // server | worker | scheduler | config | executor
 	Generation   string
 	Addr         string
 	Capabilities string // comma-separated, e.g. "sandbox"

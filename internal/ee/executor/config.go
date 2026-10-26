@@ -65,6 +65,11 @@ func (p *ParamsSource) LastError() error {
 // Refresh reloads the enabled backend row into the cache. On error it
 // keeps the last-known-good snapshot (recorded via LastError) rather than
 // flipping the executor to disabled over a transient read failure.
+//
+// Not safe for concurrent calls: the nacos pack hook invokes it
+// serially, and two overlapping refreshes could store the older read
+// over the newer (the atomic pointer makes each store whole, not the
+// interleaving ordered).
 func (p *ParamsSource) Refresh() {
 	prev := p.state.Load()
 	keep := func(err error) {

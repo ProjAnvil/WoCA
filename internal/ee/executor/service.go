@@ -34,6 +34,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -49,9 +50,9 @@ const (
 	// the internal listing filter on it.
 	LabelSandbox = "woca.sandbox"
 	// LabelExecutor is the stable executor identity that created the
-	// container ("executor-<host>"): the startup sweep and the labeled GC
-	// collect this executor's leftovers with it, and only this executor's
-	// (a shared daemon's other executors are never touched).
+	// container ("executor-<host>"): the labeled GC (gc.go) collects this
+	// executor's leftovers with it, and only this executor's (a shared
+	// daemon's other executors are never touched).
 	LabelExecutor = "woca.executor"
 	// LabelRun is the owning run's id, when known.
 	LabelRun = "woca.run"
@@ -115,6 +116,11 @@ type Service struct {
 
 	mu        sync.Mutex
 	sandboxes map[string]*sandbox
+	// creating counts creates between Backend.Create and the registry
+	// insert (see handleCreate): the labeled GC defers its container
+	// sweep while one is in flight, so a mid-provision sandbox is never
+	// collected as a leftover.
+	creating atomic.Int32
 
 	handler   http.Handler
 	ctx       context.Context
@@ -162,6 +168,21 @@ func (s *Service) ActiveRuns() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.sandboxes)
+}
+
+// ActiveSandboxes snapshots the live registry for the labeled GC
+// (gc.go): the ids of every sandbox this service owns, and whether a
+// create is currently in flight (the GC defers its whole container
+// sweep while one is, so a sandbox between Backend.Create and its
+// registry insert is never collected as a leftover).
+func (s *Service) ActiveSandboxes() (live map[string]struct{}, creating bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	live = make(map[string]struct{}, len(s.sandboxes))
+	for id := range s.sandboxes {
+		live[id] = struct{}{}
+	}
+	return live, s.creating.Load() > 0
 }
 
 // Close stops the reaper and every session pump, force-removes every
@@ -381,6 +402,12 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if spec.WorkDir == "" {
 		spec.WorkDir = sandboxWorkspacePath
 	}
+
+	// In-flight marker for the labeled GC: the container exists in the
+	// daemon before its registry entry does, so while this request runs
+	// ActiveSandboxes reports creating=true and the GC defers its sweep.
+	s.creating.Add(1)
+	defer s.creating.Add(-1)
 
 	c, err := s.cfg.Backend.Create(r.Context(), spec)
 	if err != nil {

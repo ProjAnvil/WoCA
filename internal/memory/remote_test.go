@@ -26,7 +26,6 @@ type fakeLadyM struct {
 	opsItems    []map[string]any
 	opsFallback bool
 	opStatus    int
-	opID        string
 }
 
 func newFakeLadyM(t *testing.T) *fakeLadyM {

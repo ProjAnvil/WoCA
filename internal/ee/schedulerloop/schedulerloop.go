@@ -43,7 +43,7 @@ const ackHeartbeatEvery = 10 * time.Second
 func RunLoop(ctx context.Context, deps servefront.RunLoopDeps) {
 	log := deps.Log
 	if deps.Ledger == nil || deps.Agent == nil {
-		log.Info().Msg("schedulerloop: no run ledger; embedded run loop stays off")
+		log.Info().Msg("schedulerloop: no run ledger or agent; embedded run loop stays off")
 		return
 	}
 

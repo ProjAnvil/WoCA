@@ -72,7 +72,7 @@ type Config struct {
 	// sandbox_backends table). It refines RunsOffHost per request (design
 	// §10.2 M-3): an off-host deployment without a working sandbox fails
 	// closed — POST /api/runs returns 403 — and queued runs additionally
-	// require a live sandbox-capable worker (503 otherwise). Nil counts
+	// require a live sandbox-capable executor (503 otherwise). Nil counts
 	// as no sandbox.
 	SandboxEnabled func() bool
 	// SandboxEndpoint returns the enabled sandbox backend's endpoint live

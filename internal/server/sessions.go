@@ -140,7 +140,7 @@ func (s *Server) bindWorkspace(ctx context.Context, endpoint, tenantID, sourceKe
 		s.log.Warn().Err(err).Msg("workspace binding call failed")
 		return "", errBindingUnreachable
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		var errOut struct {
 			Error string `json:"error"`
@@ -226,7 +226,7 @@ func (s *Server) workspaceTree(dir string) *workspaceNode {
 	if err != nil {
 		return nil
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	return buildVolumeTree(root, filepath.Base(dir))
 }
 
@@ -349,7 +349,7 @@ func (s *Server) workspaceFile(dir, rel string) (*workspaceNode, error) {
 	if err != nil {
 		return nil, errNotFound
 	}
-	defer root.Close()
+	defer func() { _ = root.Close() }()
 	return readVolumeWorkspaceFile(root, rel)
 }
 
