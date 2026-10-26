@@ -2,6 +2,7 @@
 
 日期：2026-10-26
 状态：设计初稿，待评审
+修订：2026-10-26 下午。整合可行性评估结论（2 条 P0、4 条 P1、若干 P2），新增 §8.4/§8.5 沙箱逃逸与外窜防御。
 取代：`docs/superpowers/specs/2026-10-24-openshell-ee-persistent-sandbox-design.md`（OpenShell 路线作废，角色划分与存储模型一并重写）
 前置调研：`docs/openshell-compose-research.md`、`sandbox-lifecycle-routing-research.md`
 
@@ -39,6 +40,11 @@
 | executor 规模 | 可横向扩容。扩容出的实例只接新工作区 |
 | 个人版 | 不接入这条路径。个人版继续本地执行 |
 | 外部方案 | 全部不接：OpenShell、E2B、Daytona、Runloop、CubeSandbox、OpenSandbox、agent-sandbox |
+| workspace 身份映射 | `workspace_bindings.source_key`（tenant_id + 规范化路径）做查找键。session 创建时 allocate-or-bind（§7.1） |
+| 后端入口 | `sandbox_backends.Endpoint` 指向 proxy。真实 executor 地址在 `config_acks.addr`，不进配置表 |
+| 容器加固 | 默认 CapDrop=ALL、no-new-privileges、read-only rootfs、默认 seccomp、pids 上限。零新依赖（§8.4） |
+| degraded 行为 | fail-closed。degraded 工作区的新 run 明确拒绝；ack 回窗自动恢复，或运维显式改绑定（§3.3） |
+| run 并发 | 首期每调度器副本串行（复用 `Worker.Step`）。并发旋钮进开放问题（§3.4、§16） |
 
 ### 2.1 为什么自建
 
@@ -108,12 +114,13 @@ executor 不跑 agent 循环，不持有模型 key，不做授权判断。
 
 ### 3.2 executor-proxy 的定位
 
-proxy 是调度器、队列与流控合在一起的转发层。四件事：
+proxy 是调度器、队列与流控合在一起的转发层。五件事：
 
 1. **生成工作区 ID 并放置。** 新工作区第一次来时，proxy 生成 ID，选一个 executor，把绑定写进数据库。
-2. **亲和路由。** 已有工作区按绑定表走，回到同一个 executor。
-3. **准入与流控。** 每个 executor 有并发上限。超限的请求进有界队列，队列满则快速失败。
-4. **负载感知的选择。** 新工作区分配给当前在跑 run 最少的 executor。
+2. **allocate-or-bind。** 按来源键（tenant_id + 规范化路径）查绑定表：命中即返回既有工作区（§7.1），未命中才走放置。
+3. **亲和路由。** 已有工作区按绑定表走，回到同一个 executor。
+4. **准入与流控。** 每个 executor 有并发上限。超限的请求进有界队列，队列满则快速失败。
+5. **统一入口。** `sandbox_backends.Endpoint` 指向 proxy。调度器的 `NewSandbox` 与 configsvc 的 verify 都拿这一个地址发 contract v2 请求，proxy 按请求里的工作区路由到 executor。真实 executor 地址不进配置表，proxy 从 `config_acks.addr` 取。
 
 proxy 无状态。它不持有会话，不缓存文件，不保存工作区内容。绑定关系在数据库里，负载信息在 `config_acks` 表里。
 
@@ -136,8 +143,8 @@ proxy 无状态。它不持有会话，不缓存文件，不保存工作区内�
 3. **舱壁**：每个 executor 一个并发上限。超限的请求进该 executor 的队列。
 4. **有界队列**：每条队列有长度上限与排队超时。两者任一越界，返回 503。
 5. **公平**：每个租户在 proxy 侧的排队额度有上限。一个租户不能占满全部队列。
-6. **负载上报**：executor 每 10 秒刷新自己的 ack，带上当前在跑 run 数。复用现有的 `config_acks` 表与 15 秒存活窗口。
-7. **不健康**：ack 超过存活窗口的 executor 视为不健康。绑定到它的工作区标记为待恢复。
+6. **负载上报**：executor 每 10 秒刷新自己的 ack，带上当前在跑 run 数。`config_acks` 加一列 `load`（整数）承载它；`capabilities` 保持标记串不动。复用现有的 15 秒存活窗口。
+7. **不健康与 degraded（fail-closed）**：ack 超过存活窗口的 executor 视为不健康，绑定到它的工作区标记 `degraded`。degraded 期间这些工作区的新 run **明确拒绝**（503，错误写明工作区 degraded 与恢复条件）。不排队——排队会在恢复后突发执行，副作用不可预期。不自动迁移到别的 executor——共享卷让迁移在数据上可行，但涉及在跑容器与工作区锁的交接，走显式重平衡（§16）。恢复只有两条路：executor 的 ack 回到存活窗口内，绑定自动回 `active`；或运维显式改绑定。degraded 不隐含任何静默降级。
 
 横向扩容有一条好处：工作区目录在共享卷上，不绑 executor。新 executor 挂同一个卷就能接管已有工作区，只要改绑定记录。不用拷贝目录。
 
@@ -157,6 +164,8 @@ final, err := w.agent.Invoke(ctx, history, run.ThreadID)
 
 不建第二个 agent，不重写执行循环。agent 本身支持并发 run：run 作用域的 workspace 是 ctx 上的值装饰，system prompt 环境、文件与 shell 工具、记忆预取都按它解析。
 
+并发口径要写明：`Worker.Step` 严格串行——claim 一个 run 跑到底（`internal/ee/worker/worker.go`）。调度器内嵌这套循环后，每个副本同一时刻只有 1 个 run，副本数 ×2 = 全局 2 并发 run。proxy 的舱壁（§3.3）限的是每个 executor 的沙箱工具调用，不是 run 级并发，两把尺子不要混。首期显式接受每副本串行：行为与今天的 worker 一致，不需要新的并发控制。每副本并发 run 数的旋钮列进开放问题（§16）。
+
 ### 3.5 门控从 worker 改成 executor
 
 现在远端租户能不能建 run，看的是有没有活的 sandbox worker。`internal/server/runs.go` 的 `enqueueRun` 里调 `hasLiveSandboxWorker`，没有就返回 503。能力标记来自 worker 的 ack（`cmd/woca-worker/main.go` 的 `workerCapabilities`）。
@@ -172,9 +181,9 @@ EE 改成 executor 之后，这套要换：
 
 1. 调度器侧的 client 是现成的 `executor.NewSandbox`（`internal/platform/executor/sandbox.go`），已经实现 `Executor` 接口加 `PutArchive` / `GetArchive`。
 2. executor 侧要实现同样的 15 个端点。现成的服务端参考是 `internal/platform/executor/fakesandbox/server.go` 的 `Handler()`：它把 15 条路由挂在 `http.ServeMux` 上，executor 的服务照这个形状写，差别只在容器操作换成真实调用。
-3. `create` 的 `cwd` 语义要明确：它承载的是**工作区 ID**，不是路径。executor 把它映射到自己的 `workspace_root/<id>` 目录，并校验 ID 只含安全字符集（字母、数字、连字符、下划线），拒绝 `/`、`..` 与绝对路径。调度器因此不需要知道 executor 的磁盘布局。
+3. `create` 的 body 加一个独立的 `workspace` 字段，承载**工作区 ID**。`cwd` 保持原语义（容器内工作目录，默认 `/workspace`）。不复用 `cwd` 装工作区 ID——那是语义复用，两个概念迟早分叉，契约反正要改（新增 sync 端点），一起改掉。executor 把 workspace ID 映射到自己的 `workspace_root/<id>` 目录，并校验 ID 只含安全字符集（字母、数字、连字符、下划线），拒绝 `/`、`..` 与绝对路径。调度器因此不需要知道 executor 的磁盘布局。
 
-client 侧要改一处：`internal/platform/executor/sandbox.go` 的 `create` 现在固定发 `{"cwd": "/workspace"}`。它要改成发本次 run 的工作区 ID。`CONTRACT.md` 里 `cwd` 的描述同步改写。
+client 侧要改一处：`internal/platform/executor/sandbox.go` 的 `create` 现在固定发 `{"cwd": "/workspace"}`。改成发 `{"workspace": "<本次 run 的工作区 ID>", "cwd": "/workspace"}`。`CONTRACT.md` 同步补字段。
 
 需要加一个端点：
 
@@ -225,6 +234,7 @@ executor 用 container runtime 的 API 管理容器：
 3. 隔离档位由 runtime 决定：`runc` 或 `runsc`。
 4. 网络默认 `none`。
 5. 容器不注入 woca 的二进制。执行命令靠 runtime 的 exec 接口。
+6. 容器创建参数固定带加固 profile（CapDrop、read-only rootfs 等），见 §8.4。
 
 不注入 woca 二进制的好处：沙箱里没有 woca 的代码，也没有 woca 的凭据。代价是文件操作要靠容器内的 `sh`、`cat`、`find`、`grep`、`tar`。所以基础镜像要固定带这些工具。
 
@@ -251,6 +261,8 @@ executor 用 container runtime 的 API 管理容器：
 
 下载：容器内 `tar` 打包 `/workspace`，流式写回宿主 staging 目录，校验后原子替换。这是 `POST /sandbox/{id}/workspace/sync` 的动作。
 
+沙箱永不 bind-mount 工作区卷，文件进出只有归档这一条通道，通道上有检查。这是刻意设计（理由见 §8.4），不要"优化"成挂载。
+
 规则沿用现有实现（`internal/ee/worker/worker_sandbox.go`）：
 
 - 归档大小上限走 `sandbox-archive-max-bytes`。
@@ -262,14 +274,14 @@ executor 用 container runtime 的 API 管理容器：
 
 executor 不提供文件接口。工作区目录在共享卷上，scheduler 挂同一个卷，直接读它。
 
-调度器侧现有的文件树与文件预览走宿主文件系统（`internal/server/workspace.go` 与 `internal/server/fsapi.go`）。现有实现直接可用，不用改成经 executor 转发。
+调度器侧现有的文件树与文件预览走宿主文件系统（`internal/server/workspace.go` 与 `internal/server/fsapi.go`）。现有实现直接可用，不用改成经 executor 转发。EE 下解析链固定：session → workspace_id → `workspace_root/<id>`（§7.1）。客户端不再传路径参数，没有穿越空间。
 
 代价是 scheduler 能读到卷上的所有工作区目录。所以：
 
 1. 文件树与预览的路径必须限制在卷根内。
-2. 结果按租户过滤。一个租户不能通过路径参数看到别人的工作区。
+2. 结果按租户过滤。一个租户不能看到别人的工作区。
 
-这两点顺带修掉现在的一个问题：这两个接口现在接受任意路径参数，客户端可以传 `?workspace=/etc` 拿到目录树。
+顺带修掉现在的一个问题：这两个接口现在接受任意路径参数，客户端可以传 `?workspace=/etc` 拿到目录树。
 
 ## 6. 配置面
 
@@ -310,9 +322,11 @@ executor 不提供文件接口。工作区目录在共享卷上，scheduler 挂�
 两个约束：
 
 1. `Options` 用 `omitempty`。空的沙箱列表在 pack 里不出现，`nacos-init` 发布的初始 pack 字节不变，watcher 的指纹不会反复触发 apply。
-2. pack 是全量清单语义且解码严格。configsvc 发出带 `options` 的新 pack 后，**全角色要同步升级**。旧 worker 收到新 pack 会解码失败。这与 pack v2 升级时的约定一致。
+2. 解码兼容性（已对代码核实）：`DecodePack`（`internal/ee/nacosrt/pack.go:199`）是裸 `json.Unmarshal` 加版本号检查，没有 `DisallowUnknownFields`，也没有自定义 `UnmarshalJSON`。未知字段被静默忽略。所以 pack 版本不变时，旧角色收到带 `options` 的新 pack **不会解码失败**，只是看不到这个字段。发布耦合相应降级：**想让谁用上新参数，谁才需要升级**，不是全角色同步。pack 版本号 bump 仍然是硬断裂——那时才要求全角色同步升级。
 
 管理台（`ee/configsvc-web/src/components/SandboxSection.vue`）在现有后端行上直接编辑这些字段。现有 CRUD 路由（`internal/ee/configsvc/handlers_sandboxes.go`）加一个 `options` 字段，不需要新路由。
+
+verify（测试连接）要改道。现在是 configsvc 进程内 `providers.New` 直建沙箱（`internal/ee/configsvc/handlers_sandboxes_verify.go:53`），新架构下真实沙箱只在 executor，configsvc 直建测不到真实执行面。verify 改为拿 `Endpoint`（即 proxy，§3.2）走同一条 contract 路径：临时工作区 → 建容器 → 执行一条命令 → 销毁。
 
 ### 6.2 热生效语义
 
@@ -353,9 +367,31 @@ ID 与 executor 无关。绑定关系单独存，这样 executor 换机器后工
 | 列 | 用途 |
 |---|---|
 | `workspace_id` | 主键。proxy 生成的 ID |
+| `source_key` | 查找键。`tenant_id` + 规范化来源键（展开家目录、去掉尾部斜杠的绝对路径字符串）。唯一索引 |
 | `executor_id` | 绑定的 executor 实例 |
-| `state` | `active` 或 `degraded`（executor 不健康时） |
+| `state` | `active` 或 `degraded`（executor 不健康时，§3.3 规则 7） |
 | `created_at` / `updated_at` | 审计与运维 |
+
+#### 为什么必须有 source_key
+
+ID 是 `ws_<uuid>`，不可预测，主键本身当不了查找键。而今天 runs 与 sessions 只带客户端传入的路径字符串（`internal/server/sessions.go` 的 `createSession`、`RunSnapshot.Workspace`）。没有 source_key 会留下三个洞：
+
+1. proxy 判不了"同一工作区又来了"，亲和路由无从执行。
+2. `enqueueRun` 插入 run 行时拿不到 workspace_id，§7.2 的部分唯一索引无值可写。
+3. 文件树缺 session → workspace_id → 卷路径的解析链（§5.4）。
+
+source_key 一次闭掉三个。tenant_id 拼进键里，两个租户用同一路径字符串也不会共享工作区。
+
+#### 分配时机：session 创建时 allocate-or-bind
+
+1. `createSession` 拿到客户端工作区路径，规范化后拼上 tenant_id 组成 source_key，调 proxy 的 allocate-or-bind。
+2. proxy 按 source_key 查绑定表：命中即返回既有 workspace_id（同一工作区又来了）；未命中则生成新 ID、按 §3.3 规则 1 选 executor、写绑定。
+3. workspace_id 存进 session 元数据。`enqueueRun` 时 run 行直接继承，不再从路径反查。所有 run 入口（含 `/btw` 这类带 workspace 串的注册路径）统一走这条继承。
+4. 旧 session 补齐：升级前创建的 session 没有 workspace_id，首次 enqueue 时按同一条 allocate-or-bind 路径现场补齐。这是一次性迁移动作，不是失败回退——映射拿不到照样拒绝，不降级。
+
+个人版不走这条路径。createSession 只在 EE 编排下调 proxy。
+
+评估过的替代方案：把 allocate-or-bind 推迟到 run 入队时做，session 只存路径。否掉。它省不掉 source_key（文件树在第一次 run 之前就要解析工作区），却让每次 enqueue 都查一次绑定，且文件树与入队两条路径各自解析身份，多一套分叉。session 创建时一次定型，下游读同一个值。
 
 工作区 ID 交给 executor 后，executor 映射到 `workspace_root/<id>` 目录。executor 校验 ID 只含安全字符集，拒绝 `/`、`..` 与绝对路径。
 
@@ -370,7 +406,7 @@ ID 与 executor 无关。绑定关系单独存，这样 executor 换机器后工
 
 实现分两层，都很轻：
 
-1. **数据库层**：`runs` 表加一列 `workspace_id`，加一个部分唯一索引，只在 `status='running'` 时生效。同一工作区不可能有两个 running run。崩溃时 reaper 把过期 run 标失败，锁自动释放。
+1. **数据库层**：`runs` 表加一列 `workspace_id`（值继承自 session，见 §7.1），加一个部分唯一索引，只在 `status='running'` 时生效。同一工作区不可能有两个 running run。崩溃时 reaper 把过期 run 标失败，锁自动释放。
 2. **执行层**：executor 对工作区目录加文件锁。两个调度器副本同时抢同一个工作区时，executor 侧也会挡住第二个。
 
 不建独立的锁表。锁就是 running run 这一行。
@@ -414,6 +450,8 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 
 第一版 `network=none`。沙箱完全没有外网。
 
+`network=none` 不只是没有外网：沙箱没有网络栈，只有 loopback，连同一宿主上的邻居容器都打不到——包括 executor。沙箱与 executor 是兄弟容器，但"沙箱直攻 executor 服务端口"这条路被它顺带封死。executor 端口只在内网是第二道独立防线，两道互不依赖。
+
 理由：模型调用在调度器侧。沙箱里不需要访问模型。demo 用 Python 标准库，不下载依赖。
 
 需要外网时再开 `bridge` 加白名单代理。这条排在首期之后。
@@ -424,12 +462,74 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 
 沙箱后端的 API key 存现有 secrets 表，键名 `sandbox-api-key:<id>`，经 pack 的 `Secrets` 传给 executor。executor 与调度器之间的内部调用用它。
 
+### 8.4 沙箱逃逸与外窜防御
+
+先把威胁面列全，再按 ROI 排措施。人-服务器的调用鉴权不在本节范围（§9 第 1 条）。
+
+#### 威胁分类
+
+| 威胁 | 路径 | 现状 |
+|---|---|---|
+| 网络外窜 | 数据外带、C2 回连、拉恶意载荷 | `network=none` 封死整类。沙箱没有网络栈，只有 loopback，连邻居容器（含 executor）都打不到（§8.2） |
+| 容器→宿主内核逃逸 | runc CVE 一类 | 缺口。默认 runc 共享内核；档位（§8.1）只换 runtime，没有容器加固 |
+| 资源耗尽 | fork 炸弹；灌满磁盘拖死邻居工作区 | 一半。cpu/mem 已在 options；pids 与磁盘是缺口。归档大小上限管不到沙箱内直接写文件 |
+| 共享卷侧攻击 | symlink、路径逃逸、`.git` 泄漏 | 已有。归档边界拒绝绝对路径、`..`、逃逸 symlink；`.git` 不上传；沙箱永不 bind-mount 卷，只走 tar 流（§5.3） |
+| executor 全权 socket 被利用 | 沙箱攻陷 executor 后横向移动 | 已列触发式后续（socket 代理）。且网络外窜一行已论证沙箱打不到 executor，这条利用链要先过内核逃逸 |
+
+#### 防御清单（ROI 从高到低）
+
+| # | 措施 | 成本 | 砍掉的攻击面 | 状态 |
+|---|---|---|---|---|
+| 1 | `network=none` 默认档 | 零 | 整类网络外窜 + 沙箱直攻 executor。零成本封死一整类，收益最大的单项 | 已定 |
+| 2 | 容器加固 profile | 约 20 行容器创建参数，零新依赖 | 特权提升与内核攻击面的一大块（runc 利用链的常见前置） | 本轮新增，默认启用 |
+| 3 | pids 上限 + 磁盘显式边界 | 一行参数 + 巡检 | fork 炸弹；灌满磁盘拖死邻居工作区 | 本轮新增 |
+| 4 | gVisor 档 | 宿主装 runsc，10–50% 开销 | 内核逃逸类（用户态内核翻译系统调用） | 已规划，跑第三方代码时触发 |
+| 5 | egress 白名单代理 + 凭据注入 | 一个新组件 | 放开外网后的外窜管控 | 已列触发条件（§16） |
+| 6 | executor socket 代理 | 一个代理组件 | executor 被攻陷后的横向移动 | 已列触发条件（§16） |
+
+排序逻辑：先按"每单位成本砍掉的攻击面"排，再按是否已被更低成本措施覆盖排。第 1、2 项合计把"沙箱内进程能碰到的东西"压到最小；3 防的是邻居受害而不是逃逸；4 到 6 各自等一个触发条件，不提前建。
+
+#### 容器加固 profile（第 2 项）
+
+容器创建参数固定带：
+
+- `CapDrop=ALL`。不保留任何 Linux capability。
+- `no-new-privileges`。
+- read-only rootfs；`/tmp` 挂 tmpfs；`/workspace` 是唯一可写目录。
+- 默认 seccomp profile。收紧的 woca 专属 profile 列为后续。
+- masked paths 保持 Docker 默认（`/proc/kcore` 等），显式不放宽。
+- 不挂任何 device、不加 `privileged`、不挂 docker.sock。
+
+联动 §5.1：基础镜像必须自带 `sh`、`cat`、`find`、`grep`、`tar`。read-only rootfs 下不能指望运行中装包，这条从"建议"升级为硬约束。
+
+兼容性：加固是 executor 的固定行为，不进 options（§6.1 五字段不动）。开发宿主（OrbStack）对个别旗标支持不一，executor 提供进程参数 `WOCA_SANDBOX_HARDENING`：`full`（默认，全部旗标）与 `minimal`（demo 用，关 no-new-privileges、read-only rootfs、masked paths，保留 CapDrop=ALL、seccomp、pids 上限）。demo compose 置 `minimal`（§11.3）。`minimal` 只验证功能路径，不是安全承诺；生产必须 `full`，宿主不支持就明确报错，不静默降级。
+
+#### pids 与磁盘（第 3 项）
+
+- pids 上限：固定值（初版 512），与 `network=none` 同类处理——安全底线不是管理台旋钮，不进 options。
+- 磁盘是显式边界，第一版不是硬配额。三件事收口：
+  1. sync 的归档大小上限（`sandbox-archive-max-bytes`）封住回写共享卷的量。超限 run 失败，这是显式上限。
+  2. per-run 容器销毁收口可写层：沙箱写进容器可写层的文件随容器删除消失，不累积。
+  3. executor 定期巡检宿主磁盘水位与工作区目录大小，超限告警。
+- 文件系统级每工作区硬配额依赖卷类型（local driver pquota、NFS、EFS 各不相同），列为触发式后续（§16）。
+
+### 8.5 宿主内核与 runc 升级纪律
+
+沙箱共享宿主内核（gVisor 档除外）。runc/containerd 逃逸类 CVE 从公开到打补丁的窗口，就是 woca 的暴露窗口。加固 profile 收窄利用面，不消灭这一类。
+
+纪律写进运维文档：
+
+1. 节点的 runtime（runc/containerd）与宿主内核安全更新纳入例行流程。
+2. 容器逃逸类高危 CVE 定响应 SLO：建议 7 天内完成节点滚动升级。
+3. executor 滚动重启不丢工作区（共享卷）；在跑 run 按故障语义标失败（§10）。
+4. 不做内核漏洞扫描与自动升级。手动纪律，执行记录走日志审计。
+
 ## 9. 安全边界
 
 1. 调度器是唯一用户授权入口。它校验租户与工作区归属。
 2. executor 不做授权。它信任来自调度器的调用。
-3. executor 不做授权。它信任来自调度器的调用。
-4. executor 的服务端口只在内网。不对用户网络开放。
+3. executor 的服务端口只在内网。不对用户网络开放。
+4. 沙箱没有网络栈，打不到 executor 与任何邻居容器（§8.2、§8.4）。
 5. executor 持有 runtime 全量权限，所以它所在的节点必须完全受信。
 6. scheduler 挂了工作区共享卷，能读到卷上所有工作区目录。文件树与预览的路径必须限制在卷根内并按租户过滤。
 7. 沙箱里没有 woca 的凭据与代码。
@@ -459,9 +559,10 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 | 上传失败 | run 失败，销毁容器，宿主目录不动 |
 | 执行超时 | 杀掉进程，run 失败 |
 | 同步失败 | run 失败。宿主保留旧目录，错误写明同步未完成 |
+| executor 失联（ack 超窗） | 绑定工作区标 degraded，新 run 503 拒绝（§3.3 规则 7）。ack 回窗自动恢复 active |
 | executor 崩溃 | run 标记失败。工作区锁随事务释放。旧容器由 executor 启动时清理 |
 | 调度器崩溃 | run 标记失败。不自动重放 |
-| 沙箱逃逸 | 由 runtime 的隔离能力兜底。woca 不做检测 |
+| 沙箱逃逸 | 由 runtime 隔离与 §8.4 加固 profile 承接。woca 不做逃逸检测 |
 
 ### 10.3 遗留容器
 
@@ -511,6 +612,8 @@ executor 拿 container runtime 的访问权，走容器内直连：executor 跑�
 | `sandbox-init` | 一次性写入模型设置与沙箱后端参数 |
 | `sandbox-demo` | 跑完整断言后退出。退出码即结论 |
 
+demo 断言"沙箱容器被回收"的机制：executor 提供一个内网查询端点（按 `woca.sandbox=1` 标签列容器，如 `GET /internal/sandboxes?run=<id>`），sandbox-demo 调它断言列表为空。选它而不是给 demo 挂只读 docker.sock：后者给 demo 容器 runtime 读权限，多一个权限面；查询端点复用 §10.3 的标签清理逻辑，代码量最小。该端点是 executor 内部运维面，不进 contract v2。
+
 启动顺序分四段，由 `make ent-sandbox-demo` 驱动：
 
 1. 基础面：pg、nacos、nacos-init、woca-config、woca-scheduler、executor-proxy、woca-executor、fakemodel。
@@ -523,6 +626,7 @@ executor 拿 container runtime 的访问权，走容器内直连：executor 跑�
 - container runtime 版本要满足 executor 的要求。
 - 选 `hardened` 档时宿主要装好 runsc。没装就明确报错。
 - macOS 上的容器运行时没有官方支持列表。`runsc` 档在 macOS 上不保证可用。
+- 加固旗标在 macOS 开发宿主（OrbStack）支持不一。demo 把 executor 的 `WOCA_SANDBOX_HARDENING` 置 `minimal`（§8.4），生产必须 `full`。
 
 ## 12. 远程 demo 验收
 
@@ -533,7 +637,7 @@ executor 拿 container runtime 的访问权，走容器内直连：executor 跑�
 3. 沙箱内跑测试，通过。
 4. 产物同步回 executor 磁盘的工作区目录。
 5. demo 容器断言目录里出现预期文件。
-6. demo 容器断言沙箱容器被回收。
+6. demo 容器断言沙箱容器被回收（经 executor 内部查询端点，§11.2）。
 
 ### 12.2 二级：跨轮次
 
@@ -562,11 +666,13 @@ executor 拿 container runtime 的访问权，走容器内直连：executor 跑�
 
 | 层 | 必测 |
 |---|---|
-| contract | 新增 sync 端点；create 的 cwd 语义；fakesandbox 同步更新 |
+| contract | 新增 sync 端点；create 的 workspace 字段；fakesandbox 同步更新 |
 | executor 沙箱服务 | 15 端点全覆盖；文件面；归档往返；symlink 与路径逃逸拒绝 |
+| 身份映射 | 同一 tenant 同一路径两次 allocate-or-bind 返回同一 workspace_id；不同租户同路径得到不同 ID；旧 session 首次入队补齐 |
 | 工作区锁 | 同工作区串行（部分唯一索引 + 文件锁）；崩溃后自动释放 |
-| 配置热生效 | 管理台改参数后新建沙箱用新参数；运行中沙箱不变；缺 runsc 时明确报错 |
-| 调度器 | 沙箱不可达时 run 失败且不回退本地 |
+| 配置热生效 | 管理台改参数后新建沙箱用新参数；运行中沙箱不变；缺 runsc 时明确报错；verify 经 proxy 走通 |
+| 调度器 | 沙箱不可达时 run 失败且不回退本地；degraded 工作区新 run 503 |
+| 容器加固 | full profile 下容器无 capability、rootfs 只读、pids 上限生效；minimal profile 仅功能路径 |
 | e2e | 一级到三级 demo 步骤；权限；清理 |
 
 e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
@@ -577,7 +683,7 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 |---|---|---|
 | M0 | 角色改名与编排位置调整 | 调度器本地跑通一个 run，事件走 PG |
 | M1 | contract 增补 sync 端点与测试 | contract 测试全绿 |
-| M2 | executor 沙箱服务（Docker driver） | 15 端点与归档往返测试通过 |
+| M2 | executor 沙箱服务（Docker driver）。M2 前拍板 Docker 依赖：`go.mod` 目前无 docker，`docker/docker` client（类型全、依赖重）还是裸 HTTP over unix socket（轻、自己写） | 15 端点与归档往返测试通过 |
 | M3 | 工作区目录与工作区锁 | 串行与崩溃恢复测试通过 |
 | M4 | 管理台参数与热生效 | 改参数后新建沙箱用新参数 |
 | M5 | compose 改造与 demo profile | `make ent-sandbox-demo` 退出码 0 |
@@ -585,24 +691,27 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 
 ## 15. 改造面
 
-- `internal/platform/executor/CONTRACT.md`：新增 sync 端点，改写 `cwd` 语义。
-- `internal/platform/executor/sandbox.go`：client 侧 create 发改工作区 ID，新增 `SyncWorkspace` 调用。
+- `internal/platform/executor/CONTRACT.md`：新增 sync 端点，`create` 加 `workspace` 字段。
+- `internal/platform/executor/sandbox.go`：client 侧 create 发工作区 ID，新增 `SyncWorkspace` 调用。
 - `internal/platform/executor/fakesandbox/`：实现新端点。
-- `internal/server/runs.go`：门控从 `hasLiveSandboxWorker` 改成 executor 在线判定。
-- `internal/server/workspace.go`、`internal/server/fsapi.go`：路径限制在共享卷根内，并按租户过滤。
-- `internal/ee/executor/`（新）：沙箱服务、容器管理、工作区目录、文件面。订阅 nacos pack，`OnChange` 里更新内存里的后端参数。
-- `internal/ee/proxy/`（新）：转发与流控。
+- `internal/server/runs.go`：门控从 `hasLiveSandboxWorker` 改成 executor 在线判定；`enqueueRun` 从 session 继承 workspace_id（§7.1）。
+- `internal/server/sessions.go`：`createSession` 调 proxy 的 allocate-or-bind，session 元数据存 workspace_id。
+- `internal/server/workspace.go`、`internal/server/fsapi.go`：解析链固定 session → workspace_id → 卷内路径，限制在共享卷根内，按租户过滤。
+- `internal/ee/executor/`（新）：沙箱服务、容器管理（含 §8.4 加固 profile 与 pids 上限）、工作区目录、文件面、内部容器查询端点（§11.2）。订阅 nacos pack，`OnChange` 里更新内存里的后端参数。
+- `internal/ee/proxy/`（新）：转发与流控、allocate-or-bind、degraded 标记与恢复。
 - `internal/ee/configsvc/handlers_sandboxes.go`：`options` 字段与校验。
+- `internal/ee/configsvc/handlers_sandboxes_verify.go`：verify 从进程内 `providers.New` 直建改为经 proxy（§6.1）。
 - `internal/ee/nacosrt/pack.go`：`SandboxRow.Options`。
-- `internal/wocadb/`：`runs` 加 `workspace_id` 列与部分唯一索引。`sandbox_backends` 加 `options` 列。不建新表。
+- `internal/wocadb/`：`runs` 加 `workspace_id` 列与部分唯一索引。`sandbox_backends` 加 `options` 列。`config_acks` 加 `load` 列。新表 `workspace_bindings`（含 `source_key` 唯一索引，§17）。
 - `ee/configsvc-web/src/components/SandboxSection.vue`：参数编辑。
 - `cmd/woca-scheduler/`、`cmd/woca-executor/`：角色改名与装配。
-- `deploy/selfhosted/docker-compose.full.yml`：服务重组、卷、demo profile。
+- `deploy/selfhosted/docker-compose.full.yml`：服务重组、卷、demo profile。改名波及面不止 compose：terraform 模板、k8s manifests、prometheus rules、otelcol 配置都引用旧服务名，改名时一并过。
 
 ## 16. 开放问题
 
 1. executor 崩溃后遗留容器的清理时机。启动时清还是定时清。
 2. proxy 的三个参数取什么默认值：每 executor 并发上限、每队列长度、排队超时。
+3. 每调度器副本的并发 run 数旋钮。首期固定 1（串行，§3.4）；什么时候要、取值多少待定。
 
 已定但有触发条件的：
 
@@ -611,20 +720,23 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 | 出口白名单代理 | 真实项目要在沙箱里装依赖、拉代码 | 沙箱请求过代理，按域名放行，代理在出口注入凭据 |
 | 硬隔离档位 | 开始跑第三方上传的代码，或对外开放租户 | Kata 轻量虚拟机或 microVM。宿主要支持虚拟化 |
 | runtime 权限收窄 | executor 所在节点不再完全受信 | socket 代理只放行沙箱需要的调用 |
-| 工作区重平衡 | executor 长期下线，或要重新分布负载 | 共享卷上目录不绑 executor，改绑定记录即可 |
+| 工作区重平衡 | executor 长期下线，或要重新分布负载 | 共享卷上目录不绑 executor，改绑定记录即可。degraded 期间不自动迁移（§3.3 规则 7），迁移走这张表 |
+| 每工作区磁盘硬配额 | 共享卷规模变大，或多租户混跑 | local driver pquota / NFS / EFS 按卷类型选配额机制 |
+| 收紧版 seccomp profile | 默认 profile 覆盖不了需求，或出现针对性绕过 | woca 专属 profile，按实际用到的系统调用白名单化 |
 
 ## 17. 数据库改动清单
 
-三处改动。
+四处改动。
 
 | 改动 | 位置 | 用途 |
 |---|---|---|
 | `sandbox_backends.options` | 配置面表 | 后端参数。经 pack v2 下发 |
-| `runs.workspace_id` | run 队列表 | 工作区归属与互斥 |
-| `workspace_bindings` | 新表 | 工作区到 executor 的绑定 |
+| `runs.workspace_id` | run 队列表 | 工作区归属与互斥。值继承自 session（§7.1） |
+| `workspace_bindings` | 新表 | 工作区到 executor 的绑定。含 `source_key` 查找键（tenant_id + 规范化路径，唯一索引） |
+| `config_acks.load` | 心跳表 | executor 在跑 run 数。proxy 放置决策用（§3.3 规则 6）。`capabilities` 保持标记串不动 |
 
 `runs` 上加一个部分唯一索引，只在 `status='running'` 时生效。同一工作区不可能有两个 running run。
 
-`workspace_bindings` 是这次唯一的新表。理由：工作区在两次 run 之间没有 run 行，但仍然属于某个 executor。绑定不持久化，工作区就会漂移到别的 executor，代码目录就找不到了。
+`workspace_bindings` 是这次唯一的新表。理由：工作区在两次 run 之间没有 run 行，但仍然属于某个 executor。绑定不持久化，工作区就会漂移到别的 executor，代码目录就找不到了。`source_key` 让 proxy 能按来源找到既有绑定（allocate-or-bind）；没有它，亲和路由与 run 行的 workspace_id 都无从谈起（§7.1）。
 
 `runs.config_snapshot` 里已经带了 workspace 路径。加这一列是为了让数据库能做唯一约束。快照里的路径继续保留，旧调用不受影响。
