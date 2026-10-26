@@ -30,9 +30,9 @@
 
 1. **恶意 workspace ID**（`../`、绝对路径、空、大写）→ create 400/拒绝，任何路径不得逃出 `workspace_root`。→ Task 5 步 1、Task 6 步 1。
 2. **options 非法值**（`network:"Bridge"`、`runtime:"kata"`、负 cpu、JSON 烂尾）→ configsvc 400，pack 不发布。→ Task 3 步 1。
-3. **同工作区并发 run**（跨 session、跨调度器副本）→ 部分唯一索引挡 claim + executor flock 挡 create，两层各测。→ Task 1 步 1、Task 5 步 3、Task 14 步 3。
+3. **同工作区并发 run**（跨 session、跨调度器副本）→ 部分唯一索引挡 claim + executor flock 挡 create，两层各测。→ Task 1 步 1、Task 5 步 1、Task 14 步 1。
 4. **输出洪泛**：进程狂喷 stdout/stderr → 每会话缓冲上限 8 MiB，截断抬 offset 地板，不 OOM。→ Task 6 步 1。
-5. **executor 重启**：会话全灭、对应 run 判失败、flock 内核自动释放、遗留容器按标签清理。→ Task 5 步 4、Task 18 步 1。
+5. **executor 重启**：会话全灭、对应 run 判失败、flock 内核自动释放、遗留容器按标签清理。→ Task 5 步 1、Task 18 步 1。
 
 ---
 
@@ -47,8 +47,9 @@
 - Produces: `type WorkspaceBinding struct { WorkspaceID, SourceKey, TenantID, ExecutorID, State string; CreatedAt, UpdatedAt int64 }`；`(d *DB) EnsureWorkspaceBinding(b WorkspaceBinding) (WorkspaceBinding, error)`（`ON CONFLICT(source_key) DO NOTHING` 后重查，幂等 allocate）；`(d *DB) WorkspaceBindingBySourceKey(key string) (WorkspaceBinding, bool, error)`；`(d *DB) WorkspaceBindingByID(id string) (WorkspaceBinding, bool, error)`；`(d *DB) SetWorkspaceBindingState(id, state string) error`；`(d *DB) WorkspaceBindings() ([]WorkspaceBinding, error)`。
 - DDL：`workspace_bindings(workspace_id TEXT PRIMARY KEY, source_key TEXT NOT NULL UNIQUE, tenant_id TEXT NOT NULL, executor_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`；`runs` 加 `workspace_id TEXT NOT NULL DEFAULT ''` + 部分唯一索引 `ON runs(workspace_id) WHERE status='running' AND workspace_id<>''`；`config_acks` 加 `load INTEGER NOT NULL DEFAULT 0`。
 - 注意 PG 占位符 ph(i) 内部 +1 的历史坑（sqlite `?` 测不出），PG 分支核对序号。
+- **sqlite 旧库加列幂等**：sqlite 的 `ALTER TABLE ADD COLUMN` 无 IF NOT EXISTS——用 `PRAGMA table_info` 预检列存在再 ALTER（对 `duplicate column name` 容错跳过）；新库直接改 CREATE TABLE。个人版升级路径必须不坏。
 
-- [ ] **Step 1: 写失败测试**：迁移幂等（Open 两次）；EnsureWorkspaceBinding 同 source_key 二次调用返回同一行；部分唯一索引——插两条 `status='running' AND workspace_id='ws_a'` 第二条必须报错，第一条 finish 后第三条成功；SetConfigAck 读写 load。
+- [ ] **Step 1: 写失败测试**：迁移幂等（新库 Open 两次 + **模拟旧库**：先建无新列的表再 Open，断言新列补齐可用）；EnsureWorkspaceBinding 同 source_key 二次调用返回同一行；部分唯一索引——插两条 `status='running' AND workspace_id='ws_a'` 第二条必须报错，第一条 finish 后第三条成功；SetConfigAck 读写 load。
 - [ ] **Step 2: 跑测试确认失败**（表/列不存在）。
 - [ ] **Step 3: 实现迁移与 DAL**（sqlite + PG 双分支）。
 - [ ] **Step 4: 跑 `go test ./internal/wocadb/ -run "WorkspaceBinding|Load" -v` 全绿；`go build ./...`。**
@@ -75,11 +76,14 @@
 ### Task 3: pack options + configsvc CRUD 校验 + 管理台编辑
 
 **Files:**
-- Modify: `internal/ee/nacosrt/pack.go`（`SandboxRow.Options *BackendOptions json:"options,omitempty"`）
+- Modify: `internal/ee/nacosrt/pack.go`（`SandboxRow.Options *BackendOptions json:"options,omitempty"`；**ExportPack 的 SELECT 列清单 :117-118 加 options**）
 - Create: `internal/ee/nacosrt/options.go`（`type BackendOptions struct{ Image string json:"image"; Runtime string json:"runtime"; Network string json:"network"; CPU int json:"cpu"; MemoryMB int json:"memory_mb"; Env map[string]string json:"env,omitempty" }` + `func (o *BackendOptions) Normalize() error`——network 空→`none`，仅 `none|bridge`；runtime 空→`runc`，仅 `runc|runsc`；cpu/memory 负数拒绝）
 - Modify: `internal/ee/configsvc/handlers_sandboxes.go`（create/update 接受 `options` JSON 文本，校验失败 400）
+- Modify: `internal/ee/configsvc/configsvc.go:109`（sandbox_backends 建表加 `options TEXT NOT NULL DEFAULT ''` + 旧库 ALTER 预检）
+- Modify: `internal/ee/nacosrt/sandboxes.go:22`（materialize 侧建表同样加列 + 旧库补列）
+- Modify: `internal/ee/nacosrt/runtime.go:292`（materialize INSERT 加 options 列）
 - Modify: `ee/configsvc-web/src/components/SandboxSection.vue`（行内编辑六字段：image 文本、runtime 下拉 runc/runsc、network 下拉 none/bridge、cpu/memory 数字、env 键值表）
-- Test: `internal/ee/nacosrt/options_test.go`、`internal/ee/configsvc/handlers_sandboxes_test.go`（补）、`ee/configsvc-web/src/components/__tests__/SandboxSection.test.ts`
+- Test: `internal/ee/nacosrt/options_test.go`、`internal/ee/configsvc/handlers_sandboxes_test.go`（补）、`ee/configsvc-web/src/components/SandboxSection.test.ts`（既有文件补断言，vitest + @vue/test-utils 基建已在）
 
 **Interfaces:**
 - Produces: `BackendOptions` 上述字段与 `Normalize()`；pack 携带 options，版本号不变。
@@ -156,11 +160,13 @@ type Backend interface {
 - Test: `internal/ee/executor/service_test.go`
 
 **Interfaces:**
-- Produces: `type ServiceConfig struct{ Backend Backend; Store *WorkspaceStore; MaxConcurrent int; Logger zerolog.Logger; Hardening Hardening; Options func() BackendOptions; Labels func(runID string) map[string]string; ActiveRuns func() int }`；`func NewService(cfg ServiceConfig) http.Handler`。
+- Produces: `type ServiceConfig struct{ Backend Backend; Store *WorkspaceStore; MaxConcurrent int; Logger zerolog.Logger; Hardening Hardening; Options func() BackendOptions; Labels func(runID string) map[string]string; ActiveRuns func() int; APIKey string }`；`func NewService(cfg ServiceConfig) http.Handler`。
 - 语义：`create` 前抢 workspace flock（持有到 destroy）；create 内 Store.Upload；`exec` 同步聚合并带 Timeout kill；`start/output/input/kill` 会话内存态；`POST /sandbox/{id}/workspace/sync` → Store.Sync；`destroy` 释放锁+Remove（幂等 2xx）；`ActiveRuns` 供 ack load。
-- **Review Focus 测试**：会话输出超 8MiB 截断且 `next_offset` 单调、旧事件丢弃后 offset 地板抬升；create 对非法 workspace 400。
+- 鉴权：`APIKey` 非空时全端点校验 `Authorization: Bearer`（不匹配 401）；为空 = 显式无鉴权 + 启动 WARN 日志（对齐 §9.2 executor 信任调度器的边界，key 是纵深防御）。
+- 内部端点：`GET /internal/sandboxes?run=<id>`——按标签 `woca.sandbox=1`（可加 run/workspace 过滤）经 `Backend.List` 返回在跑沙箱清单，demo 断言无遗留容器用（§11.2）。
+- **Review Focus 测试**：会话输出超 8MiB 截断且 `next_offset` 单调、旧事件丢弃后 offset 地板抬升；create 对非法 workspace 400；错误/缺失 Bearer 在 APIKey 非空时 401。
 
-- [ ] **Step 1: 写失败测试**：httptest 起服务打 fakeBackend——16 端点全流程（create→exec→read/write/stat/mkdir/glob/grep→start/output offset/input/kill→sync→destroy）；同 workspace 二次 create 503/409（busy）；非法 ID 400；输出洪泛截断；destroy 幂等。
+- [ ] **Step 1: 写失败测试**：httptest 起服务打 fakeBackend——16 端点全流程（create→exec→read/write/stat/mkdir/glob/grep→start/output offset/input/kill→sync→destroy）；同 workspace 二次 create 503/409（busy）；非法 ID 400；输出洪泛截断；destroy 幂等；APIKey 非空时错误 Bearer 401、正确 Bearer 放行；`/internal/sandboxes` 按 run 过滤返回标签匹配的清单。
 - [ ] **Step 2: 确认失败 → 实现 → `go test ./internal/ee/executor/ -run Service -v` 绿，包覆盖率 ≥85%（`go test ./internal/ee/executor/ -cover`）。**
 - [ ] **Step 3: Commit** `feat(executor): 16-endpoint sandbox service over Backend`
 
@@ -177,7 +183,7 @@ type Backend interface {
 - Produces: `func NewDockerBackend(host string) (Backend, error)`；`func KillArgv(sid string, sig string) []string`（`sh -c 'kill -<sig> $(cat /tmp/.woca-ses-<sid>.pid)'`）与 `func WrapArgv(sid string, argv []string) []string`（`sh -c 'echo $$ > /tmp/.woca-ses-<sid>.pid; exec "$@"' sh <argv…>`）——纯函数进 hardening.go 同级文件 `prockill.go`，plain 测试覆盖。
 
 - [ ] **Step 1: 写失败测试（plain）**：HardeningSpec full/minimal 字段差集断言；WrapArgv/KillArgv 生成的命令行字符串精确断言。
-- [ ] **Step 2: 实现 hardening.go + prockill.go，plain 测试绿。**
+- [ ] **Step 2: `go get github.com/moby/moby/client@latest && go mod tidy`（`golang.org/x/sys` 随之转 direct）；实现 hardening.go + prockill.go，plain 测试绿。**
 - [ ] **Step 3: 实现 docker_backend.go + dockerlab 冒烟测试；`go build -tags dockerlab ./...` 编译过。**
 - [ ] **Step 4: `make executor-dockerlab-test`（本机 OrbStack 有 docker 则跑；无则记录跳过）。**
 - [ ] **Step 5: Commit** `feat(executor): docker driver behind dockerlab tag with hardening profile`
@@ -190,7 +196,8 @@ type Backend interface {
 - Test: `internal/ee/executor/config_test.go`
 
 **Interfaces:**
-- Produces: `type RuntimeParams struct{ BackendOptions + Enabled bool }`；`type ParamsSource struct{...}`，`NewParamsSource(db *wocadb.DB) *ParamsSource`，`(p) Snapshot() RuntimeParams`（读 materialized sandbox_backends + EnabledSandbox）；`(p) Refresh()`（OnChange 回调里调）。ack 心跳：`Role:"executor"`、`Capabilities:"sandbox"`（Enabled 时）、`Load: ActiveRuns()`、10s 间隔、15s 窗口语义不变。
+- Produces: `type RuntimeParams struct{ BackendOptions + Enabled bool }`；`type ParamsSource struct{...}`，`NewParamsSource(db *wocadb.DB) *ParamsSource`，`(p) Snapshot() RuntimeParams`（读 materialized sandbox_backends + EnabledSandbox），`(p) Refresh()`（OnChange 回调里调）。
+- `AckHeartbeat` 新签名（Task 8 定义、Task 10/16 沿用）：`func (w *Worker) AckHeartbeat(ctx context.Context, every time.Duration, ack func() wocadb.ConfigAck)`——调用点 `cmd/woca-worker/main.go:212` 同步改。executor 侧心跳构造 `wocadb.ConfigAck{ServiceID, Role: "executor", Generation, Capabilities: "sandbox"（Enabled 时）, Load: ActiveRuns()}`，10s 间隔、15s 窗口语义不变。
 
 - [ ] **Step 1: 写失败测试**：materialized 表带 options 行 → Snapshot 返回 Normalize 后参数；无 enabled 行 → Enabled=false 且 Capabilities 空；AckHeartbeat 写出的行 Role=executor、Load=活跃数（用 wocadb 内存库断言）。
 - [ ] **Step 2: 确认失败 → 实现（worker_ack 参数化 + 全调用点）→ `go test ./internal/ee/executor/ ./internal/ee/worker/ -v` 绿。**
@@ -210,13 +217,14 @@ type Backend interface {
 ### Task 10: servefront RunLoop seam + schedulerloop
 
 **Files:**
-- Modify: `internal/servefront/serve.go`（`Edition` 加 `RunLoop func(ctx context.Context, deps RunLoopDeps)`；`RunLoopDeps{Agent *agent.Agent; Settings *settings.Store; Ledger *runstate.Ledger; Plane server.MsgPlane; SessionDir string; Obs Observability; Log zerolog.Logger}`；在 `ed.Start` 同时点调用，nil 不启动）
-- Create: `internal/ee/schedulerloop/schedulerloop.go`（装配 `worker.New(worker.Config{...})`：Ledger/Agent 直接透传；Bus=`eventbus.NewLocalWithRetention(1024)`；Sessions=`worker.NewFileSessions`；States=`worker.NewDBSessionStates`；Idle=适配 Plane；DB=`settings.DB()`；SecretFor=GetSecret 前缀闭包；MaxArchiveBytes=settings；Metrics 从 Obs 适配；ID=`"sched-"+shortHost()+"-"+pid`；`go w.AckHeartbeat(ctx, 0, "scheduler", gen, "")`）
+- Modify: `internal/servefront/serve.go`（`Edition` 加 `RunLoop func(ctx context.Context, deps RunLoopDeps)`；`RunLoopDeps{Agent *agent.Agent; Settings *settings.Store; Ledger *runstate.Ledger; Plane server.MsgPlane; SessionDir string; Obs Observability; Log zerolog.Logger}`；在 `ed.Start` 同时点（serve.go:543 附近）调用，nil 不启动）
+- Modify: `cmd/woca-server/main.go`（**Edition 装配处注入 `RunLoop: schedulerloop.RunLoop`**——没有这一步循环无人启动；Task 11 改名时随 git mv 迁移）
+- Create: `internal/ee/schedulerloop/schedulerloop.go`（装配 `worker.New(worker.Config{...})`：Ledger/Agent 直接透传；Bus=`eventbus.NewLocalWithRetention(1024)`；Sessions=`worker.NewFileSessions`；States=`worker.NewDBSessionStates`；Idle=适配 Plane；DB=`settings.DB()`；SecretFor=GetSecret 前缀闭包；MaxArchiveBytes=settings；Metrics 从 Obs 适配；ID=`"sched-"+shortHost()+"-"+pid`；心跳 `go w.AckHeartbeat(ctx, 0, func() wocadb.ConfigAck{ServiceID: id, Role: "scheduler", Generation: rtGen()})`）
 - Create: `internal/ee/edition/idle.go`（`func IdleWaiter(p server.MsgPlane) worker.IdleWaiter`——透传 plane 内持 waiter）
 - Test: `internal/ee/schedulerloop/schedulerloop_test.go`
 
 - [ ] **Step 1: 写失败测试**：空队列时 loop tick 空转不 panic、ctx 取消即退出；`RunLoop` 为 nil 时 servefront 照常起（既有 servefront 测试回归）。
-- [ ] **Step 2: 确认失败 → 实现 seam 与装配 → `go test ./internal/ee/schedulerloop/ ./internal/servefront/ -v` 绿 + `make check-editions` 绿。**
+- [ ] **Step 2: 确认失败 → 实现 seam 与装配 → `go test ./internal/ee/schedulerloop/ ./internal/servefront/ -v` 绿 + `go build ./cmd/woca-server` + `make check-editions` 绿。**
 - [ ] **Step 3: Commit** `feat(scheduler): embed worker run loop via servefront RunLoop seam`
 
 ### Task 11: 纯改名 woca-server → woca-scheduler
@@ -234,7 +242,7 @@ type Backend interface {
 
 **Files:**
 - Modify: `internal/server/runs.go:531-556`（`hasLiveSandboxWorker` → `hasLiveExecutor`：`a.Role == "executor"` + 15s 窗口 + capabilities 含 `sandbox`；`errNoSandboxWorker` 文案改 executor）
-- Test: `internal/server/runs_gate_test.go`（既有测试文件补）
+- Test: `internal/server/server_gate_sandbox_test.go`（既有文件补）
 
 - [ ] **Step 1: 写失败测试**：executor 角色+capability+新鲜 ack → 放行；worker 角色（即便带 sandbox）→ 503；过期 → 503；读库失败 → 503。**
 - [ ] **Step 2: 确认失败 → 实现 → `go test ./internal/server/ -run "Executor|Sandbox" -v` 绿。**
@@ -247,7 +255,7 @@ type Backend interface {
 - Create: `internal/ee/proxy/bind.go`（allocate-or-bind：`EnsureWorkspaceBinding` + 放置策略 load ASC→绑定数 ASC→executor_id 稳定排序；degraded 扫描循环 5s：config_acks 15s 窗口外 → `SetWorkspaceBindingState(degraded)`、回窗 → active）
 - Create: `internal/ee/proxy/route.go`（`X-Woca-Workspace` 头 → 绑定 → `config_acks.addr`（Role=executor 且新鲜）；缺头/无绑定/不健康 → 503 带原因与 Retry-After）
 - Create: `internal/ee/proxy/queue.go`（每 executor `sem chan struct{}` + 有界 FIFO waiter + 排队超时 + per-tenant 入队计数拒绝）
-- Create: `internal/ee/proxy/forward.go`（单个 `httputil.ReverseProxy`，Rewrite 按 ctx 目标改写，流式透传不读 body；create 的小 JSON body 缓冲读 workspace 后重设）
+- Create: `internal/ee/proxy/forward.go`（单个 `httputil.ReverseProxy`，Rewrite 按 ctx 目标改写，流式透传不读 body；create 的小 JSON body 缓冲读 workspace 后重设；**透传 Authorization 头**——executor 侧 API key 校验的最后一环）
 - Test: `internal/ee/proxy/*_test.go`
 
 - [ ] **Step 1: 写失败测试**：同 source_key 并发 allocate 只产生一条绑定且双方拿到同 ID；不同租户同路径不同绑定；放置选 load 最小 executor、并列选绑定数最小；ack 过期 → 绑定 degraded → 请求 503（错误体含 degraded 与恢复说明）；ack 回窗 → active → 转发恢复；队列满 503、排队超时 503（`Limits.QueueTimeout` 缩短驱动）、客户端断连释放队列位；单租户灌满额度后其他租户仍可入队；转发保持 tar.gz 流（大 body 不落内存——用 io.Pipe 计数断言）。**
@@ -257,23 +265,34 @@ type Backend interface {
 ### Task 14: session 身份 + enqueue 继承 + claim 互斥
 
 **Files:**
-- Modify: `internal/server/sessions.go`（`createSession`：runsOffHost 且有 enabled backend 时读 Endpoint 调 `POST {Endpoint}/internal/bindings {"tenant_id","source_key"}`（source_key=tenant+规范化路径），workspace_id 存 session 元数据；失败 503 不兜底；本地/个人版不调用）
+- Modify: `internal/server/sessions.go`（`createSession`：runsOffHost 且有 enabled backend 时读 Endpoint 调 `POST {Endpoint}/internal/bindings {"tenant_id","source_key"}`（source_key=tenant+规范化路径），workspace_id 存 session 元数据（sessionMeta JSON 兼容旧 index.json）；失败 503 不兜底；本地/个人版不调用）
 - Modify: `internal/server/runs.go`（`enqueueRun`：session 元数据有 workspace_id 则写入 run 行；旧 session 无值时按同 API 现场补齐一次）
-- Modify: `internal/runstate/runstate.go:171`（`Claim` 的选取子查询加 `NOT EXISTS (SELECT 1 FROM runs r2 WHERE r2.workspace_id = runs.workspace_id AND r2.workspace_id <> '' AND r2.status = 'running')`，冲突行跳过取下一条）
+- Modify: `internal/runstate/runstate.go`（**workspace_id 执行侧通道**：`Run` struct 加 `WorkspaceID string`；`Enqueue` INSERT、`Claim` 的 RETURNING 与 **`claimSQLite`（:212-239）的 SELECT** 双分支都加列——worker 侧从 `run.WorkspaceID` 读，session 元数据不再承担执行侧传递）
+- Modify: `internal/servefront/serve.go`（Edition 加两个 core→EE seam：`SandboxEndpoint func() string`（返回 enabled backend 的 Endpoint，nil=无）与 `WorkspaceRoot string`；由 EE 入口装配注入——core 包不得 import nacosrt）
+- Modify: `internal/server/server.go`（Config 加 `WorkspaceRoot string` + `SandboxEndpoint func() string`，文件树与 createSession 消费）
 - Modify: `internal/server/workspace.go`、`fsapi.go`（EE 下解析链 session → workspace_id → `workspace_root/<id>`；路径限制在卷根内——个人版行为不变）
-- Test: `internal/server/sessions_test.go` 补、`internal/runstate/runstate_test.go` 补
+- Test: `internal/server/sessions_test.go` 补、`internal/server/server_gate_sandbox_test.go` 补、`internal/runstate/runstate_test.go` 补
 
-- [ ] **Step 1: 写失败测试**：同租户同路径两 session 同 workspace_id；不同租户不同；proxy 不可达 → createSession 503；enqueue 写入 runs.workspace_id；runstate——同 workspace 一条 running 时第二条 queued 不被 claim（claim 返回第三条无关 run），running 结束后可 claim；workspace.go 解析拒绝卷外路径（`/etc`）。**
+**Interfaces:**
+- Produces: `runstate.Run.WorkspaceID`（Task 15 消费）；`servefront.Edition.SandboxEndpoint/WorkspaceRoot`（Task 14/15 消费）。
+- claim 互斥语义：`Claim`（PG 单语句）与 `claimSQLite` 的候选选取加 `NOT EXISTS (SELECT 1 FROM runs r2 WHERE r2.workspace_id = runs.workspace_id AND r2.workspace_id <> '' AND r2.status='running')`；竞态残余（READ COMMITTED 下两副本同选）由**部分唯一索引在 UPDATE 时报错**兜住——claim 返回该错误，`Worker.Run` 的 1s 退避重试（worker.go:296-303）实现"跳过"。
+
+- [ ] **Step 1: 写失败测试**：同租户同路径两 session 同 workspace_id；不同租户不同；proxy 不可达 → createSession 503；enqueue 写入 runs.workspace_id；runstate（sqlite 分支）——同 workspace 一条 running 时第二条 queued 不被 claim（claim 返回第三条无关 run），running 结束后可 claim；PG 分支断言唯一索引冲突错误可安全重试（用 sqlite 模拟等价错误路径 + SQL 形状审查测试）；workspace.go 解析拒绝卷外路径（`/etc`）；旧库（无新列）Open 补列后 enqueue 不报 no such column。
 - [ ] **Step 2: 确认失败 → 实现 → `go test ./internal/server/ ./internal/runstate/ -v` 绿。**
 - [ ] **Step 3: Commit** `feat(server): session workspace identity and per-workspace run mutual exclusion`
 
 ### Task 15: 调度器侧沙箱流程改 workspace + SyncWorkspace
 
 **Files:**
-- Modify: `internal/ee/worker/worker_sandbox.go`（`provisionRunSandbox`：`SandboxConfig.Workspace = <run 的 workspace_id>`（从 snapshot/session 解析传入）；run 成功末尾 `SyncWorkspace` 替代 `GetArchive` 回写；sync 失败 → run error）
+- Modify: `internal/ee/worker/worker_sandbox.go`（`provisionRunSandbox`：workspace 从 **`run.WorkspaceID`**（Task 14 的 runstate 通道）取，透传进 client；run 成功末尾 `SyncWorkspace` 替代 `GetArchive` 回写；sync 失败 → run error）
+- Modify: `internal/platform/executor/providers/registry.go`（`providers.Config` 加 `Workspace string` 透传 `SandboxConfig`——provision 经 providers.New，不走 SandboxConfig 直构）
 - Test: `internal/ee/worker/worker_sandbox_test.go`（补）
 
-- [ ] **Step 1: 写失败测试**：provision 后 create 请求体含正确 workspace；成功路径调用 sync 且成功；sync 失败 → run 判 error 且错误含 "sync"；无 workspace_id（个人/过渡）行为不回归（本地 executor 路径不变）。**
+**Interfaces:**
+- Consumes: `runstate.Run.WorkspaceID`、`SandboxConfig.Workspace`、`SyncWorkspace`、`providers.Config.Workspace`。
+- 上传语义闭合：contract-http EE 路径下**移除 client 侧 `uploadWorkspace`/`PutArchive` 与 `GetArchive` 回写**（上传是 executor 在 create 内部动作，spec §4；不移除则同目录传两遍）；本地 executor（非沙箱）路径行为不变。`Translate{HostRoot: snap.Workspace}` 在 EE 下宿主路径不可读时——workspace 卷路径即宿主根（共享卷同挂载点），保持传入并记录。
+
+- [ ] **Step 1: 写失败测试**：provision 后 create 请求体含正确 workspace（经 providers.Config 透传）；成功路径调用 sync 且成功、**且不再有 client 侧 PutArchive**；sync 失败 → run 判 error 且错误含 "sync"；无 workspace_id（个人/过渡）本地路径不回归。**
 - [ ] **Step 2: 确认失败 → 实现 → `go test ./internal/ee/worker/ -v` 绿。**
 - [ ] **Step 3: Commit** `feat(worker): run-scoped workspace id and sync-based artifact confirmation`
 
@@ -298,6 +317,7 @@ type Backend interface {
 **Files:**
 - Modify: `deploy/selfhosted/docker-compose.full.yml`（`woca-scheduler` ×2：加 `woca-workspaces` 卷 + `WOCA_RUN_DISPATCH=queue` + `WOCA_RUNS_OFF_HOST=true`；新 `woca-executor`：挂 `/var/run/docker.sock` + 卷 + `--workspace-root /data/workspaces`；新 `executor-proxy`；woca-worker 服务移出 EE 栈（dev 栈保留）；新卷 `woca-workspaces`；`demo` profile：`fakemodel`（复用 `e2e/sandboxlab/fakemodel`）、`sandbox-init`（写模型 settings + sandbox backend options）、`sandbox-demo`（四段启动断言、退出码即结论、断言经 executor 标签查询端点无遗留容器））
 - Create: `e2e/sandboxlab/demo/`（demo 容器脚本/镜像）
+- Modify: `e2e/sandboxlab/fakemodel/main.go`（**参数化脚本**：按环境变量/轮次标记切换行为——轮 1 写产物文件并跑测试、轮 2 读第一轮文件内容输出、热生效轮校验镜像标记文件；现状两回合硬编码撑不起 §12 二/三级断言）
 - Modify: `Makefile`（`ent-sandbox-demo:` 驱动四段顺序；artifact 加 woca-executor/executor-proxy）
 - Test: demo 本身即 e2e（`make ent-sandbox-demo` 退出码 0）
 
@@ -309,7 +329,8 @@ type Backend interface {
 
 **Files:**
 - Create: `internal/ee/executor/gc.go`（启动 + 周期：`List({woca.sandbox=1, woca.executor=<self>})`，不在活跃集合 → Remove force）
-- Test: `internal/ee/executor/gc_test.go`（fakeBackend 造遗留容器断言清理与保留）
+- Create: `internal/ee/executor/patrol.go`（§8.4 磁盘边界第三件事：定期巡检宿主磁盘水位与工作区目录大小，超限 WARN 日志告警——显式边界三件事收口）
+- Test: `internal/ee/executor/gc_test.go`（fakeBackend 造遗留容器断言清理与保留）、`patrol_test.go`（超限触发告警日志）
 - Modify: `deploy/selfhosted/README-FULL.md`（角色/卷/demo 说明替换旧名；补 §8.5 运维纪律：runtime 与内核安全更新例行化、逃逸类高危 CVE 7 天滚动升级 SLO、executor 滚动重启语义）
 
 - [ ] **Step 1: 写失败测试（GC 保留活跃、清掉孤儿）→ 实现 → 绿。**
@@ -320,4 +341,4 @@ type Backend interface {
 
 ## 执行顺序与依赖
 
-Task 1→2→3 顺序无相互依赖可并行；4→5→6 严格顺序；7 依赖 4；8 依赖 1/3；9 独立；10 依赖 9；11 独立（纯 rename，宜早做减小后续 diff 噪音，但避免与 12-16 同批）；12 独立；13 依赖 1/8；14 依赖 13；15 依赖 2/14；16 依赖 6/7/8/13；17 依赖 16；18 收尾。
+Task 1、2 可并行；Task 3 动 schema（sandbox_backends 建表/迁移）与 Task 1 同触 `db.go` 家族，与 1 串行；4→5→6 严格顺序；7 依赖 4；8 依赖 1/3；9 独立；10 依赖 9；11 独立（纯 rename，宜早做减小后续 diff 噪音，但避免与 10 同批——都动 cmd/woca-server 与 servefront）；12 独立；13 依赖 1/8；14 依赖 13；15 依赖 2/14；16 依赖 6/7/8/13；17 依赖 16；18 收尾。
