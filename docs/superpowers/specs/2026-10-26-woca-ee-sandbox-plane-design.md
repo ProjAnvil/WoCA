@@ -35,6 +35,7 @@
 | runtime 访问权 | executor 跑在容器里，直连宿主 runtime socket。权限收窄后续做 |
 | 工作区 ID | proxy 生成。ID 是执行环境的身份，不是聊天 session 的 ID |
 | 工作区放置 | proxy 按负载选 executor，绑定持久化。同一工作区固定落在一个 executor |
+| 工作区存储 | 共享卷。scheduler 与 executor 挂同一路径，文件树现有实现直接可用 |
 | executor 规模 | 可横向扩容。扩容出的实例只接新工作区 |
 | 个人版 | 不接入这条路径。个人版继续本地执行 |
 | 外部方案 | 全部不接：OpenShell、E2B、Daytona、Runloop、CubeSandbox、OpenSandbox、agent-sandbox |
@@ -117,7 +118,6 @@ proxy 是调度器、队列与流控合在一起的转发层。四件事：
 proxy 无状态。它不持有会话，不缓存文件，不保存工作区内容。绑定关系在数据库里，负载信息在 `config_acks` 表里。
 
 ### 3.3 队列与调度模型
-
 微服务里有四种常见做法：
 
 | 做法 | 特点 | 我们的取舍 |
@@ -139,7 +139,7 @@ proxy 无状态。它不持有会话，不缓存文件，不保存工作区内�
 6. **负载上报**：executor 每 10 秒刷新自己的 ack，带上当前在跑 run 数。复用现有的 `config_acks` 表与 15 秒存活窗口。
 7. **不健康**：ack 超过存活窗口的 executor 视为不健康。绑定到它的工作区标记为待恢复。
 
-横向扩容有一条硬约束：**新 executor 只接新工作区**。已绑定的工作区不能凭空换 executor，因为工作区目录在 executor 本地磁盘。要迁移得显式拷贝目录。
+横向扩容有一条好处：工作区目录在共享卷上，不绑 executor。新 executor 挂同一个卷就能接管已有工作区，只要改绑定记录。不用拷贝目录。
 
 ### 3.4 调度器不建第二个 agent
 
@@ -243,7 +243,9 @@ executor 用 container runtime 的 API 管理容器：
 
 ### 5.3 工作区同步
 
-executor 侧的工作区根目录由进程的 `workspace_root` 参数决定，不在管理台里改。每个工作区一个子目录，目录名是工作区 ID。
+工作区目录在共享卷上。scheduler 与 executor 挂同一个卷、同一路径，卷根记作 `workspace_root`。
+
+每个工作区一个子目录，目录名是工作区 ID。executor 校验 ID 只含安全字符集，拒绝 `/`、`..` 与绝对路径。
 
 上传：把宿主目录打成 tar.gz，灌进容器，解包到 `/workspace`。这是 executor 在 `create` 里的内部动作。
 
@@ -256,20 +258,18 @@ executor 侧的工作区根目录由进程的 `workspace_root` 参数决定，�
 - `.git` 不上传，宿主保留。
 - 同步失败不能算成功。
 
-### 5.4 工作区文件服务
+### 5.4 工作区文件由 scheduler 提供
 
-executor 提供只读的工作区接口，供管理台与前端使用：
+executor 不提供文件接口。工作区目录在共享卷上，scheduler 挂同一个卷，直接读它。
 
-| 操作 | 说明 |
-|---|---|
-| 列目录树 | 限深、限条目数。返回工作区路径与 revision |
-| 读文件 | 限类型、限大小。拒绝穿越出工作区根 |
+调度器侧现有的文件树与文件预览走宿主文件系统（`internal/server/workspace.go` 与 `internal/server/fsapi.go`）。现有实现直接可用，不用改成经 executor 转发。
 
-首期不做写接口。管理台改代码要走 agent 的工具，不走管理台。
+代价是 scheduler 能读到卷上的所有工作区目录。所以：
 
-这些接口在 contract 之外，是 executor 自己的管理接口。调度器不直接调用，前端经调度器转发。
+1. 文件树与预览的路径必须限制在卷根内。
+2. 结果按租户过滤。一个租户不能通过路径参数看到别人的工作区。
 
-调度器侧现有的文件树与文件预览走宿主文件系统（`internal/server/workspace.go` 与 `internal/server/fsapi.go`）。EE 改成远程执行后，宿主上没有工作区目录，这两个接口要改为经 executor 转发。首期只保留列树与读文件两项。
+这两点顺带修掉现在的一个问题：这两个接口现在接受任意路径参数，客户端可以传 `?workspace=/etc` 拿到目录树。
 
 ## 6. 配置面
 
@@ -428,13 +428,15 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 
 1. 调度器是唯一用户授权入口。它校验租户与工作区归属。
 2. executor 不做授权。它信任来自调度器的调用。
-3. executor 的服务端口只在内网。不对用户网络发布。
-4. executor 持有 runtime 全量权限，所以它所在的节点必须完全受信。
-5. 沙箱里没有 woca 的凭据与代码。
-6. 工作区文件接口限制在工作区根内。拒绝穿越。
-7. 归档导入导出拒绝绝对路径、`..` 与逃逸 symlink。
-8. 沙箱失败一律让 run 失败。不回退本地执行。
-9. 管理台改配置有审计日志，沿用现有 `sandboxLog` 形状。
+3. executor 不做授权。它信任来自调度器的调用。
+4. executor 的服务端口只在内网。不对用户网络开放。
+5. executor 持有 runtime 全量权限，所以它所在的节点必须完全受信。
+6. scheduler 挂了工作区共享卷，能读到卷上所有工作区目录。文件树与预览的路径必须限制在卷根内并按租户过滤。
+7. 沙箱里没有 woca 的凭据与代码。
+8. 工作区文件接口限制在工作区根内。拒绝穿越。
+9. 归档导入导出拒绝绝对路径、`..` 与逃逸 symlink。
+10. 沙箱失败一律让 run 失败。不回退本地执行。
+11. 管理台改配置有审计日志，沿用现有 `sandboxLog` 形状。
 
 ## 10. 故障语义
 
@@ -485,13 +487,13 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 | `woca-worker` | EE 首期不启动。角色代码保留，个人版与过渡期用 |
 | 个人版 `woca` | 不接入这条路径。个人版继续本地执行，不经过 scheduler、proxy、executor |
 
-executor 可横向扩容。扩容出的实例只接新工作区。已绑定的工作区留在原 executor 上。
+executor 可横向扩容。工作区目录在共享卷上，不绑 executor。新 executor 挂同一个卷就能接管已有工作区，只要改绑定记录。
 
 个人版与 EE 的边界：`internal/ee` 下的角色只进企业版。个人版二进制不链接它们。`make check-editions` 守这条边界。
 
 调度器内嵌的执行循环直接复用 `internal/ee/worker` 现有的 claim、事件镜像、transcript 保存逻辑。不重写一套。
 
-新增的卷：executor 的工作区根目录，挂在 executor 上。
+新增的卷：`woca-workspaces`。scheduler 与 executor 都挂，路径相同，卷根就是 `workspace_root`。
 
 executor 拿 container runtime 的访问权，走容器内直连：executor 跑在容器里，挂载宿主 runtime socket，直接调用容器管理接口。
 
@@ -587,7 +589,7 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 - `internal/platform/executor/sandbox.go`：client 侧 create 发改工作区 ID，新增 `SyncWorkspace` 调用。
 - `internal/platform/executor/fakesandbox/`：实现新端点。
 - `internal/server/runs.go`：门控从 `hasLiveSandboxWorker` 改成 executor 在线判定。
-- `internal/server/workspace.go`、`internal/server/fsapi.go`：文件树与预览改为经 executor 转发。
+- `internal/server/workspace.go`、`internal/server/fsapi.go`：路径限制在共享卷根内，并按租户过滤。
 - `internal/ee/executor/`（新）：沙箱服务、容器管理、工作区目录、文件面。订阅 nacos pack，`OnChange` 里更新内存里的后端参数。
 - `internal/ee/proxy/`（新）：转发与流控。
 - `internal/ee/configsvc/handlers_sandboxes.go`：`options` 字段与校验。
@@ -609,7 +611,7 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 | 出口白名单代理 | 真实项目要在沙箱里装依赖、拉代码 | 沙箱请求过代理，按域名放行，代理在出口注入凭据 |
 | 硬隔离档位 | 开始跑第三方上传的代码，或对外开放租户 | Kata 轻量虚拟机或 microVM。宿主要支持虚拟化 |
 | runtime 权限收窄 | executor 所在节点不再完全受信 | socket 代理只放行沙箱需要的调用 |
-| 工作区跨 executor 迁移 | executor 长期下线，或要重平衡 | 显式拷贝工作区目录到目标 executor，再改绑定 |
+| 工作区重平衡 | executor 长期下线，或要重新分布负载 | 共享卷上目录不绑 executor，改绑定记录即可 |
 
 ## 17. 数据库改动清单
 
