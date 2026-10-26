@@ -19,8 +19,6 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/projanvil/langchain-golang/core/messages"
-
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/ee/discovery"
 	"github.com/projanvil/woca/internal/ee/msgplane"
@@ -28,10 +26,8 @@ import (
 	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/ee/worker"
 	"github.com/projanvil/woca/internal/logging"
-	"github.com/projanvil/woca/internal/platform/blobstore"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/runstate"
-	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settingswatch"
 	"github.com/projanvil/woca/internal/tracing"
 	"github.com/projanvil/woca/internal/webfx"
@@ -130,10 +126,12 @@ func newWorkerRoot() *cobra.Command {
 				defer idle.(*msgplane.Waiter).Close()
 			}
 
-			sessions := openWorkerSessions(log)
+			// Shared transcript store on WOCA_SESSION_DIR (nil disables
+			// persistence); session busy states ride the same condition.
+			sessions := worker.NewFileSessions(os.Getenv("WOCA_SESSION_DIR"), log)
 			var states worker.SessionStates
 			if sessions != nil {
-				states = &dbSessionStates{db: db}
+				states = worker.NewDBSessionStates(db)
 			}
 
 			w := worker.New(worker.Config{
@@ -288,63 +286,6 @@ func serveProbes(ctx context.Context, addr string, log zerolog.Logger, o *obs.Ob
 		_ = ln.Close()
 		<-done
 	}, nil
-}
-
-// openWorkerSessions opens the shared session transcript store (the same
-// JSONL-behind-blobstore layout woca-server uses) when WOCA_SESSION_DIR
-// points at a directory shared with the gateways. Nil disables transcript
-// persistence (prompt-only history). Note: the listing index (index.json)
-// stays gateway-owned — the worker updates transcripts only, so a gateway's
-// session title/message-count refresh on its next own save.
-func openWorkerSessions(log zerolog.Logger) worker.Sessions {
-	dir := os.Getenv("WOCA_SESSION_DIR")
-	if dir == "" {
-		return nil
-	}
-	blobs, err := blobstore.NewLocal(dir)
-	if err != nil {
-		log.Warn().Str("dir", dir).Err(err).Msg("session store unavailable; runs execute with prompt-only history")
-		return nil
-	}
-	return &blobSessions{blobs: blobs}
-}
-
-// blobSessions implements worker.Sessions over the shared transcript
-// directory.
-type blobSessions struct {
-	blobs blobstore.Store
-}
-
-func (b *blobSessions) Load(id string) []messages.Message {
-	msgs, err := session.LoadBlob(context.Background(), b.blobs, id+".jsonl")
-	if err != nil {
-		return nil
-	}
-	return msgs
-}
-
-func (b *blobSessions) Save(id string, msgs []messages.Message, _ string) error {
-	return session.SaveBlob(context.Background(), b.blobs, id+".jsonl", msgs)
-}
-
-// dbSessionStates implements worker.SessionStates over the shared
-// session_state table (the same rows the gateways' listings read).
-type dbSessionStates struct {
-	db *wocadb.DB
-}
-
-func (s *dbSessionStates) MarkRunning(sessionID, runID string) {
-	_ = s.db.SetSessionState(wocadb.SessionState{
-		SessionID: sessionID,
-		Status:    wocadb.SessionRunning,
-		RunID:     runID,
-		Owner:     fmt.Sprintf("%d@worker", os.Getpid()),
-		UpdatedAt: wocadb.Now(),
-	})
-}
-
-func (s *dbSessionStates) Clear(sessionID, runID string) {
-	_, _ = s.db.ClearSessionState(sessionID, runID)
 }
 
 // openWorkerDB opens the shared settings/runstate database.
