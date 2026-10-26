@@ -181,12 +181,14 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 			ctx = agent.WithRunWorkspace(ctx, snap.Workspace)
 		}
 		// Per-run sandbox (design §4.5): when the materialized config
-		// carries an enabled backend, provision one, upload the workspace,
-		// execute through the run executor, and download the products back.
-		// Any failure — including a sandbox-table read error — fails the
-		// run explicitly; the worker never silently falls back to local
-		// execution.
-		sbxDownload, teardown, err := w.provisionRunSandbox(&ctx, snap)
+		// carries an enabled backend, provision one and execute through
+		// the run executor. Runs carrying a workspace identity (runstate
+		// channel, Task 14) route the sandbox under it and confirm their
+		// products with a workspace sync; workspace-less runs keep the
+		// client-side upload/download round trip. Any failure — including
+		// a sandbox-table read error — fails the run explicitly; the
+		// worker never silently falls back to local execution.
+		sbxDownload, teardown, err := w.provisionRunSandbox(&ctx, run.WorkspaceID, snap)
 		if teardown != nil {
 			defer teardown()
 		}

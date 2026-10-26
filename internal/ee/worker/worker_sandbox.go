@@ -1,8 +1,10 @@
 package worker
 
-// Per-run sandbox plumbing (design §4.5): workspace archive upload and
-// download over the provider's archive surface, both directions bounded
-// by the sandbox-archive-max-bytes setting.
+// Per-run sandbox plumbing (design §4.5): workspace-routed runs (EE)
+// create the sandbox under the run's workspace and confirm products with
+// a workspace sync; workspace-less runs (personal edition / transition)
+// move the workspace itself over the provider's archive surface, both
+// directions bounded by the sandbox-archive-max-bytes setting.
 
 import (
 	"archive/tar"
@@ -32,6 +34,14 @@ type archiver interface {
 	GetArchive(ctx context.Context) (io.ReadCloser, error)
 }
 
+// workspaceSyncer is the EE workspace surface (CONTRACT.md §3.16): a
+// workspace-routed sandbox flushes its /workspace back to the
+// executor-side workspace directory, which is how a run confirms its
+// products durably in workspace mode.
+type workspaceSyncer interface {
+	SyncWorkspace(ctx context.Context) error
+}
+
 // provisionRunSandbox sets up the per-run sandbox when the materialized
 // config carries an enabled backend (design §4.5). On success it rewrites
 // *ctx to carry the run executor and returns the product download
@@ -41,7 +51,15 @@ type archiver interface {
 // run executes locally, exactly the pre-sandbox behavior. Every failure
 // is returned as an error so the caller fails the run: no silent local
 // fallback, including on sandbox-table read errors.
-func (w *Worker) provisionRunSandbox(ctxp *context.Context, snap runstate.RunSnapshot) (download func(primary bool) error, teardown func(), err error) {
+//
+// workspaceID selects the artifact mode: with a workspace identity on a
+// sync-capable backend (contract-http EE) the sandbox is created under
+// that workspace and the executor seeds it during create (spec §4) — no
+// client-side upload (that would push the same directory twice) — and
+// the product confirmation is SyncWorkspace. Without one (personal
+// edition / transition, or archive-only backends like cfbridge) the
+// client-side archive round trip applies, unchanged.
+func (w *Worker) provisionRunSandbox(ctxp *context.Context, workspaceID string, snap runstate.RunSnapshot) (download func(primary bool) error, teardown func(), err error) {
 	if w.db == nil || snap.Workspace == "" {
 		return nil, nil, nil
 	}
@@ -61,32 +79,66 @@ func (w *Worker) provisionRunSandbox(ctxp *context.Context, snap runstate.RunSna
 		Endpoint: row.Endpoint,
 		APIKey:   secret,
 		Timeout:  time.Duration(row.TimeoutMs) * time.Millisecond,
+		// The run's workspace identity (runstate channel, Task 14): rides
+		// the contract-http create body and every request's routing header.
+		Workspace: workspaceID,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("sandbox: provision backend %q (%s): %w", row.Name, row.Type, err)
 	}
 	teardown = func() { _ = closeIfClosable(x) }
+	// In workspace mode the host workspace path is the shared-volume mount
+	// (scheduler and executor see the same path), so host-path translation
+	// keeps working even though the scheduler-side copy is not the source
+	// of truth anymore — recorded here so the routing is observable.
 	tx := &executor.Translate{Inner: x, HostRoot: snap.Workspace, SandboxRoot: "/workspace"}
-	// The archive surface is path-free (tar entries are workspace-relative,
-	// CONTRACT.md §4), so the raw executor — not the Translate wrapper —
-	// serves the upload/download.
-	if err := uploadWorkspace(*ctxp, x, snap.Workspace, w.maxArchiveBytes); err != nil {
-		teardown()
-		return nil, nil, fmt.Errorf("sandbox: workspace upload: %w", err)
-	}
 	var once sync.Once
 	var dlErr error
-	download = func(primary bool) error {
-		once.Do(func() {
-			dlErr = downloadWorkspace(*ctxp, x, snap.Workspace, w.maxArchiveBytes)
-			if dlErr != nil && !primary {
-				// Error path: the run already failed for its own reason;
-				// the product recovery is best-effort and only logged.
-				w.log.Warn().Err(dlErr).Msg("sandbox: best-effort product download failed")
-				dlErr = nil
-			}
-		})
-		return dlErr
+	if ws, ok := x.(workspaceSyncer); ok && workspaceID != "" {
+		download = func(primary bool) error {
+			once.Do(func() {
+				if serr := ws.SyncWorkspace(*ctxp); serr != nil {
+					dlErr = fmt.Errorf("workspace sync: %w", serr)
+				}
+				if dlErr != nil && !primary {
+					// Error path: the run already failed for its own
+					// reason; the product confirmation is best-effort and
+					// only logged.
+					w.log.Warn().Err(dlErr).Msg("sandbox: best-effort workspace sync failed")
+					dlErr = nil
+				}
+			})
+			return dlErr
+		}
+	} else {
+		if workspaceID != "" {
+			// A workspace-routed run on a backend without the sync surface
+			// (cfbridge today): the workspace identity cannot route, so the
+			// client-side archive round trip remains the only way to move
+			// the workspace. Observable on purpose — this is a degraded
+			// mode for EE tenants.
+			w.log.Warn().Str("backend", row.Name).Str("type", row.Type).
+				Msg("sandbox: backend lacks workspace sync; falling back to client-side archives")
+		}
+		// The archive surface is path-free (tar entries are
+		// workspace-relative, CONTRACT.md §4), so the raw executor — not
+		// the Translate wrapper — serves the upload/download.
+		if err := uploadWorkspace(*ctxp, x, snap.Workspace, w.maxArchiveBytes); err != nil {
+			teardown()
+			return nil, nil, fmt.Errorf("sandbox: workspace upload: %w", err)
+		}
+		download = func(primary bool) error {
+			once.Do(func() {
+				dlErr = downloadWorkspace(*ctxp, x, snap.Workspace, w.maxArchiveBytes)
+				if dlErr != nil && !primary {
+					// Error path: the run already failed for its own reason;
+					// the product recovery is best-effort and only logged.
+					w.log.Warn().Err(dlErr).Msg("sandbox: best-effort product download failed")
+					dlErr = nil
+				}
+			})
+			return dlErr
+		}
 	}
 	*ctxp = runexec.WithRunExecutor(*ctxp, tx)
 	w.log.Info().Str("backend", row.Name).Str("type", row.Type).Msg("run sandbox provisioned")

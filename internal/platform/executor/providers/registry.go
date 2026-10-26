@@ -22,6 +22,12 @@ type Config struct {
 	Endpoint string
 	APIKey   string
 	Timeout  time.Duration
+	// Workspace is the optional workspace ID the sandbox is routed under
+	// (EE sandbox plane): the contract-http create body's workspace field
+	// plus the X-Woca-Workspace routing header on every request. Empty =
+	// not workspace-routed (personal edition / transition); backends
+	// without workspace routing (cfbridge) ignore it.
+	Workspace string
 }
 
 // New builds an Executor for the backend type. Unknown or unregistered
@@ -34,9 +40,10 @@ func New(cfg Config) (executor.Executor, error) {
 	switch cfg.Type {
 	case "contract-http":
 		return executor.NewSandbox(executor.SandboxConfig{
-			Endpoint: cfg.Endpoint,
-			APIKey:   cfg.APIKey,
-			Timeout:  cfg.Timeout,
+			Endpoint:  cfg.Endpoint,
+			APIKey:    cfg.APIKey,
+			Timeout:   cfg.Timeout,
+			Workspace: cfg.Workspace,
 		})
 	case "cfbridge":
 		return cfbridge.New(cfbridge.Config{

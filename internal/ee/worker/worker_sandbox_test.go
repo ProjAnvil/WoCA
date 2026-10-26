@@ -10,12 +10,16 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -119,6 +123,73 @@ func runStatus(t *testing.T, ledger *runstate.Ledger, runID string) (string, []r
 		t.Fatal(err)
 	}
 	return row.Status, events
+}
+
+// enqueueWorkspaceIDRun enqueues a run carrying an execution-side sandbox
+// workspace identity (Task 14's runstate channel) — the EE routing path.
+func enqueueWorkspaceIDRun(t *testing.T, ledger *runstate.Ledger, runID, prompt, workspace, workspaceID string) {
+	t.Helper()
+	snap, err := runstate.EncodeSnapshot(runstate.RunSnapshot{
+		Prompt: prompt, SessionID: "s-" + runID, Workspace: workspace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ledger.Enqueue(t.Context(), runstate.Run{
+		RunID: runID, SessionID: "s-" + runID, ThreadID: "th-" + runID,
+		ConfigSnapshot: snap, WorkspaceID: workspaceID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// recordingSandbox delegates to the fakesandbox handler while recording
+// the wire traffic the workspace-mode assertions need: create bodies,
+// client-side archive uploads (PUT .../archive), and workspace syncs
+// (POST .../workspace/sync). syncFails turns the sync endpoint into a 500.
+type recordingSandbox struct {
+	inner     http.Handler
+	syncFails bool
+
+	mu      sync.Mutex
+	creates []string
+	putArch int
+	syncs   int
+}
+
+func (s *recordingSandbox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.Method == http.MethodPost && r.URL.Path == "/sandbox/create":
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(b))
+		s.mu.Lock()
+		s.creates = append(s.creates, string(b))
+		s.mu.Unlock()
+	case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/archive"):
+		s.mu.Lock()
+		s.putArch++
+		s.mu.Unlock()
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/workspace/sync"):
+		s.mu.Lock()
+		s.syncs++
+		fail := s.syncFails
+		s.mu.Unlock()
+		if fail {
+			http.Error(w, "sync failed", http.StatusInternalServerError)
+			return
+		}
+	}
+	s.inner.ServeHTTP(w, r)
+}
+
+func (s *recordingSandbox) stats() (creates []string, putArch, syncs int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.creates...), s.putArch, s.syncs
 }
 
 // A run over an enabled backend writes its products in the sandbox and
@@ -275,6 +346,166 @@ func TestWorkerNoBackendRunsLocally(t *testing.T) {
 }
 
 var _ = fmt.Sprintf
+
+// EE workspace mode: a run carrying a workspace identity routes the
+// sandbox create under it (the workspace field rides the create body via
+// providers.Config), never uploads client-side (the executor seeds the
+// workspace during create, spec §4), and confirms the products with
+// exactly one workspace sync.
+func TestWorkerSandboxWorkspaceRunSyncsInsteadOfUploading(t *testing.T) {
+	rec := &recordingSandbox{inner: fakesandbox.New().Handler()}
+	srv := httptest.NewServer(rec)
+	t.Cleanup(srv.Close)
+
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "in.txt"), []byte("host-side"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, ledger := newSandboxWorker(t, srv.URL, 8<<20,
+		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+			{ID: "1", Name: "Write", Args: map[string]any{"file_path": "out.txt", "content": "sandbox-side"}},
+		}},
+		messages.AI("done"),
+	)
+	enqueueWorkspaceIDRun(t, ledger, "r6", "write the file", ws, "ws_ee1")
+
+	if err := w.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	status, _ := runStatus(t, ledger, "r6")
+	if status != "done" {
+		t.Fatalf("status = %q, want done", status)
+	}
+	creates, putArch, syncs := rec.stats()
+	if len(creates) != 1 {
+		t.Fatalf("create calls = %d, want 1", len(creates))
+	}
+	var createBody map[string]any
+	if err := json.Unmarshal([]byte(creates[0]), &createBody); err != nil {
+		t.Fatalf("create body %q: %v", creates[0], err)
+	}
+	if got, _ := createBody["workspace"].(string); got != "ws_ee1" {
+		t.Fatalf("create body workspace = %q, want ws_ee1 (body %s)", got, creates[0])
+	}
+	if putArch != 0 {
+		t.Fatalf("client-side archive uploads = %d, want 0 (workspace mode uploads inside create)", putArch)
+	}
+	if syncs != 1 {
+		t.Fatalf("workspace syncs = %d, want exactly 1", syncs)
+	}
+}
+
+// A failing workspace sync fails the run: the products were never
+// confirmed durably executor-side, so "done" would lie. The error must
+// name the sync step.
+func TestWorkerSandboxSyncFailureFailsRun(t *testing.T) {
+	rec := &recordingSandbox{inner: fakesandbox.New().Handler(), syncFails: true}
+	srv := httptest.NewServer(rec)
+	t.Cleanup(srv.Close)
+
+	ws := t.TempDir()
+	w, ledger := newSandboxWorker(t, srv.URL, 8<<20,
+		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+			{ID: "1", Name: "Write", Args: map[string]any{"file_path": "out.txt", "content": "x"}},
+		}},
+		messages.AI("done"),
+	)
+	enqueueWorkspaceIDRun(t, ledger, "r7", "write the file", ws, "ws_ee2")
+
+	if err := w.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	status, events := runStatus(t, ledger, "r7")
+	if status != "error" {
+		t.Fatalf("status = %q, want error (failed sync must fail the run)", status)
+	}
+	var sawSyncErr bool
+	for _, ev := range events {
+		if ev.Kind == "error" && strings.Contains(ev.Payload, "sync") {
+			sawSyncErr = true
+		}
+	}
+	if !sawSyncErr {
+		t.Fatalf("no sync error event: %+v", events)
+	}
+}
+
+// provisionRunSandbox threads the run's workspace identity through
+// providers.Config into the contract-http create body (Task 15 wiring).
+func TestProvisionRunSandboxPassesWorkspaceToCreate(t *testing.T) {
+	rec := &recordingSandbox{inner: fakesandbox.New().Handler()}
+	srv := httptest.NewServer(rec)
+	t.Cleanup(srv.Close)
+
+	w, _ := newSandboxWorker(t, srv.URL, 8<<10)
+	ctx := context.Background()
+	dl, teardown, err := w.provisionRunSandbox(&ctx, "ws_direct", runstate.RunSnapshot{Workspace: t.TempDir()})
+	if err != nil {
+		t.Fatalf("provisionRunSandbox: %v", err)
+	}
+	if dl == nil || teardown == nil {
+		t.Fatal("workspace-mode provision must return download and teardown")
+	}
+	defer teardown()
+	if err := dl(true); err != nil {
+		t.Fatalf("download(true) = %v, want nil (fake sync succeeds)", err)
+	}
+	creates, putArch, syncs := rec.stats()
+	if len(creates) != 1 {
+		t.Fatalf("create calls = %d, want 1", len(creates))
+	}
+	var createBody map[string]any
+	if err := json.Unmarshal([]byte(creates[0]), &createBody); err != nil {
+		t.Fatalf("create body %q: %v", creates[0], err)
+	}
+	if got, _ := createBody["workspace"].(string); got != "ws_direct" {
+		t.Fatalf("create body workspace = %q, want ws_direct", got)
+	}
+	if putArch != 0 {
+		t.Fatalf("client-side archive uploads = %d, want 0", putArch)
+	}
+	if syncs != 1 {
+		t.Fatalf("workspace syncs = %d, want 1", syncs)
+	}
+}
+
+// A run without a workspace identity (personal edition / transition) keeps
+// the pre-EE client-side archive round trip: the create body carries no
+// workspace field, the workspace is uploaded once, and no sync happens.
+func TestWorkerSandboxLocalPathStillArchives(t *testing.T) {
+	rec := &recordingSandbox{inner: fakesandbox.New().Handler()}
+	srv := httptest.NewServer(rec)
+	t.Cleanup(srv.Close)
+
+	ws := t.TempDir()
+	w, ledger := newSandboxWorker(t, srv.URL, 8<<20, messages.AI("done"))
+	enqueueWorkspaceRun(t, ledger, "r8", "plain run", ws)
+
+	if err := w.Step(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	status, _ := runStatus(t, ledger, "r8")
+	if status != "done" {
+		t.Fatalf("status = %q, want done", status)
+	}
+	creates, putArch, syncs := rec.stats()
+	if len(creates) != 1 {
+		t.Fatalf("create calls = %d, want 1", len(creates))
+	}
+	var createBody map[string]any
+	if err := json.Unmarshal([]byte(creates[0]), &createBody); err != nil {
+		t.Fatalf("create body %q: %v", creates[0], err)
+	}
+	if _, ok := createBody["workspace"]; ok {
+		t.Fatalf("create body %s carries workspace, want none on the local path", creates[0])
+	}
+	if putArch != 1 {
+		t.Fatalf("client-side archive uploads = %d, want 1 (local path unchanged)", putArch)
+	}
+	if syncs != 0 {
+		t.Fatalf("workspace syncs = %d, want 0 on the local path", syncs)
+	}
+}
 
 // Terminal-review hardening: the download must not reintroduce .git
 // (host-owned, excluded on upload) or write symlinks whose targets escape
