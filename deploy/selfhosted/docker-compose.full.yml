@@ -628,10 +628,11 @@ services:
       WOCA_WORKSPACE_ROOT: "/data/workspaces"
       WOCA_EXECUTOR_ADVERTISE: "woca-executor:8093"
       WOCA_OBS_ADDR: ":9094"
-      # Demo posture for macOS dev hosts (OrbStack, spec §11.3): the full
-      # hardening profile's readonly-rootfs/nnP posture is not guaranteed
-      # there. Production must run full (the default) on trusted nodes.
-      WOCA_SANDBOX_HARDENING: "minimal"
+      # No WOCA_SANDBOX_HARDENING here on purpose: the unset value is the
+      # code default = the FULL profile (cap drop, no-new-privileges,
+      # readonly rootfs, pids limit — spec §8.4). The minimal profile is
+      # demo-only posture (macOS dev hosts, §11.3) and rides the demo
+      # override file, exactly like the unattended-runs allow ruleset.
     volumes:
       - woca-workspaces:/data/workspaces
       - woca-crypto:/var/lib/woca/home

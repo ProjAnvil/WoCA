@@ -2,21 +2,29 @@
 #
 # NEVER applied by the plain self-hosted stack: only `make
 # ent-sandbox-demo` composes this file on top of docker-compose.full.yml.
-# It carries the one piece of demo posture that must not leak into a
-# real deployment — the unattended-runs tool allow ruleset
-# (Write/Read/Bash) mounted as the schedulers' project settings:
-# off-host runs have no human answer loop, so without it the scripted
-# model's tool calls would stall on permission prompts. In a production
-# self-hosted stack this file is the operator's decision surface: scope
-# the allow list per deployment (the sandbox is the containment
-# boundary, the ruleset is the blast radius).
+# It carries the two pieces of demo posture that must not leak into a
+# real deployment:
+#
+#   - the unattended-runs tool allow ruleset (Write/Read/Bash) mounted
+#     as the schedulers' project settings: off-host runs have no human
+#     answer loop, so without it the scripted model's tool calls would
+#     stall on permission prompts. In a production self-hosted stack
+#     this file is the operator's decision surface: scope the allow
+#     list per deployment (the sandbox is the containment boundary, the
+#     ruleset is the blast radius).
+#
+#   - the executor's MINIMAL sandbox hardening profile: macOS dev hosts
+#     (OrbStack) do not guarantee the full profile's readonly-rootfs /
+#     no-new-privileges posture (spec §11.3). Production must run the
+#     default FULL profile (spec §8.4) — which is what the base file
+#     ships by leaving WOCA_SANDBOX_HARDENING unset.
 #
 # Usage (exactly what the make target does):
 #   docker compose -f docker-compose.full.yml -f docker-compose.demo.yml \
 #     --profile demo up -d <services>
 #
 # The demo profile's services (fakemodel, sandbox-init, sandbox-demo)
-# live in the base file; this override only widens the schedulers.
+# live in the base file; this override only widens the roles' posture.
 
 services:
   woca-scheduler-1:
@@ -26,3 +34,7 @@ services:
   woca-scheduler-2:
     volumes:
       - ./demo/scheduler-settings.json:/opt/woca/.woca/settings.json:ro
+
+  woca-executor:
+    environment:
+      WOCA_SANDBOX_HARDENING: "minimal"
