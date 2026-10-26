@@ -53,8 +53,12 @@ type CreateSpec struct {
 // positive Timeout kills the command (Exec only — Start is driven through
 // Process instead).
 type ExecSpec struct {
-	Cmd     []string
-	Dir     string
+	Cmd []string
+	Dir string
+	// Env entries ("K=V") overlay the container environment. The fake
+	// applies them on top of os.Environ() — unlike the platform local
+	// executor's wholesale replacement — so PATH keeps resolving "sh"
+	// inside fake containers.
 	Env     []string
 	Stdin   []byte
 	Timeout time.Duration

@@ -458,6 +458,55 @@ func TestFakeProcess_StdinRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFakeProcess_WriteStdinBlockedByFullPipe(t *testing.T) {
+	be := newBackend(t)
+	c := mustCreate(t, be, CreateSpec{Image: "img"})
+
+	// sleep never reads stdin, so a write larger than the pipe buffer
+	// (~64KB) parks inside the write while holding no process state.
+	p, err := c.Start(context.Background(), ExecSpec{Cmd: []string{"sh", "-c", "sleep 30"}})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		writeDone <- p.WriteStdin(bytes.Repeat([]byte("x"), 1<<20))
+	}()
+	time.Sleep(150 * time.Millisecond) // let the writer reach the blocked state
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- p.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Errorf("Close during blocked stdin write: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close deadlocked behind a blocked stdin write (lock held across pipe write)")
+	}
+
+	// Closing the pipe unblocks the parked write; it must report an error,
+	// not hang.
+	select {
+	case err := <-writeDone:
+		if err == nil {
+			t.Error("blocked WriteStdin after Close: want error, got nil")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("WriteStdin never returned after Close")
+	}
+
+	// Kill still answers while the process is being torn down.
+	if err := p.Kill(context.Background()); err != nil {
+		t.Errorf("Kill after Close: %v", err)
+	}
+	waitFor(t, "process to die", func() bool {
+		_, _, done, _ := p.Snapshot(0)
+		return done
+	})
+}
+
 func TestFakeProcess_CloseKillsRunningProcess(t *testing.T) {
 	be := newBackend(t)
 	c := mustCreate(t, be, CreateSpec{Image: "img"})

@@ -572,17 +572,22 @@ type FakeProcess struct {
 
 var _ Process = (*FakeProcess)(nil)
 
-// WriteStdin implements Process.
+// WriteStdin implements Process. The pipe write deliberately happens
+// outside p.mu: a child that stops reading stdin fills the pipe buffer and
+// parks the write, and holding the lock across it would block
+// Close/Kill/CloseStdin forever, defeating Close's 5s safety net.
 func (p *FakeProcess) WriteStdin(b []byte) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.closed {
+		p.mu.Unlock()
 		return errors.New("fake process: closed")
 	}
-	if p.stdin == nil {
+	w := p.stdin
+	p.mu.Unlock()
+	if w == nil {
 		return errors.New("fake process: stdin already closed")
 	}
-	if _, err := p.stdin.Write(b); err != nil {
+	if _, err := w.Write(b); err != nil {
 		return fmt.Errorf("fake process: stdin write: %w", err)
 	}
 	return nil
