@@ -50,6 +50,18 @@ export interface Settings {
   langfuse_secret_key_set: boolean
 }
 
+// The backend's execution options (design §17): image, runtime, network,
+// cpu/memory caps and env — validated by the backend (runtime only
+// runc|runsc, network only none|bridge, cpu/memory >= 0).
+export interface SandboxBackendOptions {
+  image: string
+  runtime: string
+  network: string
+  cpu: number
+  memory_mb: number
+  env?: Record<string, string>
+}
+
 // One managed sandbox backend (configsvc /api/sandboxes). The API key
 // never rides this shape — key_set reports whether one is stored.
 export interface SandboxBackend {
@@ -63,6 +75,7 @@ export interface SandboxBackend {
   last_probe_at?: number
   last_probe_ok?: boolean
   last_probe_error?: string
+  options?: SandboxBackendOptions
 }
 
 // The verify probe's answer: per-step outcomes without credentials.

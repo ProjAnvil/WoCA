@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/projanvil/woca/internal/ee/nacosrt"
 	"github.com/projanvil/woca/internal/wocadb"
 	"github.com/rs/zerolog"
 )
@@ -33,19 +34,22 @@ func validSandboxType(t string) bool {
 func sandboxKeySecret(id string) string { return "sandbox-api-key:" + id }
 
 // sandboxPayload is one backend over the wire. KeySet reports whether the
-// encrypted key secret exists; the key never leaves the store.
+// encrypted key secret exists; the key never leaves the store. Options is
+// the six-field execution contract (design §17) — an object over the
+// wire, JSON text in the table.
 type sandboxPayload struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	Type           string `json:"type"`
-	Endpoint       string `json:"endpoint"`
-	TimeoutMs      int64  `json:"timeout_ms"`
-	Enabled        bool   `json:"enabled"`
-	KeySet         bool   `json:"key_set"`
-	LastProbeAt    int64  `json:"last_probe_at"`
-	LastProbeOK    bool   `json:"last_probe_ok"`
-	LastProbeError string `json:"last_probe_error,omitempty"`
-	UpdatedAt      int64  `json:"updated_at"`
+	ID             string                  `json:"id"`
+	Name           string                  `json:"name"`
+	Type           string                  `json:"type"`
+	Endpoint       string                  `json:"endpoint"`
+	TimeoutMs      int64                   `json:"timeout_ms"`
+	Enabled        bool                    `json:"enabled"`
+	KeySet         bool                    `json:"key_set"`
+	LastProbeAt    int64                   `json:"last_probe_at"`
+	LastProbeOK    bool                    `json:"last_probe_ok"`
+	LastProbeError string                  `json:"last_probe_error,omitempty"`
+	Options        *nacosrt.BackendOptions `json:"options,omitempty"`
+	UpdatedAt      int64                   `json:"updated_at"`
 }
 
 // sandboxLog is the shared structured-log shape for sandbox writes
@@ -58,7 +62,7 @@ func (s *Service) sandboxLog(action, id, typ string) *zerolog.Event {
 // listSandboxRows reads the full inventory.
 func (s *Service) listSandboxRows() ([]sandboxPayload, error) {
 	rows, err := s.db.Query(`SELECT id, name, type, endpoint, timeout_ms, enabled,
-		last_probe_at, last_probe_ok, last_probe_error, updated_at FROM sandbox_backends ORDER BY name`)
+		last_probe_at, last_probe_ok, last_probe_error, options, updated_at FROM sandbox_backends ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +73,12 @@ func (s *Service) listSandboxRows() ([]sandboxPayload, error) {
 		var enabled int64
 		var probeAt, probeOK sql.NullInt64
 		var probeErr sql.NullString
+		var optsText string
 		if err := rows.Scan(&p.ID, &p.Name, &p.Type, &p.Endpoint, &p.TimeoutMs, &enabled,
-			&probeAt, &probeOK, &probeErr, &p.UpdatedAt); err != nil {
+			&probeAt, &probeOK, &probeErr, &optsText, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if p.Options, err = nacosrt.DecodeOptionsText(optsText); err != nil {
 			return nil, err
 		}
 		p.Enabled = enabled != 0
@@ -122,12 +130,13 @@ func isUniqueViolation(err error) bool {
 
 func (s *Service) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name      string `json:"name"`
-		Type      string `json:"type"`
-		Endpoint  string `json:"endpoint"`
-		TimeoutMs int64  `json:"timeout_ms"`
-		APIKey    string `json:"api_key"`
-		Enabled   bool   `json:"enabled"`
+		Name      string                  `json:"name"`
+		Type      string                  `json:"type"`
+		Endpoint  string                  `json:"endpoint"`
+		TimeoutMs int64                   `json:"timeout_ms"`
+		APIKey    string                  `json:"api_key"`
+		Enabled   bool                    `json:"enabled"`
+		Options   *nacosrt.BackendOptions `json:"options"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
@@ -149,6 +158,17 @@ func (s *Service) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	// Options validate (and default) through the shared Normalize — the
+	// backend is the authority; the console's UI mirrors the same rules.
+	if err := req.Options.Normalize(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	optsText, err := nacosrt.EncodeOptionsText(req.Options)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	now := wocadb.Now()
 	var rnd [4]byte
 	if _, err := crand.Read(rnd[:]); err != nil {
@@ -156,7 +176,7 @@ func (s *Service) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := fmt.Sprintf("sb-%x-%x", now, rnd)
-	err := s.db.WithMigrateLock(func(q wocadb.Querier) error {
+	err = s.db.WithMigrateLock(func(q wocadb.Querier) error {
 		if req.Enabled {
 			if _, err := q.Exec(`UPDATE sandbox_backends SET enabled = 0`); err != nil {
 				return err
@@ -167,9 +187,9 @@ func (s *Service) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 			enabled = 1
 		}
 		_, err := q.Exec(`INSERT INTO sandbox_backends
-			(id, name, type, endpoint, timeout_ms, enabled, created_at, updated_at)
-			VALUES (`+phI(s.db, 0)+`, `+phI(s.db, 1)+`, `+phI(s.db, 2)+`, `+phI(s.db, 3)+`, `+phI(s.db, 4)+`, `+phI(s.db, 5)+`, `+phI(s.db, 6)+`, `+phI(s.db, 7)+`)`,
-			id, req.Name, req.Type, req.Endpoint, req.TimeoutMs, enabled, now, now)
+			(id, name, type, endpoint, timeout_ms, enabled, options, created_at, updated_at)
+			VALUES (`+phI(s.db, 0)+`, `+phI(s.db, 1)+`, `+phI(s.db, 2)+`, `+phI(s.db, 3)+`, `+phI(s.db, 4)+`, `+phI(s.db, 5)+`, `+phI(s.db, 6)+`, `+phI(s.db, 7)+`, `+phI(s.db, 8)+`)`,
+			id, req.Name, req.Type, req.Endpoint, req.TimeoutMs, enabled, optsText, now, now)
 		return err
 	})
 	if err != nil {
@@ -191,7 +211,7 @@ func (s *Service) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, sandboxPayload{
 		ID: id, Name: req.Name, Type: req.Type, Endpoint: req.Endpoint,
-		TimeoutMs: req.TimeoutMs, Enabled: req.Enabled,
+		TimeoutMs: req.TimeoutMs, Enabled: req.Enabled, Options: req.Options,
 		KeySet: s.settings.HasSecret(sandboxKeySecret(id)), UpdatedAt: now,
 	})
 }
@@ -202,14 +222,18 @@ func (s *Service) getSandbox(id string) (sandboxPayload, bool, error) {
 	var enabled int64
 	var probeAt, probeOK sql.NullInt64
 	var probeErr sql.NullString
+	var optsText string
 	err := s.db.QueryRow(`SELECT id, name, type, endpoint, timeout_ms, enabled,
-		last_probe_at, last_probe_ok, last_probe_error, updated_at FROM sandbox_backends WHERE id = `+phI(s.db, 0), id).
+		last_probe_at, last_probe_ok, last_probe_error, options, updated_at FROM sandbox_backends WHERE id = `+phI(s.db, 0), id).
 		Scan(&p.ID, &p.Name, &p.Type, &p.Endpoint, &p.TimeoutMs, &enabled,
-			&probeAt, &probeOK, &probeErr, &p.UpdatedAt)
+			&probeAt, &probeOK, &probeErr, &optsText, &p.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return p, false, nil
 	}
 	if err != nil {
+		return p, false, err
+	}
+	if p.Options, err = nacosrt.DecodeOptionsText(optsText); err != nil {
 		return p, false, err
 	}
 	p.Enabled = enabled != 0
@@ -232,16 +256,32 @@ func (s *Service) handleUpdateSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name      *string `json:"name"`
-		Type      *string `json:"type"`
-		Endpoint  *string `json:"endpoint"`
-		TimeoutMs *int64  `json:"timeout_ms"`
-		Enabled   *bool   `json:"enabled"`
-		APIKey    *string `json:"api_key"`
+		Name      *string                 `json:"name"`
+		Type      *string                 `json:"type"`
+		Endpoint  *string                 `json:"endpoint"`
+		TimeoutMs *int64                  `json:"timeout_ms"`
+		Enabled   *bool                   `json:"enabled"`
+		APIKey    *string                 `json:"api_key"`
+		Options   *nacosrt.BackendOptions `json:"options"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request")
 		return
+	}
+	// An options object replaces the stored set wholesale (normalize fills
+	// the defaults); an absent options key keeps the stored set.
+	if err := req.Options.Normalize(); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var optsText string
+	if req.Options != nil {
+		text, err := nacosrt.EncodeOptionsText(req.Options)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		optsText = text
 	}
 	// Resolve the effective values for validation, then update only the
 	// present fields (partial update).
@@ -295,6 +335,9 @@ func (s *Service) handleUpdateSandbox(w http.ResponseWriter, r *http.Request) {
 				v = 1
 			}
 			add("enabled", v, len(args))
+		}
+		if req.Options != nil {
+			add("options", optsText, len(args))
 		}
 		args = append(args, id)
 		_, err := q.Exec(`UPDATE sandbox_backends SET `+strings.Join(sets, ", ")+

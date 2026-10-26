@@ -2,11 +2,13 @@
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { injectCfg } from '../inject'
-import type { SandboxBackend, VerifyResult } from '../types'
+import type { SandboxBackend, SandboxBackendOptions, VerifyResult } from '../types'
 const { t } = useI18n()
 const { api } = injectCfg()
 
 const sandboxTypes = ['contract-http', 'e2b', 'daytona', 'modal', 'microsandbox', 'cfbridge', 'sidecar'] as const
+const runtimes = ['runc', 'runsc'] as const
+const networks = ['none', 'bridge'] as const
 
 const backends = ref<SandboxBackend[]>([])
 const editing = ref<SandboxBackend | null>(null)
@@ -28,20 +30,91 @@ async function refresh() {
 }
 refresh()
 
+// withDefaults mirrors the backend's Normalize: an absent options set
+// still edits as the explicit defaults (runtime runc, network none).
+function withDefaults(o?: SandboxBackendOptions): SandboxBackendOptions {
+  return {
+    image: o?.image ?? '',
+    runtime: o?.runtime || 'runc',
+    network: o?.network || 'none',
+    cpu: o?.cpu ?? 0,
+    memory_mb: o?.memory_mb ?? 0,
+    env: { ...(o?.env ?? {}) },
+  }
+}
+
 function blank(): SandboxBackend {
-  return { id: '', name: '', type: 'contract-http', endpoint: '', timeout_ms: 120000, enabled: false, key_set: false }
+  return { id: '', name: '', type: 'contract-http', endpoint: '', timeout_ms: 120000, enabled: false, key_set: false, options: withDefaults() }
+}
+
+// Edit a copy: the stored list row stays untouched until refresh.
+function editBackend(b: SandboxBackend) {
+  editing.value = { ...b, options: withDefaults(b.options) }
+  newApiKey.value = ''
+  verifyResult.value = null
 }
 
 const formValid = () =>
   !!editing.value && editing.value.name.trim() !== '' && editing.value.endpoint.trim() !== ''
+
+// The backend's Normalize rules, mirrored client-side (the backend stays
+// the authority; this only gives the operator an immediate answer).
+const optionsValid = () => {
+  const o = editing.value?.options
+  if (!o) return true
+  if (!runtimes.includes(o.runtime as (typeof runtimes)[number])) return false
+  if (!networks.includes(o.network as (typeof networks)[number])) return false
+  if (!Number.isFinite(o.cpu) || o.cpu < 0) return false
+  if (!Number.isFinite(o.memory_mb) || o.memory_mb < 0) return false
+  return true
+}
+
+function setEnvValue(key: string, value: string) {
+  const o = editing.value?.options
+  if (!o) return
+  o.env = { ...o.env, [key]: value }
+}
+
+function renameEnvKey(oldKey: string, newKey: string) {
+  const o = editing.value?.options
+  if (!o || newKey === oldKey) return
+  const env: Record<string, string> = {}
+  for (const [k, v] of Object.entries(o.env ?? {})) env[k === oldKey ? newKey : k] = v
+  o.env = env
+}
+
+function delEnv(key: string) {
+  const o = editing.value?.options
+  if (!o) return
+  const env = { ...(o.env ?? {}) }
+  delete env[key]
+  o.env = env
+}
+
+function addEnv() {
+  const o = editing.value?.options
+  if (!o) return
+  o.env = { ...(o.env ?? {}), '': '' }
+}
 
 async function persist() {
   if (!editing.value || !formValid()) return
   err.value = ''
   flash.value = ''
   verifyResult.value = null
+  if (!optionsValid()) {
+    err.value = t('sandbox.optionsInvalid')
+    return
+  }
   try {
+    const opts = editing.value.options
     const body: Record<string, unknown> = { ...editing.value }
+    if (opts) {
+      // Blank env keys (a fresh row never named) do not ride the payload.
+      const env: Record<string, string> = {}
+      for (const [k, v] of Object.entries(opts.env ?? {})) if (k.trim() !== '') env[k] = v
+      body['options'] = { ...opts, env }
+    }
     if (newApiKey.value) body['api_key'] = newApiKey.value
     const isNew = !editing.value.id
     const resp = await api(isNew ? '/api/sandboxes' : `/api/sandboxes/${editing.value.id}`, {
@@ -112,7 +185,7 @@ function probeTime(ms?: number): string {
     <p class="hint">{{ t('sandbox.intro') }}</p>
 
     <div class="backend-list">
-      <div v-for="b in backends" :key="b.id" class="backend-row" :class="{ active: editing?.id === b.id }" @click="editing = b; newApiKey = ''; verifyResult = null">
+      <div v-for="b in backends" :key="b.id" class="backend-row" :class="{ active: editing?.id === b.id }" @click="editBackend(b)">
         <div class="backend-main">
           <span class="backend-name">{{ b.name }} <span v-if="b.enabled" class="badge on">{{ t('sandbox.enabled') }}</span></span>
           <span class="backend-sub">{{ b.type }} · {{ b.endpoint }}</span>
@@ -157,6 +230,42 @@ function probeTime(ms?: number): string {
         <label>{{ t('sandbox.apiKey') }}</label>
         <input class="field" type="password" v-model="newApiKey" :placeholder="editing.key_set ? t('sandbox.keySet') : t('storage.pwPlaceholder')" />
       </div>
+
+      <div class="opt-title">{{ t('sandbox.optionsTitle') }}</div>
+      <div class="row">
+        <label>{{ t('sandbox.image') }}</label>
+        <input class="field" v-model="editing.options!.image" placeholder="alpine:3" />
+      </div>
+      <div class="row">
+        <label>{{ t('sandbox.runtime') }}</label>
+        <select class="field" v-model="editing.options!.runtime">
+          <option v-for="rt in runtimes" :key="rt" :value="rt">{{ rt }}</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>{{ t('sandbox.network') }}</label>
+        <select class="field" v-model="editing.options!.network">
+          <option v-for="nw in networks" :key="nw" :value="nw">{{ nw }}</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>{{ t('sandbox.cpu') }}</label>
+        <input class="field" type="number" v-model.number="editing.options!.cpu" />
+      </div>
+      <div class="row">
+        <label>{{ t('sandbox.memory') }}</label>
+        <input class="field" type="number" v-model.number="editing.options!.memory_mb" />
+      </div>
+      <div class="env-editor">
+        <label>{{ t('sandbox.env') }}</label>
+        <div v-for="(v, k) in editing.options!.env" :key="k" class="env-row">
+          <input class="field" :value="k" :placeholder="t('sandbox.envKey')" @change="renameEnvKey(k, ($event.target as HTMLInputElement).value)" />
+          <input class="field" :value="v" :placeholder="t('sandbox.envValue')" @input="setEnvValue(k, ($event.target as HTMLInputElement).value)" />
+          <button class="ghost" @click="delEnv(k)">×</button>
+        </div>
+        <button class="ghost" @click="addEnv">{{ t('sandbox.addEnv') }}</button>
+      </div>
+
       <div v-if="flash" class="ok">{{ flash }}</div>
       <div v-if="err" class="err">{{ err }}</div>
       <button class="primary" :disabled="!formValid()" style="margin-top: 8px" @click="persist">{{ t('common.save') }}</button>
@@ -196,6 +305,9 @@ function probeTime(ms?: number): string {
 .danger:disabled { color: #b7bdc4; cursor: not-allowed; }
 .muted { color: #9aa5b1; }
 .editor { border-top: 1px solid #e4e7eb; padding-top: 12px; margin-top: 4px; }
+.opt-title { font-weight: 500; font-size: 12px; margin-top: 10px; color: #616e7c; }
+.env-editor { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.env-row { display: flex; gap: 6px; }
 .verify { border-top: 1px dashed #e4e7eb; margin-top: 12px; padding-top: 8px; }
 .steps { margin-top: 6px; }
 .steps td { padding: 2px 10px 2px 0; font-size: 12px; }

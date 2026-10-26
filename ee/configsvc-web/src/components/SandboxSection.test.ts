@@ -90,4 +90,58 @@ describe('SandboxSection', () => {
     // The api key only rides the request when the operator typed one.
     expect(body.api_key).toBeUndefined()
   })
+
+  // Execution options (design §17): the six backend parameters the pack
+  // carries to the executor — image, runtime, network, cpu, memory, env.
+  it('renders the six options fields with enum dropdowns and defaults', async () => {
+    const { w } = mountWith([])
+    await flushPromises()
+    await w.findAll('button').find(b => b.text().includes('New'))!.trigger('click')
+    const selects = w.findAll('select')
+    expect(selects).toHaveLength(3) // type + runtime + network
+    expect(selects[1].findAll('option').map(o => o.attributes('value'))).toEqual(['runc', 'runsc'])
+    expect(selects[2].findAll('option').map(o => o.attributes('value'))).toEqual(['none', 'bridge'])
+    // Defaults match BackendOptions.Normalize: runtime runc, network none.
+    expect((selects[1].element as HTMLSelectElement).value).toBe('runc')
+    expect((selects[2].element as HTMLSelectElement).value).toBe('none')
+    // image / cpu / memory inputs and the env key-value table are present.
+    expect(w.text()).toContain('Image')
+    expect(w.text()).toContain('CPU')
+    expect(w.text()).toContain('Memory')
+    expect(w.text()).toContain('Environment variables')
+    const numbers = w.findAll('input[type="number"]')
+    expect(numbers).toHaveLength(3) // timeout + cpu + memory
+  })
+
+  it('saves the selected network mode in options', async () => {
+    const { w, calls } = mountWith([])
+    await flushPromises()
+    await w.findAll('button').find(b => b.text().includes('New'))!.trigger('click')
+    const inputs = w.findAll('input')
+    await inputs[0].setValue('fake')
+    await inputs[1].setValue('http://127.0.0.1:9999')
+    await w.findAll('select')[2].setValue('bridge')
+    await w.findAll('button').find(b => b.text().includes('Save'))!.trigger('click')
+    await flushPromises()
+    const post = calls.find(c => c.method === 'POST' && c.path === '/api/sandboxes')
+    expect(post).toBeTruthy()
+    const body = JSON.parse(String(post!.body))
+    expect(body.options.network).toBe('bridge')
+    expect(body.options.runtime).toBe('runc')
+  })
+
+  it('shows an error and sends nothing when options are invalid', async () => {
+    const { w, calls } = mountWith([])
+    await flushPromises()
+    await w.findAll('button').find(b => b.text().includes('New'))!.trigger('click')
+    const inputs = w.findAll('input')
+    await inputs[0].setValue('fake')
+    await inputs[1].setValue('http://127.0.0.1:9999')
+    // numbers[0] = timeout, numbers[1] = cpu: a negative cpu is rejected.
+    await w.findAll('input[type="number"]')[1].setValue('-1')
+    await w.findAll('button').find(b => b.text().includes('Save'))!.trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('Invalid options')
+    expect(calls.find(c => c.method === 'POST')).toBeUndefined()
+  })
 })

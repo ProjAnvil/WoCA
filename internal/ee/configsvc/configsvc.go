@@ -116,6 +116,7 @@ func New(st *settings.Store, ts *tenant.Store, db *wocadb.DB, log zerolog.Logger
 			last_probe_at ` + tsCol + `,
 			last_probe_ok INTEGER,
 			last_probe_error TEXT,
+			options TEXT NOT NULL DEFAULT '',
 			created_at ` + tsCol + ` NOT NULL,
 			updated_at ` + tsCol + ` NOT NULL
 		)`,
@@ -126,10 +127,22 @@ func New(st *settings.Store, ts *tenant.Store, db *wocadb.DB, log zerolog.Logger
 			ddls = append(ddls,
 				`ALTER TABLE managed_skills ALTER COLUMN updated_at TYPE BIGINT`,
 				`ALTER TABLE managed_mcp ALTER COLUMN updated_at TYPE BIGINT`)
+			// options (design §17 sandbox params) arrived after the first
+			// v2 deployments: upgrade pre-options tables in place.
+			ddls = append(ddls,
+				`ALTER TABLE sandbox_backends ADD COLUMN IF NOT EXISTS options TEXT NOT NULL DEFAULT ''`)
 		}
 		for _, ddl := range ddls {
 			if _, err := q.Exec(ddl); err != nil {
 				return fmt.Errorf("configsvc: skills/mcp migrate: %w", err)
+			}
+		}
+		if db.Dialect != wocadb.DialectPostgres {
+			// SQLite's ADD COLUMN has no IF NOT EXISTS form: the
+			// duplicate-column error is the "already there" marker.
+			if _, err := q.Exec(`ALTER TABLE sandbox_backends ADD COLUMN options TEXT NOT NULL DEFAULT ''`); err != nil &&
+				!strings.Contains(err.Error(), "duplicate column") {
+				return fmt.Errorf("configsvc: sandbox backends migrate: %w", err)
 			}
 		}
 		return nil

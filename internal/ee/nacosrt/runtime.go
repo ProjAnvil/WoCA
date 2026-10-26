@@ -289,18 +289,24 @@ func (r *Runtime) materializeTables(pack *Pack) error {
 		if sb.LastProbeAt > 0 {
 			probeAt = sb.LastProbeAt
 		}
+		// Options ride the row as JSON text (design §17): the executor
+		// reads them from this materialized column.
+		optsText, err := EncodeOptionsText(sb.Options)
+		if err != nil {
+			return fmt.Errorf("sandbox backend %s: %w", sb.ID, err)
+		}
 		if _, err := db.Exec(`INSERT INTO sandbox_backends
-			(id, name, type, endpoint, timeout_ms, enabled, last_probe_at, last_probe_ok, last_probe_error, created_at, updated_at)
+			(id, name, type, endpoint, timeout_ms, enabled, last_probe_at, last_probe_ok, last_probe_error, options, created_at, updated_at)
 			VALUES (`+db.Dialect.Placeholder(0)+`, `+db.Dialect.Placeholder(1)+`, `+db.Dialect.Placeholder(2)+`, `+
 			db.Dialect.Placeholder(3)+`, `+db.Dialect.Placeholder(4)+`, `+db.Dialect.Placeholder(5)+`, `+
 			db.Dialect.Placeholder(6)+`, `+db.Dialect.Placeholder(7)+`, `+db.Dialect.Placeholder(8)+`, `+
-			db.Dialect.Placeholder(9)+`, `+db.Dialect.Placeholder(10)+`)
+			db.Dialect.Placeholder(9)+`, `+db.Dialect.Placeholder(10)+`, `+db.Dialect.Placeholder(11)+`)
 			ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, endpoint = excluded.endpoint,
 				timeout_ms = excluded.timeout_ms, enabled = excluded.enabled, last_probe_at = excluded.last_probe_at,
 				last_probe_ok = excluded.last_probe_ok, last_probe_error = excluded.last_probe_error,
-				updated_at = excluded.updated_at`,
+				options = excluded.options, updated_at = excluded.updated_at`,
 			sb.ID, sb.Name, sb.Type, sb.Endpoint, sb.TimeoutMs, enabled, probeAt, probeOK, sb.LastProbeError,
-			wocadb.Now(), wocadb.Now()); err != nil {
+			optsText, wocadb.Now(), wocadb.Now()); err != nil {
 			return fmt.Errorf("sandbox backend %s: %w", sb.ID, err)
 		}
 	}

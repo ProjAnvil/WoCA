@@ -32,6 +32,7 @@ func createSandboxTable(t *testing.T, db *wocadb.DB) {
 		endpoint TEXT NOT NULL, timeout_ms INTEGER NOT NULL DEFAULT 120000,
 		enabled INTEGER NOT NULL DEFAULT 0,
 		last_probe_at INTEGER, last_probe_ok INTEGER, last_probe_error TEXT,
+		options TEXT NOT NULL DEFAULT '',
 		created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`); err != nil {
 		t.Fatal(err)
 	}

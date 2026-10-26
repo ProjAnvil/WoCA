@@ -46,6 +46,10 @@ type SandboxRow struct {
 	LastProbeAt    int64  `json:"last_probe_at"`
 	LastProbeOK    bool   `json:"last_probe_ok"`
 	LastProbeError string `json:"last_probe_error,omitempty"`
+	// Options are the backend's execution parameters (design §17): the
+	// executor reads them from the materialized row. Nil = the backend
+	// carries none; pre-options rows and packs encode byte-identically.
+	Options *BackendOptions `json:"options,omitempty"`
 }
 
 // Pack is the delivered configuration: settings domains (the
@@ -113,9 +117,10 @@ func ExportPack(ctx context.Context, st *settings.Store, db *wocadb.DB) (*Pack, 
 	}
 	// Sandbox backends (v2): the managed inventory without keys (design
 	// §10.2 M-5: secrets ride the pack's Secrets map, collected wholesale
-	// by SecretNames above).
+	// by SecretNames above). Options ride the row as a decoded struct —
+	// the storage TEXT column is an implementation detail of each side.
 	srows, err := db.Query(`SELECT id, name, type, endpoint, timeout_ms, enabled,
-		last_probe_at, last_probe_ok, last_probe_error FROM sandbox_backends ORDER BY name`)
+		last_probe_at, last_probe_ok, last_probe_error, options FROM sandbox_backends ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("nacosrt: export sandboxes: %w", err)
 	}
@@ -125,8 +130,9 @@ func ExportPack(ctx context.Context, st *settings.Store, db *wocadb.DB) (*Pack, 
 			var enabled, probeOK sql.NullInt64
 			var probeAt sql.NullInt64
 			var probeErr sql.NullString
+			var optsText string
 			if err := srows.Scan(&r.ID, &r.Name, &r.Type, &r.Endpoint, &r.TimeoutMs,
-				&enabled, &probeAt, &probeOK, &probeErr); err != nil {
+				&enabled, &probeAt, &probeOK, &probeErr, &optsText); err != nil {
 				_ = srows.Close()
 				return nil, fmt.Errorf("nacosrt: export sandboxes: %w", err)
 			}
@@ -134,6 +140,12 @@ func ExportPack(ctx context.Context, st *settings.Store, db *wocadb.DB) (*Pack, 
 			r.LastProbeAt = probeAt.Int64
 			r.LastProbeOK = probeOK.Valid && probeOK.Int64 != 0
 			r.LastProbeError = probeErr.String
+			opts, err := DecodeOptionsText(optsText)
+			if err != nil {
+				_ = srows.Close()
+				return nil, fmt.Errorf("nacosrt: export sandbox %s: %w", r.ID, err)
+			}
+			r.Options = opts
 			p.Sandboxes = append(p.Sandboxes, r)
 		}
 		if err := srows.Close(); err != nil {
