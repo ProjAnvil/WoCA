@@ -192,7 +192,9 @@ func summarizeDSN(dsn string) string {
 // migrate creates the woca schema. All tables are keyed simply: settings and
 // secrets are single-row-per-key; checkpoints store graph checkpoints;
 // memory is a namespace+key JSON document store; session_state records the
-// durable per-session run state (running / awaiting an interrupt answer).
+// durable per-session run state (running / awaiting an interrupt answer);
+// workspace_bindings pin workspaces to executors across runs (EE sandbox
+// plane, design §7.1).
 //
 // On postgres every business table additionally carries tenant_id and is
 // RLS-scoped (design doc §9.1, Phase 1). The policy compares against the
@@ -240,6 +242,7 @@ func (d *DB) migrate() error {
 				lease_expires_at BIGINT NOT NULL DEFAULT 0,
 				thread_id TEXT NOT NULL DEFAULT '',
 				config_snapshot TEXT NOT NULL DEFAULT '',
+				workspace_id TEXT NOT NULL DEFAULT '',
 				created_at BIGINT NOT NULL,
 				updated_at BIGINT NOT NULL
 			)`,
@@ -277,9 +280,32 @@ func (d *DB) migrate() error {
 				generation TEXT NOT NULL,
 				addr TEXT NOT NULL DEFAULT '',
 				capabilities TEXT NOT NULL DEFAULT '',
+				load BIGINT NOT NULL DEFAULT 0,
 				updated_at BIGINT NOT NULL
 			)`,
+			// EE sandbox plane (design §7/§17): workspace→executor bindings
+			// with the allocate-or-bind lookup key, the per-workspace run
+			// mutex on runs, and the executor load heartbeat column. New
+			// databases get the columns in CREATE TABLE; the ALTERs below
+			// upgrade databases created by earlier builds.
+			`CREATE TABLE IF NOT EXISTS workspace_bindings (
+				workspace_id TEXT PRIMARY KEY,
+				source_key TEXT NOT NULL UNIQUE,
+				tenant_id TEXT NOT NULL,
+				executor_id TEXT NOT NULL,
+				state TEXT NOT NULL DEFAULT 'active',
+				created_at BIGINT NOT NULL,
+				updated_at BIGINT NOT NULL
+			)`,
+			`ALTER TABLE runs ADD COLUMN IF NOT EXISTS workspace_id TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE config_acks ADD COLUMN IF NOT EXISTS load BIGINT NOT NULL DEFAULT 0`,
 		}
+		// The workspace mutex is a partial unique index: only running runs
+		// with a workspace hold it, so legacy rows (empty workspace_id) and
+		// finished runs never collide. Must follow the runs.workspace_id
+		// ALTER above.
+		stmts = append(stmts, `CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_workspace
+			ON runs(workspace_id) WHERE status='running' AND workspace_id<>''`)
 		// The lgcp ownership policies (below) judge "which tenant owns this
 		// checkpoint thread" by querying runs; that subquery must see rows of
 		// every tenant, so runs must not FORCE its policy onto the table
@@ -426,6 +452,7 @@ func (d *DB) migrate() error {
 				lease_expires_at BIGINT NOT NULL DEFAULT 0,
 				thread_id TEXT NOT NULL DEFAULT '',
 				config_snapshot TEXT NOT NULL DEFAULT '',
+				workspace_id TEXT NOT NULL DEFAULT '',
 				created_at BIGINT NOT NULL,
 				updated_at BIGINT NOT NULL
 			)`,
@@ -463,7 +490,22 @@ func (d *DB) migrate() error {
 				generation TEXT NOT NULL,
 				addr TEXT NOT NULL DEFAULT '',
 				capabilities TEXT NOT NULL DEFAULT '',
-				updated_at BIGINT NOT NULL
+				load INTEGER NOT NULL DEFAULT 0,
+				updated_at INTEGER NOT NULL
+			)`,
+			// EE sandbox plane (design §7/§17); see the postgres branch.
+			// The runs/config_acks column adds and the workspace-mutex
+			// index live in migrateSQLiteAdditive below — sqlite has no
+			// ALTER TABLE ADD COLUMN IF NOT EXISTS, and the index needs
+			// the column to exist first on legacy databases.
+			`CREATE TABLE IF NOT EXISTS workspace_bindings (
+				workspace_id TEXT PRIMARY KEY,
+				source_key TEXT NOT NULL UNIQUE,
+				tenant_id TEXT NOT NULL,
+				executor_id TEXT NOT NULL,
+				state TEXT NOT NULL DEFAULT 'active',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
 			)`,
 		}
 	}
@@ -473,8 +515,75 @@ func (d *DB) migrate() error {
 				return fmt.Errorf("wocadb: migrate: %w", err)
 			}
 		}
+		if d.Dialect != DialectPostgres {
+			// sqlite's WithMigrateLock runs inline on this same DB, so the
+			// additive pass below executes inside the same serialized
+			// migration.
+			return d.migrateSQLiteAdditive()
+		}
 		return nil
 	})
+}
+
+// migrateSQLiteAdditive upgrades databases created by earlier builds:
+// columns added to existing tables after their original CREATE TABLE, plus
+// statements that depend on those columns. SQLite has no ADD COLUMN IF NOT
+// EXISTS, so each column is pre-checked via PRAGMA table_info and a
+// "duplicate column name" failure (a racing upgrade) is tolerated. The
+// partial workspace-mutex index follows the column adds — creating it while
+// runs.workspace_id is still missing would fail on legacy databases.
+func (d *DB) migrateSQLiteAdditive() error {
+	for _, c := range []struct{ table, column, ddl string }{
+		{"runs", "workspace_id", `ALTER TABLE runs ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''`},
+		{"config_acks", "load", `ALTER TABLE config_acks ADD COLUMN load INTEGER NOT NULL DEFAULT 0`},
+	} {
+		exists, err := d.sqliteHasColumn(c.table, c.column)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if _, err := d.Exec(c.ddl); err != nil {
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
+			return fmt.Errorf("wocadb: migrate: %w", err)
+		}
+	}
+	if _, err := d.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_workspace
+		ON runs(workspace_id) WHERE status='running' AND workspace_id<>''`); err != nil {
+		return fmt.Errorf("wocadb: migrate: %w", err)
+	}
+	return nil
+}
+
+// sqliteHasColumn reports whether table carries column, via PRAGMA
+// table_info. The table names come from migrateSQLiteAdditive's compile-time
+// list, never user input, so interpolating them into the pragma is safe.
+func (d *DB) sqliteHasColumn(table, column string) (bool, error) {
+	rows, err := d.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, fmt.Errorf("wocadb: pragma table_info(%s): %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     string
+			notNull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return false, fmt.Errorf("wocadb: scan pragma table_info(%s): %w", table, err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // migrateLockKey serializes schema migrations across woca processes. PG's
