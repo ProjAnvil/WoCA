@@ -125,13 +125,24 @@ final, err := w.agent.Invoke(ctx, history, run.ThreadID)
 
 不建第二个 agent，不重写执行循环。agent 本身支持并发 run：run 作用域的 workspace 是 ctx 上的值装饰，system prompt 环境、文件与 shell 工具、记忆预取都按它解析。
 
-## 4. 沙箱契约
+### 3.4 门控从 worker 改成 executor
 
+现在远端租户能不能建 run，看的是有没有活的 sandbox worker。`internal/server/runs.go` 的 `enqueueRun` 里调 `hasLiveSandboxWorker`，没有就返回 503。能力标记来自 worker 的 ack（`cmd/woca-worker/main.go` 的 `workerCapabilities`）。
+
+EE 改成 executor 之后，这套要换：
+
+1. executor 注册到 nacos，声明 `sandbox` 能力。
+2. 调度器查 executor 的在线 ack，替代 `hasLiveSandboxWorker`。
+3. 403 的语义不变：没有 enabled backend 时，远端租户不能建 run。
+
+## 4. 沙箱契约
 现有 contract v2（`internal/platform/executor/CONTRACT.md`，15 个端点）继续用。要点：
 
 1. 调度器侧的 client 是现成的 `executor.NewSandbox`（`internal/platform/executor/sandbox.go`），已经实现 `Executor` 接口加 `PutArchive` / `GetArchive`。
 2. executor 侧要实现同样的 15 个端点。现成的服务端参考是 `internal/platform/executor/fakesandbox/server.go` 的 `Handler()`：它把 15 条路由挂在 `http.ServeMux` 上，executor 的服务照这个形状写，差别只在容器操作换成真实调用。
-3. `create` 的 `cwd` 语义要明确：它承载的是**工作区 ID**，不是路径。executor 把它映射到自己的 `workspace_root/<id>` 目录，并校验 ID 不含穿越字符。调度器因此不需要知道 executor 的磁盘布局。
+3. `create` 的 `cwd` 语义要明确：它承载的是**工作区 ID**，不是路径。executor 把它映射到自己的 `workspace_root/<id>` 目录，并校验 ID 只含安全字符集（字母、数字、连字符、下划线），拒绝 `/`、`..` 与绝对路径。调度器因此不需要知道 executor 的磁盘布局。
+
+client 侧要改一处：`internal/platform/executor/sandbox.go` 的 `create` 现在固定发 `{"cwd": "/workspace"}`。它要改成发本次 run 的工作区 ID。`CONTRACT.md` 里 `cwd` 的描述同步改写。
 
 需要加一个端点：
 
@@ -179,6 +190,8 @@ executor 用 container runtime 的 API 管理容器：
 
 长进程用 runtime 的 exec 加一个会话句柄。输出靠轮询增量读。第一版不做 PTY。
 
+会话状态在 executor 内存里：输出缓冲、offset 游标、退出码、进程句柄。executor 重启这些就没了，对应的 run 判失败。executor 不做会话持久化。
+
 ### 5.3 工作区同步
 
 executor 侧的工作区根目录由进程的 `workspace_root` 参数决定，不在管理台里改。每个工作区一个子目录，目录名是工作区 ID。
@@ -206,6 +219,8 @@ executor 提供只读的工作区接口，供管理台与前端使用：
 首期不做写接口。管理台改代码要走 agent 的工具，不走管理台。
 
 这些接口在 contract 之外，是 executor 自己的管理接口。调度器不直接调用，前端经调度器转发。
+
+调度器侧现有的文件树与文件预览走宿主文件系统（`internal/server/workspace.go` 与 `internal/server/fsapi.go`）。EE 改成远程执行后，宿主上没有工作区目录，这两个接口要改为经 executor 转发。首期只保留列树与读文件两项。
 
 ## 6. 配置面
 
@@ -242,6 +257,11 @@ executor 提供只读的工作区接口，供管理台与前端使用：
 | 凭据 | 现有 secrets 表 | 已有机制 |
 
 `SandboxRow`（`internal/ee/nacosrt/pack.go`）加 `Options` 字段，pack v2 携带它。pack 版本不变：新增的是可选字段，旧 pack 解析成空值。
+
+两个约束：
+
+1. `Options` 用 `omitempty`。空的沙箱列表在 pack 里不出现，`nacos-init` 发布的初始 pack 字节不变，watcher 的指纹不会反复触发 apply。
+2. pack 是全量清单语义且解码严格。configsvc 发出带 `options` 的新 pack 后，**全角色要同步升级**。旧 worker 收到新 pack 会解码失败。这与 pack v2 升级时的约定一致。
 
 管理台（`ee/configsvc-web/src/components/SandboxSection.vue`）在现有后端行上直接编辑这些字段。现有 CRUD 路由（`internal/ee/configsvc/handlers_sandboxes.go`）加一个 `options` 字段，不需要新路由。
 
@@ -471,9 +491,11 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 
 ## 15. 改造面
 
-- `internal/platform/executor/CONTRACT.md`：新增 sync 端点，明确 cwd 语义。
-- `internal/platform/executor/sandbox.go`：client 增 sync 调用。
+- `internal/platform/executor/CONTRACT.md`：新增 sync 端点，改写 `cwd` 语义。
+- `internal/platform/executor/sandbox.go`：client 侧 create 发改工作区 ID，新增 `SyncWorkspace` 调用。
 - `internal/platform/executor/fakesandbox/`：实现新端点。
+- `internal/server/runs.go`：门控从 `hasLiveSandboxWorker` 改成 executor 在线判定。
+- `internal/server/workspace.go`、`internal/server/fsapi.go`：文件树与预览改为经 executor 转发。
 - `internal/ee/executor/`（新）：沙箱服务、容器管理、工作区目录、文件面。订阅 nacos pack，`OnChange` 里更新内存里的后端参数。
 - `internal/ee/proxy/`（新）：转发与流控。
 - `internal/ee/configsvc/handlers_sandboxes.go`：`options` 字段与校验。
