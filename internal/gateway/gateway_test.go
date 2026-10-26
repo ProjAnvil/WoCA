@@ -292,7 +292,7 @@ func TestCoreStaysVocabularyFree(t *testing.T) {
 	}
 	banned := []string{
 		"/api/auth/login", // bridge login (declared by cmd/woca-bridge)
-		"/api/native",     // native-client surface (cmd/woca-server)
+		"/api/native",     // native-client surface (cmd/woca-scheduler)
 		"woca_session",    // bridge session cookie (ee/bridge owns it)
 		"activatePath",    // removed constant names
 		"loginPath",

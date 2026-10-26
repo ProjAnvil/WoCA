@@ -1,5 +1,5 @@
 // The skill-asset platform's HTTP API (the surface the embedded console
-// SPA in ee/skillsvc-web is built against). Mounted on woca-server's
+// SPA in ee/skillsvc-web is built against). Mounted on woca-scheduler's
 // management listener inside the ops console's credential gate — the
 // console session is the credential, per-route scope checks apply.
 package skillsvc

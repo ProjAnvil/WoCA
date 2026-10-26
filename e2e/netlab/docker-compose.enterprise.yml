@@ -92,12 +92,12 @@ services:
     networks: [core]
 
   server:
-    image: woca-server:netlab
+    image: woca-scheduler:netlab
     build:
       context: ../../build/dist
       dockerfile: Dockerfile
       args:
-        ROLE_PKG: woca-server.tar.gz
+        ROLE_PKG: woca-scheduler.tar.gz
     container_name: woca-netlab-ee-server
     command: ["serve", "--addr", ":8080", "--auth", "apikey"]
     environment:

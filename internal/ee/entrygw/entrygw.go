@@ -3,7 +3,7 @@
 // tokens, renewal, revocation, and the service-plane heartbeat records.
 // Since the v1.5 topology split the surface lives behind the stateless
 // edge access point (woca-edge): the RegistryHandler rides the service
-// plane (woca-server's gateway listener), the ConfigHandler rides the
+// plane (woca-scheduler's gateway listener), the ConfigHandler rides the
 // config plane (woca-config); the bridge only ever learns the edge's
 // address. The core-internal /gw/resolve and /gw/bridges routes are the
 // edge's call-home validation hooks (R7 — the edge keeps no copy).
@@ -573,7 +573,7 @@ type gwBase struct {
 // v1.5 topology split): enrollment, renewal, heartbeats, plus the core-internal
 // resolve/bridges routes the edge access point calls back over the private
 // network (R7: the edge keeps no registry copy — every check comes home).
-// Mounted on woca-server's gateway listener.
+// Mounted on woca-scheduler's gateway listener.
 type RegistryHandler struct{ gwBase }
 
 // NewRegistryHandler builds the service-plane surface over its store.

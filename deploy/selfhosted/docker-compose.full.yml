@@ -8,7 +8,7 @@
 # entry is the gateway.
 #
 #   dmz  172.28.30.0/24   gateway (nginx) — the public half of the edge
-#   app  172.28.32.0/24   woca-server ×2, woca-worker ×2, woca-tenant
+#   app  172.28.32.0/24   woca-scheduler ×2, woca-worker ×2, woca-tenant
 #   data 172.28.10.0/24   woca-pg-primary + hot-standby
 #   infra 172.28.20.0/24  the platform substrate: NATS ×3, ladyM, nacos,
 #                         woca-collector (trace bridge) + Langfuse (LLM
@@ -25,7 +25,7 @@
 #     an mgmt outage never blocks role restarts/scale-outs.
 #
 # Roles (§5.1 artifact matrix):
-#   - woca-server  ×2  L1+L2 modular-monolith role (auth, routing, sessions,
+#   - woca-scheduler  ×2  L1+L2 modular-monolith role (auth, routing, sessions,
 #                      skill-svc; also executes in-process runs)
 #   - woca-worker  ×2  L3 execution role (claims queued runs; probe port 9092)
 #   - woca-tenant  ×1  admin toolbox (`docker exec` for tenant/key commands)
@@ -257,7 +257,7 @@ services:
   # One-shot: publish the stack's service addresses as config entries.
   # Re-running is idempotent (same values republished). Entries:
   #   DEFAULT_GROUP/woca-db.dsn       — the shared settings database
-  #   DEFAULT_GROUP/woca-ops.upstream — woca-server's management listener
+  #   DEFAULT_GROUP/woca-ops.upstream — woca-scheduler's management listener
   nacos-init:
     image: curlimages/curl:8.10.1
     container_name: woca-ent-nacos-init
@@ -285,14 +285,14 @@ services:
           echo "published $$1"
         }
         publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
-        publish woca-ops.upstream "http://woca-server-1:8090"
+        publish woca-ops.upstream "http://woca-scheduler-1:8090"
         # The trace bridge every role pushes telemetry at (resolved from
         # WOCA_OTEL_EXPORTER_OTLP_ENDPOINT like a WOCA_DB reference).
         publish woca-obs.otlp "http://woca-collector:4318"
         # The edge access point's plane legs (registry/auth on the service
         # plane, config pulls, obs forward target) — same discovery
         # discipline as every role.
-        publish woca-edge.service "http://woca-server-1:8090"
+        publish woca-edge.service "http://woca-scheduler-1:8090"
         publish woca-edge.config "http://woca-config:8086"
         # The empty bootstrap config pack: roles refuse to start without
         # a deliverable pack, so it exists before any console write.
@@ -357,7 +357,7 @@ services:
     command: ["--addr", ":8080"]
     restart: unless-stopped
     depends_on:
-      woca-server-1: { condition: service_started }
+      woca-scheduler-1: { condition: service_started }
       woca-config: { condition: service_started }
       nacos-init: { condition: service_completed_successfully }
     environment:
@@ -384,8 +384,8 @@ services:
     image: nginx:1.29-alpine
     container_name: woca-ent-gateway
     depends_on:
-      woca-server-1: { condition: service_started }
-      woca-server-2: { condition: service_started }
+      woca-scheduler-1: { condition: service_started }
+      woca-scheduler-2: { condition: service_started }
       # :8082 proxies the skill console to the ops facade — nginx resolves
       # upstream names once at config load, so it must exist first.
       woca-ops: { condition: service_started }
@@ -396,7 +396,7 @@ services:
       retries: 6
     restart: unless-stopped
     ports:
-      # Business entry: load-balanced across woca-server instances
+      # Business entry: load-balanced across woca-scheduler instances
       - "${ENT_BUSINESS_PORT:-8080}:80"
       # Skill-svc management SPA
       - "${ENT_SKILL_PORT:-9082}:8082"
@@ -417,16 +417,16 @@ services:
       - woca-mgmt
 
   # ─────────────────── woca roles (stateless, edge) ──────────────────────
-  woca-server-1: &woca-server
-    image: woca-server:local
+  woca-scheduler-1: &woca-scheduler
+    image: woca-scheduler:local
     container_name: woca-ent-server-1
     build:
       context: ../../build/dist
       dockerfile: Dockerfile
       args:
-        ROLE_PKG: woca-server.tar.gz
+        ROLE_PKG: woca-scheduler.tar.gz
     command: ["serve", "--addr", ":8080"]
-    environment: &woca-server-env
+    environment: &woca-scheduler-env
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_AUTH: apikey
@@ -444,7 +444,7 @@ services:
       # Telemetry (§12.2 env layer): the trace bridge address comes from
       # the registry like the DSN — resolved once at startup. Traces are
       # LLM/session reporting into Langfuse via woca-collector.
-      WOCA_SERVICE_NAME: woca-server-1
+      WOCA_SERVICE_NAME: woca-scheduler-1
       WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "nacos://nacos:8848/DEFAULT_GROUP/woca-obs.otlp"
       # Tenant ops console (v1.7 §6.7) on the internal gateway listener —
       # org credentials, enrollments, audit. Console sign-in env rides the
@@ -473,16 +473,16 @@ services:
       # notifications, nacos registry/pack delivery, ladyM, and the
       # woca-collector trace bridge all live on the infra zone now —
       # one interface, no cross-zone forwarding. The role alias feeds
-      # Prometheus DNS-SD (job woca-server): every replica answers to it.
+      # Prometheus DNS-SD (job woca-scheduler): every replica answers to it.
       woca-infra:
-        aliases: ["woca-server"]
+        aliases: ["woca-scheduler"]
 
-  woca-server-2:
-    <<: *woca-server
+  woca-scheduler-2:
+    <<: *woca-scheduler
     container_name: woca-ent-server-2
     environment:
-      <<: *woca-server-env
-      WOCA_SERVICE_NAME: woca-server-2
+      <<: *woca-scheduler-env
+      WOCA_SERVICE_NAME: woca-scheduler-2
     ports: []
 
   # The console UI as its own service (v1.7 §6.7, split): the SPA plus a
@@ -507,7 +507,7 @@ services:
       - "127.0.0.1:${ENT_OPS_PORT:-9091}:8091"
     restart: unless-stopped
     depends_on:
-      woca-server-1: { condition: service_started }
+      woca-scheduler-1: { condition: service_started }
       # The upstream address resolves through nacos at startup.
       nacos-init: { condition: service_completed_successfully }
     networks:

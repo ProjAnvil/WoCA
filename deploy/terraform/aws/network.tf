@@ -30,11 +30,11 @@ locals {
   # the NACL (the DOCKER-USER matrix made real). Dual-homed services carry
   # their other legs as ENIs, so nearly all compose traffic stays
   # intra-subnet; the genuinely cross-subnet flows are the gateway (dmz) →
-  # woca-server (app) business proxy target and the gateway → langfuse-web
+  # woca-scheduler (app) business proxy target and the gateway → langfuse-web
   # (infra) ops-UI reverse proxy.
   cross_flows = [
-    { from = "dmz", to = "app", port = 8080, proto = "tcp", note = "gateway nginx → woca-server business entry" },
-    { from = "dmz", to = "app", port = 8090, proto = "tcp", note = "gateway nginx → woca-server service-plane listener (WOCA_GW_ADDR)" },
+    { from = "dmz", to = "app", port = 8080, proto = "tcp", note = "gateway nginx → woca-scheduler business entry" },
+    { from = "dmz", to = "app", port = 8090, proto = "tcp", note = "gateway nginx → woca-scheduler service-plane listener (WOCA_GW_ADDR)" },
     { from = "dmz", to = "infra", port = 3000, proto = "tcp", note = "gateway nginx → langfuse-web ops UI (NLB :3000)" },
   ]
 }

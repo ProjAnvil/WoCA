@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # VM/bare-metal adaptation verification (design §12.1): prove the current
 # full-stack registry posture against a real standalone Nacos. The server
-# role (woca-server) registers itself, heartbeats every 5s, and
+# role (woca-scheduler) registers itself, heartbeats every 5s, and
 # materializes the delivered config pack at startup — and refuses to
 # start at all without WOCA_NACOS_URL (fail-closed, no fallback). See
 # internal/ee/nacosrt/ for the client contract this script exercises over
@@ -36,15 +36,15 @@ curl -sf -X POST "http://localhost:8848/nacos/v1/cs/configs" \
     --data-urlencode "group=DEFAULT_GROUP" \
     --data-urlencode 'content={"version":2,"generation":"","settings":{}}' >/dev/null
 
-echo "== build woca-server"
-go build -o "$DIR/woca-server" ./cmd/woca-server
+echo "== build woca-scheduler"
+go build -o "$DIR/woca-scheduler" ./cmd/woca-scheduler
 
 echo "== fail-closed: no WOCA_NACOS_URL means no process"
 # Scrub the operator shell's WOCA_NACOS_URL so an exported value can't
 # turn this step into a false pass/fail.
-if env -u WOCA_NACOS_URL WOCA_DB="sqlite:$DIR/woca-fail.db" "$DIR/woca-server" serve \
+if env -u WOCA_NACOS_URL WOCA_DB="sqlite:$DIR/woca-fail.db" "$DIR/woca-scheduler" serve \
     --addr 127.0.0.1:18098 --no-browser >"$DIR/fail.log" 2>&1; then
-    echo "FAIL: woca-server started without WOCA_NACOS_URL" >&2
+    echo "FAIL: woca-scheduler started without WOCA_NACOS_URL" >&2
     exit 1
 fi
 grep -q nacosrt "$DIR/fail.log" || {
@@ -55,13 +55,13 @@ grep -q nacosrt "$DIR/fail.log" || {
 echo "   refused to start: $(tail -1 "$DIR/fail.log")"
 
 echo "== register + heartbeat + config pull against the real registry"
-WOCA_DB="sqlite:$DIR/woca-server.db" WOCA_NACOS_URL="http://localhost:8848" \
-    "$DIR/woca-server" serve --addr 127.0.0.1:18099 --no-browser \
+WOCA_DB="sqlite:$DIR/woca-scheduler.db" WOCA_NACOS_URL="http://localhost:8848" \
+    "$DIR/woca-scheduler" serve --addr 127.0.0.1:18099 --no-browser \
     >"$DIR/serve.log" 2>&1 &
 SRV_PID=$!
 
 i=0
-until curl -sf "http://localhost:8848/nacos/v1/ns/instance/list?serviceName=woca-server" \
+until curl -sf "http://localhost:8848/nacos/v1/ns/instance/list?serviceName=woca-scheduler" \
     | grep -q '"healthy":true'; do
     i=$((i + 1))
     if [ "$i" -gt 30 ]; then
@@ -70,7 +70,7 @@ until curl -sf "http://localhost:8848/nacos/v1/ns/instance/list?serviceName=woca
         exit 1
     fi
     kill -0 "$SRV_PID" 2>/dev/null || {
-        echo "FAIL: woca-server exited before registering:" >&2
+        echo "FAIL: woca-scheduler exited before registering:" >&2
         cat "$DIR/serve.log" >&2
         exit 1
     }
@@ -83,4 +83,4 @@ grep -q "initial config pack applied" "$DIR/serve.log" || {
     exit 1
 }
 
-echo "PASS: woca-server registered healthy in nacos (heartbeat running) and applied the delivered config pack"
+echo "PASS: woca-scheduler registered healthy in nacos (heartbeat running) and applied the delivered config pack"

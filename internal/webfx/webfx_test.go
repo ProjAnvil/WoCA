@@ -250,7 +250,7 @@ func TestOptionsWrapSitsOutermost(t *testing.T) {
 func TestStaysVocabularyFree(t *testing.T) {
 	banned := []string{
 		"/api/auth/login", // bridge login (declared by cmd/woca-bridge)
-		"/api/native",     // native-client surface (cmd/woca-server)
+		"/api/native",     // native-client surface (cmd/woca-scheduler)
 		"woca_session",    // bridge session cookie (ee/bridge owns it)
 		"/gw/",            // machine channel (ee/entrygw owns it)
 		"/tunnel/",        // bridge tunnels (ee/edgegw owns it)

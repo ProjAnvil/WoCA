@@ -121,7 +121,7 @@ func runEnterprise() {
 
 	coreMux := http.NewServeMux()
 	entrygw.NewRegistryHandler(reg).RegisterRoutes(coreMux)
-	// The native credential machine channel (what woca-server mounts
+	// The native credential machine channel (what woca-scheduler mounts
 	// beside authcore on its gateway listener) — the activate endpoint
 	// the native client's connect flow posts to.
 	coreMux.Handle("/gw/native/", nativeauth.MachineHandler(nativeauth.New(keys, tenant.NewAPIKeyProvider(keys))))

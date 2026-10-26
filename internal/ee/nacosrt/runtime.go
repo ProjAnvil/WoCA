@@ -37,7 +37,7 @@ const (
 // its RawPack callback still sees every delivered pack).
 type Config struct {
 	Server    string // nacos base URL (http://nacos:8848)
-	Service   string // nacos service name: woca-server / woca-worker / woca-edge
+	Service   string // nacos service name: woca-scheduler / woca-worker / woca-edge
 	Advertise string // host:port this instance serves (host empty = autodetect)
 
 	St       *settings.Store // materialization target (nil = no pack apply)

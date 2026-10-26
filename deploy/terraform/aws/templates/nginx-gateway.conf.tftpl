@@ -3,7 +3,7 @@
 # The Grafana :8085 block from the original is dropped until the
 # observability overlay lands.
 
-upstream woca_servers {
+upstream woca_schedulers {
     least_conn;
 %{ for upstream in server_upstreams ~}
     server ${upstream};
@@ -19,7 +19,7 @@ server {
     listen 80;  # business entry (NLB :80)
     location = /metrics { return 404; }
     location / {
-        proxy_pass http://woca_servers;
+        proxy_pass http://woca_schedulers;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
@@ -33,11 +33,11 @@ server {
 server {
     listen 8082;  # skill-svc management SPA (NLB :9082)
     location / {
-        proxy_pass http://woca_servers/skills/;
+        proxy_pass http://woca_schedulers/skills/;
         proxy_set_header Host $host;
     }
     location /api/skills/ {
-        proxy_pass http://woca_servers/api/skills/;
+        proxy_pass http://woca_schedulers/api/skills/;
         proxy_set_header Host $host;
     }
 }
@@ -45,10 +45,10 @@ server {
 server {
     listen 8083;  # component discovery & configuration (NLB :9083)
     location /health {
-        proxy_pass http://woca_servers/api/health;
+        proxy_pass http://woca_schedulers/api/health;
     }
     location /woca/status {
-        proxy_pass http://woca_servers/api/stats;
+        proxy_pass http://woca_schedulers/api/stats;
     }
     location /ladym/health {
         proxy_pass http://${ladym_host}:8080/api/stats;

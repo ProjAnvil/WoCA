@@ -86,7 +86,7 @@ func newNativeAuthFixture(t *testing.T) *nativeAuthFixture {
 		Logger:     zerolog.Nop(),
 		NativeAuth: na,
 		// The native surface's declared exemptions (mirrors the
-		// woca-server entry point): activation is anonymous, the whole
+		// woca-scheduler entry point): activation is anonymous, the whole
 		// prefix is the client's session lifecycle.
 		AnonymousAPIPaths:      []string{"/api/native/activate"},
 		HostGateExemptPrefixes: []string{"/api/native/"},

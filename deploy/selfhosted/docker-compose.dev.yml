@@ -1,6 +1,6 @@
 # woca dev environment: the minimal counterpart of docker-compose.full.yml
 #
-# Same microservice topology (gateway → woca-server/worker/config/tenant,
+# Same microservice topology (gateway → woca-scheduler/worker/config/tenant,
 # ladyM) with the smallest viable instance counts — one of everything, a
 # single PostgreSQL (no hot-standby), a single NATS node, and NO
 # observability stack. Built for development 联调: fast to start, cheap to
@@ -106,7 +106,7 @@ services:
     image: nginx:1.29-alpine
     container_name: woca-dev-gateway
     depends_on:
-      woca-server-1: { condition: service_started }
+      woca-scheduler-1: { condition: service_started }
       # :8082 proxies the skill console to the ops facade — nginx resolves
       # upstream names once at config load, so it must exist first.
       ops: { condition: service_started }
@@ -127,14 +127,14 @@ services:
       - woca
 
   # ─────────────────── woca roles (stateless, edge) ──────────────────────
-  woca-server-1:
-    image: woca-server:local
+  woca-scheduler-1:
+    image: woca-scheduler:local
     container_name: woca-dev-server-1
     build:
       context: ../../build/dist
       dockerfile: Dockerfile
       args:
-        ROLE_PKG: woca-server.tar.gz
+        ROLE_PKG: woca-scheduler.tar.gz
     command: ["serve", "--addr", ":8080"]
     environment:
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
@@ -182,7 +182,7 @@ services:
   # The console as its own service (v1.7 §6.7, split). The dev stack uses
   # the direct assembly: the console runs self-contained over the shared
   # database (like the config console — both consoles stay direct-PG here),
-  # no woca-server hop. The full stack uses the proxy assembly instead.
+  # no woca-scheduler hop. The full stack uses the proxy assembly instead.
   ops:
     image: woca-ops:dev
     container_name: woca-dev-ops
@@ -228,7 +228,7 @@ services:
       WOCA_OBS_ADDR: ":9092"
       WOCA_SESSION_DIR: "/var/lib/woca/sessions"
       WOCA_HOME: "/var/lib/woca/home"
-      # Same registry-resolved trace bridge as woca-server-1 — the worker
+      # Same registry-resolved trace bridge as woca-scheduler-1 — the worker
       # is where runs execute, so this is where LLM/session spans
       # originate.
       WOCA_SERVICE_NAME: woca-dev-worker-1
@@ -301,7 +301,7 @@ services:
     command: ["--addr", ":8080"]
     restart: unless-stopped
     depends_on:
-      woca-server-1: { condition: service_started }
+      woca-scheduler-1: { condition: service_started }
       woca-config: { condition: service_started }
       nacos-init: { condition: service_completed_successfully }
     environment:
@@ -507,8 +507,8 @@ services:
           echo "published $$1"
         }
         publish woca-db.dsn "postgres://woca:$${WOCA_PG_PASSWORD}@woca-pg-primary:5432/woca?sslmode=disable"
-        publish woca-ops.upstream "http://woca-server-1:8090"
-        publish woca-edge.service "http://woca-server-1:8090"
+        publish woca-ops.upstream "http://woca-scheduler-1:8090"
+        publish woca-edge.service "http://woca-scheduler-1:8090"
         publish woca-edge.config "http://woca-config:8080"
         publish woca-obs.otlp "http://woca-collector:4318"
         publish woca-config.pack '{"version":2,"generation":"","settings":{}}'

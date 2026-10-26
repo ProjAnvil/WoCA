@@ -1,6 +1,6 @@
 // woca-bridge is the private-cloud bridge service (product design v1.7):
 // the execution plane users hold themselves. It is the enterprise-edition
-// server role for user machines — the same serve path as woca-server,
+// server role for user machines — the same serve path as woca-scheduler,
 // with the product identity model layered on top: organization
 // credentials (issued by the tenant ops console on the private core,
 // verified offline against the config-delivered org key), cookie/Bearer

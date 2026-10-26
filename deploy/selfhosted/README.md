@@ -4,7 +4,7 @@
 模型)/ §10(运行状态外置与事件流)的开发环境:PostgreSQL(主 + 流复制热备)
 与 NATS JetStream(3 节点 RAFT 集群)作为一套 `docker compose` 拓扑,按组件
 类别切分网段,对外只经 **唯一网关**(nginx TCP 直通)以高端口分发。这是
-Phase 1+ 各微服务角色(woca-server / scheduler / worker / …)落地时共享的数据面。
+Phase 1+ 各微服务角色(woca-scheduler / scheduler / worker / …)落地时共享的数据面。
 
 ## 拓扑
 
@@ -104,7 +104,7 @@ networks:
 
 ## 租户与 API key 认证(Phase 1)
 
-`woca-server serve --auth apikey`(或 env `WOCA_AUTH=apikey`)后,除 `/api/health`
+`woca-scheduler serve --auth apikey`(或 env `WOCA_AUTH=apikey`)后,除 `/api/health`
 外全部 API 要求 Bearer 凭证;默认 `local` 模式信任本机(个人版行为不变)。
 凭证用 `woca-tenant tenant` 管理(走同一 `--db`/`WOCA_DB`):
 

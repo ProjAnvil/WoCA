@@ -144,7 +144,7 @@ func TestLastGeneration(t *testing.T) {
 // the -race detector flags here.
 func TestRuntimePackConcurrent(t *testing.T) {
 	rt, err := New(Config{
-		Server: "http://nacos", Service: "woca-server", Advertise: "127.0.0.1:8080",
+		Server: "http://nacos", Service: "woca-scheduler", Advertise: "127.0.0.1:8080",
 	}, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)

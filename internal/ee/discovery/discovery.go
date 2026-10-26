@@ -41,7 +41,7 @@ import (
 const Timeout = 10 * time.Second
 
 // Install wires Resolve into wocadb.DSNResolver so registry-backed DSN
-// references resolve at open time. Server-role entry points (woca-server,
+// references resolve at open time. Server-role entry points (woca-scheduler,
 // woca-worker, woca-config, woca-tenant) call it at startup; the personal
 // edition never does, so registry DSNs fail loudly there instead of
 // reaching the network.

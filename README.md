@@ -378,7 +378,7 @@ woca ships as **two editions** built from one repository:
   registry DSN discovery. Seven role binaries, none with interactive
   surfaces:
 
-  - `woca-server` — the modular-monolith API surface: business API plus
+  - `woca-scheduler` — the modular-monolith API surface: business API plus
     the console management authority; no pages of its own
   - `woca-worker` — claims runs from the shared runstate ledger and
     executes them through the agent (probe port `:9092` by default)
@@ -393,7 +393,7 @@ woca ships as **two editions** built from one repository:
   - `woca-ops` — the tenant ops console (it issues organization
     credentials), plus the skill-asset console under `/skillsvc/`
 
-  The registry-coupled roles (`woca-server`, `woca-worker`, `woca-config`,
+  The registry-coupled roles (`woca-scheduler`, `woca-worker`, `woca-config`,
   `woca-edge`) are **fail-closed** on the nacos registry: they require
   `WOCA_NACOS_URL` and refuse to start without it, so a minimal
   enterprise deployment includes a nacos registry (dev-grade standalone
@@ -414,7 +414,7 @@ internal/ee/     enterprise-only: msgplane, tenant, configsvc, worker, obs,
                  console API + SPA), bridge (the private-cloud bridge
                  service), entrygw (the private-core machine registry),
                  edgegw (the stateless edge access point), edition
-                 (woca-server's composition root)
+                 (woca-scheduler's composition root)
 internal/platform/machineid  shared machine identity (enrollment tokens,
                  Ed25519 identities, opaque access tokens)
 web/             shared web UI (personal + enterprise web surface)
@@ -448,7 +448,7 @@ stateless edge access point (`cmd/woca-edge`, `internal/ee/edgegw`;
 no database, no files, every machine-token check calls home to the
 service plane). Behind it the private core splits in two: the registry
 routes (`/gw/enroll|renew|heartbeat|resolve|bridges`, mounted on
-woca-server's `WOCA_GW_ADDR` listener) and the config pull (`/gw/config`
+woca-scheduler's `WOCA_GW_ADDR` listener) and the config pull (`/gw/config`
 on woca-config). A one-time enrollment token exchanges for a local
 Ed25519 identity plus short-TTL opaque access tokens; pulled settings
 install as the managed overlay (locked, `managed_fields` in
@@ -493,7 +493,7 @@ packages reach enterprise capabilities only through seams —
 > moved to `ee/`); `deploy/enterprise/` is now `deploy/selfhosted/`. The
 > personal binary no longer ships the `tenant` and `memory` subcommands
 > (use `woca-tenant`), and `woca serve --auth apikey` now requires the
-> `woca-server` binary — multi-tenant auth is an enterprise capability.
+> `woca-scheduler` binary — multi-tenant auth is an enterprise capability.
 
 ### The agent graph
 

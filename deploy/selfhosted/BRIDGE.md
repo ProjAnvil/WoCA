@@ -11,19 +11,19 @@
 |---|---|---|
 | `woca-bridge` | 执行面：用户机器/服务器，托管 SPA + API，组织 key 登录，出站注册到边缘接入点 | 用户侧（可 NAT 后），出站-only |
 | `woca-edge` | 边缘接入点：公网唯一入口。无状态（R7）——TLS 终结、机器通道转发、客户端流量按 bridge_id 经出站隧道路由 | 公网 / DMZ / VPS / CF Tunnel |
-| `woca-server` | 私有核心·服务面：机器注册表（enrollment/renew/heartbeat/resolve/bridges，监听 `WOCA_GW_ADDR`）+ **租户运维管理台**（v1.7 §6.7） | 私网 |
+| `woca-scheduler` | 私有核心·服务面：机器注册表（enrollment/renew/heartbeat/resolve/bridges，监听 `WOCA_GW_ADDR`）+ **租户运维管理台**（v1.7 §6.7） | 私网 |
 | `woca-config` | 私有核心·配置面：配置权威源 + 配置台（专注 woca 设置域）+ `/gw/config` 下发 | 私网 |
 
 v1.4 的单体「入口网关挂 woca-config」形态已按 v1.5 拆分：注册类
-`/gw/*` 在 woca-server 的网关监听器上，配置拉取在 woca-config 上；
+`/gw/*` 在 woca-scheduler 的网关监听器上，配置拉取在 woca-config 上；
 bridge 只见边缘接入点一个对端（D5），核心内部拓扑对它透明。
 v1.7 把租户与 key 管理、bridge 注册治理、审计从配置台上收到
-**woca-server 的租户运维管理台**（与 `/gw/*` 同一个私网监听器）；
+**woca-scheduler 的租户运维管理台**（与 `/gw/*` 同一个私网监听器）；
 配置台只管 woca 自己的配置域。
 
 ## 一、控制面（管理员一次）
 
-**租户运维管理台**（woca-server 的 `WOCA_GW_ADDR` 监听器，仅私网可达）
+**租户运维管理台**（woca-scheduler 的 `WOCA_GW_ADDR` 监听器，仅私网可达）
 是整套系统唯一的管理入口：租户与 key 的签发/吊销、enrollment token
 签发、pending 批准、bridge 吊销、治理审计、`edge_spki_pin`（k3s 模式）。
 配置台（woca-config :8080）只管模型/存储/记忆/消息面等 woca 设置域。
@@ -31,7 +31,7 @@ v1.7 把租户与 key 管理、bridge 注册治理、审计从配置台上收到
 
 ```sh
 # 私有核心：服务面 + 配置面（共享同一个数据库）
-woca-server serve --db "postgres://…" --auth apikey   # WOCA_GW_ADDR=:8090
+woca-scheduler serve --db "postgres://…" --auth apikey   # WOCA_GW_ADDR=:8090
 woca-config --db "postgres://…" --addr :8080
 
 # 边缘接入点（公网侧唯一部署；TLS 必配，或前置 CF Tunnel/Tailscale Funnel）
@@ -163,7 +163,7 @@ SSE 流式透传；`local` 信任模式**不会**开启隧道（apikey 姿态才
 
 ## 联调（开发环境）
 
-无证书接入姿态是**启动参数**，不是页面开关：`woca-server` 进程以
+无证书接入姿态是**启动参数**，不是页面开关：`woca-scheduler` 进程以
 `WOCA_INSECURE_BRIDGES=1` 启动时开启（每次启动覆盖 `gw_settings` 行，
 env 即权威；管理台与 API 不暴露该项——放宽 TLS 是部署决策，红线 R6）。
 两套 dev compose 已默认带上。

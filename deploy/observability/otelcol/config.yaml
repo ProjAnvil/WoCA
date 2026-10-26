@@ -4,7 +4,7 @@
 # traffic when the overlay is up (the bridge fails fast and drops
 # otherwise).
 #
-# Receives OTLP/HTTP from every server artifact (woca-server on its business
+# Receives OTLP/HTTP from every server artifact (woca-scheduler on its business
 # port, woca-worker over the same push), exports:
 #   - metrics -> Prometheus exposition at :8889 (scraped by Prometheus)
 #   - traces  -> Jaeger (Tempo is a drop-in replacement via the otlphttp

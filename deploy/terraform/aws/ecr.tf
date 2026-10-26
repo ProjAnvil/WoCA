@@ -4,7 +4,7 @@
 
 locals {
   image_repos = [
-    "woca-server",
+    "woca-scheduler",
     "woca-worker",
     "woca-ops",
     "woca-config",

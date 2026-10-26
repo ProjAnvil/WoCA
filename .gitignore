@@ -19,7 +19,7 @@ ee/opsconsole-web/node_modules/
 /woca-config
 /woca-worker
 /woca-tenant
-/woca-server
+/woca-scheduler
 
 # IDE
 .idea/

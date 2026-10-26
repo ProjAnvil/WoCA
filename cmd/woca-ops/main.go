@@ -3,13 +3,13 @@
 // per request:
 //
 //   - proxy (WOCA_OPS_UPSTREAM, the full/prod topology): a stateless
-//     facade — the console SPA plus a reverse proxy onto woca-server's
+//     facade — the console SPA plus a reverse proxy onto woca-scheduler's
 //     pageless management API. The login exchange and the console
 //     session both live server-side; the session cookie transits.
 //
 //   - direct (WOCA_DB, the single-box dev topology): the console runs
 //     self-contained over the shared database — the same authoritative
-//     opsconsole API plus the SPA in one process, no woca-server hop.
+//     opsconsole API plus the SPA in one process, no woca-scheduler hop.
 //
 // The upstream address follows the discovery discipline (design §12.1):
 // a plain URL or a nacos:// / consul:// reference resolved through the
@@ -18,7 +18,7 @@
 //
 // Both assemblies also serve the skill-asset console (design §6.4) under
 // /skillsvc/ (internal/ee/skillsvcui); its /api/skills calls ride the same
-// channel as the ops console's API — proxied to woca-server in the proxy
+// channel as the ops console's API — proxied to woca-scheduler in the proxy
 // assembly, in-process over the shared database in the direct one.
 package main
 
@@ -88,7 +88,7 @@ func main() {
 	case db != "":
 		router.Handle("/", directAssembly(log, db))
 	default:
-		log.Fatal().Msg("woca-ops: set WOCA_OPS_UPSTREAM (proxy onto woca-server) or WOCA_DB (direct) — refusing to guess an assembly")
+		log.Fatal().Msg("woca-ops: set WOCA_OPS_UPSTREAM (proxy onto woca-scheduler) or WOCA_DB (direct) — refusing to guess an assembly")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -99,7 +99,7 @@ func main() {
 }
 
 // proxyAssembly is the full/prod form: the SPA plus a stateless proxy
-// onto woca-server's management API.
+// onto woca-scheduler's management API.
 func proxyAssembly(log zerolog.Logger, raw string) http.Handler {
 	resolved, err := discovery.Resolve(context.Background(), raw)
 	if err != nil {
@@ -124,13 +124,13 @@ func proxyAssembly(log zerolog.Logger, raw string) http.Handler {
 	mux.Handle("/api/", proxy)
 	mux.Handle("/skillsvc/", skillsSPA())
 	mux.Handle("/", opsui.Handler())
-	log.Info().Str("upstream", resolved).Msg("woca-ops: console facade up (SPA + proxy to woca-server)")
+	log.Info().Str("upstream", resolved).Msg("woca-ops: console facade up (SPA + proxy to woca-scheduler)")
 	return mux
 }
 
 // skillsSPA serves the skill-asset console (internal/ee/skillsvcui) under
 // /skillsvc/; its API calls (/api/skills) ride the same channel as the ops
-// console's — proxied to woca-server in the proxy assembly, in-process in
+// console's — proxied to woca-scheduler in the proxy assembly, in-process in
 // the direct one.
 func skillsSPA() http.Handler {
 	return http.StripPrefix("/skillsvc/", skillsvcui.Handler())
@@ -165,6 +165,6 @@ func directAssembly(log zerolog.Logger, dsn string) http.Handler {
 	mux.Handle("/api/", console.Handler())
 	mux.Handle("/skillsvc/", skillsSPA())
 	mux.Handle("/", opsui.Handler())
-	log.Info().Msg("woca-ops: console up (direct over the shared database; no woca-server hop)")
+	log.Info().Msg("woca-ops: console up (direct over the shared database; no woca-scheduler hop)")
 	return mux
 }

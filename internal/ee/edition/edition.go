@@ -1,7 +1,7 @@
 // Package edition assembles the enterprise subsystems injected into the
 // shared serve path through servefront.Edition: API-key + native-client
 // authentication over the tenant store, and the run-dispatch message plane
-// with its config-plane waiter. It is the composition root woca-server
+// with its config-plane waiter. It is the composition root woca-scheduler
 // wires in; the personal edition never links this package.
 package edition
 

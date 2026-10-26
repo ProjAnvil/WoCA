@@ -184,7 +184,7 @@ func mintTenantKey(t *testing.T) string {
 
 // tenantPost creates a run as the remote tenant (the server's API-key
 // authn: Authorization Bearer <woca_ key> — the bridge-style login
-// surface does not exist on woca-server); returns status + body.
+// surface does not exist on woca-scheduler); returns status + body.
 func tenantPost(t *testing.T, key string) (string, string) {
 	t.Helper()
 	return curlCode(t, 30,
@@ -212,7 +212,7 @@ func configCall(t *testing.T, method, path, body string) (string, string) {
 // from the shared settings tables).
 func TestSandboxLab(t *testing.T) {
 	requireDocker(t)
-	requireTarballs(t, "woca-server", "woca-config", "woca-worker", "woca-fakesandbox")
+	requireTarballs(t, "woca-scheduler", "woca-config", "woca-worker", "woca-fakesandbox")
 	ws := t.TempDir()
 
 	t.Cleanup(func() {

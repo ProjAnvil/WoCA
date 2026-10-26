@@ -1,6 +1,6 @@
 // woca-worker is the Phase 3 execution role (design §5.3/§13): it claims
 // runs from the shared runstate ledger and executes them through the
-// agent, mirroring events into run_events. Deploy alongside woca-server
+// agent, mirroring events into run_events. Deploy alongside woca-scheduler
 // against the same database; neither links the interactive surfaces.
 //
 // Server governance baseline (design §12.3): /healthz + /metrics on a
@@ -85,7 +85,7 @@ func newWorkerRoot() *cobra.Command {
 			// The settings database carries the runstate tables. The worker
 			// is a server artifact (design §5.1): the embedded ladyM engine
 			// is excluded — memory is remote (ladyM enterprise) or none,
-			// enforced with the same enterprise gate woca-server uses.
+			// enforced with the same enterprise gate woca-scheduler uses.
 			opts := agentbuild.Options{LogLevel: logLevel, EnterpriseMemory: true, Sandbox: agentbuild.SandboxFromEnv()}
 			db, err := openWorkerDB(cmd, &opts)
 			if err != nil {

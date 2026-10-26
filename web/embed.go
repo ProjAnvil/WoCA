@@ -1,7 +1,7 @@
 // Package webdist embeds the built web frontend (web/dist) so binaries
 // that serve the chat UI — the personal woca and the bridge execution
 // plane — can ship it without external files. Headless API roles
-// (woca-server, worker, ...) do not import this package; they serve no
+// (woca-scheduler, worker, ...) do not import this package; they serve no
 // pages (the ops console UI is the separate woca-ops service).
 //
 // The package lives next to the built assets because go:embed only reaches

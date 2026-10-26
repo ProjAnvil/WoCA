@@ -1,5 +1,5 @@
 // Package schedulerloop embeds the worker run loop inside the scheduler
-// role (woca-server) through the servefront RunLoop seam: the same claim →
+// role (woca-scheduler) through the servefront RunLoop seam: the same claim →
 // execute → finish cycle the standalone woca-worker drives, assembled from
 // the pieces the serve path already owns — the built agent, the settings
 // store's runstate ledger, the message plane's dispatch waiter, the shared

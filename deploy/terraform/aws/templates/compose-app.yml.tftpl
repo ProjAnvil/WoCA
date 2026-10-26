@@ -1,13 +1,13 @@
-# App node compose — mirrors docker-compose.full.yml woca-server /
+# App node compose — mirrors docker-compose.full.yml woca-scheduler /
 # woca-worker / woca-tenant (one of each per node; scale by node count).
 # The node's ENIs carry the data/mq/memory/mgmt legs, so every address
 # below is reachable in-zone.
 name: woca-private-app
 
 services:
-  woca-server:
-    image: ${images["woca-server"]}
-    container_name: woca-server
+  woca-scheduler:
+    image: ${images["woca-scheduler"]}
+    container_name: woca-scheduler
     # The role images are baked from the make <role> packages; their
     # start.sh entrypoint passes this through to the binary.
     command: ["serve", "--addr", ":8080"]
@@ -27,7 +27,7 @@ services:
       # Telemetry (§12.2 env layer): the trace bridge address resolves from
       # the registry at startup like the DSN — LLM/session spans land in
       # Langfuse via the infra node's woca-collector.
-      WOCA_SERVICE_NAME: woca-server
+      WOCA_SERVICE_NAME: woca-scheduler
       WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "${nacos_url}/DEFAULT_GROUP/woca-obs.otlp"
       WOCA_CONSOLE_USER: $${WOCA_CONSOLE_USER:-}
       WOCA_CONSOLE_PASSWORD: $${WOCA_CONSOLE_PASSWORD:-}
@@ -51,7 +51,7 @@ services:
       WOCA_DB: "${nacos_url}/DEFAULT_GROUP/woca-db.dsn"
       WOCA_NACOS_URL: "${nacos_url}"
       WOCA_OBS_ADDR: ":9091"
-      # Same registry-resolved trace bridge as woca-server — the worker is
+      # Same registry-resolved trace bridge as woca-scheduler — the worker is
       # where runs execute, so this is where LLM/session spans originate.
       WOCA_SERVICE_NAME: woca-worker
       WOCA_OTEL_EXPORTER_OTLP_ENDPOINT: "${nacos_url}/DEFAULT_GROUP/woca-obs.otlp"

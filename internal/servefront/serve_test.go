@@ -164,7 +164,7 @@ func TestServeOpensBrowserWithFakeOpen(t *testing.T) {
 
 // The serve path rejects apikey auth when no enterprise edition assembly
 // is attached (the personal binary): multi-tenant auth is an enterprise
-// capability, wired in by woca-server.
+// capability, wired in by woca-scheduler.
 func TestServeAPIKeyRequiresEdition(t *testing.T) {
 	isolateEnv(t)
 	opts := baseOpts(t, fakeOpenAI(t, "hi"))

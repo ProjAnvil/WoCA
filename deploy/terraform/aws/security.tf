@@ -67,7 +67,7 @@ resource "aws_security_group_rule" "dmz_to_app" {
   from_port                = tonumber(each.value)
   to_port                  = tonumber(each.value)
   protocol                 = "tcp"
-  description              = "gateway nginx → woca-server (${each.value})"
+  description              = "gateway nginx → woca-scheduler (${each.value})"
 }
 
 resource "aws_security_group_rule" "dmz_to_infra_langfuse" {

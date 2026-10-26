@@ -350,7 +350,7 @@ woca 以同一仓库构建的**两个版本**交付：
   置服务、可观测性（OTel/Prometheus/Grafana）与 registry DSN 发现。
   共七个角色二进制，均无交互界面：
 
-  - `woca-server` —— 模块化单体 API 面：业务 API 加 console 管理权
+  - `woca-scheduler` —— 模块化单体 API 面：业务 API 加 console 管理权
     威；自身不提供页面
   - `woca-worker` —— 从共享 runstate 账本认领运行并经代理执行（探针
     端口默认 `:9092`）
@@ -364,7 +364,7 @@ woca 以同一仓库构建的**两个版本**交付：
   - `woca-ops` —— 租户运维 console（组织凭据由它签发），外加
     `/skillsvc/` 下的 skill 资产 console
 
-  与 registry 耦合的角色（`woca-server`、`woca-worker`、
+  与 registry 耦合的角色（`woca-scheduler`、`woca-worker`、
   `woca-config`、`woca-edge`）对 nacos registry **fail-closed**：它们
   要求 `WOCA_NACOS_URL`，缺失时拒绝启动，因此最小企业部署需包含一个
   nacos registry（开发级 standalone 清单见
@@ -384,7 +384,7 @@ internal/ee/     仅企业版：msgplane、tenant、configsvc、worker、obs、
                  opsconsole/opsui（租户运维 console API + SPA）、
                  bridge（私有云 bridge 服务）、entrygw（私有核心机器
                  registry）、edgegw（无状态边缘接入点）、edition
-                 （woca-server 的组装根）
+                 （woca-scheduler 的组装根）
 internal/platform/machineid  共享机器身份（enrollment token、Ed25519
                  身份、不透明访问令牌）
 web/             共享 Web UI（个人版 + 企业版 web 面）
@@ -413,7 +413,7 @@ cookie 会话（吊销从运维 console 经配置生成级联下发），工作�
 到一个控制面对端 —— 无状态边缘接入点（`cmd/woca-edge`、
 `internal/ee/edgegw`；无数据库、无文件，每次机器令牌校验都回源服务
 面）。其后私有核心一分为二：registry 路由
-（`/gw/enroll|renew|heartbeat|resolve|bridges`，挂载在 woca-server 的
+（`/gw/enroll|renew|heartbeat|resolve|bridges`，挂载在 woca-scheduler 的
 `WOCA_GW_ADDR` 监听器上）与配置拉取（woca-config 上的
 `/gw/config`）。一次性 enrollment token 换得本地 Ed25519 身份加短
 TTL 不透明访问令牌；拉取的设置安装为受管覆盖层（锁定，
@@ -449,7 +449,7 @@ NAT 之后、零入站端口的 bridge。loopback bridge 保留零登录的个�
 > 企业版 web console 移到 `ee/`）；`deploy/enterprise/` 现为
 > `deploy/selfhosted/`。个人版二进制不再附带 `tenant` 与 `memory` 子
 > 命令（请使用 `woca-tenant`），`woca serve --auth apikey` 现在需要
-> `woca-server` 二进制 —— 多租户认证是企业版能力。
+> `woca-scheduler` 二进制 —— 多租户认证是企业版能力。
 
 ### 代理图
 

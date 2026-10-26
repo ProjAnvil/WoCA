@@ -1,9 +1,9 @@
 // Package opsui embeds the tenant ops console SPA (built from
 // ee/opsconsole-web, synced by `make ee-web`). Only the woca-ops facade
-// links it: woca-server hosts the console's authoritative API without any
+// links it: woca-scheduler hosts the console's authoritative API without any
 // web pages, and the facade serves the SPA while proxying every /api call
 // back to the server (product design: the console is a separate service
-// that reaches woca-server through deployment-layer discovery).
+// that reaches woca-scheduler through deployment-layer discovery).
 package opsui
 
 import (

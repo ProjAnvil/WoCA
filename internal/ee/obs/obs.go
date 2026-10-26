@@ -3,7 +3,7 @@
 // endpoint, RED metrics for every HTTP route, /healthz for probes, and a
 // telemetry sink mapping woca spans onto the OTel GenAI attributes.
 //
-// It is linked only by the server artifacts (woca-server, woca-worker).
+// It is linked only by the server artifacts (woca-scheduler, woca-worker).
 // The personal edition keeps the zero-dependency local sink (§5.2), so the
 // dependency-hygiene baseline never sees OTel packages.
 package obs

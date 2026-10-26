@@ -1,6 +1,6 @@
 # woca on Kubernetes (design §5.3 / §12)
 
-Plain-namespace manifests for the microservices deployment: woca-server and
+Plain-namespace manifests for the microservices deployment: woca-scheduler and
 woca-worker roles plus the nacos registry and the observability pipeline.
 No Helm chart yet — these files are the readable reference for one.
 
@@ -12,18 +12,18 @@ No Helm chart yet — these files are the readable reference for one.
 | `00-nacos.yaml` | standalone nacos StatefulSet + Service (dev-grade) + the `nacos-init` Job publishing the initial config pack |
 | `01-infra-config.yaml` | ConfigMap `woca-infra` (OTLP endpoint via cluster DNS) + placeholder Secret `woca-secrets` (`WOCA_DB` DSN) |
 | `10-observability.yaml` | OTel Collector, Prometheus (kubernetes_sd scraping + alert rules), Alertmanager, Grafana (provisioned), Jaeger |
-| `20-woca-server.yaml` | Deployment (probes `/healthz`), Service, HPA (CPU; SSE-connection scaling later) |
+| `20-woca-scheduler.yaml` | Deployment (probes `/healthz`), Service, HPA (CPU; SSE-connection scaling later) |
 | `21-woca-worker.yaml` | Deployment (probes on `:9092`), Service, HPA (CPU fallback; KEDA queue-depth sketch in comments) |
 
 ## Registry coupling (§12.1): nacos, fail-closed
 
-These roles are **registry-coupled**: `woca-server` and `woca-worker`
+These roles are **registry-coupled**: `woca-scheduler` and `woca-worker`
 register themselves with nacos, heartbeat every 5s, and take tenant/business
 configuration from the delivered config pack (`woca-config.pack`,
 `DEFAULT_GROUP`). `WOCA_NACOS_URL` is **required** — without it the process
 refuses to start (fail-closed, no fallback posture); a registry that has
 never delivered the initial pack is likewise fatal. See
-`cmd/woca-server/main.go`, `cmd/woca-worker/main.go`, and
+`cmd/woca-scheduler/main.go`, `cmd/woca-worker/main.go`, and
 `internal/ee/nacosrt/` for the contract; `deploy/vm/nacos-verify.sh` proves
 it end-to-end against a real standalone nacos.
 
@@ -47,7 +47,7 @@ Practical consequences:
 
 ## Role coverage
 
-These manifests cover **woca-server** and **woca-worker** only. The full
+These manifests cover **woca-scheduler** and **woca-worker** only. The full
 stack — woca-config (config plane), woca-tenant, woca-edge, woca-ops,
 woca-bridge — is not packaged here; see `deploy/selfhosted/` (compose) and
 `deploy/terraform/` for the complete role set, and `deploy/micro/` for the
@@ -65,10 +65,10 @@ per-role distribution packages.
 
 ```sh
 # images are baked from the per-role distribution packages (adjust tags):
-make dist-images   # woca-server:local, woca-worker:local, ... from the
+make dist-images   # woca-scheduler:local, woca-worker:local, ... from the
                    # make <role> tar packages (deploy/micro/README.md)
 # load into your cluster (kind):
-kind load docker-image woca-server:local woca-worker:local
+kind load docker-image woca-scheduler:local woca-worker:local
 
 kubectl apply -f deploy/k8s/00-namespace.yaml
 kubectl apply -f deploy/k8s/00-nacos.yaml
@@ -78,7 +78,7 @@ kubectl apply -f deploy/k8s/10-observability.yaml
 # Grafana dashboard (shared with the compose stack):
 kubectl -n woca create configmap woca-grafana-dashboards \
   --from-file=deploy/observability/grafana/provisioning/dashboards/
-kubectl apply -f deploy/k8s/20-woca-server.yaml
+kubectl apply -f deploy/k8s/20-woca-scheduler.yaml
 kubectl apply -f deploy/k8s/21-woca-worker.yaml
 ```
 
@@ -88,7 +88,7 @@ serves until traffic justifies NATS (design §5.4).
 
 ## Scaling
 
-- `woca-server`: HPA on CPU (70%, 2–6). The better long-term signal is SSE
+- `woca-scheduler`: HPA on CPU (70%, 2–6). The better long-term signal is SSE
   connection count (`http_server_active_requests`) via a custom-metrics
   adapter.
 - `woca-worker`: HPA on CPU is the always-available fallback; the target

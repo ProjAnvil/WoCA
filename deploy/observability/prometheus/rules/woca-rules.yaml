@@ -10,7 +10,7 @@ groups:
   - name: woca-service-health
     rules:
       - alert: WocaServiceDown
-        expr: up{job=~"woca-(server|worker)"} == 0
+        expr: up{job=~"woca-(scheduler|worker)"} == 0
         for: 2m
         labels:
           severity: critical

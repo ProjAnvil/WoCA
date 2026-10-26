@@ -21,7 +21,7 @@ import (
 // be unreachable from the core's direct address too.
 func TestEnterpriseEdgeChain(t *testing.T) {
 	requireDocker(t)
-	requireTarballs(t, "woca-server", "woca-config", "woca-edge", "woca-bridge")
+	requireTarballs(t, "woca-scheduler", "woca-config", "woca-edge", "woca-bridge")
 	st := stack{name: "netlab enterprise", file: enterpriseCompose}
 	st.lifecycle(t)
 

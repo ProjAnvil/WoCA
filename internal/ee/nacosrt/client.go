@@ -1,5 +1,5 @@
 // Package nacosrt is the enterprise nacos runtime: the shared component
-// every full-stack role (woca-server, woca-worker, woca-edge) assembles to
+// every full-stack role (woca-scheduler, woca-worker, woca-edge) assembles to
 // (1) register itself with nacos and keep the heartbeat, and (2) subscribe
 // to the delivered configuration pack. It speaks the nacos v1 HTTP APIs
 // with the standard library only — no SDK, same discipline as

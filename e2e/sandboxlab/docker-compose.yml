@@ -2,7 +2,7 @@
 # design docs/superpowers/specs/2026-10-19-sandbox-console-design.md §6):
 # the full off-host chain across real role containers — configsvc
 # registers/verifies/enables a contract-http backend (the fakesandbox
-# container), a remote tenant creates a run on woca-server (queue
+# container), a remote tenant creates a run on woca-scheduler (queue
 # dispatch + RunsOffHost), woca-worker claims it, executes every tool
 # call inside the sandbox backend, and downloads the products back to
 # the shared workspace volume, where the Go driver asserts them.
@@ -104,12 +104,12 @@ services:
     networks: [core]
 
   server:
-    image: woca-server:sandboxlab
+    image: woca-scheduler:sandboxlab
     build:
       context: ../../build/dist
       dockerfile: Dockerfile
       args:
-        ROLE_PKG: woca-server.tar.gz
+        ROLE_PKG: woca-scheduler.tar.gz
     container_name: woca-sandboxlab-server
     command: ["serve", "--addr", ":8080", "--auth", "apikey"]
     environment:

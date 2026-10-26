@@ -1,4 +1,4 @@
-# woca-server (L1/L2 modular monolith role, design §5.3): stateless, scaled
+# woca-scheduler (L1/L2 modular monolith role, design §5.3): stateless, scaled
 # on QPS. /healthz + /metrics live on the business port (8080); Prometheus
 # discovers the pods via the metrics.woca.dev annotations.
 # Registry: fail-closed on nacos — WOCA_NACOS_URL below is mandatory, and
@@ -7,22 +7,22 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: woca-server
+  name: woca-scheduler
   namespace: woca
 spec:
   replicas: 2
-  selector: {matchLabels: {app: woca-server}}
+  selector: {matchLabels: {app: woca-scheduler}}
   template:
     metadata:
-      labels: {app: woca-server}
+      labels: {app: woca-scheduler}
       annotations:
         metrics.woca.dev/scrape: "true"
         metrics.woca.dev/port: "8080"
-        metrics.woca.dev/job: woca-server
+        metrics.woca.dev/job: woca-scheduler
     spec:
       containers:
-        - name: woca-server
-          image: woca-server:local
+        - name: woca-scheduler
+          image: woca-scheduler:local
           # Empty host on --addr: nacosrt autodetects the pod IP for the
           # registry advertise (a literal 0.0.0.0 would be registered as-is).
           args: ["serve", "--addr", ":8080", "--auth", "apikey", "--no-browser"]
@@ -50,10 +50,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: woca-server
+  name: woca-scheduler
   namespace: woca
 spec:
-  selector: {app: woca-server}
+  selector: {app: woca-scheduler}
   ports: [{name: http, port: 8080, targetPort: http}]
 ---
 # Scale on CPU for v1; SSE connection count is the better signal once a
@@ -61,10 +61,10 @@ spec:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: woca-server
+  name: woca-scheduler
   namespace: woca
 spec:
-  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: woca-server}
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: woca-scheduler}
   minReplicas: 2
   maxReplicas: 6
   metrics:

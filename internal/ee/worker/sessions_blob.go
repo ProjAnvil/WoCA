@@ -11,7 +11,7 @@ import (
 )
 
 // NewFileSessions opens the shared session transcript store (the same
-// JSONL-behind-blobstore layout woca-server uses) when dir points at a
+// JSONL-behind-blobstore layout woca-scheduler uses) when dir points at a
 // directory shared with the gateways. An empty dir — or a store that cannot
 // be opened — disables transcript persistence (prompt-only history): the
 // constructor returns nil, which Config.Sessions treats as disabled. Note:

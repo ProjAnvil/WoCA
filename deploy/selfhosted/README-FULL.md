@@ -10,7 +10,7 @@ isolation, and network-zone isolation.
   host ports (via gateway only)
   ─────────────────────────►  gateway (dmz 172.28.30.0/24)
      :8080 business entry         │
-     :9082 skill-svc SPA          ├── woca-server ×2 ┐
+     :9082 skill-svc SPA          ├── woca-scheduler ×2 ┐
      :9083 component discovery    ├── woca-worker ×2 ├ app 172.28.32.0/24
      :9086 config console         └── woca-tenant    ┘ (legs: data + infra)
      :3000 Langfuse ops UI
@@ -31,7 +31,7 @@ restarts), and the firewall one-shot drops every cross-zone pair.
 ### Network zones (physical isolation)
 - **woca-dmz**: the gateway only — the public half of the edge. The business
   roles never share a segment with it.
-- **woca-app**: woca-server/worker/tenant (the business half of the edge),
+- **woca-app**: woca-scheduler/worker/tenant (the business half of the edge),
   with data + infra legs.
 - **woca-data**: woca PG primary/replica.
 - **woca-infra**: the platform substrate — NATS JetStream ×3, ladyM (its PG
@@ -49,8 +49,8 @@ restarts), and the firewall one-shot drops every cross-zone pair.
 ### Exposed surfaces (via the gateway only)
 | Port | Surface | Target |
 |------|---------|--------|
-| :8080 | Business entry (API + SPA + SSE) | woca-server ×2 (least_conn) |
-| :9082 | Skill-svc management SPA | woca-server /skills/ |
+| :8080 | Business entry (API + SPA + SSE) | woca-scheduler ×2 (least_conn) |
+| :9082 | Skill-svc management SPA | woca-scheduler /skills/ |
 | :9083 | Component discovery & config | health + stats endpoints |
 | :9084 | ladyM management console | ladym-console |
 
@@ -106,11 +106,11 @@ docker exec woca-ent-tenant woca-tenant --db "$WOCA_DB" tenant issue <tenant-id>
 
 ## Scaling
 
-The woca-server and woca-worker instances are stateless (all state in the
+The woca-scheduler and woca-worker instances are stateless (all state in the
 shared PG); scale horizontally:
 
 ```bash
-docker compose -f docker-compose.full.yml up -d --scale woca-server-1=3
+docker compose -f docker-compose.full.yml up -d --scale woca-scheduler-1=3
 ```
 
 ## Teardown
@@ -133,7 +133,7 @@ open http://localhost:8085
 Details, env contract, and the VM (Consul/Nacos) address-source mode live
 in `deploy/observability/README.md`; Kubernetes layouts in
 `deploy/k8s/README.md`. To surface the Grafana link inside the woca SPA,
-set `WOCA_GRAFANA_URL` on the woca-server containers (served via
+set `WOCA_GRAFANA_URL` on the woca-scheduler containers (served via
 `/api/health`).
 
 ## LLM tracing (Langfuse)
@@ -192,7 +192,7 @@ The full stack mirrors the microservices architecture (design §5.3):
   the overlay). Cross-segment forwarded traffic is dropped by the
   `firewall` one-shot in Docker's DOCKER-USER chain.
 - **Health & self-healing**: every long-running service declares a Docker
-  healthcheck (`/healthz` on woca-server:8080 and woca-worker:9092, NATS
+  healthcheck (`/healthz` on woca-scheduler:8080 and woca-worker:9092, NATS
   monitor, pg_isready) plus `restart: unless-stopped`.
 - **Addressing**: service DNS names only; the gateway is the sole
   host-facing entry (:8080 business, :9082 skills SPA, :9083 discovery,
@@ -275,7 +275,7 @@ run (today: `contract-http`, `cfbridge`).
   key volume (the compose stacks already do), or workers cannot decrypt
   the backend key the config plane wrote.
 - **Run gating**: with `WOCA_RUN_DISPATCH=queue` +
-  `WOCA_RUNS_OFF_HOST=true` on woca-server, `POST /api/runs` from remote
+  `WOCA_RUNS_OFF_HOST=true` on woca-scheduler, `POST /api/runs` from remote
   tenants answers 403 while no backend is enabled, and 503
   ("no sandbox-capable worker available") while no live worker acks the
   `sandbox` capability (the worker rewrites its capability ack every
@@ -304,7 +304,7 @@ any other version is refused outright instead of half-applying.
   carries into the sandbox — so it is kept as-is rather than rebuilt
   around a context-free cache.
 - The run workspace must be a directory shared between the dispatching
-  woca-server and the executing workers (the same volume both roles
+  woca-scheduler and the executing workers (the same volume both roles
   mount); products land back in it after each run.
 
 Reference e2e: `make sandboxlab` (e2e/sandboxlab) drives this whole

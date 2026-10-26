@@ -6,7 +6,7 @@
 //
 // It bundles every frontend: the terminal UIs below plus the serve/web
 // commands from internal/servefront. The enterprise role entries
-// (woca-server, woca-worker, woca-config, woca-tenant, woca-bridge,
+// (woca-scheduler, woca-worker, woca-config, woca-tenant, woca-bridge,
 // woca-edge, woca-ops) assemble from
 // internal/agentbuild, internal/servefront, and internal/ee without
 // linking this package's terminal frontends — this binary never links the

@@ -1,6 +1,6 @@
 // Package skillsvcui embeds the skill-asset console SPA (built from
 // ee/skillsvc-web, synced by `make ee-web`). Only the woca-ops facade
-// links it: woca-server hosts the skill platform's authoritative API
+// links it: woca-scheduler hosts the skill platform's authoritative API
 // (internal/ee/skillsvc) without any web pages, and the facade serves the
 // SPA under /skillsvc/ while proxying every /api call back to the server
 // — the same split as opsconsole/opsui.

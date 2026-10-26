@@ -126,11 +126,11 @@ func TestFromEnvDefaults(t *testing.T) {
 		t.Error("service name should fall back to the binary name")
 	}
 
-	t.Setenv(envServiceName, "woca-server-1")
+	t.Setenv(envServiceName, "woca-scheduler-1")
 	t.Setenv(envOTLPEndpoint, "http://collector:4318")
 	t.Setenv(envOTLPInsecure, "false")
 	cfg = FromEnv()
-	if cfg.ServiceName != "woca-server-1" || cfg.OTLPEndpoint != "http://collector:4318" || cfg.OTLPInsecure {
+	if cfg.ServiceName != "woca-scheduler-1" || cfg.OTLPEndpoint != "http://collector:4318" || cfg.OTLPInsecure {
 		t.Errorf("FromEnv = %+v", cfg)
 	}
 }

@@ -1,4 +1,4 @@
-// woca-server is the enterprise-edition server role: the modular-monolith
+// woca-scheduler is the enterprise-edition server role: the modular-monolith
 // API surface (business API + the console management authority) with no
 // interactive surfaces (TUI/REPL/one-shot CLI) and no web pages — the
 // chat UI ships with the execution planes (personal `woca`, bridge) and
@@ -51,7 +51,7 @@ func main() {
 	// same database the nacos pack apply materialized into.
 	var sandboxSettings *settings.Store
 	root := &cobra.Command{
-		Use:           "woca-server",
+		Use:           "woca-scheduler",
 		Short:         "woca enterprise server role (no interactive surfaces)",
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -65,7 +65,7 @@ func main() {
 		_ = f.Value.Set("info")
 	}
 	root.AddCommand(servefront.NewServeCmdWithEdition(opts, servefront.Edition{
-		// woca-server is a pageless API role: it serves the business API
+		// woca-scheduler is a pageless API role: it serves the business API
 		// and the management authority, but no web pages. The chat UI
 		// ships with the execution planes (personal woca, bridge); the
 		// ops console UI is the woca-ops facade proxying back to the
@@ -88,7 +88,7 @@ func main() {
 			base := nacosrt.ServerFromEnv()
 			return &servefront.NacosAssembly{
 				Server:  base,
-				Service: "woca-server",
+				Service: "woca-scheduler",
 				Build: func(a servefront.NacosAssembly, w servefront.NacosWiring, log zerolog.Logger) (servefront.NacosRuntime, error) {
 					return nacosrt.New(nacosrt.Config{
 						Server: a.Server, Service: a.Service, Advertise: w.Advertise,
@@ -136,7 +136,7 @@ func main() {
 			}
 			gwStore, err := entrygw.NewStore(st.DB())
 			if err != nil {
-				log.Error().Err(err).Msg("woca-server: gateway registry store failed")
+				log.Error().Err(err).Msg("woca-scheduler: gateway registry store failed")
 				return
 			}
 			// The user-identity authority (v1.8 §2.1): woca_ key login,
@@ -145,12 +145,12 @@ func main() {
 			// bridges reach it through the edge's /gw forwarding.
 			tenantStore, err := tenant.NewStore(st.DB())
 			if err != nil {
-				log.Error().Err(err).Msg("woca-server: tenant store failed")
+				log.Error().Err(err).Msg("woca-scheduler: tenant store failed")
 				return
 			}
 			auth, err := authcore.New(tenantStore, st.DB(), log)
 			if err != nil {
-				log.Error().Err(err).Msg("woca-server: core auth service failed")
+				log.Error().Err(err).Msg("woca-scheduler: core auth service failed")
 				return
 			}
 			audit := func(event, subject, detail string) { gwStore.AuditEvent(context.Background(), event, subject, detail) }
@@ -172,7 +172,7 @@ func main() {
 			// keeping this listener pageless.
 			skillStore, err := skillsvc.NewStore(st.DB())
 			if err != nil {
-				log.Error().Err(err).Msg("woca-server: skill asset store failed")
+				log.Error().Err(err).Msg("woca-scheduler: skill asset store failed")
 				return
 			}
 			console.AttachSkills(skillStore)
@@ -199,15 +199,15 @@ func main() {
 			router.Handle("/", console.Handler())
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
-				log.Error().Err(err).Str("addr", addr).Msg("woca-server: gateway listener failed")
+				log.Error().Err(err).Str("addr", addr).Msg("woca-scheduler: gateway listener failed")
 				return
 			}
 			go func() {
 				if err := router.Serve(ctx, ln); err != nil {
-					log.Error().Err(err).Msg("woca-server: gateway listener stopped")
+					log.Error().Err(err).Msg("woca-scheduler: gateway listener stopped")
 				}
 			}()
-			log.Info().Str("addr", addr).Msg("woca-server: service-plane gateway listener up (/gw/* + console management API; UI on woca-ops)")
+			log.Info().Str("addr", addr).Msg("woca-scheduler: service-plane gateway listener up (/gw/* + console management API; UI on woca-ops)")
 		},
 	}))
 	if err := root.Execute(); err != nil {

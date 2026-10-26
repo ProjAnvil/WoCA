@@ -1,6 +1,6 @@
 // Package configsvc is the standalone settings management plane (design
 // §16): a dedicated role that owns configuration read/write, validation,
-// export/import, and its console SPA. Business roles (woca-server,
+// export/import, and its console SPA. Business roles (woca-scheduler,
 // woca-worker) keep reading the shared settings tables directly — the
 // config service is the sole management entry, deployed independently
 // behind the gateway's admin port.

@@ -590,7 +590,7 @@ func (d *DB) sqliteHasColumn(table, column string) (bool, error) {
 // CREATE TABLE IF NOT EXISTS is not race-safe (concurrent creators collide
 // on the pg_type rowtype unique index), and enterprise deployments start N
 // replicas against one database — the enterprise stack hit exactly that:
-// woca-server ×2 + worker migrating simultaneously failed with
+// woca-scheduler ×2 + worker migrating simultaneously failed with
 // "duplicate key value violates unique constraint pg_type_typname_nsp_index".
 const migrateLockKey = 0x776F6361 // "woca"
 

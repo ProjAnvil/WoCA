@@ -224,7 +224,7 @@ ent-full-down:
 ent-obs-up:
 	# up -d (not restart): the overlay changes app env/networks, and only
 	# up recreates containers whose merged configuration drifted.
-	$(ENT_FULL_COMPOSE) up -d gateway woca-server-1 woca-server-2 woca-worker-1 woca-worker-2 $(ENT_OBS_SVCS)
+	$(ENT_FULL_COMPOSE) up -d gateway woca-scheduler-1 woca-scheduler-2 woca-worker-1 woca-worker-2 $(ENT_OBS_SVCS)
 	# nginx resolves static upstream names once at config load; recreated
 	# app containers get new IPs, so reload the gateway to re-resolve.
 	$(ENT_FULL_COMPOSE) restart gateway
@@ -329,7 +329,7 @@ edge-bridge-down:
 # e2e/netlab/README.md). Requires a linux-container docker engine; the
 # role packages cross-compile with GOOS=linux at the host's GOARCH.
 NETLAB_PERSONAL_ROLES := woca woca-relay
-NETLAB_ENTERPRISE_ROLES := woca-server woca-config woca-edge woca-bridge
+NETLAB_ENTERPRISE_ROLES := woca-scheduler woca-config woca-edge woca-bridge
 
 .PHONY: netlab netlab-personal netlab-enterprise
 netlab: netlab-personal netlab-enterprise
@@ -359,7 +359,7 @@ netlab-enterprise:
 # docker engine; the role packages cross-compile with GOOS=linux at the
 # host's GOARCH. The scripted anthropic-compatible model (fakemodel/)
 # needs no package — it builds in its own docker stage.
-SANDBOXLAB_ROLES := woca-server woca-config woca-worker woca-fakesandbox
+SANDBOXLAB_ROLES := woca-scheduler woca-config woca-worker woca-fakesandbox
 
 .PHONY: sandboxlab
 sandboxlab:
@@ -404,7 +404,7 @@ complab-offline:
 # Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
 # woca-edge joins the set with the v1.5 topology split (stateless public
 # entry; still a role artifact — thin, no interactive surfaces).
-SERVER_ARTIFACTS := woca-server woca-tenant woca-worker woca-config woca-bridge woca-edge woca-ops
+SERVER_ARTIFACTS := woca-scheduler woca-tenant woca-worker woca-config woca-bridge woca-edge woca-ops
 
 .PHONY: build-server check-server-artifacts check-editions
 build-server:
@@ -484,8 +484,8 @@ check-server-artifacts: build-server
 		fi; \
 	done
 	@for p in woca/web internal/ee/opsui internal/ee/configsvc internal/ee/skillsvcui; do \
-		if go list -deps ./cmd/woca-server | grep -q "projanvil/woca/$$p$$"; then \
-			echo "woca-server links a web/frontend package ($$p): it must stay pageless"; exit 1; \
+		if go list -deps ./cmd/woca-scheduler | grep -q "projanvil/woca/$$p$$"; then \
+			echo "woca-scheduler links a web/frontend package ($$p): it must stay pageless"; exit 1; \
 		fi; \
 	done
 	@echo "server artifacts pass dependency hygiene"

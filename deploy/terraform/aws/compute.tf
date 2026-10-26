@@ -4,7 +4,7 @@
 #
 #   compose service      networks                     → node   ENIs
 #   gateway              edge, ladym-data, mgmt       → dmz    dmz, infra, mgmt
-#   woca-server/worker   edge, pg, mq, ladym, mgmt    → app    app, data, infra
+#   woca-scheduler/worker   edge, pg, mq, ladym, mgmt    → app    app, data, infra
 #         (the compose mgmt leg exists only for nacos; with nacos in
 #          infra it folds into the infra leg — 5 legs → 3)
 #   woca-tenant          edge, pg, mq                 → app    (covered by app legs)

@@ -26,7 +26,7 @@ func TestHTTPMiddlewareSpanAttributes(t *testing.T) {
 	buf, restore := spanLog(t)
 	defer restore()
 
-	o, err := Setup(t.Context(), Config{ServiceName: "woca-server"})
+	o, err := Setup(t.Context(), Config{ServiceName: "woca-scheduler"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestHTTPMiddlewareSpanAttributes(t *testing.T) {
 		`"http.route":"/api/sessions/{id}"`, // pattern, not the raw path
 		`"http.request.method":"GET"`,
 		`"http.response.status_code":200`,
-		`"service.name":"woca-server"`,
+		`"service.name":"woca-scheduler"`,
 		`"woca.http.request_id":"trace-42"`,
 	} {
 		if !strings.Contains(line, want) {

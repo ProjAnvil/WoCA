@@ -1,7 +1,7 @@
 // Package servefront implements the server-role frontends — the embedded
 // web UI server (serve) and the background web-GUI daemon (web) — on top of
 // the shared agentbuild composition root. Future server entries
-// (woca-server, woca-gateway) import this package instead of the terminal
+// (woca-scheduler, woca-gateway) import this package instead of the terminal
 // frontends, which stay in the personal cmd/woca entry.
 package servefront
 
@@ -64,7 +64,7 @@ type Observability interface {
 }
 
 // Edition bundles the enterprise subsystems a server-role entry point
-// (woca-server) attaches to the shared serve path. Every field is
+// (woca-scheduler) attaches to the shared serve path. Every field is
 // optional; the personal edition (cmd/woca) runs with the zero Edition and
 // each nil keeps the corresponding personal-edition posture. The
 // enterprise implementations live under internal/ee — this package (and
@@ -124,7 +124,7 @@ type Edition struct {
 
 	// Static is the frontend filesystem the entry point injects: the
 	// personal edition and the bridge embed web/dist; headless API roles
-	// (woca-server) pass nil and serve a pageless API. This package never
+	// (woca-scheduler) pass nil and serve a pageless API. This package never
 	// imports the embedded frontend — the form split happens at assembly.
 	Static fs.FS
 
@@ -186,7 +186,7 @@ type Edition struct {
 // package stays enterprise-free like the Observability seam).
 type NacosAssembly struct {
 	Server    string // nacos base URL, e.g. http://nacos:8848
-	Service   string // nacos service name, e.g. woca-server
+	Service   string // nacos service name, e.g. woca-scheduler
 	Advertise string // optional host:port override (default: the serve addr)
 	// Build constructs the runtime over the wiring the serve path
 	// completes (settings store, ack identity, rebuild hooks). Required.
@@ -388,7 +388,7 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 			return fmt.Errorf("unknown --auth mode %q (want local or apikey)", authMode)
 		}
 		if ed.Authn == nil {
-			return fmt.Errorf("apikey auth requires an enterprise server binary (woca-server); the personal edition trusts the local machine")
+			return fmt.Errorf("apikey auth requires an enterprise server binary (woca-scheduler); the personal edition trusts the local machine")
 		}
 	}
 

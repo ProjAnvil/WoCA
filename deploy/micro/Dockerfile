@@ -3,7 +3,7 @@
 # the package passed by name:
 #
 #   docker build -f build/dist/Dockerfile \
-#     --build-arg ROLE_PKG=woca-server.tar.gz -t woca-server:local build/dist
+#     --build-arg ROLE_PKG=woca-scheduler.tar.gz -t woca-scheduler:local build/dist
 #
 # or via `make dist-images`. The packaged start.sh is the entrypoint in
 # foreground mode: it exec's the binary as PID 1, so docker stop reaches

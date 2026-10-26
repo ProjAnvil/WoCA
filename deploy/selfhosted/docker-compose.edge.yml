@@ -50,7 +50,7 @@ services:
       - edge-pg-data:/var/lib/postgresql/data
     networks: [internal]
 
-  # ─────────────────────── service plane: woca-server ──────────────────────
+  # ─────────────────────── service plane: woca-scheduler ──────────────────────
   # The machine registry rides its own listener (:8090, WOCA_GW_ADDR) on
   # the internal network: enrollment, renewal, heartbeats, /gw/resolve —
   # the routes the edge calls home on (R7). The same listener hosts the
@@ -58,13 +58,13 @@ services:
   # bridge inventory, governance audit. The edge only ever forwards
   # enumerated /gw/* machine routes — the console never exposes through it.
   server:
-    image: woca-server:edge-dev
+    image: woca-scheduler:edge-dev
     container_name: woca-edge-dev-server
     build:
       context: ../../build/dist
       dockerfile: Dockerfile
       args:
-        ROLE_PKG: woca-server.tar.gz
+        ROLE_PKG: woca-scheduler.tar.gz
     command: ["serve", "--addr", ":8080", "--auth", "apikey"]
     environment:
       WOCA_DB: "postgres://woca:${WOCA_PG_PASSWORD}@pg:5432/woca?sslmode=disable"

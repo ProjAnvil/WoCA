@@ -39,7 +39,7 @@ traces appearing.
 
 | artifact | endpoints | notes |
 |---|---|---|
-| `woca-server` | `/healthz`, `/metrics` on the business port | probes answer from the moment the port binds, before the agent finishes building; nginx blocks `/metrics` on the public entry (Prometheus scrapes inside the network) |
+| `woca-scheduler` | `/healthz`, `/metrics` on the business port | probes answer from the moment the port binds, before the agent finishes building; nginx blocks `/metrics` on the public entry (Prometheus scrapes inside the network) |
 | `woca-worker` | `/healthz`, `/metrics` on `--obs-addr` (default `:9092`, `off` disables) | dedicated probe port — the worker has no business HTTP surface |
 
 Metrics produced by `internal/ee/obs`:

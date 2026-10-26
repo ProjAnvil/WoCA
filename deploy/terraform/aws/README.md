@@ -13,7 +13,7 @@ both sides by hand and keep the correspondence readable).
 | tf subnet | compose zone | node | services (compose subsets in templates/) | extra ENIs (bridge legs) |
 |-----------|--------------|------|-------------------------------------------|--------------------------|
 | dmz (public) | woca-dmz | dmz-1 | gateway (nginx) | infra (ladym stats, langfuse UI proxy), mgmt (config console proxy) |
-| app | woca-app | app-N (default 1) | woca-server, woca-worker, woca-tenant | data, infra |
+| app | woca-app | app-N (default 1) | woca-scheduler, woca-worker, woca-tenant | data, infra |
 | data | woca-data | data-1 | woca-pg-primary, woca-pg-replica | — |
 | infra | woca-infra | infra-1 | nats-js-1/2/3, nats-init, ladym-pg, ladym-api-1/2, ladym-worker (dict image), **nacos + nacos-init, woca-collector (trace bridge), langfuse-\* (web/worker/pg/clickhouse/redis/minio)** | — |
 | mgmt | woca-mgmt | mgmt-1 | woca-config, woca-ops | data, infra, app (config/ops legs) |

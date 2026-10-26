@@ -59,7 +59,7 @@ func newFakeCore(t *testing.T) *fakeCore {
 	}
 	svcMux := http.NewServeMux()
 	entrygw.NewRegistryHandler(store).RegisterRoutes(svcMux)
-	// The native credential machine channel (what woca-server mounts
+	// The native credential machine channel (what woca-scheduler mounts
 	// beside authcore on its gateway listener).
 	svcMux.Handle("/gw/native/", nativeauth.MachineHandler(nativeauth.New(keys, tenant.NewAPIKeyProvider(keys))))
 	svc := httptest.NewServer(svcMux)

@@ -5,7 +5,7 @@
 # Topology: every component class lives on its own subnet and is reachable
 # from the outside only through the single gateway, which straddles all
 # segments and is the only container publishing host ports (high ports).
-# Future woca microservice roles (woca-server / gateway / scheduler /
+# Future woca microservice roles (woca-scheduler / gateway / scheduler /
 # worker, Phase 2+) attach to the `edge` segment and reach the data plane
 # through the gateway — mirroring the K8s topology where only the control
 # plane talks to storage.

@@ -1,6 +1,6 @@
 // Package opsconsole is the tenant ops console's authoritative API
 // (product design v1.8 §6.7): the private core's single management
-// surface, hosted by the service plane (woca-server's internal listener)
+// surface, hosted by the service plane (woca-scheduler's internal listener)
 // and reachable only on the private network — the edge access point never
 // forwards it. The console UI itself is a separate service (woca-ops:
 // the opsui SPA plus a reverse proxy onto these routes); this package
