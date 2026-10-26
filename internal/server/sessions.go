@@ -53,7 +53,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		var err error
 		wsID, err = s.bindWorkspace(r.Context(), endpoint, tenant, workspaceSourceKey(tenant, ws))
 		if err != nil {
-			s.log.Warn().Err(err).Msg("session workspace binding failed")
+			// bindWorkspace logged the raw cause; the tenant sees the
+			// sanitized message.
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
@@ -76,9 +77,11 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 // bindingTarget reports whether requests in this context allocate sandbox
 // workspace bindings, and the tenant + executor-proxy endpoint to use: only
-// the off-host EE posture with a live enabled backend endpoint, and only
-// for non-local tenants (the personal edition has no tenant plane to scope
-// a source key with, so it never binds).
+// the off-host EE posture with a live enabled backend (both the endpoint
+// and the enabled-probe must agree — an endpoint wired without an enabled
+// backend would bind sessions whose runs the sandbox gate then 403s), and
+// only for non-local tenants (the personal edition has no tenant plane to
+// scope a source key with, so it never binds).
 func (s *Server) bindingTarget(ctx context.Context) (tenant, endpoint string, ok bool) {
 	if !s.runsOffHost || s.sandboxEndpoint == nil {
 		return "", "", false
@@ -88,7 +91,7 @@ func (s *Server) bindingTarget(ctx context.Context) (tenant, endpoint string, ok
 		return "", "", false
 	}
 	ep := s.sandboxEndpoint()
-	if ep == "" {
+	if ep == "" || !s.sandboxEnabled() {
 		return "", "", false
 	}
 	return tc.TenantID, ep, true
@@ -106,24 +109,36 @@ func workspaceSourceKey(tenantID, workspace string) string {
 	return tenantID + "|" + abs
 }
 
+// Tenant-facing binding errors: generic by design. Transport errors carry
+// the proxy's internal URL, which never crosses to a remote tenant — the
+// raw error is logged instead. The proxy's own refusal reasons (from its
+// error envelope) are client-appropriate and pass through.
+var (
+	errBindingUnreachable = errors.New("workspace binding proxy unreachable")
+	errBindingMalformed   = errors.New("workspace binding response malformed")
+)
+
 // bindWorkspace calls the executor proxy's allocate-or-bind endpoint
 // (POST {endpoint}/internal/bindings, spec §3.2) and returns the stable
 // sandbox workspace identity for sourceKey. Idempotent on the source key:
 // concurrent callers converge on one identity. Errors are the caller's
-// fail-closed signal — no local fallback identity exists.
+// fail-closed signal — no local fallback identity exists — and safe to
+// surface to a tenant (raw transport details stay in the log).
 func (s *Server) bindWorkspace(ctx context.Context, endpoint, tenantID, sourceKey string) (string, error) {
 	body, err := json.Marshal(map[string]string{"tenant_id": tenantID, "source_key": sourceKey})
 	if err != nil {
-		return "", err
+		return "", errBindingMalformed
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/internal/bindings", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("bindings: %w", err)
+		s.log.Warn().Err(err).Msg("workspace binding request build failed")
+		return "", errBindingUnreachable
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := bindClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("bindings: %w", err)
+		s.log.Warn().Err(err).Msg("workspace binding call failed")
+		return "", errBindingUnreachable
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -135,19 +150,22 @@ func (s *Server) bindWorkspace(ctx context.Context, endpoint, tenantID, sourceKe
 			reason = errOut.Error
 		}
 		if reason == "" {
-			reason = fmt.Sprintf("proxy returned %d", resp.StatusCode)
+			reason = fmt.Sprintf("status %d", resp.StatusCode)
 		}
-		return "", fmt.Errorf("bindings: %s", reason)
+		s.log.Warn().Str("reason", reason).Int("status", resp.StatusCode).Msg("workspace binding refused")
+		return "", fmt.Errorf("workspace binding refused: %s", reason)
 	}
 	var out struct {
 		WorkspaceID string `json:"workspace_id"`
 		State       string `json:"state"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, bindResponseLimit)).Decode(&out); err != nil {
-		return "", fmt.Errorf("bindings: %w", err)
+		s.log.Warn().Err(err).Msg("workspace binding response undecodable")
+		return "", errBindingMalformed
 	}
 	if out.WorkspaceID == "" {
-		return "", errors.New("bindings: proxy returned no workspace id")
+		s.log.Warn().Msg("workspace binding response carried no workspace id")
+		return "", errBindingMalformed
 	}
 	if out.State != "" && out.State != "active" {
 		s.log.Info().Str("workspace", out.WorkspaceID).Str("state", out.State).
@@ -187,12 +205,29 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleWorkspace(w http.ResponseWriter, r *http.Request) {
-	root, err := s.workspaceForRequest(r)
+	dir, err := s.workspaceForRequest(r)
 	if err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, buildWorkspaceTree(root))
+	writeJSON(w, http.StatusOK, s.workspaceTree(dir))
+}
+
+// workspaceTree builds the file tree for a request-resolved workspace: the
+// personal edition walks lexically (loopback trust, unchanged); the EE
+// volume walks through an os.Root opened on the workspace, so a symlink
+// cannot lead the walk out of it (openroot-grade jail, aligned with the
+// fsb folder browser).
+func (s *Server) workspaceTree(dir string) *workspaceNode {
+	if s.workspaceRoot == "" {
+		return buildWorkspaceTree(dir)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil
+	}
+	defer root.Close()
+	return buildVolumeTree(root, filepath.Base(dir))
 }
 
 // expandHomePath resolves a leading ~ or ~/ so workspaces typed as shorthand
@@ -280,12 +315,12 @@ func pathWithinRoot(root, p string) bool {
 // handleWorkspaceFile returns a single workspace file's content for the
 // right-sidebar preview (bounded, text files only).
 func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request) {
-	root, err := s.workspaceForRequest(r)
+	dir, err := s.workspaceForRequest(r)
 	if err != nil {
 		writeError(w, http.StatusForbidden, err.Error())
 		return
 	}
-	node, err := readWorkspaceFile(root, r.URL.Query().Get("path"))
+	node, err := s.workspaceFile(dir, r.URL.Query().Get("path"))
 	if err != nil {
 		var status int
 		switch err {
@@ -300,6 +335,22 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, node)
+}
+
+// workspaceFile loads one file for preview from a request-resolved
+// workspace: the personal edition reads lexically (loopback trust,
+// unchanged); the EE volume reads through an os.Root jail — traversal and
+// escaping symlinks fail as not-found.
+func (s *Server) workspaceFile(dir, rel string) (*workspaceNode, error) {
+	if s.workspaceRoot == "" {
+		return readWorkspaceFile(dir, rel)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, errNotFound
+	}
+	defer root.Close()
+	return readVolumeWorkspaceFile(root, rel)
 }
 
 // handleCompletions lists slash commands (builtin + skills, for the chat

@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -95,6 +96,8 @@ type sandboxPlaneOpts struct {
 	endpoint    string // allocate-or-bind proxy URL ("" = no sandbox endpoint)
 	sessionDir  string
 	workspaceRt string
+	// sandboxEnabled overrides the enabled-backend probe (nil = true).
+	sandboxEnabled func() bool
 }
 
 func newSandboxPlaneServer(t *testing.T, opts sandboxPlaneOpts) (*Server, *runstate.Ledger, *wocadb.DB, *httptest.Server) {
@@ -122,12 +125,16 @@ func newSandboxPlaneServer(t *testing.T, opts sandboxPlaneOpts) (*Server, *runst
 		ep := opts.endpoint
 		endpoint = func() string { return ep }
 	}
+	sandboxEnabled := opts.sandboxEnabled
+	if sandboxEnabled == nil {
+		sandboxEnabled = func() bool { return true }
+	}
 	s := New(Config{
 		Agent: newScriptedAgent(t, "bound"), Static: fstest.MapFS{},
 		Logger: zerolog.Nop(), SessionDir: opts.sessionDir, WorkDir: t.TempDir(),
 		RunLedger: ledger, DispatchToQueue: true, RunsOffHost: true,
 		RunStateDB:      db,
-		SandboxEnabled:  func() bool { return true },
+		SandboxEnabled:  sandboxEnabled,
 		SandboxEndpoint: endpoint,
 		WorkspaceRoot:   opts.workspaceRt,
 		Auth:            multiTenantProvider{},
@@ -187,6 +194,178 @@ func dispatchTenantRun(t *testing.T, url, tenant, sessionID string) (int, string
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	return resp.StatusCode, out.RunID
+}
+
+// tenantRequest issues one tenant-authenticated API request and returns the
+// status plus the raw body text (for error-envelope assertions).
+func tenantRequest(t *testing.T, method, url, tenant, body string) (int, string) {
+	t.Helper()
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, url, rdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "bearer "+tenant)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+// TestBindingErrorsLeakNoTopology: transport failures against the binding
+// proxy are sanitized on the wire — the raw net/http error carries the
+// proxy's internal URL, which must reach the log only, never a remote
+// tenant's response body (createSession and dispatch paths alike).
+func TestBindingErrorsLeakNoTopology(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unreachable", http.StatusBadGateway)
+	}))
+	url := dead.URL
+	dead.Close() // nothing listens anymore; net/http errors embed the URL
+
+	_, _, _, srv := newSandboxPlaneServer(t, sandboxPlaneOpts{endpoint: url})
+	host := strings.TrimPrefix(url, "http://")
+
+	status, body := tenantRequest(t, http.MethodPost, srv.URL+"/api/sessions", "tenant-a", `{}`)
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("create session with dead proxy = %d, want 503", status)
+	}
+	if strings.Contains(body, host) || strings.Contains(body, "/internal/bindings") {
+		t.Fatalf("session 503 body leaks the proxy topology: %q", body)
+	}
+
+	status, body = tenantRequest(t, http.MethodPost, srv.URL+"/api/runs", "tenant-a", `{"prompt":"x"}`)
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("dispatch with unbindable workspace = %d, want 503", status)
+	}
+	if strings.Contains(body, host) || strings.Contains(body, "/internal/bindings") {
+		t.Fatalf("run 503 body leaks the proxy topology: %q", body)
+	}
+}
+
+// TestBindingRequiresEnabledSandbox: the binding path demands the
+// enabled-backend probe too — an endpoint wired while no backend is
+// enabled must not bind (otherwise a session could bind and then have its
+// runs 403'd at the sandbox gate: the inconsistent window).
+func TestBindingRequiresEnabledSandbox(t *testing.T) {
+	proxy := newFakeBindingsProxy(t)
+	s, _, _, srv := newSandboxPlaneServer(t, sandboxPlaneOpts{
+		endpoint:       proxy.urlStr,
+		sandboxEnabled: func() bool { return false },
+	})
+	resp, sid := postSession(t, srv.URL, "tenant-a", filepath.Join(t.TempDir(), "p"))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create session = %d (the personal path must still work)", resp.StatusCode)
+	}
+	if id := s.sessions.workspaceIDOf(sid); id != "" {
+		t.Fatalf("session bound without an enabled backend: %q", id)
+	}
+	if n := len(proxy.requests()); n != 0 {
+		t.Fatalf("bind attempted %d times without an enabled backend", n)
+	}
+}
+
+// TestVolumeTreeAndPreviewRefuseEscapingSymlinks: the EE workspace tree and
+// preview resolve through an os.Root jail — a symlink inside the volume
+// that points outside is skipped by the tree and refused by the preview
+// (openroot-grade, aligned with /api/filesystem), while a symlink that
+// stays inside the volume keeps resolving.
+func TestVolumeTreeAndPreviewRefuseEscapingSymlinks(t *testing.T) {
+	root := t.TempDir()
+	proxy := newFakeBindingsProxy(t)
+	s, _, _, srv := newSandboxPlaneServer(t, sandboxPlaneOpts{endpoint: proxy.urlStr, workspaceRt: root})
+	_, sid := postSession(t, srv.URL, "tenant-a", filepath.Join(t.TempDir(), "proj"))
+	wsID := s.sessions.workspaceIDOf(sid)
+	volDir := filepath.Join(root, wsID)
+	if err := os.MkdirAll(volDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(volDir, "notes.md"), []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A secret OUTSIDE the volume; two links from inside: one escaping, one
+	// staying inside.
+	outside := filepath.Join(t.TempDir(), "outside-secret.md")
+	if err := os.WriteFile(outside, []byte("host secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(volDir, "escape.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink("notes.md", filepath.Join(volDir, "inside.md")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	get := func(url string) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		req.Header.Set("Authorization", "bearer tenant-a")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	// Tree: the escaping link is skipped, the internal one resolves.
+	resp := get(srv.URL + "/api/workspace?session=" + sid)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("workspace tree = %d", resp.StatusCode)
+	}
+	var tree struct {
+		Children []struct {
+			Name    string `json:"name"`
+			Content string `json:"content"`
+		} `json:"children"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&tree)
+	resp.Body.Close()
+	listed := map[string]string{}
+	for _, c := range tree.Children {
+		listed[c.Name] = c.Content
+	}
+	if _, ok := listed["escape.md"]; ok {
+		t.Fatal("tree lists a symlink escaping the volume")
+	}
+	if _, ok := listed["inside.md"]; !ok {
+		t.Fatalf("internal symlink not resolved: %v", listed)
+	}
+
+	// Preview: the escaping link is refused, the internal one reads through.
+	resp = get(srv.URL + "/api/workspace/file?session=" + sid + "&path=escape.md")
+	var codeText string
+	if resp.StatusCode == http.StatusOK {
+		var node struct {
+			Content string `json:"content"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&node)
+		codeText = node.Content
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusOK || codeText == "host secret" {
+		t.Fatalf("preview served a symlink escaping the volume (status %d)", resp.StatusCode)
+	}
+	resp = get(srv.URL + "/api/workspace/file?session=" + sid + "&path=inside.md")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("internal symlink preview = %d", resp.StatusCode)
+	}
+	var node struct {
+		Content string `json:"content"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&node)
+	if node.Content != "inside" {
+		t.Fatalf("internal symlink content = %q", node.Content)
+	}
 }
 
 // TestCreateSessionBindsWorkspaceIdentity: same tenant + same workspace

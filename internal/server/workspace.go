@@ -3,6 +3,7 @@ package server
 import (
 	"cmp"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -127,6 +128,143 @@ func nodePath(root, p string) string {
 		return filepath.Base(p)
 	}
 	return filepath.ToSlash(rel)
+}
+
+// --- EE volume tree/preview (os.Root jail) ---
+//
+// The personal-edition walk above trusts the local user's filesystem:
+// lexical paths, symlinks followed freely. Under the sandbox plane the
+// workspace lives in the executor volume and the client is a remote
+// tenant, so every resolution goes through an os.Root opened on the
+// workspace directory — the same openat-grade containment the fsb folder
+// browser uses (/api/filesystem): a symlink leading out of the workspace
+// is refused by the jail, never by a string prefix.
+
+// buildVolumeTree walks the workspace opened as root into the same bounded
+// tree shape as buildWorkspaceTree. rootName is the resolved workspace
+// directory's base (the root node's name/path).
+func buildVolumeTree(root *os.Root, rootName string) *workspaceNode {
+	return walkVolumeTree(root, ".", rootName, 0)
+}
+
+func walkVolumeTree(root *os.Root, dir, rootName string, depth int) *workspaceNode {
+	info, err := root.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return nil
+	}
+	node := &workspaceNode{
+		Name: volumeNodeName(dir, rootName),
+		Path: volumeNodeName(dir, rootName),
+		Kind: "dir",
+	}
+	if depth >= workspaceMaxDepth {
+		return node
+	}
+	f, err := root.Open(dir)
+	if err != nil {
+		return node
+	}
+	entries, err := f.ReadDir(-1)
+	_ = f.Close()
+	if err != nil {
+		return node
+	}
+	dirRank := func(e os.DirEntry) int {
+		if e.IsDir() {
+			return 0
+		}
+		return 1
+	}
+	slices.SortFunc(entries, func(a, b os.DirEntry) int {
+		return cmp.Or(
+			cmp.Compare(dirRank(a), dirRank(b)),
+			cmp.Compare(a.Name(), b.Name()),
+		)
+	})
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") || workspaceExcluded[name] {
+			continue
+		}
+		if len(node.Children) >= workspaceMaxEntries {
+			break
+		}
+		p := filepath.Join(dir, name)
+		// Stat through the root follows in-volume links but refuses
+		// escapes (and broken links): skip what the jail will not resolve.
+		st, err := root.Stat(p)
+		if err != nil {
+			continue
+		}
+		if st.IsDir() {
+			if child := walkVolumeTree(root, p, rootName, depth+1); child != nil {
+				node.Children = append(node.Children, child)
+			}
+			continue
+		}
+		fn := &workspaceNode{Name: name, Path: filepath.ToSlash(p), Kind: "file"}
+		if markdownExts[strings.ToLower(filepath.Ext(name))] {
+			if b, err := readVolumeFile(root, p, workspaceMaxContent); err == nil && len(b) <= workspaceMaxContent {
+				fn.Content = string(b)
+			}
+		}
+		node.Children = append(node.Children, fn)
+	}
+	return node
+}
+
+// volumeNodeName is the display name of a root-relative directory ("."
+// maps to the workspace's base name).
+func volumeNodeName(dir, rootName string) string {
+	if dir == "." {
+		return rootName
+	}
+	return filepath.Base(dir)
+}
+
+// readVolumeFile reads one root-relative file through the jail, bounded at
+// max bytes (max+1 read so an oversized file is detectable by length).
+func readVolumeFile(root *os.Root, rel string, max int64) ([]byte, error) {
+	f, err := root.Open(rel)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, max+1))
+}
+
+// readVolumeWorkspaceFile is the EE preview: one file (relative to the
+// workspace) loaded through the os.Root jail — traversal and escaping
+// symlinks fail as not-found (no path oracle), the type/size/UTF-8 rules
+// match the personal path.
+func readVolumeWorkspaceFile(root *os.Root, rel string) (*workspaceNode, error) {
+	if strings.TrimSpace(rel) == "" {
+		return nil, errNotFound
+	}
+	p := filepath.FromSlash(rel)
+	info, err := root.Stat(p)
+	if err != nil || info.IsDir() {
+		return nil, errNotFound
+	}
+	if !isPreviewable(info.Name()) {
+		return nil, errNotPreviewable
+	}
+	if info.Size() > workspaceMaxFilePreview {
+		return nil, errFileTooLarge
+	}
+	b, err := readVolumeFile(root, p, workspaceMaxFilePreview)
+	if err != nil || len(b) > workspaceMaxFilePreview {
+		return nil, errNotFound
+	}
+	if !utf8.Valid(b) {
+		return nil, errNotPreviewable
+	}
+	return &workspaceNode{
+		Name:    info.Name(),
+		Path:    filepath.ToSlash(rel),
+		Kind:    "file",
+		Content: string(b),
+	}, nil
 }
 
 // previewableExts are extensions the right-sidebar preview will render (with
