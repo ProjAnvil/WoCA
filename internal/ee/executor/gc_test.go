@@ -6,9 +6,11 @@ package executor
 // touching live workspaces or fresh staging dirs.
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -236,6 +238,89 @@ func TestCollectorRecoversInterruptedSwap(t *testing.T) {
 	}
 }
 
+// The double-crash: an older swap whose prev cleanup died, then a newer
+// swap crashing between its renames. The lexically-first prev is the
+// STALE one; recovery must restore the newest-mtime prev (the tree the
+// workspace actually had) and clean the older sibling, never the other
+// way around.
+func TestCollectorRecoversNewestPrev(t *testing.T) {
+	root := t.TempDir()
+	store := NewWorkspaceStore(root, 1<<20)
+
+	stale := filepath.Join(root, "ws9.staging-001.prev")  // the older crash's residue
+	latest := filepath.Join(root, "ws9.staging-002.prev") // the interrupted swap's set-aside tree
+	staging := filepath.Join(root, "ws9.staging-003")     // the newer swap's never-installed tree
+	for _, p := range []string{stale, latest, staging} {
+		mkdir(t, p)
+	}
+	if err := os.WriteFile(filepath.Join(stale, "gen"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(latest, "gen"), []byte("latest"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setAge(t, stale, -3*time.Hour)
+	setAge(t, latest, -2*time.Hour)
+	setAge(t, staging, -2*time.Hour)
+
+	c := NewCollector(CollectorConfig{Store: store, Logger: zerolog.Nop()})
+	if _, err := c.SweepStaging(time.Now()); err != nil {
+		t.Fatalf("SweepStaging: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(root, "ws9", "gen"))
+	if err != nil || string(b) != "latest" {
+		t.Fatalf("recovered the wrong generation: content = (%q, %v), want %q", b, err, "latest")
+	}
+	for _, gone := range []string{stale, latest, staging} {
+		if _, err := os.Lstat(gone); !os.IsNotExist(err) {
+			t.Fatalf("%s survived the recovery sweep", gone)
+		}
+	}
+}
+
+// Two prev siblings with indistinguishable mtimes cannot be ordered:
+// the sweep refuses the recovery (WARNs for manual intervention) rather
+// than guessing a generation. Staged trees are still cleaned — they are
+// never-installed residue regardless.
+func TestCollectorRefusesAmbiguousRecovery(t *testing.T) {
+	root := t.TempDir()
+	store := NewWorkspaceStore(root, 1<<20)
+
+	a := filepath.Join(root, "wsA.staging-001.prev")
+	b := filepath.Join(root, "wsA.staging-002.prev")
+	staging := filepath.Join(root, "wsA.staging-003")
+	for _, p := range []string{a, b, staging} {
+		mkdir(t, p)
+	}
+	same := time.Now().Add(-2 * time.Hour)
+	for _, p := range []string{a, b, staging} {
+		if err := os.Chtimes(p, same, same); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var buf bytes.Buffer
+	c := NewCollector(CollectorConfig{Store: store, Logger: zerolog.New(&buf)})
+	removed, err := c.SweepStaging(time.Now())
+	if err != nil {
+		t.Fatalf("SweepStaging: %v", err)
+	}
+	if removed != 1 { // only the never-installed staged tree
+		t.Fatalf("removed = %d, want 1 (only the staging dir)", removed)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "wsA")); !os.IsNotExist(err) {
+		t.Fatal("ambiguous recovery created a workspace anyway")
+	}
+	for _, keep := range []string{a, b} {
+		if _, err := os.Lstat(keep); err != nil {
+			t.Fatalf("ambiguous prev %s was swept", keep)
+		}
+	}
+	if !strings.Contains(buf.String(), "recovery ambiguous") {
+		t.Fatalf("no ambiguity warning logged: %s", buf.String())
+	}
+}
+
 // The live swap window — fresh staging + prev + no workspace — has the
 // same shape as the crash-between state, so the sweep defers until the
 // age fence distinguishes them.
@@ -300,6 +385,16 @@ func TestStagingWorkspaceID(t *testing.T) {
 func mkdir(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setAge stamps a path's times to now+delta (the sweep's age fence and
+// the newest-prev ordering both read mtimes).
+func setAge(t *testing.T, path string, delta time.Duration) {
+	t.Helper()
+	when := time.Now().Add(delta)
+	if err := os.Chtimes(path, when, when); err != nil {
 		t.Fatal(err)
 	}
 }

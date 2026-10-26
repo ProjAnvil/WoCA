@@ -314,6 +314,11 @@ any other version is refused outright instead of half-applying.
   watermark (default 85%, `WOCA_PATROL_DISK_PCT` to tune) or a single
   workspace directory outgrows `sandbox-archive-max-bytes`. Alarms only
   — enforcement stays with the archive cap and container teardown.
+- **Executor hosts are Linux-only**: the role's workspace locking
+  (flock) and disk patrol sit on unix syscalls, and its runtime contract
+  is the docker socket. The windows cross-build is a compile-time
+  refusal (locking answers "requires a unix host"), not a supported
+  target — deploy executors on Linux hosts.
 
 Reference e2e: `make sandboxlab` (e2e/sandboxlab) drives this whole
 chain against the containerized fakesandbox, including the 403/503

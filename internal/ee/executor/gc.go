@@ -249,14 +249,29 @@ func (c *Collector) SweepStaging(now time.Time) (removed int, err error) {
 			// The live swap window's shape — leave everything; the next
 			// pass decides once the fence has passed.
 		case len(a.prev) > 0 && !wsExists:
-			// Crash between the renames: prev is the tree's only copy.
-			// Restore it; the rest is cleanup.
-			if err := os.Rename(filepath.Join(root, a.prev[0]), ws); err != nil {
+			// Crash between the renames: one prev holds the tree's only
+			// copy — the NEWEST one. Two crashes can stack (a swap whose
+			// prev cleanup died, then a later swap crashing mid-window):
+			// the older prev is stale residue, and ReadDir's lexical
+			// order would happily restore it while deleting the
+			// authoritative sibling. A prev dir's mtime tracks its
+			// tree's last content change (extraction stamps now), so the
+			// newest mtime is the surviving tree; a tie is
+			// indeterminable — refuse rather than guess a generation.
+			newest, tie := newestPrev(root, a.prev)
+			if tie || newest < 0 {
+				c.log.Warn().Str("workspace", id).Strs("prev", a.prev).
+					Msg("gc: crashed swap recovery ambiguous (no determinable newest prev); left for manual recovery (staged trees were still cleaned)")
+				removed += c.removeStaging(root, a.staging, now)
+				continue
+			}
+			if err := os.Rename(filepath.Join(root, a.prev[newest]), ws); err != nil {
 				c.log.Warn().Err(err).Str("workspace", id).Msg("gc: crashed swap recovery failed (next pass retries)")
 				continue
 			}
 			c.log.Info().Str("workspace", id).Msg("gc: restored workspace from an interrupted sync's set-aside tree")
-			removed += c.removeStaging(root, append(a.staging, a.prev[1:]...), now)
+			rest := append(a.prev[:newest:newest], a.prev[newest+1:]...)
+			removed += c.removeStaging(root, append(a.staging, rest...), now)
 		default:
 			// Healthy workspace (or none): every artifact is a leftover.
 			removed += c.removeStaging(root, append(a.staging, a.prev...), now)
@@ -291,6 +306,28 @@ func (c *Collector) removeStaging(root string, names []string, now time.Time) in
 		c.log.Info().Str("path", p).Msg("gc: removed crashed sync artifact")
 	}
 	return removed
+}
+
+// newestPrev returns the index into prevs of the sibling with the
+// newest mtime, and whether the two newest are indistinguishable (a
+// tie — the caller must refuse the recovery rather than guess). -1
+// (with tie=false) when nothing could be stat'd.
+func newestPrev(root string, prevs []string) (best int, tie bool) {
+	best = -1
+	var bestMod time.Time
+	for i, name := range prevs {
+		info, err := os.Lstat(filepath.Join(root, name))
+		if err != nil {
+			continue // vanished mid-sweep
+		}
+		switch {
+		case info.ModTime().After(bestMod):
+			best, bestMod, tie = i, info.ModTime(), false
+		case info.ModTime().Equal(bestMod):
+			tie = true // matches the current best: the top is ambiguous
+		}
+	}
+	return best, tie
 }
 
 // stagingWorkspaceID reports whether name is a Sync artifact under the
