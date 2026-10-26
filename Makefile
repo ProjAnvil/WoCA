@@ -368,6 +368,17 @@ sandboxlab:
 	done
 	go test -tags sandboxlab -count=1 -timeout 25m -run 'TestSandboxLab' -v ./e2e/sandboxlab
 
+# ─────────── executor-dockerlab: docker 驱动冒烟（internal/ee/executor） ──────
+# The EE sandbox plane's real Docker driver (docker_backend.go) lives behind
+# the dockerlab build tag, so plain `go test ./...` needs no daemon. This
+# target runs its smoke test against the local docker engine: create a
+# hardened alpine container → exec variants → stdin → timeout kill ladder →
+# CopyIn/CopyOut round-trip → Start/Kill → remove. DOCKER_HOST is honored
+# for OrbStack-style sockets; without a reachable daemon the test skips.
+.PHONY: executor-dockerlab-test
+executor-dockerlab-test:
+	go test -tags dockerlab -count=1 -timeout 10m -run 'DockerLab' -v ./internal/ee/executor
+
 # ─────────── complab: component integration tests (e2e/complab) ───────────
 # Unlike netlab / sandboxlab there is no docker topology here: woca is
 # assembled in-process the way production wires it, each component is checked
