@@ -3,6 +3,15 @@
 // every executor surface once, record the outcome on the row, and destroy
 // the sandbox. A failing step aborts the run; the probe's response never
 // contains the stored key.
+//
+// contract-http backends are probed through their routing proxy (spec
+// §3.2): the endpoint of such a row IS the executor-proxy, and a probe
+// that bypassed it would verify a path tenants never use. The probe first
+// binds its stable workspace (source key verify:<backend-id>) via POST
+// {endpoint}/internal/bindings, then runs the whole contract path —
+// create→exec→…→destroy — workspace-routed exactly like a tenant session.
+// The binding is deliberately never released: repeated probes of one
+// backend reuse one workspace instead of accumulating garbage.
 package configsvc
 
 import (
@@ -10,6 +19,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,6 +35,68 @@ import (
 // verifyStepMax bounds each probe step; the row's timeout can only lower
 // it further.
 const verifyStepMax = 30 * time.Second
+
+// verifyBindClient / verifyBindBodyLimit bound the allocate-or-bind call.
+// Generic errors only (the endpoint's URL never crosses to the console
+// response); the proxy's own refusal reasons pass through.
+var (
+	verifyBindClient   = &http.Client{Timeout: 10 * time.Second}
+	errVerifyBindUnrep = errors.New("verify workspace binding unavailable")
+	errVerifyBindBad   = errors.New("verify workspace binding response malformed")
+)
+
+const verifyBindBodyLimit = 4 << 10
+
+// verifySourceKey is the probe's allocate-or-bind key: one stable
+// workspace per backend row.
+func verifySourceKey(backendID string) string { return "verify:" + backendID }
+
+// verifyWorkspace binds (or rebinds) the probe's workspace through the
+// backend's routing proxy. Fail-closed: a probe that cannot obtain a
+// workspace does not fall back to an unrouted direct connection — the
+// endpoint is the proxy, and an unrouted create would be refused there
+// anyway.
+func (s *Service) verifyWorkspace(ctx context.Context, row sandboxPayload) (string, error) {
+	body, err := json.Marshal(map[string]string{"tenant_id": "console", "source_key": verifySourceKey(row.ID)})
+	if err != nil {
+		return "", errVerifyBindBad
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, row.Endpoint+"/internal/bindings", bytes.NewReader(body))
+	if err != nil {
+		s.log.Warn().Err(err).Str("backend_id", row.ID).Msg("sandbox verification: binding request build failed")
+		return "", errVerifyBindUnrep
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := verifyBindClient.Do(req)
+	if err != nil {
+		s.log.Warn().Err(err).Str("backend_id", row.ID).Msg("sandbox verification: binding call failed")
+		return "", errVerifyBindUnrep
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var errOut struct {
+			Error string `json:"error"`
+		}
+		reason := ""
+		if json.NewDecoder(io.LimitReader(resp.Body, verifyBindBodyLimit)).Decode(&errOut) == nil && errOut.Error != "" {
+			reason = errOut.Error
+		}
+		if reason == "" {
+			reason = fmt.Sprintf("status %d", resp.StatusCode)
+		}
+		s.log.Warn().Str("backend_id", row.ID).Str("reason", reason).Int("status", resp.StatusCode).
+			Msg("sandbox verification: workspace binding refused")
+		return "", fmt.Errorf("verify workspace binding refused: %s", reason)
+	}
+	var out struct {
+		WorkspaceID string `json:"workspace_id"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, verifyBindBodyLimit)).Decode(&out); err != nil || out.WorkspaceID == "" {
+		s.log.Warn().Err(err).Str("backend_id", row.ID).Msg("sandbox verification: binding response undecodable")
+		return "", errVerifyBindBad
+	}
+	return out.WorkspaceID, nil
+}
 
 // archiver is the optional archive surface of the contract family
 // (*executor.Sandbox and the cfbridge provider implement it); providers
@@ -54,13 +127,30 @@ func (s *Service) handleVerifySandbox(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	steps := []verifyStep{}
 
-	// Step 1 — provision: providers.New covers the create step (the
-	// constructor creates the sandbox); type dispatch happens inside.
+	// Step 1 — routing identity + provision. contract-http endpoints are
+	// the executor-proxy: bind the probe's stable verify workspace first,
+	// then construct the provider workspace-routed so the whole probe
+	// rides the same path a tenant session does. Every other type keeps
+	// the direct construction (cfbridge's endpoint is not
+	// workspace-routed; the not-yet-registered enums fail in New below).
+	workspace := ""
+	if row.Type == "contract-http" && row.Endpoint != "" {
+		ws, err := s.verifyWorkspace(r.Context(), row)
+		if err != nil {
+			steps = append(steps, verifyStep{Name: "create", Error: err.Error()})
+			s.finishVerify(w, r, id, row, false, err.Error(), start, steps)
+			return
+		}
+		workspace = ws
+	}
+	// providers.New covers the create step (the constructor creates the
+	// sandbox); type dispatch happens inside.
 	x, err := providers.New(providers.Config{
-		Type:     row.Type,
-		Endpoint: row.Endpoint,
-		APIKey:   s.settings.GetSecret(sandboxKeySecret(id)),
-		Timeout:  time.Duration(row.TimeoutMs) * time.Millisecond,
+		Type:      row.Type,
+		Endpoint:  row.Endpoint,
+		APIKey:    s.settings.GetSecret(sandboxKeySecret(id)),
+		Timeout:   time.Duration(row.TimeoutMs) * time.Millisecond,
+		Workspace: workspace,
 	})
 	if err != nil {
 		steps = append(steps, verifyStep{Name: "create", Error: err.Error()})

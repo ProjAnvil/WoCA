@@ -48,6 +48,11 @@ const (
 	// LabelSandbox marks a container as a woca sandbox ("1"); the GC and
 	// the internal listing filter on it.
 	LabelSandbox = "woca.sandbox"
+	// LabelExecutor is the stable executor identity that created the
+	// container ("executor-<host>"): the startup sweep and the labeled GC
+	// collect this executor's leftovers with it, and only this executor's
+	// (a shared daemon's other executors are never touched).
+	LabelExecutor = "woca.executor"
 	// LabelRun is the owning run's id, when known.
 	LabelRun = "woca.run"
 	// LabelWorkspace is the workspace the sandbox is routed under.
@@ -82,9 +87,11 @@ type ServiceConfig struct {
 	// "no options" and leaves the fields to the backend's judgment.
 	Options func() nacosrt.BackendOptions
 	// Labels returns the container labels for a sandbox created under the
-	// given identity — the workspace/run id the executor knows at create
-	// time. The service passes the map through into CreateSpec.Labels.
-	Labels func(runID string) map[string]string
+	// given workspace id (empty when the sandbox is not workspace-routed —
+	// the run id, when one exists, is the caller's concern and rides the
+	// workspace identity, not this hook). The service passes the map
+	// through into CreateSpec.Labels.
+	Labels func(workspaceID string) map[string]string
 	// ActiveRuns is a passive hook reporting the executor-side run count
 	// for the ack heartbeat's Load figure (design §10.1); a nil hook means
 	// the heartbeat reports 0. It is deliberately NOT consulted for
