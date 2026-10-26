@@ -1,5 +1,8 @@
 # OpenShell 作为 woca EE 默认沙箱：持久工作区闭环设计
 
+> **已作废（2026-10-26）。** 选型结论改为自建轻量沙箱后端，角色划分、存储模型与配置面全部重写。
+> 现行设计见 `2026-10-26-woca-ee-sandbox-plane-design.md`。本文保留作为调研记录。
+
 日期：2026-10-24
 状态：设计主线已确认，待编写实施计划
 前置资料：`docs/openshell-compose-research.md`、`sandbox-lifecycle-routing-research.md`
