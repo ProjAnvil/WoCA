@@ -199,6 +199,23 @@ client 侧要改一处：`internal/platform/executor/sandbox.go` 的 `create` �
 
 ## 5. executor 侧实现
 
+### 5.0 宿主、executor 与沙箱的关系
+
+```text
+宿主：跑 container runtime 的机器（物理机 / 云主机 / VM）
+  └─ container runtime：runc / runsc / kata。隔离强度由它决定
+       ├─ executor 容器：woca 角色。建容器、exec 命令、管工作区
+       └─ 沙箱容器：用户代码进程
+```
+
+三点要分清：
+
+1. executor 不是虚拟化宿主。它是一个普通容器，和沙箱容器是兄弟。
+2. 隔离由 container runtime 提供，不由 executor 提供。换 runtime 就换隔离强度。
+3. executor 持有 runtime 的全量 API 权限，比沙箱更靠近信任边界。所以它所在的节点必须完全受信。
+
+Kata 模式下沙箱会多一层轻量虚拟机。首期不做。
+
 ### 5.1 容器
 
 executor 用 container runtime 的 API 管理容器：
