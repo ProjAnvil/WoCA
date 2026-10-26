@@ -1,0 +1,11 @@
+# woca-sandbox-base:demo — the sandbox image the demo backend starts
+# from (tag built by `make ent-sandbox-demo`). Requirements imposed by
+# the executor's docker driver and the tool surface:
+#   - tar + sh   — CopyIn/CopyOut ride exec'd tar streams (busybox tar
+#                  qualifies; Task 7 hard dependency);
+#   - python3    — the scripted model's round-one unittest + egress
+#                  probe run in python;
+#   - bash       — the Bash tool execs argv ["bash","-c",...]; alpine
+#                  ships no bash, so it is added explicitly.
+FROM python:3.12-alpine
+RUN apk add --no-cache bash

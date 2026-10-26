@@ -1,0 +1,8 @@
+# woca-sandbox-marker:demo — the hot-reload marker image (spec §12.3):
+# identical to the demo base plus /marker, so the L3 assertion can tell
+# which image a sandbox was created from (the marker round copies
+# /marker into the workspace; a base-image sandbox has no such file).
+# Self-contained on purpose: compose/make build order must not make
+# this image depend on woca-sandbox-base:demo existing first.
+FROM python:3.12-alpine
+RUN apk add --no-cache bash && echo "woca-demo-marker-ok" > /marker

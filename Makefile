@@ -217,6 +217,96 @@ ent-full-down:
 	docker run --rm --privileged --pid=host alpine:3.22 nsenter -t 1 -m -n -- \
 		sh -c 'iptables -D DOCKER-USER -j WOCA-ENT-ISOLATION 2>/dev/null; iptables -F WOCA-ENT-ISOLATION 2>/dev/null; iptables -X WOCA-ENT-ISOLATION 2>/dev/null; echo woca-enterprise: isolation rules removed'
 
+# ─────────── ent-sandbox-demo: EE sandbox plane acceptance (spec §12) ───────────
+# Drives the full stack's demo profile through the four-phase startup
+# (design §11.2) and asserts all four acceptance levels; the sandbox-demo
+# container's exit code is the verdict:
+#
+#   1. base plane: pg, nacos, nacos-init, woca-config, woca-scheduler,
+#      executor-proxy, fakemodel (config comes up BEFORE the executor, so
+#      its boot arms the backend's API key);
+#   2. config plane: sandbox-init writes the model settings + the
+#      contract-http backend (endpoint executor-proxy) and enables it;
+#   3. execution plane: woca-executor (registers with nacos, declares the
+#      sandbox capability);
+#   4. acceptance: sandbox-demo (L1 scripted model → product + reclaim,
+#      L2 cross-run continuity/fresh container/mutex, L3 hot options,
+#      L4 isolation/403/egress/no leftovers).
+#
+# The stack is hermetic per run (down -v teardown) and needs no .env —
+# the compose file's required variables get demo defaults here. The
+# sandbox images (bash+python+tar base, marker variant) build from
+# e2e/sandboxlab/demo. Requires a linux-container docker engine
+# (OrbStack: hardening runs minimal, spec §11.3). ENT_SANDBOX_DEMO_KEEP=1
+# keeps a failing stack up for troubleshooting.
+ENT_DEMO_COMPOSE = docker compose -f deploy/selfhosted/docker-compose.full.yml --profile demo
+ENT_DEMO_ENV = WOCA_PG_PASSWORD=woca-demo-pg \
+	WOCA_PG_REPL_PASSWORD=woca-demo-repl \
+	LADYM_PG_PASSWORD=woca-demo-ladym \
+	LANGFUSE_PG_PASSWORD=woca-demo-lf-pg \
+	LANGFUSE_CLICKHOUSE_PASSWORD=woca-demo-lf-ch \
+	LANGFUSE_REDIS_AUTH=woca-demo-lf-redis \
+	LANGFUSE_MINIO_ROOT_PASSWORD=woca-demo-lf-minio \
+	LANGFUSE_SALT=woca-demo-lf-salt \
+	LANGFUSE_ENCRYPTION_KEY=woca-demo-lf-enc \
+	LANGFUSE_NEXTAUTH_SECRET=woca-demo-lf-na
+ENT_DEMO_ROLES := woca-scheduler woca-config executor-proxy
+
+.PHONY: ent-sandbox-demo
+ent-sandbox-demo:
+	@for r in $(ENT_DEMO_ROLES); do \
+		GOOS=linux $(MAKE) --no-print-directory dist-role ROLE=$$r || exit 1; \
+	done
+	# The executor role package always carries the docker driver: without
+	# -tags dockerlab the binary refuses to start (fail-closed no-backend).
+	GOOS=linux $(MAKE) --no-print-directory dist-role ROLE=woca-executor || exit 1
+	docker build -q -t woca-sandbox-base:demo \
+		-f e2e/sandboxlab/demo/Dockerfile.sandbox-base e2e/sandboxlab/demo || exit 1
+	docker build -q -t woca-sandbox-marker:demo \
+		-f e2e/sandboxlab/demo/Dockerfile.sandbox-marker e2e/sandboxlab/demo || exit 1
+	# Hermetic start: drop any previous project state (volumes included).
+	-$(ENT_DEMO_ENV) $(ENT_DEMO_COMPOSE) down -v --remove-orphans --timeout 20
+	# Phase 1 — base plane without the executor (config first: the
+	# executor's boot resolves the enabled backend + its API key).
+	$(ENT_DEMO_ENV) $(ENT_DEMO_COMPOSE) up -d --build \
+		woca-pg-primary nacos nacos-init woca-config woca-scheduler-1 \
+		executor-proxy fakemodel || exit 1
+	# Phase 2 — config plane (model settings + backend, enabled).
+	$(ENT_DEMO_ENV) $(ENT_DEMO_COMPOSE) run --rm sandbox-init || exit 1
+	# Phase 3 — execution plane. Record the roles' boot state: the L3
+	# hot-reload assertion requires NO restarts across the options change.
+	$(ENT_DEMO_ENV) $(ENT_DEMO_COMPOSE) up -d --build woca-executor || exit 1
+	@state0=$$(docker inspect -f '{{.Name}} {{.State.StartedAt}} restarts={{.RestartCount}}' \
+		woca-ent-executor woca-ent-server-1 2>/dev/null); \
+	rc=0; \
+	$(ENT_DEMO_ENV) $(ENT_DEMO_COMPOSE) run --rm --build sandbox-demo || rc=$$?; \
+	state1=$$(docker inspect -f '{{.Name}} {{.State.StartedAt}} restarts={{.RestartCount}}' \
+		woca-ent-executor woca-ent-server-1 2>/dev/null); \
+	if [ $$rc -eq 0 ] && [ "$$state0" != "$$state1" ]; then \
+		echo "ent-sandbox-demo: executor/scheduler restarted during the demo (L3 requires no restarts)"; \
+		echo "  before: $$state0"; echo "  after:  $$state1"; \
+		rc=1; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		if docker logs woca-ent-server-1 2>&1 | grep -q 'falling back to client-side archives'; then \
+			echo "ent-sandbox-demo: scheduler logged a local archive fallback (no-local-fallback violated)"; \
+			rc=1; \
+		fi; \
+	fi; \
+	if [ $$rc -eq 0 ]; then echo "ent-sandbox-demo: ALL LEVELS GREEN"; \
+	else echo "ent-sandbox-demo: FAILED (rc=$$rc)"; fi; \
+	if [ "$$(docker ps -q --filter label=woca.sandbox=1 | wc -l | tr -d ' ')" != "0" ]; then \
+		echo "ent-sandbox-demo: leftover sandbox containers:"; \
+		docker ps --filter label=woca.sandbox=1; \
+		docker ps -q --filter label=woca.sandbox=1 | xargs docker rm -f >/dev/null 2>&1 || true; \
+	fi; \
+	if [ "$$ENT_SANDBOX_DEMO_KEEP" = "1" ]; then \
+		echo "ENT_SANDBOX_DEMO_KEEP=1 — stack left running for troubleshooting"; \
+	else \
+		$(ENT_DEMO_ENV) $(ENT_DEMO_COMPOSE) down -v --remove-orphans --timeout 20 >/dev/null 2>&1 || true; \
+	fi; \
+	exit $$rc
+
 # Observability overlay (design §12.3): OTel Collector + Prometheus +
 # Alertmanager + Grafana + Jaeger onto the full stack. Requires the full
 # stack to be up (ent-full-up).
@@ -403,8 +493,9 @@ complab-offline:
 
 # Server-side artifacts (design §5.1/Phase 3 T9): no TUI/REPL/CLI surfaces.
 # woca-edge joins the set with the v1.5 topology split (stateless public
-# entry; still a role artifact — thin, no interactive surfaces).
-SERVER_ARTIFACTS := woca-scheduler woca-tenant woca-worker woca-config woca-bridge woca-edge woca-ops
+# entry; still a role artifact — thin, no interactive surfaces). The EE
+# sandbox plane adds woca-executor + executor-proxy (sandbox-plane task 17).
+SERVER_ARTIFACTS := woca-scheduler woca-tenant woca-worker woca-config woca-bridge woca-edge woca-ops woca-executor executor-proxy
 
 .PHONY: build-server check-server-artifacts check-editions
 build-server:
@@ -453,14 +544,21 @@ dist-images: dist-linux
 		echo "image: $$r:local"; \
 	done
 
+# ROLE_BUILD_TAGS: per-role default build tags for dist packages. The
+# executor's docker driver lives behind -tags dockerlab (plain builds
+# refuse to start — fail-closed no-backend), and a shipped executor
+# package without it would be dead weight; override with GO_BUILDTAGS.
 dist-role:
 	@test -n "$(ROLE)" || { echo "usage: make dist-role ROLE=woca-ops (or just: make woca-ops)"; exit 2; }
 	@test -d cmd/$(ROLE) || { echo "unknown role $(ROLE): no cmd/$(ROLE)"; exit 2; }
-	@stage="build/dist/.stage-$(ROLE)"; out="build/dist/$(ROLE)-$(VERSION)-$(DIST_GOOS)-$(DIST_GOARCH)"; \
+	@tags="$(GO_BUILDTAGS)"; \
+	if [ -z "$$tags" ] && [ "$(ROLE)" = "woca-executor" ]; then tags=dockerlab; fi; \
+	if [ -n "$$tags" ]; then tagflags="-tags $$tags"; else tagflags=""; fi; \
+	stage="build/dist/.stage-$(ROLE)"; out="build/dist/$(ROLE)-$(VERSION)-$(DIST_GOOS)-$(DIST_GOARCH)"; \
 	rm -rf "$$stage" "$$out" "$$out.tar.gz"; \
 	mkdir -p "$$stage/$(ROLE)"; \
 	CGO_ENABLED=0 GOOS=$(DIST_GOOS) GOARCH=$(DIST_GOARCH) \
-		go build -trimpath -ldflags "-s -w" -o "$$stage/$(ROLE)/$(ROLE)$(DIST_EXE)" ./cmd/$(ROLE) || exit 1; \
+		go build $$tagflags -trimpath -ldflags "-s -w" -o "$$stage/$(ROLE)/$(ROLE)$(DIST_EXE)" ./cmd/$(ROLE) || exit 1; \
 	if [ "$(DIST_GOOS)" = "windows" ]; then scripts="start.ps1 stop.ps1"; else scripts="start.sh stop.sh"; fi; \
 	for f in $$scripts; do \
 		sed -e "s/@ROLE@/$(ROLE)/g" deploy/micro/$$f.tmpl > "$$stage/$(ROLE)/$$f" || exit 1; \

@@ -196,7 +196,7 @@ func newExecutorRoot() *cobra.Command {
 			// needs only the identity, database and logger.
 			hb := worker.New(worker.Config{DB: db, Logger: log, ID: id})
 			go hb.AckHeartbeat(ctx, 0, executor.AckFunc(
-				id, rt.LastGeneration, params, func() int64 { return int64(svc.ActiveRuns()) },
+				id, "http://"+advertise, rt.LastGeneration, params, func() int64 { return int64(svc.ActiveRuns()) },
 			))
 
 			contractSrv, err := serveContract(ctx, listen, svc)

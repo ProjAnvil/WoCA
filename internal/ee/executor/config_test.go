@@ -136,17 +136,19 @@ func TestParamsSourceRefreshPicksUpPackChange(t *testing.T) {
 }
 
 // TestAckFuncBuildsExecutorAck: the ack body carries Role=executor, the
-// generation, the "sandbox" capability exactly while enabled, and the
-// caller's live load; nil hooks degrade to zero values.
+// generation, the "sandbox" capability exactly while enabled, the
+// caller's live load, and the routable advertise address (the proxy
+// dials ack.Addr — an empty address is unroutable); nil hooks degrade to
+// zero values.
 func TestAckFuncBuildsExecutorAck(t *testing.T) {
 	db := openConfigDB(t)
 	createBackendsTable(t, db)
 	insertBackend(t, db, "sb-1", true, nil)
 	src := NewParamsSource(db)
 
-	ack := AckFunc("exec-1", func() string { return "g7" }, src, func() int64 { return 3 })
+	ack := AckFunc("exec-1", "http://exec-1:8093", func() string { return "g7" }, src, func() int64 { return 3 })
 	if a := ack(); a.ServiceID != "exec-1" || a.Role != "executor" || a.Generation != "g7" ||
-		a.Capabilities != "sandbox" || a.Load != 3 {
+		a.Capabilities != "sandbox" || a.Load != 3 || a.Addr != "http://exec-1:8093" {
 		t.Fatalf("ack = %+v", a)
 	}
 
@@ -156,7 +158,7 @@ func TestAckFuncBuildsExecutorAck(t *testing.T) {
 		t.Fatalf("disabled ack capabilities = %q, want empty", a.Capabilities)
 	}
 
-	if a := AckFunc("exec-2", nil, nil, nil)(); a.Generation != "" || a.Capabilities != "" || a.Load != 0 {
+	if a := AckFunc("exec-2", "", nil, nil, nil)(); a.Generation != "" || a.Capabilities != "" || a.Load != 0 {
 		t.Fatalf("nil-hook ack = %+v, want zeros", a)
 	}
 }
@@ -173,7 +175,7 @@ func TestExecutorAckHeartbeatRow(t *testing.T) {
 
 	w := worker.New(worker.Config{ID: "exec-1", Logger: zerolog.Nop(), DB: db})
 	go w.AckHeartbeat(t.Context(), 10*time.Millisecond,
-		AckFunc("exec-1", func() string { return "g7" }, src, func() int64 { return 5 }))
+		AckFunc("exec-1", "http://exec-1:8093", func() string { return "g7" }, src, func() int64 { return 5 }))
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -183,7 +185,8 @@ func TestExecutorAckHeartbeatRow(t *testing.T) {
 		}
 		for _, a := range acks {
 			if a.ServiceID == "exec-1" && a.Role == "executor" && a.Generation == "g7" &&
-				a.Capabilities == "sandbox" && a.Load == 5 && a.UpdatedAt != 0 {
+				a.Capabilities == "sandbox" && a.Load == 5 && a.UpdatedAt != 0 &&
+				a.Addr == "http://exec-1:8093" {
 				return
 			}
 		}

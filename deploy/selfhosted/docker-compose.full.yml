@@ -26,8 +26,14 @@
 #
 # Roles (§5.1 artifact matrix):
 #   - woca-scheduler  ×2  L1+L2 modular-monolith role (auth, routing, sessions,
-#                      skill-svc; also executes in-process runs)
-#   - woca-worker  ×2  L3 execution role (claims queued runs; probe port 9092)
+#                      skill-svc; also executes queued runs in-process through
+#                      the EE sandbox plane)
+#   - woca-executor ×1  EE sandbox host (contract v2 over the host runtime;
+#                      probe port 9094, data plane 8093, §11.1)
+#   - executor-proxy ×1 stateless workspace router (8094; bindings + liveness
+#                      in PG)
+#   - woca-worker  ×2  legacy L3 execution role — NOT in the EE startup set
+#                      (profiles legacy-worker)
 #   - woca-tenant  ×1  admin toolbox (`docker exec` for tenant/key commands)
 #   - gateway      ×1  nginx: TLS-less edge proxy, the only published ports
 #                      (incl. :3000 = the Langfuse ops UI, reverse-proxied
@@ -295,8 +301,16 @@ services:
         publish woca-edge.service "http://woca-scheduler-1:8090"
         publish woca-edge.config "http://woca-config:8086"
         # The empty bootstrap config pack: roles refuse to start without
-        # a deliverable pack, so it exists before any console write.
-        publish woca-config.pack '{"version":2,"generation":"","settings":{}}'
+        # a deliverable pack, so it exists before any console write. The
+        # settings object must be BYTE-stable under the roles'
+        # DecodePack→Encode round trip (the watcher fingerprints the
+        # re-encoded pack; a handwritten {"settings":{}} never matches,
+        # so every role would re-apply on every long-poll return — and
+        # each apply of a sandbox-less pack wipes sandbox_backends, the
+        # full-manifest semantics, racing the config plane's enable
+        # window). This exact JSON is the canonical re-encoding
+        # (nacosrt.DecodePack+Encode; same string sandboxlab pins).
+        publish woca-config.pack '{"version":2,"generation":"","settings":{"provider":"","model":"","max_tokens":0,"temperature":0,"thinking_budget":0,"anthropic_base_url":"","openai_base_url":"","glm_base_url":"","deepseek_base_url":"","checkpoint_backend":"","memory_backend":"","checkpoint_dir":"","output_style":"","memory_engine":"","ladym_db_path":"","ladym_embedding":"","ladym_embedding_model":"","ladym_embedding_base_url":"","ladym_llm":"","ladym_autoretain":false,"ladym_topk":0,"ladym_system2":false,"ladym_system2_interval":0,"ladym_endpoint":"","ladym_api_username":"","debug_log":false,"model_whitelist":"","relay_url":"","msg_plane_mode":"","msg_plane_nats_url":"","msg_plane_subject":"","checkpoint_pg_host":"","checkpoint_pg_port":"","checkpoint_pg_db":"","checkpoint_pg_user":"","memory_pg_host":"","memory_pg_port":"","memory_pg_db":"","memory_pg_user":"","claude_skills":null,"claude_mcp":null,"builtin_plugins":null,"builtin_skills":null,"langfuse_enabled":false,"langfuse_base_url":"","langfuse_public_key":"","sandbox_archive_max_bytes":0,"search_providers":null,"search_searxng_endpoint":"","search_custom_endpoint":"","search_allowed_domains":null,"search_denied_domains":null}}'
         echo "nacos service addresses ready"
     restart: "no"
     networks:
@@ -430,12 +444,18 @@ services:
       WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
       WOCA_NACOS_URL: "http://nacos:8848"
       WOCA_AUTH: apikey
-      # Phase 3 wiring: runs are enqueued for the workers (the PG queue is
-      # the message plane until traffic needs NATS, design §5.4) and session
-      # transcripts live on a volume shared with the workers.
+      # Phase 3 wiring: runs are enqueued on the PG queue (the message
+      # plane until traffic needs NATS, design §5.4). EE sandbox plane:
+      # the scheduler's embedded loop claims them itself (the standalone
+      # workers stay out of the EE stack — profiles legacy-worker) and
+      # executes every tool call through executor-proxy → woca-executor.
       WOCA_RUN_DISPATCH: "queue"
       WOCA_RUNS_OFF_HOST: "true"
       WOCA_SESSION_DIR: "/var/lib/woca/sessions"
+      # The shared executor volume: workspace identities resolve to
+      # <root>/<id> here (never a host path), same mount point as the
+      # executor's --workspace-root.
+      WOCA_WORKSPACE_ROOT: "/data/workspaces"
       # One secrets master key for every role (WOCA_HOME → shared volume):
       # secrets written by the config plane must decrypt in the roles.
       # ladyM wiring is operator-owned settings now (config console,
@@ -455,6 +475,13 @@ services:
     volumes:
       - woca-sessions:/var/lib/woca/sessions
       - woca-crypto:/var/lib/woca/home
+      # The executor workspace volume (EE sandbox plane, §11.1): the
+      # scheduler binds tenants onto it and reads products back from it.
+      - woca-workspaces:/data/workspaces
+      # Off-host runs have no human answer loop: the allow ruleset for
+      # unattended tool execution (demo posture — operators scope it per
+      # deployment; sandboxed execution is the containment boundary).
+      - ./demo/scheduler-settings.json:/opt/woca/.woca/settings.json:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
       interval: 10s
@@ -514,9 +541,14 @@ services:
       - woca-mgmt
       - woca-app
 
+  # The standalone worker role left the EE startup set (design §11.1):
+  # the scheduler's embedded loop claims runs, and sandbox execution
+  # lives on woca-executor. The definition stays for the personal /
+  # transition stacks — `--profile legacy-worker` brings it back.
   woca-worker-1: &woca-worker
     image: woca-worker:local
     container_name: woca-ent-worker-1
+    profiles: ["legacy-worker"]
     build:
       context: ../../build/dist
       dockerfile: Dockerfile
@@ -561,9 +593,105 @@ services:
   woca-worker-2:
     <<: *woca-worker
     container_name: woca-ent-worker-2
+    profiles: ["legacy-worker"]
     environment:
       <<: *woca-worker-env
       WOCA_SERVICE_NAME: woca-worker-2
+
+  # ───────────── EE sandbox execution plane (design §11.1) ─────────────
+  # The contract v2 sandbox host: workspace directories on the shared
+  # woca-workspaces volume (same mount point as the schedulers), sandbox
+  # containers on the host runtime through the docker socket. The
+  # identity is executor-<hostname> and must survive restarts (workspace
+  # bindings pin it), hence the pinned hostname + advertise. The boot
+  # order (config plane's backend exists first) is driven by
+  # `make ent-sandbox-demo`, not a depends_on — but the executor's
+  # INITIAL pack fetch can still race the registry's settle and boot
+  # before the enabled row reaches it: it then serves unauthenticated
+  # (a loud WARN, functional on the trusted-network boundary) and arms
+  # the API key on its next restart; the pack listener catches up within
+  # seconds either way. A plain `up` of the EE stack boots the same way
+  # until the console registers and enables a backend.
+  woca-executor:
+    image: woca-executor:local
+    container_name: woca-ent-executor
+    hostname: woca-executor
+    build:
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: woca-executor.tar.gz
+    environment:
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
+      WOCA_NACOS_URL: "http://nacos:8848"
+      WOCA_HOME: "/var/lib/woca/home"
+      WOCA_WORKSPACE_ROOT: "/data/workspaces"
+      WOCA_EXECUTOR_ADVERTISE: "woca-executor:8093"
+      WOCA_OBS_ADDR: ":9094"
+      # Demo posture for macOS dev hosts (OrbStack, spec §11.3): the full
+      # hardening profile's readonly-rootfs/nnP posture is not guaranteed
+      # there. Production must run full (the default) on trusted nodes.
+      WOCA_SANDBOX_HARDENING: "minimal"
+    volumes:
+      - woca-workspaces:/data/workspaces
+      - woca-crypto:/var/lib/woca/home
+      # The Docker API is a bidirectional stream over the socket: a
+      # read-only bind still carries create/exec/remove calls (verified
+      # against this engine) while blocking filesystem mutation of the
+      # socket inode itself. The executor remains a fully privileged
+      # role either way — it lives on trusted nodes only (§11.1).
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9094/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    depends_on:
+      woca-pg-primary: { condition: service_healthy }
+      # The nacos entries must exist before the role resolves its DSN.
+      nacos-init: { condition: service_completed_successfully }
+    networks:
+      # The proxy leg: routing, creates, exec streams.
+      woca-app:
+      # Settings/ack database and the nacos registry/pack delivery.
+      woca-data:
+      woca-infra:
+
+  # The stateless workspace router (design §3.3): the schedulers'
+  # allocate-or-bind and every contract call ride it; bindings and
+  # executor liveness live in the shared database. No nacos identity, no
+  # probe port of its own (the healthcheck is a bare TCP connect).
+  executor-proxy:
+    image: executor-proxy:local
+    container_name: woca-ent-executor-proxy
+    build:
+      context: ../../build/dist
+      dockerfile: Dockerfile
+      args:
+        ROLE_PKG: executor-proxy.tar.gz
+    command: ["--listen", ":8094"]
+    environment:
+      WOCA_DB: "nacos://nacos:8848/DEFAULT_GROUP/woca-db.dsn"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8094 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    depends_on:
+      woca-pg-primary: { condition: service_healthy }
+      nacos-init: { condition: service_completed_successfully }
+    networks:
+      # scheduler → proxy → executor all share the app zone.
+      woca-app:
+      # Workspace bindings + executor ack rows.
+      woca-data:
+      # The WOCA_DB nacos:// reference resolves against the registry at
+      # startup, like every role (zone discipline: no hardcoded DSN).
+      woca-infra:
 
   # Config plane (design §16): the standalone settings management role —
   # settings API (read/write/export/import) + the embedded ops console
@@ -637,6 +765,135 @@ services:
       - woca-infra
     volumes:
       - woca-crypto:/var/lib/woca/home
+
+  # ─────────────── demo profile (design §11.2, spec §12) ─────────────────
+  # The developer acceptance topology: a scripted model, a one-shot that
+  # writes the model settings + the contract-http backend (endpoint =
+  # executor-proxy) through the config console, and the assertion
+  # container whose exit code is the verdict. Started exclusively by
+  # `make ent-sandbox-demo` (--profile demo); nothing here runs in a
+  # plain `up`.
+  fakemodel:
+    image: woca-fakemodel:full-demo
+    container_name: woca-ent-fakemodel
+    profiles: ["demo"]
+    build:
+      context: ../../e2e/sandboxlab/fakemodel
+      dockerfile: Dockerfile
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    networks:
+      # The schedulers' model leg (anthropic_base_url → fakemodel:8080).
+      woca-app:
+
+  # One-shot config-plane bootstrap: provider settings pointing at
+  # fakemodel, the contract-http backend pointing at executor-proxy with
+  # the demo sandbox image, enabled. Runs BEFORE woca-executor boots (the
+  # make target's phase order), so the executor normally finds the
+  # enabled backend at its initial pack fetch and arms its API key at
+  # boot.
+  sandbox-init:
+    image: curlimages/curl:8.10.1
+    container_name: woca-ent-sandbox-init
+    profiles: ["demo"]
+    depends_on:
+      woca-config: { condition: service_healthy }
+    environment:
+      WOCA_DEMO_SB_API_KEY: ${WOCA_DEMO_SB_API_KEY:-woca-demo-sb-key}
+      WOCA_DEMO_BACKEND_IMAGE: ${WOCA_DEMO_BACKEND_IMAGE:-woca-sandbox-base:demo}
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        api() {  # method path body
+          curl -sS -f -X "$$1" -H "Content-Type: application/json" \
+            --data "$$3" "http://woca-config:8080$$2"
+        }
+        api PUT /api/settings '{
+          "provider": "anthropic",
+          "model": "fake-claude",
+          "anthropic_base_url": "http://fakemodel:8080",
+          "anthropic_api_key": "woca-demo-model-key"
+        }' >/dev/null
+        echo "demo model settings published"
+        # Register + enable with settle retries: a consumer role still
+        # applying the previous (backend-less) pack wipes sandbox_backends
+        # full-manifest style (design §10.2 M-2), so the enable can land
+        # in that window and 404 on a just-wiped row. Re-registering is
+        # idempotent (name unique) and the row is stable once the enabled
+        # pack has been applied everywhere.
+        i=0
+        while [ $$i -lt 10 ]; do
+          i=$$((i+1))
+          id=""
+          resp=$$(api POST /api/sandboxes "{
+            \"name\": \"docker-demo\",
+            \"type\": \"contract-http\",
+            \"endpoint\": \"http://executor-proxy:8094\",
+            \"timeout_ms\": 600000,
+            \"api_key\": \"$$WOCA_DEMO_SB_API_KEY\",
+            \"options\": {
+              \"image\": \"$$WOCA_DEMO_BACKEND_IMAGE\",
+              \"runtime\": \"runc\",
+              \"network\": \"none\"
+            }
+          }" 2>/dev/null) && \
+            id=$$(printf '%s' "$$resp" | sed -n 's/.*"id": *"\([^"]*\)".*/\1/p')
+          if [ -z "$$id" ]; then
+            list=$$(api GET /api/sandboxes 2>/dev/null) || list=""
+            id=$$(printf '%s' "$$list" | tr '{' '\n' | grep 'docker-demo' | \
+              sed -n 's/.*"id": *"\([^"]*\)".*/\1/p')
+          fi
+          [ -n "$$id" ] || { sleep 2; continue; }
+          api PUT "/api/sandboxes/$$id" '{"enabled": true}' >/dev/null 2>&1 || { sleep 2; continue; }
+          sleep 2
+          list=$$(api GET /api/sandboxes 2>/dev/null) || list=""
+          if printf '%s' "$$list" | grep -q '"enabled":true'; then
+            echo "demo sandbox backend $$id registered and enabled"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "demo sandbox backend never settled (wiped or unenableable 10x)"; exit 1
+    restart: "no"
+    networks:
+      # The config console's zone.
+      woca-mgmt:
+
+  # The acceptance container (spec §12): exercises all four levels over
+  # the stack's internal surfaces, asserts products on the shared
+  # workspace volume, exits 0 on green. `docker compose run --rm
+  # sandbox-demo` propagates the code.
+  sandbox-demo:
+    image: woca-sandbox-demo:local
+    container_name: woca-ent-sandbox-demo
+    profiles: ["demo"]
+    build:
+      context: ../../e2e/sandboxlab/demo
+      dockerfile: Dockerfile
+    depends_on:
+      woca-scheduler-1: { condition: service_healthy }
+      woca-config: { condition: service_healthy }
+      executor-proxy: { condition: service_healthy }
+      woca-executor: { condition: service_healthy }
+      fakemodel: { condition: service_healthy }
+      sandbox-init: { condition: service_completed_successfully }
+    environment:
+      WOCA_DEMO_SB_API_KEY: ${WOCA_DEMO_SB_API_KEY:-woca-demo-sb-key}
+      WOCA_DEMO_MARKER_IMAGE: ${WOCA_DEMO_MARKER_IMAGE:-woca-sandbox-marker:demo}
+    volumes:
+      # Products assert straight off the executor's workspace volume.
+      - woca-workspaces:/data/workspaces:ro
+    restart: "no"
+    networks:
+      # Business API (scheduler :8080/:8090) and the executor data plane.
+      woca-app:
+      # The config console (L3's hot options change).
+      woca-mgmt:
 
   # ─────────────────────── ladyM (zone: infra) ────────────────────────────
   # Database physical isolation (§6.3.3) is instance-level: ladym-pg is
@@ -933,6 +1190,11 @@ volumes:
     name: woca-ent-full-sessions
   woca-crypto:
     name: woca-ent-full-crypto
+  # The EE sandbox plane's workspace volume (design §11.1): schedulers
+  # and executor mount it at the same path (/data/workspaces); the
+  # executor owns the directories (one per workspace identity).
+  woca-workspaces:
+    name: woca-ent-full-workspaces
   woca-pg-primary-data:
     name: woca-ent-full-pg-primary
   woca-pg-replica-data:
