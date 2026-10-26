@@ -3,8 +3,7 @@
 日期：2026-10-26
 状态：设计初稿，待评审
 修订：2026-10-26 下午。整合可行性评估结论（2 条 P0、4 条 P1、若干 P2），新增 §8.4/§8.5 沙箱逃逸与外窜防御。出口改为开关：默认关（`network=none`），开 = 直出；不做白名单与镜像网络规则继承（§8.2）。
-取代：`docs/superpowers/specs/2026-10-24-openshell-ee-persistent-sandbox-design.md`（OpenShell 路线作废，角色划分与存储模型一并重写）
-前置调研：`docs/openshell-compose-research.md`、`sandbox-lifecycle-routing-research.md`
+取代：2026-10-24 OpenShell 路线（作废，相关文档已删，本文件是沙箱执行面唯一设计文档）
 
 ## 1. 目标
 
