@@ -1,7 +1,0 @@
-{
-  "system_tokens": 1982,
-  "tools_tokens": 4080,
-  "total_tokens": 6062,
-  "tokenizer": "o200k_base",
-  "n_tools": 49
-}

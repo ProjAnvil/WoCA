@@ -48,3 +48,7 @@ native-client/native-client
 # Local deploy environment (use .env.example)
 deploy/selfhosted/.env
 coverage/
+
+# evaluation run outputs (reproducible; keep the repo clean)
+logs/
+eval/results/

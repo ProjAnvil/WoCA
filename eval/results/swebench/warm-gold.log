@@ -1,43 +1,0 @@
-pre-pulling official eval images (--platform pinned for ARM hosts)...
-  astropy__astropy-13033: pulled
-  django__django-14122: pulled
-  django__django-16877: pulled
-  matplotlib__matplotlib-23412: pulled
-  mwaskom__seaborn-3069: pulled
-  pydata__xarray-4687: pulled
-  pylint-dev__pylint-7080: pulled
-  pytest-dev__pytest-7324: pulled
-    pull timed out after 900s (attempt 1/3)
-    pull timed out after 900s (attempt 2/3)
-    pull timed out after 900s (attempt 3/3)
-  sympy__sympy-13974: pull FAILED after retries
-  sympy__sympy-19954: pulled
-note: arm64 host — official eval images are x86_64; Docker runs them under emulation (slow)
-Running: /Users/yuhaochen/Documents/codebase/projanvil/woca/eval/swebench/.venv/bin/python3 -m swebench.harness.run_evaluation --dataset_name SWE-bench/SWE-bench_Verified --predictions_path gold --run_id warm --max_workers 2 --instance_ids astropy__astropy-13033 django__django-14122 django__django-16877 matplotlib__matplotlib-23412 mwaskom__seaborn-3069 pydata__xarray-4687 pylint-dev__pylint-7080 pytest-dev__pytest-7324 sympy__sympy-13974 sympy__sympy-19954
-Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
-Using gold predictions - ignoring predictions_path
-Running 10 instances...
-  0%|          | 0/10 [00:00<?, ?it/s] 10%|█         | 1/10 [00:23<03:35, 23.90s/it]1 ran successfully, 0 failed:  10%|█         | 1/10 [00:23<03:35, 23.90s/it]1 ran successfully, 0 failed:  20%|██        | 2/10 [00:47<03:11, 23.95s/it]2 ran successfully, 0 failed:  20%|██        | 2/10 [00:47<03:11, 23.95s/it]2 ran successfully, 0 failed:  30%|███       | 3/10 [01:12<02:48, 24.07s/it]3 ran successfully, 0 failed:  30%|███       | 3/10 [01:12<02:48, 24.07s/it]3 ran successfully, 0 failed:  40%|████      | 4/10 [01:42<02:33, 25.64s/it]4 ran successfully, 0 failed:  40%|████      | 4/10 [01:42<02:33, 25.64s/it]4 ran successfully, 0 failed:  50%|█████     | 5/10 [01:44<01:44, 20.93s/it]5 ran successfully, 0 failed:  50%|█████     | 5/10 [01:44<01:44, 20.93s/it]5 ran successfully, 0 failed:  60%|██████    | 6/10 [02:15<01:30, 22.63s/it]6 ran successfully, 0 failed:  60%|██████    | 6/10 [02:15<01:30, 22.63s/it]6 ran successfully, 0 failed:  70%|███████   | 7/10 [02:35<01:06, 22.17s/it]7 ran successfully, 0 failed:  70%|███████   | 7/10 [02:35<01:06, 22.17s/it]7 ran successfully, 0 failed:  80%|████████  | 8/10 [02:40<00:40, 20.03s/it]8 ran successfully, 0 failed:  80%|████████  | 8/10 [02:40<00:40, 20.03s/it]8 ran successfully, 0 failed:  90%|█████████ | 9/10 [02:54<00:19, 19.38s/it]9 ran successfully, 0 failed:  90%|█████████ | 9/10 [02:54<00:19, 19.38s/it]9 ran successfully, 0 failed: 100%|██████████| 10/10 [03:01<00:00, 18.15s/it]10 ran successfully, 0 failed: 100%|██████████| 10/10 [03:01<00:00, 18.15s/it]10 ran successfully, 0 failed: 100%|██████████| 10/10 [03:01<00:00, 18.15s/it]
-All instances run.
-Total instances: 10
-Instances submitted: 10
-Instances completed: 10
-Instances incomplete: 0
-Instances resolved: 10
-Instances unresolved: 0
-Instances with likely infrastructure failures: 0
-Instances with ambiguous failures: 0
-Instances with empty patches: 0
-Instances with errors: 0
-Unstopped containers: 0
-Unremoved images: 10
-Report written to gold.warm.json
-Exception ignored while finalizing file <urllib3.response.HTTPResponse object at 0x11b17b0d0>:
-Traceback (most recent call last):
-  File "/Users/yuhaochen/Documents/codebase/projanvil/woca/eval/swebench/.venv/lib/python3.14/site-packages/urllib3/response.py", line 1313, in close
-    self._fp.close()
-  File "/Users/yuhaochen/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/http/client.py", line 432, in close
-    super().close() # set "closed" flag
-  File "/Users/yuhaochen/.local/share/uv/python/cpython-3.14.0-macos-aarch64-none/lib/python3.14/http/client.py", line 445, in flush
-    self.fp.flush()
-ValueError: I/O operation on closed file.
