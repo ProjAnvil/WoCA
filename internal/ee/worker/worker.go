@@ -11,7 +11,6 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/runstate"
-	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/tracing"
 	"github.com/projanvil/woca/internal/wocadb"
 	"github.com/rs/zerolog"
@@ -90,10 +89,6 @@ type Config struct {
 	// counterpart of the config plane's sandbox-api-key:<id> secrets).
 	// Nil yields no key.
 	SecretFor func(backendID string) string
-	// MaxArchiveBytes caps the workspace tar.gz uploaded to / downloaded
-	// from a sandbox, in both directions (settings key
-	// sandbox-archive-max-bytes; 0 = the settings default of 512 MiB).
-	MaxArchiveBytes int64
 }
 
 // IdleWaiter blocks a worker between empty claim attempts.
@@ -105,18 +100,17 @@ const idlePollEvery = 200 * time.Millisecond
 
 // Worker claims and executes runs from the queue.
 type Worker struct {
-	ledger          *runstate.Ledger
-	agent           *agent.Agent
-	bus             eventbus.Bus
-	log             zerolog.Logger
-	id              string
-	metrics         *Metrics
-	sessions        Sessions
-	states          SessionStates
-	idle            IdleWaiter
-	db              *wocadb.DB
-	secretFor       func(backendID string) string
-	maxArchiveBytes int64
+	ledger    *runstate.Ledger
+	agent     *agent.Agent
+	bus       eventbus.Bus
+	log       zerolog.Logger
+	id        string
+	metrics   *Metrics
+	sessions  Sessions
+	states    SessionStates
+	idle      IdleWaiter
+	db        *wocadb.DB
+	secretFor func(backendID string) string
 }
 
 // New returns a Worker over cfg.
@@ -124,16 +118,12 @@ func New(cfg Config) *Worker {
 	if cfg.ID == "" {
 		cfg.ID = fmt.Sprintf("worker-%d", time.Now().UnixNano())
 	}
-	if cfg.MaxArchiveBytes <= 0 {
-		cfg.MaxArchiveBytes = settings.DefaultSandboxArchiveMaxBytes
-	}
 	return &Worker{
 		ledger: cfg.Ledger, agent: cfg.Agent, bus: cfg.Bus, log: cfg.Logger,
 		id: cfg.ID, metrics: cfg.Metrics, sessions: cfg.Sessions, states: cfg.States,
-		idle:            cfg.Idle,
-		db:              cfg.DB,
-		secretFor:       cfg.SecretFor,
-		maxArchiveBytes: cfg.MaxArchiveBytes,
+		idle:      cfg.Idle,
+		db:        cfg.DB,
+		secretFor: cfg.SecretFor,
 	}
 }
 
@@ -180,15 +170,16 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 		if snap.Workspace != "" {
 			ctx = agent.WithRunWorkspace(ctx, snap.Workspace)
 		}
-		// Per-run sandbox (design §4.5): when the materialized config
+		// Per-run sandbox (design §4.5/§5.3): when the materialized config
 		// carries an enabled backend, provision one and execute through
 		// the run executor. Runs carrying a workspace identity (runstate
-		// channel, Task 14) route the sandbox under it and confirm their
-		// products with a workspace sync; workspace-less runs keep the
-		// client-side upload/download round trip. Any failure — including
-		// a sandbox-table read error — fails the run explicitly; the
-		// worker never silently falls back to local execution.
-		sbxDownload, teardown, err := w.provisionRunSandbox(&ctx, run.WorkspaceID, snap)
+		// channel, Task 14) route the sandbox under it; the executor
+		// bind-mounts the workspace directory, so products land on the
+		// volume in place — there is no transfer step to run. Any failure
+		// — including a sandbox-table read error — fails the run
+		// explicitly; the worker never silently falls back to local
+		// execution.
+		teardown, err := w.provisionRunSandbox(&ctx, run.WorkspaceID, snap)
 		if teardown != nil {
 			defer teardown()
 		}
@@ -199,9 +190,6 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 				w.states.Clear(run.SessionID, run.RunID)
 			}
 			return w.ledger.Finish(ctx, run.RunID, w.id, "error")
-		}
-		if sbxDownload != nil {
-			defer func() { _ = sbxDownload(false) }() // recovery logs its own errors
 		}
 		// Tag the execution ctx with the run/session identity so every
 		// telemetry span the agent records (chat, tools) carries it — in the
@@ -223,23 +211,6 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 				w.states.Clear(run.SessionID, run.RunID)
 			}
 			return w.ledger.Finish(ctx, run.RunID, w.id, "error")
-		}
-		// Recover the products from the sandbox before reporting success:
-		// a download past the archive cap (or a broken download) fails the
-		// run — the products never reached the host workspace, so "done"
-		// would lie.
-		if sbxDownload != nil {
-			if err := sbxDownload(true); err != nil {
-				// The mode-neutral prefix: in workspace mode this is a
-				// sync confirmation, in archive mode a download — either
-				// way it is the sandbox's product handoff that failed.
-				w.emitAndMirror(ctx, run.RunID, "error", map[string]any{"message": "sandbox artifacts: " + err.Error()})
-				w.metrics.finish("error", time.Since(started))
-				if w.states != nil {
-					w.states.Clear(run.SessionID, run.RunID)
-				}
-				return w.ledger.Finish(ctx, run.RunID, w.id, "error")
-			}
 		}
 		if len(final) > 0 {
 			last := final[len(final)-1]

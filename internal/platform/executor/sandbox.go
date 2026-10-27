@@ -1,6 +1,6 @@
 // sandbox.go is the contract-v2 sandbox Executor (CONTRACT.md, design §4.1):
 // commands run in a remote sandbox behind a generic HTTP API instead of the
-// host. The concrete provider is any HTTP service implementing the 16
+// host. The concrete provider is any HTTP service implementing the 15
 // endpoints of the contract; E2B, Daytona, and friends fit with thin
 // adapters layered on the provider registry.
 package executor
@@ -119,14 +119,6 @@ func (s *Sandbox) create(ctx context.Context) error {
 	}
 	s.sbxID = out.SandboxID
 	return nil
-}
-
-// SyncWorkspace flushes the sandbox /workspace back to the executor-side
-// workspace directory (POST /sandbox/{id}/workspace/sync, CONTRACT.md
-// §3.16). Runs call it before declaring success so artifacts are durably
-// on the executor host; a non-2xx is an error.
-func (s *Sandbox) SyncWorkspace(ctx context.Context) error {
-	return s.do(ctx, http.MethodPost, "/sandbox/"+s.sbxID+"/workspace/sync", nil, nil)
 }
 
 // Close destroys the sandbox.

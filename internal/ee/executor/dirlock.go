@@ -14,14 +14,14 @@ var ErrWorkspaceBusy = errors.New("executor: workspace directory busy")
 // drove this design:
 //
 //   - The lock lives on the directory fd, not on a lock file inside the
-//     directory, so locking never pollutes the tree that gets tarred for
-//     upload.
+//     directory, so locking never pollutes the workspace tree that is
+//     bind-mounted into the sandbox.
 //   - The kernel releases the lock when the process dies in any way
 //     (crash, kill -9), so a dead holder can never wedge a workspace.
 //
-// Holders must serialize Upload/Sync/Delete of a workspace by holding its
-// DirLock for the whole critical section. Close releases the lock and is
-// idempotent.
+// Holders must serialize create/delete of a sandbox over a workspace by
+// holding its DirLock for the whole critical section (the sandbox works
+// on the directory in place). Close releases the lock and is idempotent.
 //
 // The locking primitives are platform-split: dirlock_unix.go carries the
 // flock implementation; dirlock_windows.go refuses (the executor is a

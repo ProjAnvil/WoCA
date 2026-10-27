@@ -1,18 +1,16 @@
 package worker
 
-// Per-run sandbox execution (design §4.5): when the materialized config
-// carries an enabled backend, the worker provisions a sandbox, uploads the
-// run workspace, executes the run through the run-executor injection, and
-// downloads the products back. Every step fails the run explicitly — no
-// silent fallback to local execution.
+// Per-run sandbox execution (design §4.5, spec §5.3): when the materialized
+// config carries an enabled backend, the worker provisions a sandbox and
+// executes the run through the run-executor injection. There is no transfer
+// step anywhere — the sandbox bind-mounts its workspace directory and works
+// on it in place, so the wire must show zero archive uploads, zero archive
+// downloads, and zero sync calls for every backend type. Failures fail the
+// run explicitly — no silent fallback to local execution.
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +25,6 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
-	"github.com/projanvil/woca/internal/platform/executor"
 	"github.com/projanvil/woca/internal/platform/executor/fakesandbox"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/tools"
@@ -37,7 +34,7 @@ import (
 
 // seedSandboxBackend creates the materialized sandbox_backends table and
 // one enabled row pointing at endpoint.
-func seedSandboxBackend(t *testing.T, db *wocadb.DB, endpoint string) {
+func seedSandboxBackend(t *testing.T, db *wocadb.DB, backendType, endpoint string) {
 	t.Helper()
 	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS sandbox_backends (
 		id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,
@@ -52,22 +49,22 @@ func seedSandboxBackend(t *testing.T, db *wocadb.DB, endpoint string) {
 	}
 	if _, err := db.Exec(`INSERT INTO sandbox_backends
 		(id, name, type, endpoint, timeout_ms, enabled, created_at, updated_at)
-		VALUES ('sb1', 'fake', 'contract-http', ?, 120000, 1, ?, ?)`,
-		endpoint, time.Now().UnixMilli(), time.Now().UnixMilli()); err != nil {
+		VALUES ('sb1', 'fake', ?, ?, 120000, 1, ?, ?)`,
+		backendType, endpoint, time.Now().UnixMilli(), time.Now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // newSandboxWorker builds a worker whose DB carries an enabled backend at
 // endpoint and whose agent replays the scripted model responses.
-func newSandboxWorker(t *testing.T, endpoint string, maxBytes int64, replies ...messages.Message) (*Worker, *runstate.Ledger) {
+func newSandboxWorker(t *testing.T, backendType, endpoint string, replies ...messages.Message) (*Worker, *runstate.Ledger) {
 	t.Helper()
 	db, err := wocadb.Open("sqlite:" + filepath.Join(t.TempDir(), "w.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	seedSandboxBackend(t, db, endpoint)
+	seedSandboxBackend(t, db, backendType, endpoint)
 	ledger, err := runstate.New(db)
 	if err != nil {
 		t.Fatal(err)
@@ -85,13 +82,12 @@ func newSandboxWorker(t *testing.T, endpoint string, maxBytes int64, replies ...
 		t.Fatal(err)
 	}
 	w := New(Config{
-		Ledger:          ledger,
-		Agent:           a,
-		Logger:          zerolog.Nop(),
-		ID:              "worker-sbx",
-		DB:              db,
-		MaxArchiveBytes: maxBytes,
-		SecretFor:       func(id string) string { return "secret-for-" + id },
+		Ledger:    ledger,
+		Agent:     a,
+		Logger:    zerolog.Nop(),
+		ID:        "worker-sbx",
+		DB:        db,
+		SecretFor: func(id string) string { return "secret-for-" + id },
 	})
 	return w, ledger
 }
@@ -112,19 +108,6 @@ func enqueueWorkspaceRun(t *testing.T, ledger *runstate.Ledger, runID, prompt, w
 	}
 }
 
-func runStatus(t *testing.T, ledger *runstate.Ledger, runID string) (string, []runstate.Event) {
-	t.Helper()
-	row, ok, err := ledger.Row(t.Context(), runID)
-	if err != nil || !ok {
-		t.Fatalf("row = ok=%v err=%v", ok, err)
-	}
-	events, err := ledger.Replay(t.Context(), runID, 0, 1000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return row.Status, events
-}
-
 // enqueueWorkspaceIDRun enqueues a run carrying an execution-side sandbox
 // workspace identity (Task 14's runstate channel) — the EE routing path.
 func enqueueWorkspaceIDRun(t *testing.T, ledger *runstate.Ledger, runID, prompt, workspace, workspaceID string) {
@@ -143,18 +126,31 @@ func enqueueWorkspaceIDRun(t *testing.T, ledger *runstate.Ledger, runID, prompt,
 	}
 }
 
-// recordingSandbox delegates to the fakesandbox handler while recording
-// the wire traffic the workspace-mode assertions need: create bodies,
-// client-side archive uploads (PUT .../archive), and workspace syncs
-// (POST .../workspace/sync). syncFails turns the sync endpoint into a 500.
-type recordingSandbox struct {
-	inner     http.Handler
-	syncFails bool
+func runStatus(t *testing.T, ledger *runstate.Ledger, runID string) (string, []runstate.Event) {
+	t.Helper()
+	row, ok, err := ledger.Row(t.Context(), runID)
+	if err != nil || !ok {
+		t.Fatalf("row = ok=%v err=%v", ok, err)
+	}
+	events, err := ledger.Replay(t.Context(), runID, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row.Status, events
+}
 
-	mu      sync.Mutex
-	creates []string
-	putArch int
-	syncs   int
+// recordingSandbox delegates to the fakesandbox handler while recording
+// the wire traffic the zero-transfer assertions need: create bodies,
+// archive uploads/downloads, workspace syncs, and destroys.
+type recordingSandbox struct {
+	inner http.Handler
+
+	mu       sync.Mutex
+	creates  []string
+	putArch  int
+	getArch  int
+	syncs    int
+	destroys int
 }
 
 func (s *recordingSandbox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +161,7 @@ func (s *recordingSandbox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		r.Body = io.NopCloser(bytes.NewReader(b))
+		r.Body = io.NopCloser(strings.NewReader(string(b)))
 		s.mu.Lock()
 		s.creates = append(s.creates, string(b))
 		s.mu.Unlock()
@@ -173,33 +169,55 @@ func (s *recordingSandbox) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.putArch++
 		s.mu.Unlock()
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/archive"):
+		s.mu.Lock()
+		s.getArch++
+		s.mu.Unlock()
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/workspace/sync"):
 		s.mu.Lock()
 		s.syncs++
-		fail := s.syncFails
 		s.mu.Unlock()
-		if fail {
-			http.Error(w, "sync failed", http.StatusInternalServerError)
-			return
-		}
+	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/sandbox/"):
+		s.mu.Lock()
+		s.destroys++
+		s.mu.Unlock()
 	}
 	s.inner.ServeHTTP(w, r)
 }
 
-func (s *recordingSandbox) stats() (creates []string, putArch, syncs int) {
+func (s *recordingSandbox) stats() (creates []string, putArch, getArch, syncs, destroys int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]string(nil), s.creates...), s.putArch, s.syncs
+	return append([]string(nil), s.creates...), s.putArch, s.getArch, s.syncs, s.destroys
 }
 
-// A run over an enabled backend writes its products in the sandbox and
-// the download returns them to the host workspace.
-func TestWorkerSandboxRoundTrip(t *testing.T) {
+// assertZeroTransfer fails the test when any transfer call was recorded.
+func assertZeroTransfer(t *testing.T, putArch, getArch, syncs int) {
+	t.Helper()
+	if putArch != 0 {
+		t.Errorf("archive uploads = %d, want 0 (woca does not transfer workspaces)", putArch)
+	}
+	if getArch != 0 {
+		t.Errorf("archive downloads = %d, want 0 (woca does not transfer workspaces)", getArch)
+	}
+	if syncs != 0 {
+		t.Errorf("workspace syncs = %d, want 0 (the sync surface is gone)", syncs)
+	}
+}
+
+// A run over an enabled backend executes in the sandbox and moves no
+// files: no archive round trip, no sync — the ruling (spec §5.3) applies
+// to every mode.
+func TestWorkerSandboxRunMovesNoFiles(t *testing.T) {
+	rec := &recordingSandbox{inner: fakesandbox.New().Handler()}
+	srv := httptest.NewServer(rec)
+	t.Cleanup(srv.Close)
+
 	ws := t.TempDir()
 	if err := os.WriteFile(filepath.Join(ws, "in.txt"), []byte("host-side"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	w, ledger := newSandboxWorker(t, fakesandbox.Addr(t), 8<<20,
+	w, ledger := newSandboxWorker(t, "contract-http", srv.URL,
 		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
 			{ID: "1", Name: "Write", Args: map[string]any{"file_path": "out.txt", "content": "sandbox-side"}},
 		}},
@@ -217,68 +235,63 @@ func TestWorkerSandboxRoundTrip(t *testing.T) {
 		}
 		t.Fatalf("status = %q, want done", status)
 	}
-	data, err := os.ReadFile(filepath.Join(ws, "out.txt"))
-	if err != nil {
-		t.Fatalf("product not downloaded back to the host workspace: %v", err)
+	creates, putArch, getArch, syncs, destroys := rec.stats()
+	if len(creates) != 1 {
+		t.Fatalf("create calls = %d, want 1", len(creates))
 	}
-	if string(data) != "sandbox-side" {
-		t.Fatalf("out.txt = %q", data)
+	assertZeroTransfer(t, putArch, getArch, syncs)
+	if destroys != 1 {
+		t.Fatalf("destroy calls = %d, want 1 (teardown destroys the sandbox)", destroys)
 	}
-	// The host's .git exclusion keeps the host tree intact (nothing was
-	// clobbered); the pre-existing file survives the download.
-	if _, err := os.Stat(filepath.Join(ws, "in.txt")); err != nil {
-		t.Fatalf("pre-existing host file lost: %v", err)
-	}
-}
-
-// An upload past the archive cap fails the run instead of silently
-// executing locally.
-func TestWorkerSandboxUploadOverflowFailsRun(t *testing.T) {
-	ws := t.TempDir()
-	if err := os.WriteFile(filepath.Join(ws, "big.bin"), make([]byte, 64<<10), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	w, ledger := newSandboxWorker(t, fakesandbox.Addr(t), 4<<10, messages.AI("done"))
-	enqueueWorkspaceRun(t, ledger, "r2", "big workspace", ws)
-
-	if err := w.Step(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	status, events := runStatus(t, ledger, "r2")
-	if status != "error" {
-		t.Fatalf("status = %q, want error (upload overflow must fail the run)", status)
-	}
-	var sawSandboxErr bool
-	for _, ev := range events {
-		if strings.Contains(ev.Payload, "sandbox") {
-			sawSandboxErr = true
-		}
-	}
-	if !sawSandboxErr {
-		t.Fatalf("no sandbox error event: %+v", events)
+	// The host workspace is never the transfer target anymore: whatever
+	// the run wrote stayed in the sandbox.
+	if _, err := os.Stat(filepath.Join(ws, "out.txt")); !os.IsNotExist(err) {
+		t.Fatalf("host workspace was written outside the sandbox mount (err=%v)", err)
 	}
 }
 
-// A download past the archive cap fails the run (the products cannot be
-// recovered; the run must not report success).
-func TestWorkerSandboxDownloadOverflowFailsRun(t *testing.T) {
+// EE workspace mode: a run carrying a workspace identity routes the
+// sandbox create under it (the workspace field rides the create body via
+// providers.Config) and still moves no files — zero archives, zero syncs,
+// teardown destroys.
+func TestWorkerSandboxWorkspaceRunZeroTransfer(t *testing.T) {
+	rec := &recordingSandbox{inner: fakesandbox.New().Handler()}
+	srv := httptest.NewServer(rec)
+	t.Cleanup(srv.Close)
+
 	ws := t.TempDir()
-	w, ledger := newSandboxWorker(t, fakesandbox.Addr(t), 4<<10,
+	if err := os.WriteFile(filepath.Join(ws, "in.txt"), []byte("host-side"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, ledger := newSandboxWorker(t, "contract-http", srv.URL,
 		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
-			{ID: "1", Name: "Write", Args: map[string]any{
-				"file_path": "huge.txt", "content": strings.Repeat("x", 64<<10),
-			}},
+			{ID: "1", Name: "Write", Args: map[string]any{"file_path": "out.txt", "content": "sandbox-side"}},
 		}},
 		messages.AI("done"),
 	)
-	enqueueWorkspaceRun(t, ledger, "r3", "write a huge file", ws)
+	enqueueWorkspaceIDRun(t, ledger, "r2", "write the file", ws, "ws_ee1")
 
 	if err := w.Step(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	status, _ := runStatus(t, ledger, "r3")
-	if status != "error" {
-		t.Fatalf("status = %q, want error (download overflow must fail the run)", status)
+	status, _ := runStatus(t, ledger, "r2")
+	if status != "done" {
+		t.Fatalf("status = %q, want done", status)
+	}
+	creates, putArch, getArch, syncs, destroys := rec.stats()
+	if len(creates) != 1 {
+		t.Fatalf("create calls = %d, want 1", len(creates))
+	}
+	var createBody map[string]any
+	if err := json.Unmarshal([]byte(creates[0]), &createBody); err != nil {
+		t.Fatalf("create body %q: %v", creates[0], err)
+	}
+	if got, _ := createBody["workspace"].(string); got != "ws_ee1" {
+		t.Fatalf("create body workspace = %q, want ws_ee1 (body %s)", got, creates[0])
+	}
+	assertZeroTransfer(t, putArch, getArch, syncs)
+	if destroys != 1 {
+		t.Fatalf("destroy calls = %d, want 1 (teardown destroys the sandbox)", destroys)
 	}
 }
 
@@ -291,13 +304,13 @@ func TestWorkerSandboxBrokenBackendFailsRun(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	ws := t.TempDir()
-	w, ledger := newSandboxWorker(t, srv.URL, 8<<20, messages.AI("done"))
-	enqueueWorkspaceRun(t, ledger, "r4", "unreachable backend", ws)
+	w, ledger := newSandboxWorker(t, "contract-http", srv.URL, messages.AI("done"))
+	enqueueWorkspaceRun(t, ledger, "r3", "unreachable backend", ws)
 
 	if err := w.Step(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	status, _ := runStatus(t, ledger, "r4")
+	status, _ := runStatus(t, ledger, "r3")
 	if status != "error" {
 		t.Fatalf("status = %q, want error (broken backend must fail the run)", status)
 	}
@@ -316,7 +329,7 @@ func TestWorkerNoBackendRunsLocally(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	seedSandboxBackend(t, db, "http://unused.example") // creates the table
+	seedSandboxBackend(t, db, "contract-http", "http://unused.example") // creates the table
 	if _, err := db.Exec(`DELETE FROM sandbox_backends`); err != nil {
 		t.Fatal(err)
 	}
@@ -334,123 +347,36 @@ func TestWorkerNoBackendRunsLocally(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := New(Config{Ledger: ledger, Agent: a, Logger: zerolog.Nop(), ID: "w-local", DB: db})
-	enqueueWorkspaceRun(t, ledger, "r5", "plain run", t.TempDir())
+	enqueueWorkspaceRun(t, ledger, "r4", "plain run", t.TempDir())
 
 	if err := w.Step(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	status, _ := runStatus(t, ledger, "r5")
+	status, _ := runStatus(t, ledger, "r4")
 	if status != "done" {
 		t.Fatalf("status = %q, want done (no backend = local execution)", status)
 	}
 }
 
-var _ = fmt.Sprintf
-
-// EE workspace mode: a run carrying a workspace identity routes the
-// sandbox create under it (the workspace field rides the create body via
-// providers.Config), never uploads client-side (the executor seeds the
-// workspace during create, spec §4), and confirms the products with
-// exactly one workspace sync.
-func TestWorkerSandboxWorkspaceRunSyncsInsteadOfUploading(t *testing.T) {
-	rec := &recordingSandbox{inner: fakesandbox.New().Handler()}
-	srv := httptest.NewServer(rec)
-	t.Cleanup(srv.Close)
-
-	ws := t.TempDir()
-	if err := os.WriteFile(filepath.Join(ws, "in.txt"), []byte("host-side"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	w, ledger := newSandboxWorker(t, srv.URL, 8<<20,
-		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
-			{ID: "1", Name: "Write", Args: map[string]any{"file_path": "out.txt", "content": "sandbox-side"}},
-		}},
-		messages.AI("done"),
-	)
-	enqueueWorkspaceIDRun(t, ledger, "r6", "write the file", ws, "ws_ee1")
-
-	if err := w.Step(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	status, _ := runStatus(t, ledger, "r6")
-	if status != "done" {
-		t.Fatalf("status = %q, want done", status)
-	}
-	creates, putArch, syncs := rec.stats()
-	if len(creates) != 1 {
-		t.Fatalf("create calls = %d, want 1", len(creates))
-	}
-	var createBody map[string]any
-	if err := json.Unmarshal([]byte(creates[0]), &createBody); err != nil {
-		t.Fatalf("create body %q: %v", creates[0], err)
-	}
-	if got, _ := createBody["workspace"].(string); got != "ws_ee1" {
-		t.Fatalf("create body workspace = %q, want ws_ee1 (body %s)", got, creates[0])
-	}
-	if putArch != 0 {
-		t.Fatalf("client-side archive uploads = %d, want 0 (workspace mode uploads inside create)", putArch)
-	}
-	if syncs != 1 {
-		t.Fatalf("workspace syncs = %d, want exactly 1", syncs)
-	}
-}
-
-// A failing workspace sync fails the run: the products were never
-// confirmed durably executor-side, so "done" would lie. The error must
-// name the sync step.
-func TestWorkerSandboxSyncFailureFailsRun(t *testing.T) {
-	rec := &recordingSandbox{inner: fakesandbox.New().Handler(), syncFails: true}
-	srv := httptest.NewServer(rec)
-	t.Cleanup(srv.Close)
-
-	ws := t.TempDir()
-	w, ledger := newSandboxWorker(t, srv.URL, 8<<20,
-		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
-			{ID: "1", Name: "Write", Args: map[string]any{"file_path": "out.txt", "content": "x"}},
-		}},
-		messages.AI("done"),
-	)
-	enqueueWorkspaceIDRun(t, ledger, "r7", "write the file", ws, "ws_ee2")
-
-	if err := w.Step(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	status, events := runStatus(t, ledger, "r7")
-	if status != "error" {
-		t.Fatalf("status = %q, want error (failed sync must fail the run)", status)
-	}
-	var sawSyncErr bool
-	for _, ev := range events {
-		if ev.Kind == "error" && strings.Contains(ev.Payload, "sync") {
-			sawSyncErr = true
-		}
-	}
-	if !sawSyncErr {
-		t.Fatalf("no sync error event: %+v", events)
-	}
-}
-
 // provisionRunSandbox threads the run's workspace identity through
-// providers.Config into the contract-http create body (Task 15 wiring).
+// providers.Config into the contract-http create body (Task 15 wiring)
+// and does nothing else on the wire: no archives, no sync, one destroy
+// on teardown.
 func TestProvisionRunSandboxPassesWorkspaceToCreate(t *testing.T) {
 	rec := &recordingSandbox{inner: fakesandbox.New().Handler()}
 	srv := httptest.NewServer(rec)
 	t.Cleanup(srv.Close)
 
-	w, _ := newSandboxWorker(t, srv.URL, 8<<10)
+	w, _ := newSandboxWorker(t, "contract-http", srv.URL)
 	ctx := context.Background()
-	dl, teardown, err := w.provisionRunSandbox(&ctx, "ws_direct", runstate.RunSnapshot{Workspace: t.TempDir()})
+	teardown, err := w.provisionRunSandbox(&ctx, "ws_direct", runstate.RunSnapshot{Workspace: t.TempDir()})
 	if err != nil {
 		t.Fatalf("provisionRunSandbox: %v", err)
 	}
-	if dl == nil || teardown == nil {
-		t.Fatal("workspace-mode provision must return download and teardown")
+	if teardown == nil {
+		t.Fatal("provision must return a teardown")
 	}
-	defer teardown()
-	if err := dl(true); err != nil {
-		t.Fatalf("download(true) = %v, want nil (fake sync succeeds)", err)
-	}
-	creates, putArch, syncs := rec.stats()
+	creates, putArch, getArch, syncs, destroys := rec.stats()
 	if len(creates) != 1 {
 		t.Fatalf("create calls = %d, want 1", len(creates))
 	}
@@ -461,103 +387,89 @@ func TestProvisionRunSandboxPassesWorkspaceToCreate(t *testing.T) {
 	if got, _ := createBody["workspace"].(string); got != "ws_direct" {
 		t.Fatalf("create body workspace = %q, want ws_direct", got)
 	}
-	if putArch != 0 {
-		t.Fatalf("client-side archive uploads = %d, want 0", putArch)
+	assertZeroTransfer(t, putArch, getArch, syncs)
+	if destroys != 0 {
+		t.Fatalf("destroy calls before teardown = %d, want 0", destroys)
 	}
-	if syncs != 1 {
-		t.Fatalf("workspace syncs = %d, want 1", syncs)
-	}
-}
-
-// A run without a workspace identity (personal edition / transition) keeps
-// the pre-EE client-side archive round trip: the create body carries no
-// workspace field, the workspace is uploaded once, and no sync happens.
-func TestWorkerSandboxLocalPathStillArchives(t *testing.T) {
-	rec := &recordingSandbox{inner: fakesandbox.New().Handler()}
-	srv := httptest.NewServer(rec)
-	t.Cleanup(srv.Close)
-
-	ws := t.TempDir()
-	w, ledger := newSandboxWorker(t, srv.URL, 8<<20, messages.AI("done"))
-	enqueueWorkspaceRun(t, ledger, "r8", "plain run", ws)
-
-	if err := w.Step(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	status, _ := runStatus(t, ledger, "r8")
-	if status != "done" {
-		t.Fatalf("status = %q, want done", status)
-	}
-	creates, putArch, syncs := rec.stats()
-	if len(creates) != 1 {
-		t.Fatalf("create calls = %d, want 1", len(creates))
-	}
-	var createBody map[string]any
-	if err := json.Unmarshal([]byte(creates[0]), &createBody); err != nil {
-		t.Fatalf("create body %q: %v", creates[0], err)
-	}
-	if _, ok := createBody["workspace"]; ok {
-		t.Fatalf("create body %s carries workspace, want none on the local path", creates[0])
-	}
-	if putArch != 1 {
-		t.Fatalf("client-side archive uploads = %d, want 1 (local path unchanged)", putArch)
-	}
-	if syncs != 0 {
-		t.Fatalf("workspace syncs = %d, want 0 on the local path", syncs)
+	teardown()
+	if _, _, _, _, destroys := rec.stats(); destroys != 1 {
+		t.Fatalf("destroy calls after teardown = %d, want 1", destroys)
 	}
 }
 
-// Terminal-review hardening: the download must not reintroduce .git
-// (host-owned, excluded on upload) or write symlinks whose targets escape
-// the workspace — a hostile backend could otherwise plant git hooks on the
-// host workspace via run products.
-func TestDownloadSkipsGitAndEscapingSymlinks(t *testing.T) {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	must := func(err error) {
-		t.Helper()
-		if err != nil {
-			t.Fatal(err)
+// fakeBridge is the minimal Cloudflare-bridge wire fake: it provisions
+// sandboxes, counts every hydrate/persist (archive) call, and destroys.
+type fakeBridge struct {
+	mu       sync.Mutex
+	creates  int
+	hydrates int
+	persists int
+	destroys int
+}
+
+func (f *fakeBridge) handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/sandbox":
+			f.creates++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"sbx_cf_1"}`))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hydrate"):
+			f.hydrates++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/persist"):
+			f.persists++
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v1/sandbox/"):
+			f.destroys++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "unexpected "+r.Method+" "+r.URL.Path, http.StatusNotFound)
 		}
-	}
-	must(tw.WriteHeader(&tar.Header{Name: "normal.txt", Mode: 0o644, Size: 3}))
-	_, err := tw.Write([]byte("ok\n"))
-	must(err)
-	must(tw.WriteHeader(&tar.Header{Name: ".git/hooks/pre-commit", Mode: 0o755, Size: 5}))
-	_, err = tw.Write([]byte("evil\n"))
-	must(err)
-	must(tw.WriteHeader(&tar.Header{Name: ".git", Typeflag: tar.TypeDir, Mode: 0o755}))
-	must(tw.WriteHeader(&tar.Header{Name: "lnk-abs", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"}))
-	must(tw.WriteHeader(&tar.Header{Name: "lnk-esc", Typeflag: tar.TypeSymlink, Linkname: "../../escape"}))
-	must(tw.Close())
-	must(gz.Close())
+	})
+}
 
-	srv := httptest.NewServer(fakesandbox.New().Handler())
+func (f *fakeBridge) stats() (creates, hydrates, persists, destroys int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.creates, f.hydrates, f.persists, f.destroys
+}
+
+// The archive-only backend (cfbridge — the one that used to fall back to
+// client-side archives) goes through the same mount-only provision: zero
+// hydrate (upload), zero persist (download), one destroy on teardown. The
+// former "falling back to client-side archives" path is gone for good.
+func TestProvisionRunSandboxCfbridgeZeroTransfer(t *testing.T) {
+	fb := &fakeBridge{}
+	srv := httptest.NewServer(fb.handler())
 	t.Cleanup(srv.Close)
-	sbx, err := executor.NewSandbox(executor.SandboxConfig{Endpoint: srv.URL, Timeout: 10 * time.Second})
+
+	w, _ := newSandboxWorker(t, "cfbridge", srv.URL)
+	ctx := context.Background()
+	teardown, err := w.provisionRunSandbox(&ctx, "ws_cf", runstate.RunSnapshot{Workspace: t.TempDir()})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("provisionRunSandbox (cfbridge): %v", err)
 	}
-	t.Cleanup(func() { _ = sbx.Close() })
-	if err := sbx.PutArchive(t.Context(), bytes.NewReader(buf.Bytes())); err != nil {
-		t.Fatal(err)
+	if teardown == nil {
+		t.Fatal("provision must return a teardown")
 	}
-
-	ws := t.TempDir()
-	if err := downloadWorkspace(t.Context(), sbx, ws, 8<<20); err != nil {
-		t.Fatal(err)
+	creates, hydrates, persists, destroys := fb.stats()
+	if creates != 1 {
+		t.Fatalf("bridge creates = %d, want 1", creates)
 	}
-
-	if b, err := os.ReadFile(filepath.Join(ws, "normal.txt")); err != nil || string(b) != "ok\n" {
-		t.Fatalf("normal.txt = %q err=%v", b, err)
+	if hydrates != 0 {
+		t.Fatalf("bridge hydrate (upload) calls = %d, want 0 (no client-side archive fallback)", hydrates)
 	}
-	if _, err := os.Lstat(filepath.Join(ws, ".git")); !os.IsNotExist(err) {
-		t.Fatalf(".git leaked into host workspace (err=%v)", err)
+	if persists != 0 {
+		t.Fatalf("bridge persist (download) calls = %d, want 0 (no client-side archive fallback)", persists)
 	}
-	for _, l := range []string{"lnk-abs", "lnk-esc"} {
-		if _, err := os.Lstat(filepath.Join(ws, l)); !os.IsNotExist(err) {
-			t.Fatalf("%s leaked into host workspace", l)
-		}
+	if destroys != 0 {
+		t.Fatalf("bridge destroys before teardown = %d, want 0", destroys)
+	}
+	teardown()
+	if _, _, _, destroys := fb.stats(); destroys != 1 {
+		t.Fatalf("bridge destroys after teardown = %d, want 1", destroys)
 	}
 }

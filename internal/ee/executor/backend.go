@@ -43,6 +43,11 @@ type CreateSpec struct {
 	Hardening Hardening
 	// WorkDir is the container-side default working directory.
 	WorkDir string
+	// WorkspaceDir is the host-side workspace directory bind-mounted onto
+	// WorkDir (spec §5.3). Empty means no workspace mount (the container
+	// gets an ordinary directory at WorkDir). Backends that cannot honor a
+	// non-empty WorkspaceDir must fail Create.
+	WorkspaceDir string
 }
 
 // ExecSpec describes one command execution inside a container. It mirrors

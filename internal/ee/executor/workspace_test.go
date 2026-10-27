@@ -2,13 +2,11 @@ package executor
 
 import (
 	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
-	"fmt"
-	"io"
-	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,138 +40,6 @@ func writeTestFile(t *testing.T, p, content string) {
 	}
 }
 
-func mustSymlink(t *testing.T, target, link string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatalf("Symlink(%s -> %s): %v", link, target, err)
-	}
-}
-
-// treeEntry is one entry of a host directory tree.
-type treeEntry struct {
-	kind byte // 'f' file, 'd' dir, 'l' symlink
-	data string
-	link string
-}
-
-// readHostTree snapshots root as a map of slash-relative paths to entries
-// (root itself excluded). Symlinks are not followed.
-func readHostTree(t *testing.T, root string) map[string]treeEntry {
-	t.Helper()
-	out := map[string]treeEntry{}
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if p == root {
-			return nil
-		}
-		rel, rerr := filepath.Rel(root, p)
-		if rerr != nil {
-			return rerr
-		}
-		name := filepath.ToSlash(rel)
-		switch {
-		case d.IsDir():
-			out[name] = treeEntry{kind: 'd'}
-		case d.Type()&os.ModeSymlink != 0:
-			link, lerr := os.Readlink(p)
-			if lerr != nil {
-				return lerr
-			}
-			out[name] = treeEntry{kind: 'l', link: link}
-		default:
-			data, rerr := os.ReadFile(p)
-			if rerr != nil {
-				return rerr
-			}
-			out[name] = treeEntry{kind: 'f', data: string(data)}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk %s: %v", root, err)
-	}
-	return out
-}
-
-func assertTree(t *testing.T, root string, want map[string]treeEntry) {
-	t.Helper()
-	got := readHostTree(t, root)
-	for name, w := range want {
-		g, ok := got[name]
-		if !ok {
-			t.Errorf("tree %s: missing %q (want %c)", root, name, w.kind)
-			continue
-		}
-		if g != w {
-			t.Errorf("tree %s: %q = %+v, want %+v", root, name, g, w)
-		}
-	}
-	for name := range got {
-		if _, ok := want[name]; !ok {
-			t.Errorf("tree %s: unexpected extra entry %q = %+v", root, name, got[name])
-		}
-	}
-}
-
-// archEntry is one entry of a container /workspace archive.
-type archEntry struct {
-	typeflag byte
-	data     string
-	link     string
-}
-
-// readContainerWorkspace pulls the container's /workspace via CopyOut and
-// returns its entries keyed by workspace-relative name (the Docker-style
-// top-level "workspace/" prefix is stripped).
-func readContainerWorkspace(t *testing.T, c Container) map[string]archEntry {
-	t.Helper()
-	rc, err := c.CopyOut(context.Background(), "/workspace")
-	if err != nil {
-		t.Fatalf("CopyOut(/workspace): %v", err)
-	}
-	defer func() { _ = rc.Close() }()
-
-	out := map[string]archEntry{}
-	tr := tar.NewReader(rc)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			return out
-		}
-		if err != nil {
-			t.Fatalf("tar next: %v", err)
-		}
-		name := path.Clean(hdr.Name)
-		if name == "." || name == "workspace" || name == "/" {
-			continue
-		}
-		name = strings.TrimPrefix(name, "workspace/")
-		e := archEntry{typeflag: hdr.Typeflag, link: hdr.Linkname}
-		if hdr.Typeflag == tar.TypeReg {
-			data, rerr := io.ReadAll(tr)
-			if rerr != nil {
-				t.Fatalf("tar read %s: %v", name, rerr)
-			}
-			e.data = string(data)
-		}
-		out[name] = e
-	}
-}
-
-// execScript runs sh -c <script> in the container and requires exit 0.
-func execScript(t *testing.T, c Container, script string) {
-	t.Helper()
-	res := mustExec(t, c, ExecSpec{Cmd: []string{"sh", "-c", script}})
-	if res.ExitCode != 0 {
-		t.Fatalf("sh -c %q: exit %d, stderr %q", script, res.ExitCode, res.Stderr)
-	}
-}
-
 // containerWorkspaceHostPath returns the host path backing a fake
 // container's /workspace: fake-container commands see host paths, so
 // in-container scripts must be written against this path.
@@ -183,7 +49,43 @@ func containerWorkspaceHostPath(t *testing.T, c Container) string {
 	if !ok {
 		t.Fatalf("container is %T, want *FakeContainer", c)
 	}
-	return filepath.Join(fc.dir, "workspace")
+	return fc.hostPath(sandboxWorkspacePath)
+}
+
+// tarGz builds an in-memory tar.gz from the given headers (data written
+// for regular entries in order).
+func tarGz(t *testing.T, entries []tar.Header) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	for _, hdr := range entries {
+		h := hdr
+		if err := tw.WriteHeader(&h); err != nil {
+			t.Fatalf("WriteHeader(%q): %v", hdr.Name, err)
+		}
+		if h.Typeflag == tar.TypeReg && h.Size > 0 {
+			data := strings.Repeat("x", int(h.Size))
+			if _, err := tw.Write([]byte(data)); err != nil {
+				t.Fatalf("Write(%q): %v", hdr.Name, err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// importArchive feeds body through the store's GuardImport into the
+// container's /workspace (the manual import path) and returns the CopyIn
+// error.
+func importArchive(t *testing.T, s *WorkspaceStore, c Container, body []byte) error {
+	t.Helper()
+	return c.CopyIn(context.Background(), sandboxWorkspacePath, s.GuardImport(bytes.NewReader(body)))
 }
 
 // --- ValidWorkspaceID ------------------------------------------------------
@@ -253,234 +155,191 @@ func TestWorkspaceStore_Dir(t *testing.T) {
 	}
 }
 
-// --- Upload ----------------------------------------------------------------
+// --- GuardImport (manual archive channel checks) ---------------------------
 
-func TestWorkspaceStore_UploadSkipsGitAndCopiesContent(t *testing.T) {
+// A clean manual import lands in the container workspace: files,
+// directories and in-root symlinks survive, .git included (it is the
+// user's own archive, spec §5.3).
+func TestWorkspaceStore_GuardImportRoundTrip(t *testing.T) {
 	s, _ := newTestStore(t)
-	dir := mustWorkspaceDir(t, s, "ws1")
-	writeTestFile(t, filepath.Join(dir, "main.go"), "package main")
-	writeTestFile(t, filepath.Join(dir, "sub", "util.txt"), "utils")
-	writeTestFile(t, filepath.Join(dir, ".git", "config"), "[core]")
-	writeTestFile(t, filepath.Join(dir, ".git", "hooks", "pre-commit"), "#!/bin/sh")
-
 	be := newBackend(t)
 	c := mustCreate(t, be, CreateSpec{Image: "test-image", WorkDir: "/workspace"})
 
-	if err := s.Upload(context.Background(), c, "ws1"); err != nil {
-		t.Fatalf("Upload: %v", err)
+	body := tarGz(t, []tar.Header{
+		{Name: "main.go", Typeflag: tar.TypeReg, Mode: 0o644, Size: 3},
+		{Name: "sub", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "sub/util.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 5},
+		{Name: ".git/config", Typeflag: tar.TypeReg, Mode: 0o644, Size: 6},
+		{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "main.go"},
+	})
+	if err := importArchive(t, s, c, body); err != nil {
+		t.Fatalf("import: %v", err)
 	}
 
-	entries := readContainerWorkspace(t, c)
-	for name := range entries {
-		if name == ".git" || strings.HasPrefix(name, ".git/") {
-			t.Errorf("container archive contains .git entry %q", name)
+	wsHost := containerWorkspaceHostPath(t, c)
+	for name, want := range map[string]string{
+		"main.go":      "xxx",
+		"sub/util.txt": "xxxxx",
+		".git/config":  "xxxxxx",
+	} {
+		data, err := os.ReadFile(filepath.Join(wsHost, name))
+		if err != nil {
+			t.Fatalf("imported %s missing: %v", name, err)
+		}
+		if string(data) != want {
+			t.Errorf("imported %s = %q, want %q", name, data, want)
 		}
 	}
-	want := map[string]archEntry{
-		"main.go":      {typeflag: tar.TypeReg, data: "package main"},
-		"sub":          {typeflag: tar.TypeDir},
-		"sub/util.txt": {typeflag: tar.TypeReg, data: "utils"},
-	}
-	for name, w := range want {
-		if got, ok := entries[name]; !ok {
-			t.Errorf("container archive missing %q", name)
-		} else if got != w {
-			t.Errorf("container archive %q = %+v, want %+v", name, got, w)
-		}
+	link, err := os.Readlink(filepath.Join(wsHost, "link"))
+	if err != nil || link != "main.go" {
+		t.Errorf("imported link = %q err=%v, want main.go", link, err)
 	}
 }
 
-func TestWorkspaceStore_UploadSymlinkPolicy(t *testing.T) {
-	// The link sits at the workspace root, so targets resolve against ".".
+// The channel checks (spec §5.3): absolute entry names, ".." traversal,
+// and escaping or absolute symlink targets are rejected mid-stream — the
+// CopyIn error carries them and nothing is written past the violation.
+func TestWorkspaceStore_GuardImportRejectsEscapes(t *testing.T) {
 	tests := []struct {
 		name    string
-		target  string
+		entries []tar.Header
 		wantErr bool
 	}{
-		{"in-root file", "main.go", false},
-		{"in-root deeper", "sub/inner.txt", false},
-		{"in-root via dotdot", "sub/../main.go", false},
-		{"parent itself", "..", true},
-		{"dotdot escape", "../outside", true},
-		{"deep dotdot escape", "sub/../../outside", true},
-		{"absolute", "/etc/passwd", true},
+		{
+			name: "absolute entry",
+			entries: []tar.Header{
+				{Name: "ok.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+				{Name: "/etc/passwd", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
+			},
+			wantErr: true,
+		},
+		{
+			name: "dotdot traversal",
+			entries: []tar.Header{
+				{Name: "../escape", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
+			},
+			wantErr: true,
+		},
+		{
+			name: "deep dotdot traversal",
+			entries: []tar.Header{
+				{Name: "sub/../../escape", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
+			},
+			wantErr: true,
+		},
+		{
+			name: "absolute symlink",
+			entries: []tar.Header{
+				{Name: "evil", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "escaping symlink",
+			entries: []tar.Header{
+				{Name: "evil", Typeflag: tar.TypeSymlink, Linkname: "../../outside"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "nested escaping symlink",
+			entries: []tar.Header{
+				{Name: "sub/evil", Typeflag: tar.TypeSymlink, Linkname: "../../outside"},
+			},
+			wantErr: true,
+		},
+		{
+			// A link one level up from a subdirectory resolves to the
+			// workspace root — in-root, allowed (the one-hop policy).
+			name: "in-root parent link allowed",
+			entries: []tar.Header{
+				{Name: "sub/ok", Typeflag: tar.TypeSymlink, Linkname: "../file"},
+				{Name: "file", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s, _ := newTestStore(t)
-			dir := mustWorkspaceDir(t, s, "ws1")
-			writeTestFile(t, filepath.Join(dir, "main.go"), "m")
-			writeTestFile(t, filepath.Join(dir, "sub", "inner.txt"), "i")
-			mustSymlink(t, tt.target, filepath.Join(dir, "link"))
-
 			be := newBackend(t)
 			c := mustCreate(t, be, CreateSpec{Image: "test-image", WorkDir: "/workspace"})
 
-			err := s.Upload(context.Background(), c, "ws1")
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("Upload with link %q succeeded, want error", tt.target)
-				}
-				return
+			err := importArchive(t, s, c, tarGz(t, tt.entries))
+			if tt.wantErr && err == nil {
+				t.Fatal("import succeeded, want channel-check error")
 			}
-			if err != nil {
-				t.Fatalf("Upload with link %q: %v", tt.target, err)
-			}
-			got, ok := readContainerWorkspace(t, c)["link"]
-			if !ok || got.typeflag != tar.TypeSymlink || got.link != tt.target {
-				t.Fatalf("container archive link = %+v, want symlink -> %q", got, tt.target)
+			if !tt.wantErr && err != nil {
+				t.Fatalf("import: %v", err)
 			}
 		})
 	}
 }
 
-func TestWorkspaceStore_UploadSizeCap(t *testing.T) {
+// An import past the archive cap is rejected with ErrWorkspaceTooLarge
+// (settings key sandbox-archive-max-bytes); the cap counts the
+// uncompressed tar payload, so gzip cannot slip a big workspace past it.
+func TestWorkspaceStore_GuardImportSizeCap(t *testing.T) {
 	s := NewWorkspaceStore(t.TempDir(), 1024)
-	dir := mustWorkspaceDir(t, s, "ws1")
-	writeTestFile(t, filepath.Join(dir, "big.bin"), strings.Repeat("x", 2048))
-
 	be := newBackend(t)
 	c := mustCreate(t, be, CreateSpec{Image: "test-image", WorkDir: "/workspace"})
 
-	err := s.Upload(context.Background(), c, "ws1")
-	if !errors.Is(err, ErrWorkspaceTooLarge) {
-		t.Fatalf("Upload over cap: got %v, want ErrWorkspaceTooLarge", err)
-	}
-}
-
-func TestWorkspaceStore_UploadInvalidID(t *testing.T) {
-	s, _ := newTestStore(t)
-	be := newBackend(t)
-	c := mustCreate(t, be, CreateSpec{Image: "test-image", WorkDir: "/workspace"})
-	if err := s.Upload(context.Background(), c, "../etc"); err == nil {
-		t.Fatal("Upload with invalid id succeeded, want error")
-	}
-}
-
-// --- Sync ------------------------------------------------------------------
-
-func TestWorkspaceStore_SyncRoundTrip(t *testing.T) {
-	s, root := newTestStore(t)
-	dir := mustWorkspaceDir(t, s, "ws1")
-	writeTestFile(t, filepath.Join(dir, "main.go"), "v1")
-	writeTestFile(t, filepath.Join(dir, "data.bin"), "payload")
-	writeTestFile(t, filepath.Join(dir, "sub", "nested.txt"), "nested")
-	mustSymlink(t, "main.go", filepath.Join(dir, "link"))
-
-	be := newBackend(t)
-	c := mustCreate(t, be, CreateSpec{Image: "test-image", WorkDir: "/workspace"})
-
-	if err := s.Upload(context.Background(), c, "ws1"); err != nil {
-		t.Fatalf("Upload: %v", err)
-	}
-
-	// Mutate the container-side workspace: edit, delete, create, new dir.
-	// Fake-container commands see host paths, so address the host directory
-	// backing /workspace.
-	wsHost := containerWorkspaceHostPath(t, c)
-	execScript(t, c, fmt.Sprintf(`printf v2 > '%s/main.go' && rm '%s/data.bin' &&
-		echo new > '%s/created.txt' && mkdir '%s/newdir'`, wsHost, wsHost, wsHost, wsHost))
-
-	if err := s.Sync(context.Background(), c, "ws1"); err != nil {
-		t.Fatalf("Sync: %v", err)
-	}
-
-	assertTree(t, filepath.Join(root, "ws1"), map[string]treeEntry{
-		"main.go":        {kind: 'f', data: "v2"},
-		"sub":            {kind: 'd'},
-		"sub/nested.txt": {kind: 'f', data: "nested"},
-		"link":           {kind: 'l', link: "main.go"},
-		"created.txt":    {kind: 'f', data: "new\n"},
-		"newdir":         {kind: 'd'},
-		// data.bin was deleted inside the container: gone after Sync.
+	// Highly compressible payload: 64 KiB of zeros, well over the 1 KiB
+	// cap once uncompressed.
+	body := tarGz(t, []tar.Header{
+		{Name: "big.bin", Typeflag: tar.TypeReg, Mode: 0o644, Size: 64 << 10},
 	})
-
-	// No staging or replaced-dir leftovers next to the workspace.
-	if names := listDirNames(t, root); len(names) != 1 || names[0] != "ws1" {
-		t.Errorf("root after Sync = %v, want exactly [ws1]", names)
+	err := importArchive(t, s, c, body)
+	if !errors.Is(err, ErrWorkspaceTooLarge) {
+		t.Fatalf("import over cap: got %v, want ErrWorkspaceTooLarge", err)
 	}
 }
 
-func TestWorkspaceStore_SyncFailureKeepsOldDirectory(t *testing.T) {
-	tests := []struct {
-		name     string
-		cap      int64
-		sabotage func(t *testing.T, c Container)
-		wantErr  error
-	}{
-		{
-			name: "copy out fails",
-			sabotage: func(t *testing.T, c Container) {
-				if err := c.Remove(context.Background(), true); err != nil {
-					t.Fatalf("Remove: %v", err)
-				}
-			},
-		},
-		{
-			name: "escaping symlink from container",
-			sabotage: func(t *testing.T, c Container) {
-				ws := containerWorkspaceHostPath(t, c)
-				execScript(t, c, fmt.Sprintf("ln -s ../../escape '%s/bad'", ws))
-			},
-		},
-		{
-			name: "absolute symlink from container",
-			sabotage: func(t *testing.T, c Container) {
-				ws := containerWorkspaceHostPath(t, c)
-				execScript(t, c, fmt.Sprintf("ln -s /etc/passwd '%s/bad'", ws))
-			},
-		},
-		{
-			name: "archive over cap",
-			cap:  8192,
-			sabotage: func(t *testing.T, c Container) {
-				ws := containerWorkspaceHostPath(t, c)
-				execScript(t, c, fmt.Sprintf("head -c 32768 /dev/zero > '%s/big.bin'", ws))
-			},
-			wantErr: ErrWorkspaceTooLarge,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cap := int64(64 * 1024 * 1024)
-			if tt.cap != 0 {
-				cap = tt.cap
-			}
-			s := NewWorkspaceStore(t.TempDir(), cap)
-			dir := mustWorkspaceDir(t, s, "ws1")
-			writeTestFile(t, filepath.Join(dir, "keep.txt"), "keep")
-			writeTestFile(t, filepath.Join(dir, "sub", "b.txt"), "b")
-
-			be := newBackend(t)
-			c := mustCreate(t, be, CreateSpec{Image: "test-image", WorkDir: "/workspace"})
-			if err := s.Upload(context.Background(), c, "ws1"); err != nil {
-				t.Fatalf("Upload: %v", err)
-			}
-
-			tt.sabotage(t, c)
-			err := s.Sync(context.Background(), c, "ws1")
-			if err == nil {
-				t.Fatal("Sync succeeded, want error")
-			}
-			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
-				t.Fatalf("Sync error = %v, want %v", err, tt.wantErr)
-			}
-
-			// The previous workspace must survive every failure mode intact.
-			assertTree(t, filepath.Join(s.root, "ws1"), map[string]treeEntry{
-				"keep.txt":  {kind: 'f', data: "keep"},
-				"sub":       {kind: 'd'},
-				"sub/b.txt": {kind: 'f', data: "b"},
-			})
-		})
-	}
-}
-
-func TestWorkspaceStore_SyncInvalidID(t *testing.T) {
+// Non-regular entries (hardlinks, fifos, devices) are dropped, not
+// unpacked — the sanitized stream only carries files, dirs and safe
+// symlinks.
+func TestWorkspaceStore_GuardImportDropsSpecialEntries(t *testing.T) {
 	s, _ := newTestStore(t)
 	be := newBackend(t)
 	c := mustCreate(t, be, CreateSpec{Image: "test-image", WorkDir: "/workspace"})
-	if err := s.Sync(context.Background(), c, "ws id"); err == nil {
-		t.Fatal("Sync with invalid id succeeded, want error")
+
+	entries := []tar.Header{
+		{Name: "fifo", Typeflag: tar.TypeFifo},
+		{Name: "dev", Typeflag: tar.TypeChar, Mode: 0o644, Size: 0},
+		{Name: "ok.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 2},
+	}
+	if err := importArchive(t, s, c, tarGz(t, entries)); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	wsHost := containerWorkspaceHostPath(t, c)
+	if _, err := os.Lstat(filepath.Join(wsHost, "ok.txt")); err != nil {
+		t.Fatalf("ok.txt missing: %v", err)
+	}
+	for _, name := range []string{"fifo", "dev"} {
+		if _, err := os.Lstat(filepath.Join(wsHost, name)); !os.IsNotExist(err) {
+			t.Errorf("%s unpacked, want dropped", name)
+		}
+	}
+}
+
+// GuardImport passes plain (uncompressed) tars through the same checks —
+// CopyIn accepts both shapes.
+func TestWorkspaceStore_GuardImportPlainTar(t *testing.T) {
+	s, _ := newTestStore(t)
+	be := newBackend(t)
+	c := mustCreate(t, be, CreateSpec{Image: "test-image", WorkDir: "/workspace"})
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: "/abs", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("evil")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := importArchive(t, s, c, buf.Bytes()); err == nil {
+		t.Fatal("plain-tar import with absolute entry succeeded, want error")
 	}
 }

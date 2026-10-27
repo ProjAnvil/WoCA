@@ -248,13 +248,15 @@ func withSessionTTL(t *testing.T, ttl time.Duration) {
 	t.Cleanup(func() { sessionIdleTTL = old })
 }
 
-// --- full 16-endpoint flow ---------------------------------------------------
+// --- full 15-endpoint flow ---------------------------------------------------
 
 func TestServiceFullFlow(t *testing.T) {
 	cfg, backend := newTestConfig(t)
 	_, srv := startTestService(t, cfg)
 
-	// Seed the host workspace before create; create must upload it.
+	// Seed the host workspace before create; the sandbox bind-mounts the
+	// same directory (spec §5.3), so the file is visible in-container with
+	// no upload step.
 	dir, err := cfg.Store.Dir("ws_1")
 	if err != nil {
 		t.Fatalf("Store.Dir: %v", err)
@@ -264,12 +266,12 @@ func TestServiceFullFlow(t *testing.T) {
 	// 1. create
 	sbx := createSandbox(t, srv, "ws_1")
 
-	// 2. exec: uploaded file visible, env + stdin plumbing work. The fake
-	// backend maps the container cwd onto a host directory but does not
-	// rewrite argv paths, so exec tests address files relatively — a real
-	// container would accept "/workspace/hello.txt" just as well.
+	// 2. exec: mounted file visible, env + stdin plumbing work. The fake
+	// backend maps the container cwd onto the mounted host directory but
+	// does not rewrite argv paths, so exec tests address files relatively —
+	// a real container would accept "/workspace/hello.txt" just as well.
 	if code, out := execSandbox(t, srv, sbx, []string{"cat", "hello.txt"}); code != 0 || out != "hello woca\n" {
-		t.Fatalf("exec cat uploaded file: exit %d out %q", code, out)
+		t.Fatalf("exec cat mounted file: exit %d out %q", code, out)
 	}
 	var execOut struct {
 		ExitCode int    `json:"exit_code"`
@@ -424,22 +426,26 @@ func TestServiceFullFlow(t *testing.T) {
 		t.Fatalf("input after exit: status %d", code)
 	}
 
-	// 16. sync: write a file container-side, sync, find it host-side.
+	// The mount (spec §5.3): a file written through the sandbox's write
+	// endpoint is on the host workspace directory immediately — no sync
+	// call, the sandbox works on the volume in place.
 	if code := call(t, srv, http.MethodPost, "/sandbox/"+sbx+"/write", map[string]any{
 		"path": "/workspace/synced.txt", "content": b64("synced-payload"), "mode": 420,
 	}, nil); code != http.StatusNoContent {
-		t.Fatalf("write for sync: status %d", code)
-	}
-	if code := call(t, srv, http.MethodPost, "/sandbox/"+sbx+"/workspace/sync", nil, nil); code != http.StatusOK {
-		t.Fatalf("sync: status %d", code)
+		t.Fatalf("write for mount check: status %d", code)
 	}
 	host, err := cfg.Store.Dir("ws_1")
 	if err != nil {
-		t.Fatalf("Store.Dir after sync: %v", err)
+		t.Fatalf("Store.Dir after write: %v", err)
 	}
 	raw, err := os.ReadFile(host + "/synced.txt")
 	if err != nil || string(raw) != "synced-payload" {
 		t.Fatalf("host synced.txt: %q err %v", raw, err)
+	}
+	// The sync endpoint is gone with the transfer machinery: an explicit
+	// 404 for a live sandbox, not a silent no-op.
+	if code := call(t, srv, http.MethodPost, "/sandbox/"+sbx+"/workspace/sync", nil, nil); code != http.StatusNotFound {
+		t.Fatalf("workspace/sync on a live sandbox: status %d (want 404, the endpoint is removed)", code)
 	}
 
 	// 15. destroy: idempotent 2xx, sessions die, container gone, lock freed.
@@ -532,7 +538,7 @@ func TestServiceCreateHeaderWorkspace(t *testing.T) {
 		t.Fatalf("create with header workspace: status %d", code)
 	}
 	if _, got := execSandbox(t, srv, out.SandboxID, []string{"cat", "marker.txt"}); got != "from-header\n" {
-		t.Fatalf("header workspace upload: %q", got)
+		t.Fatalf("header workspace mount: %q", got)
 	}
 }
 
@@ -566,14 +572,18 @@ func callH(t *testing.T, srv *httptest.Server, method, p, workspace string, body
 	return resp.StatusCode
 }
 
-// --- upload failure semantics -------------------------------------------------
+// --- create failure semantics ---------------------------------------------------
 
-func TestServiceCreateUploadFailureCleansUp(t *testing.T) {
+// A backend that cannot mount (or otherwise refuses Create) fails the
+// create with 500, leaves no container behind, and releases the workspace
+// lock: nothing stays wedged (spec §10.2's cleanup posture, now without
+// any upload step to fail).
+func TestServiceCreateFailureCleansUp(t *testing.T) {
 	cfg, backend := newTestConfig(t)
-	cfg.Store = NewWorkspaceStore(t.TempDir(), 16) // 16-byte cap
+	cfg.Backend = &failingBackend{Backend: cfg.Backend, createErr: errors.New("mount boom")}
 	_, srv := startTestService(t, cfg)
 
-	dir, err := cfg.Store.Dir("ws_big")
+	dir, err := cfg.Store.Dir("ws_mount")
 	if err != nil {
 		t.Fatalf("Store.Dir: %v", err)
 	}
@@ -581,26 +591,28 @@ func TestServiceCreateUploadFailureCleansUp(t *testing.T) {
 	var errOut struct {
 		Error string `json:"error"`
 	}
-	if code := call(t, srv, http.MethodPost, "/sandbox/create", map[string]any{"workspace": "ws_big", "cwd": "/workspace"}, &errOut); code != http.StatusInternalServerError {
-		t.Fatalf("create with oversized workspace: status %d (want 500)", code)
+	if code := call(t, srv, http.MethodPost, "/sandbox/create", map[string]any{"workspace": "ws_mount", "cwd": "/workspace"}, &errOut); code != http.StatusInternalServerError {
+		t.Fatalf("create with failing backend: status %d (want 500)", code)
 	}
 	if errOut.Error == "" {
-		t.Fatal("upload failure error body empty")
+		t.Fatal("create failure error body empty")
 	}
 	live, err := backend.List(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(live) != 0 {
-		t.Fatalf("containers after failed upload: %d", len(live))
+		t.Fatalf("containers after failed create: %d", len(live))
 	}
-	// The workspace lock must be released (spec §10.2: host dir untouched,
-	// nothing wedged).
+	// The workspace lock must be released and the host dir untouched.
 	lock, err := LockDir(dir)
 	if err != nil {
-		t.Fatalf("workspace lock after failed upload: %v", err)
+		t.Fatalf("workspace lock after failed create: %v", err)
 	}
 	_ = lock.Close()
+	if b, err := os.ReadFile(dir + "/big.txt"); err != nil || string(b) != strings.Repeat("x", 128) {
+		t.Fatalf("host dir disturbed by failed create: (%d bytes, %v)", len(b), err)
+	}
 }
 
 // --- authentication ------------------------------------------------------------
@@ -965,15 +977,6 @@ func TestServiceBadRequests(t *testing.T) {
 	}
 }
 
-func TestServiceSyncWithoutWorkspace(t *testing.T) {
-	cfg, _ := newTestConfig(t)
-	_, srv := startTestService(t, cfg)
-	sbx := createSandbox(t, srv, "") // not workspace-routed
-	if code := call(t, srv, http.MethodPost, "/sandbox/"+sbx+"/workspace/sync", nil, nil); code != http.StatusBadRequest {
-		t.Fatalf("sync without workspace: status %d (want 400)", code)
-	}
-}
-
 // --- archive endpoints -------------------------------------------------------------------
 
 func TestServiceArchiveRoundtrip(t *testing.T) {
@@ -1001,12 +1004,19 @@ func TestServiceArchiveRoundtrip(t *testing.T) {
 	_ = tw.Close()
 	_ = zw.Close()
 
-	// 13. upload → 204, content lands in /workspace.
+	// 13. manual import → 204, content lands in /workspace — which is the
+	// bind-mounted workspace directory, so the file is on the volume
+	// directly (the import is the only direct volume write left).
 	if code, _, _ := callBytes(t, srv, http.MethodPut, "/sandbox/"+sbx+"/archive", "application/gzip", tarbuf.Bytes(), ""); code != http.StatusNoContent {
 		t.Fatalf("put archive: status %d", code)
 	}
 	if _, got := execSandbox(t, srv, sbx, []string{"cat", "a.txt"}); got != "alpha\n" {
 		t.Fatalf("archive upload content: %q", got)
+	}
+	if host, err := cfg.Store.Dir("ws_arch"); err != nil {
+		t.Fatalf("Store.Dir: %v", err)
+	} else if b, err := os.ReadFile(host + "/a.txt"); err != nil || string(b) != "alpha\n" {
+		t.Fatalf("manual import not on the volume: (%q, %v)", b, err)
 	}
 
 	// 14. download → gzip tar with both entries.
@@ -1046,6 +1056,31 @@ func TestServiceArchiveRoundtrip(t *testing.T) {
 	// Garbage uploads are a 400, not a 500.
 	if code, _, _ := callBytes(t, srv, http.MethodPut, "/sandbox/"+sbx+"/archive", "application/gzip", []byte("definitely not a tar"), ""); code != http.StatusBadRequest {
 		t.Fatalf("put garbage archive: status %d (want 400)", code)
+	}
+
+	// Channel checks on the manual import (spec §5.3): absolute entry
+	// names and escaping symlinks are rejected with 400.
+	evil := func(entries ...tar.Header) []byte {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(zw)
+		for _, h := range entries {
+			hdr := h
+			if err := tw.WriteHeader(&hdr); err != nil {
+				t.Fatalf("tar header: %v", err)
+			}
+		}
+		_ = tw.Close()
+		_ = zw.Close()
+		return buf.Bytes()
+	}
+	if code, _, _ := callBytes(t, srv, http.MethodPut, "/sandbox/"+sbx+"/archive", "application/gzip",
+		evil(tar.Header{Name: "/etc/evil", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4}), ""); code != http.StatusBadRequest {
+		t.Fatalf("put archive with absolute entry: status %d (want 400)", code)
+	}
+	if code, _, _ := callBytes(t, srv, http.MethodPut, "/sandbox/"+sbx+"/archive", "application/gzip",
+		evil(tar.Header{Name: "lnk", Typeflag: tar.TypeSymlink, Linkname: "../../escape"}), ""); code != http.StatusBadRequest {
+		t.Fatalf("put archive with escaping symlink: status %d (want 400)", code)
 	}
 }
 
@@ -1316,19 +1351,38 @@ func TestServiceMaxFileBytes(t *testing.T) {
 	}
 }
 
-func TestServiceSyncTooLarge(t *testing.T) {
+// A manual archive import past sandbox-archive-max-bytes answers 413 —
+// the size cap moved from the deleted sync path onto the one remaining
+// volume-write channel (spec §5.3).
+func TestServiceArchiveImportOverCap(t *testing.T) {
 	cfg, _ := newTestConfig(t)
-	cfg.Store = NewWorkspaceStore(t.TempDir(), 4096) // empty upload fits, 8 KiB sync does not
+	cfg.Store = NewWorkspaceStore(t.TempDir(), 4096)
 	_, srv := startTestService(t, cfg)
 	sbx := createSandbox(t, srv, "ws_small")
 
-	writeViaEndpoint(t, srv, sbx, "/workspace/big.txt", strings.Repeat("y", 8192))
-	if code := call(t, srv, http.MethodPost, "/sandbox/"+sbx+"/workspace/sync", nil, nil); code != http.StatusInternalServerError {
-		t.Fatalf("sync over cap: status %d (want 500)", code)
+	// Highly compressible payload: over the cap uncompressed, tiny as gzip.
+	var tarbuf bytes.Buffer
+	zw := gzip.NewWriter(&tarbuf)
+	tw := tar.NewWriter(zw)
+	if err := tw.WriteHeader(&tar.Header{Name: "big.txt", Mode: 0o644, Size: 64 << 10, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
 	}
-	// The host workspace directory survives the failed sync (spec §10.2).
-	if dir, err := cfg.Store.Dir("ws_small"); err != nil || dir == "" {
-		t.Fatalf("workspace dir after failed sync: %q err %v", dir, err)
+	if _, err := tw.Write(bytes.Repeat([]byte("y"), 64<<10)); err != nil {
+		t.Fatal(err)
+	}
+	_ = tw.Close()
+	_ = zw.Close()
+
+	if code, _, _ := callBytes(t, srv, http.MethodPut, "/sandbox/"+sbx+"/archive", "application/gzip", tarbuf.Bytes(), ""); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("archive import over cap: status %d (want 413)", code)
+	}
+	// The workspace directory survives the rejected import untouched.
+	dir, err := cfg.Store.Dir("ws_small")
+	if err != nil || dir == "" {
+		t.Fatalf("workspace dir after rejected import: %q err %v", dir, err)
+	}
+	if names := listDirNames(t, dir); len(names) != 0 {
+		t.Fatalf("workspace dir disturbed by rejected import: %v", names)
 	}
 }
 

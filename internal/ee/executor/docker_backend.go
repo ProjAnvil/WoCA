@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"path"
 	"slices"
 	"strings"
@@ -83,7 +84,10 @@ func NewDockerBackend(host string) (Backend, error) {
 
 // Create implements Backend: the container is created with the hardening
 // profile for spec.Hardening (see hardening.go) and started on its idle
-// command, ready for exec sessions.
+// command, ready for exec sessions. A non-empty spec.WorkspaceDir is
+// bind-mounted onto /workspace (spec §5.3): the sandbox works on the
+// volume in place, so under Full hardening the bind replaces the former
+// workspace tmpfs — a bind stays writable even on a read-only rootfs.
 func (b *dockerBackend) Create(ctx context.Context, spec CreateSpec) (Container, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -93,6 +97,20 @@ func (b *dockerBackend) Create(ctx context.Context, spec CreateSpec) (Container,
 	}
 	h := hardeningSpecFor(spec.Hardening)
 
+	var binds []string
+	if spec.WorkspaceDir != "" {
+		info, statErr := os.Stat(spec.WorkspaceDir)
+		if statErr != nil {
+			return nil, fmt.Errorf("docker backend: workspace dir %s: %w", spec.WorkspaceDir, statErr)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("docker backend: workspace dir %s: not a directory", spec.WorkspaceDir)
+		}
+		// Only the workspace's own subdirectory is ever mounted — never
+		// the volume root (spec §5.3).
+		binds = append(binds, spec.WorkspaceDir+":"+sandboxWorkspacePath+":rw")
+	}
+
 	// PidsLimit: the spec's explicit cap wins; unset falls back to the
 	// hardening profile's default (512) — the fail-closed posture.
 	pids := spec.PidsLimit
@@ -101,6 +119,7 @@ func (b *dockerBackend) Create(ctx context.Context, spec CreateSpec) (Container,
 	}
 	hc := &container.HostConfig{
 		Runtime:        spec.Runtime,
+		Binds:          binds,
 		CapDrop:        slices.Clone(h.CapDrop),
 		SecurityOpt:    slices.Clone(h.SecurityOpt),
 		ReadonlyRootfs: h.ReadonlyRootfs,
@@ -112,11 +131,13 @@ func (b *dockerBackend) Create(ctx context.Context, spec CreateSpec) (Container,
 	// PidsLimit is a promoted field (embedded Resources); assigning it out
 	// of the literal keeps go1.26 language compatibility.
 	hc.PidsLimit = &pids
-	if h.ReadonlyRootfs {
+	if h.ReadonlyRootfs && spec.WorkspaceDir == "" {
 		// Full hardening mounts the rootfs read-only, so besides the
-		// profile's /tmp the sandbox workspace path (WorkspaceStore's
-		// CopyIn target) needs writable scratch too — it does not exist
-		// in the images and could never be created on a read-only rootfs.
+		// profile's /tmp the sandbox workspace path (the CopyIn target of
+		// a non-routed sandbox) needs writable scratch too — it does not
+		// exist in the images and could never be created on a read-only
+		// rootfs. A workspace-routed sandbox gets the bind instead, which
+		// is writable by itself.
 		if hc.Tmpfs == nil {
 			hc.Tmpfs = map[string]string{}
 		}
@@ -206,8 +227,9 @@ func (c *dockerContainer) State(ctx context.Context) (State, error) {
 // CopyIn implements Container by streaming the tarball through an in-container
 // `tar -x`. The engine's own archive API (PUT /archive) cannot be used: it
 // refuses read-only-rootfs containers outright and cannot see tmpfs mounts —
-// and under full hardening every writable path IS tmpfs. Gzip streams are
-// sniffed (WorkspaceStore uploads tar.gz) and handed to `tar -xz`.
+// and under full hardening every unmounted writable path IS tmpfs. Gzip
+// streams are sniffed (manual archive imports arrive as tar.gz) and handed
+// to `tar -xz`.
 func (c *dockerContainer) CopyIn(ctx context.Context, dstDir string, tarball io.Reader) error {
 	if err := ctx.Err(); err != nil {
 		return err

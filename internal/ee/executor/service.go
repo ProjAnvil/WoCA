@@ -1,11 +1,14 @@
 package executor
 
 // The executor's contract v2 sandbox HTTP service (internal/platform/
-// executor/CONTRACT.md): all 16 endpoints plus one internal ops endpoint,
+// executor/CONTRACT.md): all 15 endpoints plus one internal ops endpoint,
 // served entirely through the narrow Backend interface, so the same service
 // runs over the FakeBackend in tests and over the docker backend in
 // production. Workspace-routed sandboxes hold their workspace's DirLock
-// from create to destroy and upload/sync through the WorkspaceStore.
+// from create to destroy; the workspace directory itself is bind-mounted
+// into the container at create (spec §5.3) — there is no upload or sync
+// step, and the manual archive import is the only direct write onto the
+// volume.
 //
 // File-surface endpoints are built from the generic Backend's path-mapping
 // primitives: read/stat/glob/grep stream a CopyOut tar, write/mkdir pack a
@@ -65,8 +68,9 @@ type ServiceConfig struct {
 	// Backend provisions and lists sandbox containers (required).
 	Backend Backend
 	// Store owns the host-side workspace directories; workspace-routed
-	// sandboxes upload from and sync into it. Nil rejects workspace
-	// routing explicitly.
+	// sandboxes bind-mount their directory out of it, and the store's cap
+	// bounds the manual archive import. Nil rejects workspace routing
+	// explicitly.
 	Store *WorkspaceStore
 	// MaxConcurrent caps concurrent live sandboxes; 0 means unlimited. A
 	// create past the cap answers 503 (design §3.3 rule 4).
@@ -108,7 +112,7 @@ type ServiceConfig struct {
 	APIKey string
 }
 
-// Service is the executor sandbox service: the 16 contract endpoints plus
+// Service is the executor sandbox service: the 15 contract endpoints plus
 // GET /internal/sandboxes, over one Backend.
 type Service struct {
 	cfg ServiceConfig
@@ -228,7 +232,6 @@ func (s *Service) routes() *http.ServeMux {
 	mux.HandleFunc("POST /sandbox/{id}/grep", s.withSandbox(s.handleGrep))
 	mux.HandleFunc("PUT /sandbox/{id}/archive", s.withSandbox(s.handlePutArchive))
 	mux.HandleFunc("GET /sandbox/{id}/archive", s.withSandbox(s.handleGetArchive))
-	mux.HandleFunc("POST /sandbox/{id}/workspace/sync", s.withSandbox(s.handleWorkspaceSync))
 	mux.HandleFunc("DELETE /sandbox/{id}", s.handleDestroy) // idempotent 2xx per §3.15
 	mux.HandleFunc("GET /internal/sandboxes", s.handleInternalSandboxes)
 	return mux
@@ -364,6 +367,7 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 	// until destroy (design §4): two sandboxes may never share a host
 	// workspace. Busy is 503 — the workspace is not wedged, just taken.
 	var lock *DirLock
+	var workspaceDir string
 	if workspace != "" {
 		if s.cfg.Store == nil {
 			writeErr(w, http.StatusInternalServerError, "workspace routing requires a workspace store")
@@ -383,6 +387,7 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		workspaceDir = dir
 	}
 
 	spec := CreateSpec{Hardening: s.cfg.Hardening}
@@ -402,6 +407,10 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 	if spec.WorkDir == "" {
 		spec.WorkDir = sandboxWorkspacePath
 	}
+	// The mount (spec §5.3): the workspace directory rides the spec, and
+	// the backend bind-mounts it onto /workspace — the sandbox works on
+	// the volume in place, there is nothing to upload.
+	spec.WorkspaceDir = workspaceDir
 
 	// In-flight marker for the labeled GC: the container exists in the
 	// daemon before its registry entry does, so while this request runs
@@ -414,18 +423,6 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		_ = lock.Close()
 		writeErr(w, http.StatusInternalServerError, "create container: "+err.Error())
 		return
-	}
-	if workspace != "" {
-		if err := s.cfg.Store.Upload(r.Context(), c, workspace); err != nil {
-			// Spec §10.2: upload failure fails the create; the container
-			// dies, the host directory stays untouched, nothing stays
-			// locked. destroy's idempotent semantics apply to the
-			// already-registered-less container.
-			_ = c.Remove(context.Background(), true)
-			_ = lock.Close()
-			writeErr(w, http.StatusInternalServerError, "workspace upload: "+err.Error())
-			return
-		}
 	}
 
 	sbx := &sandbox{id: c.ID(), container: c, workspace: workspace, lock: lock}
@@ -935,9 +932,23 @@ func writeCopyOutErr(w http.ResponseWriter, err error, op string) {
 
 // --- archive surface ------------------------------------------------------------------
 
+// handlePutArchive is the user-initiated manual import (CONTRACT.md
+// §3.13): the only endpoint that writes the volume directly. With a store
+// configured the body passes through GuardImport — the streaming channel
+// checks (workspace-relative entries only, no escaping symlinks, payload
+// bounded by sandbox-archive-max-bytes) — before CopyIn unpacks it into
+// /workspace; a violation answers 400, an over-cap stream 413.
 func (s *Service) handlePutArchive(sbx *sandbox, w http.ResponseWriter, r *http.Request) {
+	var body io.Reader = r.Body
+	if s.cfg.Store != nil {
+		body = s.cfg.Store.GuardImport(r.Body)
+	}
 	// CopyIn accepts plain and gzipped tars; garbage is its error to report.
-	if err := sbx.container.CopyIn(r.Context(), sandboxWorkspacePath, r.Body); err != nil {
+	if err := sbx.container.CopyIn(r.Context(), sandboxWorkspacePath, body); err != nil {
+		if errors.Is(err, ErrWorkspaceTooLarge) {
+			writeErr(w, http.StatusRequestEntityTooLarge, "archive: "+err.Error())
+			return
+		}
 		writeErr(w, http.StatusBadRequest, "archive: "+err.Error())
 		return
 	}
@@ -992,28 +1003,6 @@ func (s *Service) handleGetArchive(sbx *sandbox, w http.ResponseWriter, r *http.
 	}
 	_ = tw.Close()
 	_ = zw.Close()
-}
-
-// --- workspace sync --------------------------------------------------------------------
-
-func (s *Service) handleWorkspaceSync(sbx *sandbox, w http.ResponseWriter, r *http.Request) {
-	if sbx.workspace == "" {
-		writeErr(w, http.StatusBadRequest, "sandbox is not workspace-routed")
-		return
-	}
-	if s.cfg.Store == nil {
-		writeErr(w, http.StatusInternalServerError, "workspace store not configured")
-		return
-	}
-	// Sync extracts the container /workspace and atomically swaps the host
-	// directory (spec §10.2: a failed sync fails the run, the host keeps
-	// the old tree).
-	if err := s.cfg.Store.Sync(r.Context(), sbx.container, sbx.workspace); err != nil {
-		s.log.Error().Err(err).Str("sandbox", sbx.id).Str("workspace", sbx.workspace).Msg("workspace sync failed")
-		writeErr(w, http.StatusInternalServerError, "workspace sync: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
 // --- internal ops endpoint ---------------------------------------------------------------

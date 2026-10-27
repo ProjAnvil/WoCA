@@ -359,3 +359,86 @@ func readDockerLabTar(t *testing.T, rc io.ReadCloser) (map[string]bool, map[stri
 		contents[hdr.Name] = string(data)
 	}
 }
+
+// TestDockerLabWorkspaceBind verifies the mount semantics (spec §5.3)
+// against a real daemon: a WorkspaceDir create bind-mounts that host
+// directory onto /workspace — writable even under Full hardening's
+// read-only rootfs — so exec writes and CopyIn land on the host directory
+// in place, CopyOut reads them back, a missing directory fails Create
+// loudly, and Remove never deletes the workspace.
+func TestDockerLabWorkspaceBind(t *testing.T) {
+	ctx := requireDaemonAndImage(t)
+	backend, err := NewDockerBackend(dockerLabHost())
+	if err != nil {
+		t.Fatalf("dockerlab: backend: %v", err)
+	}
+
+	ws, err := os.MkdirTemp("", "dockerlab-ws-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ws+"/pre.txt", []byte("already-there"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := backend.Create(ctx, CreateSpec{
+		Image:        dockerLabImage,
+		WorkDir:      "/workspace",
+		WorkspaceDir: ws,
+		Labels:       map[string]string{"woca.io/test": "dockerlab-bind"},
+		Hardening:    HardeningFull,
+	})
+	if err != nil {
+		t.Fatalf("dockerlab: create with workspace bind: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Remove(context.WithoutCancel(ctx), true) })
+
+	// The pre-existing host file is visible through the mount; a write in
+	// the container lands on the host directory (read-only rootfs and
+	// all — the bind is its own writable surface).
+	if res := dockerLabExec(t, ctx, c, "cat", "/workspace/pre.txt"); string(res.Stdout) != "already-there" {
+		t.Fatalf("dockerlab: mounted pre.txt = %q (stderr %q)", res.Stdout, res.Stderr)
+	}
+	dockerLabExec(t, ctx, c, "sh", "-c", "echo mounted > /workspace/product.txt")
+	if b, err := os.ReadFile(ws + "/product.txt"); err != nil || string(b) != "mounted\n" {
+		t.Fatalf("dockerlab: host product.txt = (%q, %v), want %q", b, err, "mounted\n")
+	}
+
+	// CopyIn unpacks onto the same directory; CopyOut reads it back.
+	var tarbuf bytes.Buffer
+	tw := tar.NewWriter(&tarbuf)
+	dockerLabTarFile(t, tw, "imported.txt", "delta")
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CopyIn(ctx, "/workspace", bytes.NewReader(tarbuf.Bytes())); err != nil {
+		t.Fatalf("dockerlab: CopyIn into the bind: %v", err)
+	}
+	if b, err := os.ReadFile(ws + "/imported.txt"); err != nil || string(b) != "delta" {
+		t.Fatalf("dockerlab: host imported.txt = (%q, %v)", b, err)
+	}
+	rc, err := c.CopyOut(ctx, "/workspace")
+	if err != nil {
+		t.Fatalf("dockerlab: CopyOut of the bind: %v", err)
+	}
+	_, contents := readDockerLabTar(t, rc)
+	if contents["workspace/product.txt"] != "mounted\n" || contents["workspace/imported.txt"] != "delta" {
+		t.Fatalf("dockerlab: CopyOut contents = %v", contents)
+	}
+
+	// A missing workspace directory fails Create explicitly.
+	if _, err := backend.Create(ctx, CreateSpec{
+		Image: dockerLabImage, WorkDir: "/workspace",
+		WorkspaceDir: ws + "/nope", Hardening: HardeningFull,
+	}); err == nil {
+		t.Fatal("dockerlab: create with missing WorkspaceDir succeeded, want error")
+	}
+
+	// Remove reclaims the container, never the workspace directory.
+	if err := c.Remove(ctx, true); err != nil {
+		t.Fatalf("dockerlab: remove: %v", err)
+	}
+	if b, err := os.ReadFile(ws + "/product.txt"); err != nil || string(b) != "mounted\n" {
+		t.Fatalf("dockerlab: workspace content after remove = (%q, %v)", b, err)
+	}
+}

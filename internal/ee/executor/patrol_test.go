@@ -20,6 +20,15 @@ func patrolBuf() (*bytes.Buffer, zerolog.Logger) {
 	return &buf, zerolog.New(&buf).With().Logger()
 }
 
+// mkdir creates dir (a local stand-in for the helper the staging tests
+// used to share).
+func mkdir(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // An over-threshold watermark and an over-cap workspace each raise a
 // WARN naming the breach.
 func TestPatrolOnceWarnsOnBreach(t *testing.T) {
@@ -64,7 +73,8 @@ func TestPatrolOnceSilentWhenHealthy(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "ws-ok", "file"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// A staging artifact: the patrol must not size it (the GC owns it).
+	// A foreign name (not a valid workspace id): the patrol must not
+	// size it.
 	mkdir(t, filepath.Join(root, "ws-ok.staging-1"))
 
 	buf, log := patrolBuf()

@@ -154,7 +154,6 @@ func newWorkerRoot() *cobra.Command {
 					}
 					return ap.Settings.GetSecret("sandbox-api-key:" + backendID)
 				},
-				MaxArchiveBytes: ap.Settings.Load().SandboxArchiveMaxBytes,
 			})
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)

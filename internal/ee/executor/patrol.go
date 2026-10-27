@@ -4,11 +4,11 @@ package executor
 // periodic WARN-level watch over the executor's host-side disk posture —
 // the workspace root's filesystem watermark and each workspace
 // directory's on-disk size. The first version observes and alarms only
-// (no enforcement): the archive cap already bounds what crosses the
-// sandbox boundary, container teardown reclaims the writable layer, and
-// this patrol is the explicit boundary that notices everything else —
-// a runaway run writing inside its container's /workspace between syncs,
-// or a host filling up from neighbors.
+// (no enforcement): the archive cap bounds the manual import channel,
+// container teardown reclaims the writable layer, and this patrol is the
+// explicit boundary that notices everything else — a runaway run writing
+// into its bind-mounted /workspace (the mount means container writes hit
+// the volume directly), or a host filling up from neighbors.
 //
 // Costs are bounded but real: each pass statfs's the root and walks
 // every workspace directory (first version walks unconditionally; with
@@ -46,10 +46,10 @@ type PatrolConfig struct {
 	// through WOCA_PATROL_DISK_PCT on the executor entrypoint.
 	DiskPct float64
 	// DirMaxBytes is the per-workspace-directory size cap; 0 defaults to
-	// the store's archive cap (the same budget the sync boundary
-	// enforces — a directory persistently past it means syncs are being
-	// raced by in-container writes or never happening). A negative value
-	// disables the per-directory check.
+	// the store's archive cap (the same budget the manual import channel
+	// enforces — a directory persistently past it means in-container
+	// writes into the bind mount are outrunning the budget). A negative
+	// value disables the per-directory check.
 	DirMaxBytes int64
 	// DiskUsage overrides the watermark probe (percent used); nil uses
 	// the platform statfs. Tests inject deterministic values.
@@ -100,7 +100,7 @@ func PatrolOnce(cfg PatrolConfig) {
 	}
 	if pct, err := usage(root); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			// No workspace root yet — nothing has ever synced; not an
+			// No workspace root yet — no workspace was ever created; not an
 			// alarm, and not worth a WARN every minute.
 			return
 		}
@@ -125,7 +125,7 @@ func PatrolOnce(cfg PatrolConfig) {
 	}
 	for _, e := range entries {
 		if !e.IsDir() || !ValidWorkspaceID(e.Name()) {
-			continue // staging artifacts and foreign files are the GC's, not the patrol's
+			continue // foreign files and non-workspace names are not the patrol's
 		}
 		dir := filepath.Join(root, e.Name())
 		size, err := dirSize(dir)

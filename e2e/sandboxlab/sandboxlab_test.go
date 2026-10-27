@@ -7,10 +7,17 @@
 //
 //	configsvc registers + verifies + enables a contract-http backend
 //	(the fakesandbox container) → a remote tenant (key minted on the
-//	server's GW console API) creates a run → the worker claims it,
-//	uploads the workspace, executes the scripted model's Write call
-//	inside the sandbox, and downloads the products back → the artifact
-//	appears on the shared host-mounted workspace.
+//	server's GW console API) creates a run → the worker claims it and
+//	executes the scripted model's Write call inside the sandbox.
+//
+// No files move anywhere (the file-transfer ruling, spec
+// docs/superpowers/specs/2026-10-26-woca-ee-sandbox-plane-design.md
+// §5.3): no upload, no download, no sync — the run's products stay
+// wherever the backend put them, and the host workspace is untouched.
+// The mount semantics (products landing on the volume in place) are
+// covered by the executor's backend tests and the ent demo, which run a
+// mount-capable executor; this lab's contract fake has no mount, so the
+// product assertion here is the negative one: nothing was copied back.
 //
 // Negative posture first: before any backend exists the same remote
 // tenant gets 403 (the dynamic RunsOffHost gate, design §10.2 M-3).
@@ -355,9 +362,10 @@ func TestSandboxLab(t *testing.T) {
 		return true, ""
 	})
 
-	// P2 — the run completes: the worker uploaded /data, executed the
-	// scripted Write inside the sandbox, and downloaded the products
-	// back. Follow the ledger SSE replay until the terminal frame.
+	// P2 — the run completes: the worker provisioned the sandbox under
+	// the run's workspace identity and executed the scripted Write inside
+	// it, moving no files in either direction. Follow the ledger SSE
+	// replay until the terminal frame.
 	var runErr string
 	waitFor(t, 240*time.Second, "run never finished", func() (bool, string) {
 		out, _ := execOut("client", "curl", "-sS", "-N", "-m", "8",
@@ -373,18 +381,17 @@ func TestSandboxLab(t *testing.T) {
 		t.Fatalf("run errored:\n%s", runErr)
 	}
 
-	// The done frame only proves completion; assert the artifact itself
-	// on the shared host-mounted workspace.
-	data, err := os.ReadFile(filepath.Join(ws, "out.txt"))
-	if err != nil {
-		t.Fatalf("product not downloaded back to the host workspace: %v", err)
-	}
-	if string(data) != "sandbox-side" {
-		t.Fatalf("out.txt = %q, want %q", data, "sandbox-side")
+	// The done frame only proves completion; the transfer ruling's
+	// negative assertion is the artifact check: the run's product stays
+	// backend-side (this lab's contract fake has no mount), so the host
+	// workspace must NOT carry out.txt — nothing was uploaded or
+	// downloaded. Volume-in-place products are asserted by the executor
+	// backend tests and the ent demo (mount-capable executor).
+	if _, err := os.Stat(filepath.Join(ws, "out.txt")); !os.IsNotExist(err) {
+		t.Fatalf("host workspace carries out.txt (err=%v): the run moved files despite the no-transfer ruling", err)
 	}
 
-	t.Logf("sandboxlab green: tenant run %s executed through fakesandbox; product at %s",
-		runID, filepath.Join(ws, "out.txt"))
+	t.Logf("sandboxlab green: tenant run %s executed through fakesandbox with zero file transfer", runID)
 }
 
 // lastLine keeps failure evidence short (SSE replays grow).

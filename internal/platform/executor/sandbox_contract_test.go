@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http/httptest"
 	"regexp"
 	"testing"
 	"time"
@@ -356,27 +355,6 @@ func TestContractGlobEmptyPattern(t *testing.T) {
 	matches, err := sb.Glob(t.Context(), "/workspace/*.nomatch")
 	if err != nil || len(matches) != 0 {
 		t.Fatalf("glob = %v err=%v, want empty", matches, err)
-	}
-}
-
-// TestContractSyncWorkspace drives the workspace sync endpoint (CONTRACT.md
-// §3.16) against the fake: a workspace-routed sandbox syncs without error
-// and the fake records exactly one sync call.
-func TestContractSyncWorkspace(t *testing.T) {
-	fake := fakesandbox.New()
-	httpSrv := httptest.NewServer(fake.Handler())
-	t.Cleanup(httpSrv.Close)
-	sb, err := NewSandbox(SandboxConfig{Endpoint: httpSrv.URL, Workspace: "ws_x"})
-	if err != nil {
-		t.Fatalf("NewSandbox against fakesandbox: %v", err)
-	}
-	t.Cleanup(func() { _ = sb.Close() })
-
-	if err := sb.SyncWorkspace(t.Context()); err != nil {
-		t.Fatalf("SyncWorkspace: %v", err)
-	}
-	if got := fake.SyncCalls(); got != 1 {
-		t.Fatalf("fake recorded %d sync calls, want 1", got)
 	}
 }
 

@@ -271,6 +271,10 @@ ent-sandbox-demo:
 		-f e2e/sandboxlab/demo/Dockerfile.sandbox-marker e2e/sandboxlab/demo || exit 1
 	# Hermetic start: drop any previous project state (volumes included).
 	-$(ENT_DEMO_ENV) $(ENT_DEMO_COMPOSE) down -v --remove-orphans --timeout 20
+	# The workspace storage is a fixed daemon-host path now (the bind
+	# source the executor mounts into sandbox containers, spec §5.3), so
+	# down -v no longer wipes it — clean it with a helper container.
+	-docker run --rm -v /data/workspaces:/ws alpine:3 sh -c 'rm -rf /ws/.[!.]* /ws/* 2>/dev/null || true'
 	# Phase 1 — base plane without the executor (config first: the
 	# executor's boot resolves the enabled backend + its API key).
 	$(ENT_DEMO_ENV) $(ENT_DEMO_COMPOSE) up -d --build \

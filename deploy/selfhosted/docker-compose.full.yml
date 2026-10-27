@@ -475,9 +475,14 @@ services:
     volumes:
       - woca-sessions:/var/lib/woca/sessions
       - woca-crypto:/var/lib/woca/home
-      # The executor workspace volume (EE sandbox plane, §11.1): the
-      # scheduler binds tenants onto it and reads products back from it.
-      - woca-workspaces:/data/workspaces
+      # The executor workspace storage (EE sandbox plane, §11.1 + §5.3):
+      # the scheduler binds tenants onto it and reads products back from
+      # it. Deliberately a fixed daemon-host path (NOT a named volume):
+      # the executor bind-mounts workspace subdirectories into sibling
+      # sandbox containers, and bind sources resolve in the daemon's
+      # filesystem namespace — only a literal path shared by every mount
+      # points all roles at the same directories.
+      - /data/workspaces:/data/workspaces
       # NOTE: the unattended-runs allow ruleset (demo posture) is NOT
       # mounted here — it rides the demo override file
       # (docker-compose.demo.yml) so a plain self-hosted `up` never
@@ -634,7 +639,11 @@ services:
       # demo-only posture (macOS dev hosts, §11.3) and rides the demo
       # override file, exactly like the unattended-runs allow ruleset.
     volumes:
-      - woca-workspaces:/data/workspaces
+      # Same fixed daemon-host path the sandbox binds resolve against
+      # (see the scheduler's mount note): the executor owns the
+      # directories (one per workspace identity) and bind-mounts each
+      # into its sandbox at /workspace (spec §5.3).
+      - /data/workspaces:/data/workspaces
       - woca-crypto:/var/lib/woca/home
       # The Docker API is a bidirectional stream over the socket: a
       # read-only bind still carries create/exec/remove calls (verified
@@ -887,8 +896,9 @@ services:
       WOCA_DEMO_SB_API_KEY: ${WOCA_DEMO_SB_API_KEY:-woca-demo-sb-key}
       WOCA_DEMO_MARKER_IMAGE: ${WOCA_DEMO_MARKER_IMAGE:-woca-sandbox-marker:demo}
     volumes:
-      # Products assert straight off the executor's workspace volume.
-      - woca-workspaces:/data/workspaces:ro
+      # Products assert straight off the executor's workspace storage —
+      # the same fixed daemon-host path, read-only.
+      - /data/workspaces:/data/workspaces:ro
     restart: "no"
     networks:
       # Business API (scheduler :8080/:8090) and the executor data plane.
@@ -1191,11 +1201,6 @@ volumes:
     name: woca-ent-full-sessions
   woca-crypto:
     name: woca-ent-full-crypto
-  # The EE sandbox plane's workspace volume (design §11.1): schedulers
-  # and executor mount it at the same path (/data/workspaces); the
-  # executor owns the directories (one per workspace identity).
-  woca-workspaces:
-    name: woca-ent-full-workspaces
   woca-pg-primary-data:
     name: woca-ent-full-pg-primary
   woca-pg-replica-data:

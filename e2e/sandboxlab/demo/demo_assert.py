@@ -175,13 +175,13 @@ def live_sandboxes():
 
 
 def workspace_dirs():
-    """Workspace directories on the shared volume (staging siblings excluded)."""
+    """Workspace directories on the shared volume."""
     try:
         names = os.listdir(WORKSPACES)
     except FileNotFoundError:
         return []
     return [os.path.join(WORKSPACES, n) for n in names
-            if ".staging" not in n and os.path.isdir(os.path.join(WORKSPACES, n))]
+            if os.path.isdir(os.path.join(WORKSPACES, n))]
 
 
 def read_product(name):
@@ -218,7 +218,7 @@ def level1(key_a):
 
     wait_for("sandbox containers not reclaimed after run %s" % run_id, 60,
              lambda: (len(sandboxes()) == 0, "sandboxes=%s" % json.dumps(sandboxes())))
-    print("   product synced to the volume; unittest pass; egress blocked; sandbox reclaimed")
+    print("   product landed on the volume in place; unittest pass; egress blocked; sandbox reclaimed")
     return host_dir, host.strip()
 
 

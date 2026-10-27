@@ -159,13 +159,10 @@ func newExecutorRoot() *cobra.Command {
 			// crashed predecessor of this (stable) identity left behind and
 			// doubles as the daemon-reachability gate (an unreachable docker
 			// socket is a configuration error, not a degraded mode); the
-			// periodic pass collects anything torn down uncleanly later, and
-			// sweeps crashed staging/prev sync artifacts off the workspace
-			// volume.
+			// periodic pass collects anything torn down uncleanly later.
 			collector := executor.NewCollector(executor.CollectorConfig{
 				Backend:    backend,
 				ExecutorID: id,
-				Store:      store,
 				Active:     svc.ActiveSandboxes,
 				Logger:     log,
 			})
@@ -439,7 +436,7 @@ func serveProbes(ctx context.Context, addr string, log zerolog.Logger, o *obs.Ob
 	}, nil
 }
 
-// serveContract binds the contract v2 sandbox service (all 16 endpoints
+// serveContract binds the contract v2 sandbox service (all 15 endpoints
 // plus /internal/sandboxes) on the configured listener.
 func serveContract(ctx context.Context, addr string, h http.Handler) (*http.Server, error) {
 	ln, err := net.Listen("tcp", addr)

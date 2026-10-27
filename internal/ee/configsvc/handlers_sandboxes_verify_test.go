@@ -270,9 +270,6 @@ func TestSandboxVerifyRoutesThroughProxy(t *testing.T) {
 	// The contract path ran through the proxy end to end: the upstream
 	// (only reachable via the proxy) served both creates and both
 	// destroys (Close of the contract provider).
-	if fake.SyncCalls() != 0 {
-		t.Fatalf("unexpected syncs: %d", fake.SyncCalls())
-	}
 }
 
 func TestSandboxVerifyBadEndpoint(t *testing.T) {

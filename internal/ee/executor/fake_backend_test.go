@@ -8,7 +8,9 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -671,4 +673,109 @@ func TestFakeContainer_Remove(t *testing.T) {
 			t.Fatalf("Remove(force=false) on idle container: %v", err)
 		}
 	})
+}
+
+// --- Container: workspace bind ("mount") ---------------------------------------
+//
+// The fake's stand-in for the bind mount (spec §5.3): a container created
+// with WorkspaceDir resolves /workspace onto that host directory, so
+// exec's writes, CopyIn unpacks, and CopyOut reads all land on the real
+// files in place — no staging, no copy back.
+
+func TestFakeContainer_WorkspaceBindWritesInPlace(t *testing.T) {
+	be := newBackend(t)
+	store, _ := newTestStore(t)
+	ws := mustWorkspaceDir(t, store, "ws-mount")
+
+	c := mustCreate(t, be, CreateSpec{
+		Image:        "img",
+		WorkDir:      "/workspace",
+		WorkspaceDir: ws,
+	})
+
+	// An exec with the default working directory writes straight onto the
+	// host-side workspace directory.
+	res := mustExec(t, c, ExecSpec{Cmd: []string{"sh", "-c", "echo mounted > product.txt"}})
+	if res.ExitCode != 0 {
+		t.Fatalf("exec exit %d, stderr %q", res.ExitCode, res.Stderr)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "product.txt")); err != nil || string(b) != "mounted\n" {
+		t.Fatalf("workspace file after exec = (%q, %v), want %q", b, err, "mounted\n")
+	}
+
+	// CopyIn into /workspace unpacks onto the same directory.
+	if err := c.CopyIn(context.Background(), "/workspace", bytes.NewReader(buildTar(t, map[string]string{"imported/d.txt": "delta"}))); err != nil {
+		t.Fatalf("CopyIn: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "imported", "d.txt")); err != nil || string(b) != "delta" {
+		t.Fatalf("imported file = (%q, %v)", b, err)
+	}
+
+	// CopyOut of /workspace reads the same directory back.
+	rc, err := c.CopyOut(context.Background(), "/workspace")
+	if err != nil {
+		t.Fatalf("CopyOut: %v", err)
+	}
+	defer rc.Close()
+	entries := readTarEntries(t, rc)
+	if got := entries["workspace/product.txt"]; got != "mounted\n" {
+		t.Errorf("CopyOut workspace/product.txt = %q, want %q", got, "mounted\n")
+	}
+
+	// A pre-existing host file is visible from the container (the mount
+	// is the directory, not a copy of it). Fake-container commands see
+	// host paths, so the probe cats the host path of /workspace/pre.txt.
+	if err := os.WriteFile(filepath.Join(ws, "pre.txt"), []byte("already-there"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res = mustExec(t, c, ExecSpec{Cmd: []string{"cat", filepath.Join(ws, "pre.txt")}, Dir: "/workspace"})
+	if got := string(res.Stdout); got != "already-there" {
+		t.Errorf("pre-existing host file seen as %q, want %q", got, "already-there")
+	}
+
+	// Removing the container never deletes the workspace directory: it
+	// belongs to the store, not the container.
+	if err := c.Remove(context.Background(), true); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws, "product.txt")); err != nil || string(b) != "mounted\n" {
+		t.Fatalf("workspace content after container removal = (%q, %v)", b, err)
+	}
+}
+
+// A missing or non-directory WorkspaceDir fails Create explicitly — the
+// mount cannot silently degrade into an unmounted /workspace.
+func TestFakeBackend_CreateWorkspaceDirMustExist(t *testing.T) {
+	be := newBackend(t)
+	missing := filepath.Join(t.TempDir(), "nope")
+	if _, err := be.Create(context.Background(), CreateSpec{Image: "img", WorkDir: "/workspace", WorkspaceDir: missing}); err == nil {
+		t.Fatal("Create with missing WorkspaceDir succeeded, want error")
+	}
+
+	file := filepath.Join(t.TempDir(), "plain-file")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := be.Create(context.Background(), CreateSpec{Image: "img", WorkDir: "/workspace", WorkspaceDir: file}); err == nil {
+		t.Fatal("Create with a file WorkspaceDir succeeded, want error")
+	}
+}
+
+// Paths outside /workspace keep resolving onto the container's own root —
+// the mount covers exactly the workspace directory, nothing wider.
+func TestFakeContainer_WorkspaceBindScoped(t *testing.T) {
+	be := newBackend(t)
+	store, _ := newTestStore(t)
+	ws := mustWorkspaceDir(t, store, "ws-scope")
+
+	c := mustCreate(t, be, CreateSpec{Image: "img", WorkDir: "/workspace", WorkspaceDir: ws})
+	mustExec(t, c, ExecSpec{Cmd: []string{"sh", "-c", "mkdir -p out && echo outside > out/note.txt"}, Dir: "/"})
+
+	if entries, _ := os.ReadDir(ws); len(entries) != 0 {
+		t.Fatalf("write outside /workspace leaked into the workspace: %v", entries)
+	}
+	res := mustExec(t, c, ExecSpec{Cmd: []string{"cat", "out/note.txt"}, Dir: "/"})
+	if got := string(res.Stdout); got != "outside\n" {
+		t.Errorf("/out/note.txt = %q, want %q", got, "outside\n")
+	}
 }

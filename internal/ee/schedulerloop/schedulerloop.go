@@ -50,13 +50,11 @@ func RunLoop(ctx context.Context, deps servefront.RunLoopDeps) {
 	// The sandbox/config wiring rides the settings store when one is open;
 	// a nil store (never in the serve path once a ledger exists, but this
 	// is a public seam) keeps the no-database posture: no backend secrets,
-	// no archive cap override, no ack heartbeat.
+	// no ack heartbeat.
 	var db *wocadb.DB
-	maxArchive := int64(0)
 	secretFor := func(string) string { return "" }
 	if deps.Settings != nil {
 		db = deps.Settings.DB()
-		maxArchive = deps.Settings.Load().SandboxArchiveMaxBytes
 		secretFor = func(backendID string) string {
 			return deps.Settings.GetSecret("sandbox-api-key:" + backendID)
 		}
@@ -85,10 +83,9 @@ func RunLoop(ctx context.Context, deps servefront.RunLoopDeps) {
 		// Park between empty claims on the plane's dispatch waiter (the
 		// same NATS wake-up the standalone worker uses); nil keeps the
 		// poll cadence.
-		Idle:            edition.IdleWaiter(deps.Plane),
-		DB:              db,
-		SecretFor:       secretFor,
-		MaxArchiveBytes: maxArchive,
+		Idle:      edition.IdleWaiter(deps.Plane),
+		DB:        db,
+		SecretFor: secretFor,
 	})
 
 	// Config-plane heartbeat (design §10.2 M-4): rewrite this scheduler's

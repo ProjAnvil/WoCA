@@ -84,10 +84,6 @@ func (c *wireCapture) handler() http.Handler {
 		c.record(r, nil)
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("POST /sandbox/sbx_wire/workspace/sync", func(w http.ResponseWriter, r *http.Request) {
-		c.record(r, nil)
-		w.WriteHeader(http.StatusOK)
-	})
 	mux.HandleFunc("DELETE /sandbox/sbx_wire", func(w http.ResponseWriter, r *http.Request) {
 		c.record(r, nil)
 		w.WriteHeader(http.StatusNoContent)
@@ -123,7 +119,7 @@ func newWireSandbox(t *testing.T) (*Sandbox, *wireCapture) {
 
 // newWireWorkspaceSandbox is newWireSandbox with Workspace set, so wire
 // tests can assert the workspace field and routing header (CONTRACT.md §1,
-// §3.1, §3.16).
+// §3.1).
 func newWireWorkspaceSandbox(t *testing.T) (*Sandbox, *wireCapture) {
 	t.Helper()
 	c := &wireCapture{}
@@ -191,8 +187,8 @@ func TestSandboxWireWorkspaceCreateBody(t *testing.T) {
 }
 
 // TestSandboxWireWorkspaceHeaderEveryRequest asserts the routing header is
-// stamped on every sandbox request — JSON calls, raw archive calls, sync,
-// and destroy — when the sandbox is workspace-routed.
+// stamped on every sandbox request — JSON calls, raw archive calls, and
+// destroy — when the sandbox is workspace-routed.
 func TestSandboxWireWorkspaceHeaderEveryRequest(t *testing.T) {
 	sb, c := newWireWorkspaceSandbox(t)
 	if _, err := sb.Exec(t.Context(), ExecRequest{Name: "echo", Args: []string{"hi"}}); err != nil {
@@ -210,15 +206,12 @@ func TestSandboxWireWorkspaceHeaderEveryRequest(t *testing.T) {
 	if err := sb.PutArchive(t.Context(), strings.NewReader("")); err != nil {
 		t.Fatal(err)
 	}
-	if err := sb.SyncWorkspace(t.Context()); err != nil {
-		t.Fatal(err)
-	}
 	if err := sb.Close(); err != nil {
 		t.Fatal(err)
 	}
 	reqs := c.all()
 	if len(reqs) < 7 {
-		t.Fatalf("captured %d requests, want at least 7 (create/exec/read/write/glob/archive/sync/destroy)", len(reqs))
+		t.Fatalf("captured %d requests, want at least 7 (create/exec/read/write/glob/archive/destroy)", len(reqs))
 	}
 	for _, req := range reqs {
 		if got := req.Header.Get("X-Woca-Workspace"); got != "ws_x" {
@@ -244,41 +237,25 @@ func TestSandboxWireWorkspaceHeaderOmittedWhenUnset(t *testing.T) {
 	}
 }
 
-// TestSandboxWireSyncWorkspace asserts the sync endpoint shape: POST
-// /sandbox/{id}/workspace/sync with a 2xx response and no error.
-func TestSandboxWireSyncWorkspace(t *testing.T) {
+// The workspace lifecycle makes no transfer calls: across a full
+// workspace-routed sandbox lifetime (create + exec + close) the wire
+// carries no sync request and no archive traffic — the sync surface is
+// gone and archives are user-initiated only.
+func TestSandboxWireWorkspaceLifecycleZeroTransfer(t *testing.T) {
 	sb, c := newWireWorkspaceSandbox(t)
-	if err := sb.SyncWorkspace(t.Context()); err != nil {
-		t.Fatalf("SyncWorkspace: %v", err)
-	}
-	req := c.find(http.MethodPost, "/sandbox/sbx_wire/workspace/sync")
-	if req == nil {
-		t.Fatal("sync request not captured")
-	}
-}
-
-// TestSandboxWireSyncWorkspaceError: non-2xx from sync is an error.
-func TestSandboxWireSyncWorkspaceError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/sandbox/create" {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"sandbox_id":"sbx_err"}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":"sync failed"}`))
-	}))
-	defer srv.Close()
-	sb, err := NewSandbox(SandboxConfig{Endpoint: srv.URL, Workspace: "ws_x"})
-	if err != nil {
+	if _, err := sb.Exec(t.Context(), ExecRequest{Name: "echo", Args: []string{"hi"}}); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = sb.Close() }()
-	if err := sb.SyncWorkspace(t.Context()); err == nil {
-		t.Fatal("sync non-2xx not surfaced as error")
-	} else if !strings.Contains(err.Error(), "http 500") {
-		t.Fatalf("sync error = %v, want http 500", err)
+	if err := sb.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, req := range c.all() {
+		if strings.Contains(req.Path, "/workspace/sync") {
+			t.Errorf("sync request on the wire: %s %s", req.Method, req.Path)
+		}
+		if strings.HasSuffix(req.Path, "/archive") {
+			t.Errorf("archive request on the wire: %s %s", req.Method, req.Path)
+		}
 	}
 }
 

@@ -55,13 +55,25 @@ func NewFakeBackend() (*FakeBackend, error) {
 
 // Create implements Backend. The image itself is not pulled or run — it is
 // only required so that spec drift from the real backend shows up in
-// tests; labels and workdir are honored.
+// tests; labels, workdir and the workspace bind are honored. The fake's
+// "mount" of spec.WorkspaceDir is direct: the container's /workspace path
+// maps onto that host directory, so CopyIn/CopyOut and exec working
+// directories read and write the real files in place (spec §5.3).
 func (b *FakeBackend) Create(ctx context.Context, spec CreateSpec) (Container, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if spec.Image == "" {
 		return nil, errors.New("fake executor: CreateSpec.Image is required")
+	}
+	if spec.WorkspaceDir != "" {
+		info, err := os.Stat(spec.WorkspaceDir)
+		if err != nil {
+			return nil, fmt.Errorf("fake executor: workspace dir %s: %w", spec.WorkspaceDir, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("fake executor: workspace dir %s: not a directory", spec.WorkspaceDir)
+		}
 	}
 
 	b.mu.Lock()
@@ -75,15 +87,26 @@ func (b *FakeBackend) Create(ctx context.Context, spec CreateSpec) (Container, e
 
 	dir := filepath.Join(b.root, id)
 	workDir := path.Clean("/" + spec.WorkDir)
-	if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(workDir)), 0o755); err != nil {
+	// The container's own root always exists (commands with a Dir outside
+	// the mount chdir into it); the working directory exists on the mount
+	// when it sits at or under the mounted /workspace, so only the
+	// unmounted case needs a directory created inside the root.
+	workDirMounted := spec.WorkspaceDir != "" &&
+		(workDir == sandboxWorkspacePath || strings.HasPrefix(workDir, sandboxWorkspacePath+"/"))
+	mkTarget := dir
+	if !workDirMounted {
+		mkTarget = filepath.Join(dir, filepath.FromSlash(workDir))
+	}
+	if err := os.MkdirAll(mkTarget, 0o755); err != nil {
 		return nil, fmt.Errorf("fake executor: container dir for %s: %w", id, err)
 	}
 	c := &FakeContainer{
-		backend: b,
-		id:      id,
-		dir:     dir,
-		workDir: workDir,
-		labels:  maps.Clone(spec.Labels),
+		backend:      b,
+		id:           id,
+		dir:          dir,
+		workDir:      workDir,
+		workspaceDir: spec.WorkspaceDir,
+		labels:       maps.Clone(spec.Labels),
 	}
 	if c.labels == nil {
 		c.labels = map[string]string{}
@@ -156,16 +179,21 @@ func (b *FakeBackend) deregister(id string) {
 // --- fake container ---------------------------------------------------------
 
 // FakeContainer is the fake's Container: a host directory standing in for
-// the container filesystem plus the processes started inside it.
+// the container filesystem plus the processes started inside it. A
+// non-empty workspaceDir is the fake's bind mount: container paths at or
+// under /workspace resolve onto it instead of the container's own
+// directory, and Remove never deletes it (it belongs to the WorkspaceStore,
+// not the container).
 type FakeContainer struct {
-	backend  *FakeBackend
-	mu       sync.Mutex
-	id       string
-	dir      string // host directory backing the container filesystem
-	workDir  string // container-side default working directory
-	labels   map[string]string
-	sessions []*FakeProcess
-	removed  bool
+	backend      *FakeBackend
+	mu           sync.Mutex
+	id           string
+	dir          string // host directory backing the container filesystem
+	workspaceDir string // host directory "mounted" at /workspace; "" when unset
+	workDir      string // container-side default working directory
+	labels       map[string]string
+	sessions     []*FakeProcess
+	removed      bool
 }
 
 var _ Container = (*FakeContainer)(nil)
@@ -458,8 +486,20 @@ func (c *FakeContainer) matchesLabels(want map[string]string) bool {
 
 // hostPath maps a container-side path onto the host directory backing the
 // container. The path is cleaned against "/" first, so ".." cannot escape.
+// When a workspace dir is "mounted", paths at or under /workspace resolve
+// onto that directory — the fake's stand-in for the bind mount (Create).
 func (c *FakeContainer) hostPath(p string) string {
-	return filepath.Join(c.dir, filepath.FromSlash(path.Clean("/"+p)))
+	clean := path.Clean("/" + p)
+	if c.workspaceDir != "" {
+		if clean == sandboxWorkspacePath {
+			return c.workspaceDir
+		}
+		if strings.HasPrefix(clean, sandboxWorkspacePath+"/") {
+			rel := strings.TrimPrefix(clean, sandboxWorkspacePath+"/")
+			return filepath.Join(c.workspaceDir, filepath.FromSlash(rel))
+		}
+	}
+	return filepath.Join(c.dir, filepath.FromSlash(clean))
 }
 
 // workHostPath resolves the working directory for a command: req.Dir when

@@ -28,7 +28,7 @@ sandbox instance ID is `sbx_1`.
   binary-safe end to end.
 - `env` is a JSON **object** (`{"K":"V"}`), never an array.
 
-## 2. Endpoint table (16)
+## 2. Endpoint table (15)
 
 | # | Operation | Method & path |
 |---|---|---|
@@ -44,10 +44,14 @@ sandbox instance ID is `sbx_1`.
 | 10 | Mkdir | `POST /sandbox/{id}/mkdir` |
 | 11 | Glob | `POST /sandbox/{id}/glob` |
 | 12 | Grep | `POST /sandbox/{id}/grep` |
-| 13 | Upload archive | `PUT /sandbox/{id}/archive` |
-| 14 | Download archive | `GET /sandbox/{id}/archive` |
+| 13 | Upload archive (manual import) | `PUT /sandbox/{id}/archive` |
+| 14 | Download archive (manual export) | `GET /sandbox/{id}/archive` |
 | 15 | Destroy sandbox | `DELETE /sandbox/{id}` |
-| 16 | Sync workspace | `POST /sandbox/{id}/workspace/sync` |
+
+There is no upload/sync endpoint in any automatic pipeline: the sandbox
+bind-mounts its workspace directory in place, so artifacts land on the
+volume directly. The archive endpoints exist for **user-initiated manual
+import/export only**.
 
 ## 3. Endpoints in detail
 
@@ -61,7 +65,7 @@ Request body:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `workspace` | string | optional workspace ID the sandbox is routed under (EE sandbox plane). The executor maps it to its own `workspace_root/<id>` directory and uploads that directory's archive into the container. IDs are restricted to letters, digits, `-`, `_` (no `/`, `..`, absolute paths). Omitted when the run is not workspace-routed; `cwd` keeps its own meaning regardless. |
+| `workspace` | string | optional workspace ID the sandbox is routed under (EE sandbox plane). The executor maps it to its own `workspace_root/<id>` directory and bind-mounts that directory as the container's `/workspace`. IDs are restricted to letters, digits, `-`, `_` (no `/`, `..`, absolute paths). Omitted when the run is not workspace-routed; `cwd` keeps its own meaning regardless. |
 | `cwd` | string | sandbox working directory; backends that cannot honor it may ignore the field, but the archive endpoints (§3.13/3.14) always unpack relative to `/workspace`. |
 
 `workspace` and `cwd` are separate concepts on purpose: one is the routing/
@@ -302,6 +306,9 @@ starting with `.`) are skipped, except `root` itself. Response:
 
 ### 3.13 Upload archive — `PUT /sandbox/{id}/archive`
 
+**User-initiated manual import only.** No automated pipeline calls this
+endpoint.
+
 ```bash
 curl -X PUT http://sandbox.local/sandbox/sbx_1/archive \
   -H 'Content-Type: application/gzip' \
@@ -310,9 +317,13 @@ curl -X PUT http://sandbox.local/sandbox/sbx_1/archive \
 
 Body is a **gzip-compressed tar** stream. See §4 for tar conventions. On
 success the workspace is replaced (backend-defined whether atomically);
-response `204`.
+response `204`. Backends enforce entry-path checks on unpack: absolute
+paths, `..` traversal, and symlink escapes are rejected, and the stream is
+bounded by the backend's archive size limit.
 
 ### 3.14 Download archive — `GET /sandbox/{id}/archive`
+
+**User-initiated manual export only.**
 
 ```bash
 curl http://sandbox.local/sandbox/sbx_1/archive -o workspace.tar.gz
@@ -329,21 +340,6 @@ curl -X DELETE http://sandbox.local/sandbox/sbx_1
 
 Destroys the sandbox and all sessions. Destroying an unknown or already
 destroyed id returns 2xx (idempotent). Response: `204`.
-
-### 3.16 Sync workspace — `POST /sandbox/{id}/workspace/sync`
-
-Flushes the sandbox `/workspace` back to the executor-side workspace
-directory (`workspace_root/<id>`, staged then atomically swapped). Runs sync
-before the scheduler counts their artifacts as delivered; a failed sync
-fails the run.
-
-```bash
-curl -X POST http://sandbox.local/sandbox/sbx_1/workspace/sync \
-  -H 'X-Woca-Sandbox-Contract: 2'
-```
-
-Empty request body (`Content-Length: 0` is fine). Response: `200` (or
-`204`). Unknown sandbox id → `404` (§5).
 
 ## 4. tar conventions
 
@@ -390,6 +386,9 @@ Empty request body (`Content-Length: 0` is fine). Response: `200` (or
   request; argv/cwd/env/stdin/timeout_ms exec; start/output/input/kill
   session surface; full file surface; tar.gz archive round-trip.
 - v2 amendment (EE sandbox plane, 2026-10): the optional `workspace` field
-  on create (§3.1), the optional `X-Woca-Workspace` routing header (§1),
-  and endpoint 16, workspace sync (§3.16). The contract header stays `2`;
-  servers must accept requests without the workspace field/header.
+  on create (§3.1) and the optional `X-Woca-Workspace` routing header (§1).
+  The contract header stays `2`; servers must accept requests without the
+  workspace field/header. A later revision of the same amendment removed
+  the workspace-sync endpoint: the sandbox bind-mounts its workspace
+  directory in place, so no automatic transfer surface exists. The endpoint
+  table is back to 15; the archive endpoints are manual import/export only.
