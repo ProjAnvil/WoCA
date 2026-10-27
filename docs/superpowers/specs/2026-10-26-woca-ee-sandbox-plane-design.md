@@ -2,7 +2,7 @@
 
 日期：2026-10-26
 状态：设计初稿，待评审
-修订：2026-10-26 下午。整合可行性评估结论（2 条 P0、4 条 P1、若干 P2），新增 §8.4/§8.5 沙箱逃逸与外窜防御。出口改为开关：默认关（`network=none`），开 = 直出；不做白名单与镜像网络规则继承（§8.2）。
+修订：2026-10-26 下午。整合可行性评估结论（2 条 P0、4 条 P1、若干 P2），新增 §8.4/§8.5 沙箱逃逸与外窜防御。出口改为开关：默认关（`network=none`），开 = 直出；不做白名单与镜像网络规则继承（§8.2）。随后裁决（§5.3）：woca 不做任何文件搬运——删除自动上传/同步链路（含 sync 端点），沙箱 bind-mount 工作区目录在原地做事，卷与外部是否同步是用户的事。
 取代：2026-10-24 OpenShell 路线（作废，相关文档已删，本文件是沙箱执行面唯一设计文档）
 
 ## 1. 目标
@@ -48,6 +48,7 @@
 | proxy 队列默认值 | 每 executor 并发 4、队列长 32、排队超时 30s（须小于后端调用超时） |
 | degraded 行为 | fail-closed。degraded 工作区的新 run 明确拒绝；ack 回窗自动恢复，或运维显式改绑定（§3.3） |
 | run 并发 | 首期每调度器副本串行（复用 `Worker.Step`）。并发旋钮进开放问题（§3.4、§16） |
+| 文件搬运 | 不做。woca 无权把文件从一个 owner 搬到另一台机器。沙箱 bind-mount 工作区目录原地做事；卷与外部的同步是用户的事（§5.3） |
 
 ### 2.1 为什么自建
 
@@ -77,6 +78,7 @@
 | 沙箱复用（跨 run 保留同一容器） | 首期 per-run 创建销毁。代码靠工作区目录延续 | 需要时按 driver 能力位加 |
 | 独立配置服务 | 配置面已有 woca-config 与 pack 通道 | 不做 |
 | 出口白名单 / 镜像网络规则继承 | 出口只做开关，粒度换简单 | 触发式（§16） |
+| 工作区自动上传/同步（tar 搬运） | 文件所有权原则：把文件从一个 owner 转移到另一台机器不是 woca 的权力。各模式的 workspace 只在自身管控的文件上做事（§5.3） | 不做 |
 
 ## 3. 角色与数据流
 
@@ -99,11 +101,10 @@ woca-executor ×N ── contract v2 沙箱服务、容器管理、工作区目�
 代码与产物的流向：
 
 ```
-executor 磁盘工作区目录 ──归档上传──▶ 沙箱容器 /workspace
-executor 磁盘工作区目录 ◀──归档下载── 沙箱容器 /workspace
+executor 磁盘工作区目录 ══ bind-mount ══▶ 沙箱容器 /workspace（同一份文件，原地读写）
 ```
 
-调度器不碰文件字节。文件只在 executor 与沙箱之间流动。
+调度器不碰文件字节。executor 不搬文件：工作区目录直接挂载进沙箱，沙箱在原地读写，产物落在卷上。
 
 ### 3.1 executor 的定位
 
@@ -111,7 +112,7 @@ executor 是一个普通的服务进程，职责只有四件：
 
 1. 暴露 contract v2 的沙箱服务。
 2. 用 container runtime 起容器、注入执行命令、回收容器。
-3. 持有工作区目录，做归档上传与下载。
+3. 持有工作区目录，把它 bind-mount 进沙箱。
 4. 提供工作区文件树与文件读取（管理台与前端要用）。
 
 executor 不跑 agent 循环，不持有模型 key，不做授权判断。
@@ -185,30 +186,20 @@ EE 改成 executor 之后，这套要换：
 
 1. 调度器侧的 client 是现成的 `executor.NewSandbox`（`internal/platform/executor/sandbox.go`），已经实现 `Executor` 接口加 `PutArchive` / `GetArchive`。
 2. executor 侧要实现同样的 15 个端点。现成的服务端参考是 `internal/platform/executor/fakesandbox/server.go` 的 `Handler()`：它把 15 条路由挂在 `http.ServeMux` 上，executor 的服务照这个形状写，差别只在容器操作换成真实调用。
-3. `create` 的 body 加一个独立的 `workspace` 字段，承载**工作区 ID**。`cwd` 保持原语义（容器内工作目录，默认 `/workspace`）。不复用 `cwd` 装工作区 ID——那是语义复用，两个概念迟早分叉，契约反正要改（新增 sync 端点），一起改掉。executor 把 workspace ID 映射到自己的 `workspace_root/<id>` 目录，并校验 ID 只含安全字符集（字母、数字、连字符、下划线），拒绝 `/`、`..` 与绝对路径。调度器因此不需要知道 executor 的磁盘布局。
+3. `create` 的 body 加一个独立的 `workspace` 字段，承载**工作区 ID**。`cwd` 保持原语义（容器内工作目录，默认 `/workspace`）。不复用 `cwd` 装工作区 ID——那是语义复用，两个概念迟早分叉。executor 把 workspace ID 映射到自己的 `workspace_root/<id>` 目录，并校验 ID 只含安全字符集（字母、数字、连字符、下划线），拒绝 `/`、`..` 与绝对路径。调度器因此不需要知道 executor 的磁盘布局。
 
 client 侧要改两处：`internal/platform/executor/sandbox.go` 的 `create` 现在固定发 `{"cwd": "/workspace"}`。改成发 `{"workspace": "<本次 run 的工作区 ID>", "cwd": "/workspace"}`。另外每个请求带 `X-Woca-Workspace: <id>` 内部头——proxy 靠它做无状态路由，不解析请求体。`CONTRACT.md` 同步补字段与头。
 
-需要加一个端点：
+不新增端点。文件搬运不做（§5.3）：没有 upload 方向的端点，也没有 sync 端点——沙箱 bind-mount 工作区目录，产物直接落在卷上，不需要谁确认"收到"。
 
-| 操作 | 端点 | 语义 |
-|---|---|---|
-| 同步工作区 | `POST /sandbox/{id}/workspace/sync` | 把沙箱内 `/workspace` 同步回 executor 磁盘的工作区目录。返回成功或失败 |
-
-理由：产物必须由调度器确认收到才能算 run 成功。同步放在 executor 内部、由 executor 主动完成，调度器就看不到失败。
-
-这个端点是 contract v2 的增补。`fakesandbox` 与 `contract` 测试要同步更新。
-
-上传方向不需要新端点。executor 在 `create` 返回前把工作区目录同步进容器，这是 executor 的内部动作。
-
-`archive` 两个端点保留 contract 原语义（请求体与响应体都是 tar.gz 流），用于手工导入导出。调度器不调用它们，因为调度器不碰文件字节。
+`archive` 两个端点保留 contract 原语义（请求体与响应体都是 tar.gz 流），**仅限用户手工导入导出**——那是用户在行使自己的文件所有权。调度器与 executor 的自动链路都不调用它们。
 
 其余端点语义不变：
 
 - `exec` 走 `docker exec`，argv、cwd、env、stdin、超时、独立 stdout/stderr、退出码。
 - `start` / `output` / `input` / `kill` 对应容器内的长进程。
 - `read` / `write` / `stat` / `mkdir` / `glob` / `grep` 走容器内的 `cat`、`sh`、基础工具。
-- `archive` 保持原语义：请求体是 tar.gz 流。用于一次性导入导出，不是工作区同步。
+- `archive` 保持原语义：请求体是 tar.gz 流。仅限用户手工导入导出。
 
 ## 5. executor 侧实现
 
@@ -234,7 +225,7 @@ Kata 模式下沙箱会多一层轻量虚拟机。首期不做。
 executor 用 container runtime 的 API 管理容器：
 
 1. 按配置的镜像与资源限制创建容器。
-2. 工作目录指向容器内 `/workspace`。
+2. 工作目录 `/workspace` 是 bind-mount 的工作区目录（§5.3）。
 3. 隔离档位由 runtime 决定：`runc` 或 `runsc`。
 4. 网络由 options 决定：关（`none`，默认）或开（`bridge`，容器默认网络直出）。
 5. 容器不注入 woca 的二进制。执行命令靠 runtime 的 exec 接口。
@@ -255,24 +246,17 @@ executor 用 container runtime 的 API 管理容器：
 
 会话状态在 executor 内存里：输出缓冲、offset 游标、退出码、进程句柄。executor 重启这些就没了，对应的 run 判失败。executor 不做会话持久化。
 
-### 5.3 工作区同步
+### 5.3 工作区挂载
 
 工作区目录在共享卷上。scheduler 与 executor 挂同一个卷、同一路径，卷根记作 `workspace_root`。
 
 每个工作区一个子目录，目录名是工作区 ID。executor 校验 ID 只含安全字符集，拒绝 `/`、`..` 与绝对路径。
 
-上传：把宿主目录打成 tar.gz，灌进容器，解包到 `/workspace`。这是 executor 在 `create` 里的内部动作。
+**沙箱 bind-mount 自己的工作区目录到容器 `/workspace`**——只挂这个工作区的子目录，不挂卷根。没有上传，没有下载，没有 staging：沙箱读写的就是卷上那份文件，产物直接落卷。这是文件所有权原则（§2）：woca 不把文件从一个 owner 搬到另一台机器；沙箱只在 executor 管控的工作区目录上原地做事。卷与用户本地（或任何外部）是否同步，是用户自己的事——用户可以在沙箱里跑 git，也可以用 `archive` 端点手工导入导出。
 
-下载：容器内 `tar` 打包 `/workspace`，流式写回宿主 staging 目录，校验后原子替换。这是 `POST /sandbox/{id}/workspace/sync` 的动作。
+此前"永不 bind-mount、文件进出只走归档通道"的设计作废：那条通道的存在意义就是搬运，而搬运本身被否决。挂载带来的安全姿态变化在 §8.4 如实记录。
 
-沙箱永不 bind-mount 工作区卷，文件进出只有归档这一条通道，通道上有检查。这是刻意设计（理由见 §8.4），不要"优化"成挂载。
-
-规则沿用现有实现（`internal/ee/worker/worker_sandbox.go`）：
-
-- 归档大小上限走 `sandbox-archive-max-bytes`。
-- 拒绝绝对路径、`..` 逃逸、逃逸 symlink。
-- `.git` 不上传，宿主保留。
-- 同步失败不能算成功。
+保留的通道检查只作用于用户手工 `archive` 导入（解包侧拒绝绝对路径、`..`、逃逸 symlink，大小上限走 `sandbox-archive-max-bytes`）。`.git` 是工作区目录的一部分，随目录挂载，无特殊处理。
 
 ### 5.4 工作区文件由 scheduler 提供
 
@@ -431,8 +415,8 @@ source_key 一次闭掉三个。tenant_id 拼进键里，两个租户用同一�
 代码延续靠工作区目录，不靠沙箱容器。
 
 - 第二轮 run 复用同一个目录。
-- 沙箱是新的容器。
-- 上传阶段把目录内容灌进新容器。
+- 沙箱是新的容器，挂载同一个目录。
+- 没有上传阶段——目录就是文件本身，挂上即用。
 
 因此开发服务器、装在容器里的依赖这些不跨轮次。这是轻量的代价，要在管理台和文档里写明。
 
@@ -483,8 +467,8 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 |---|---|---|
 | 网络外窜 | 数据外带、C2 回连、拉恶意载荷 | 默认关（`none`）封死整类：无网络栈、只有 loopback、打不到邻居容器含 executor（§8.2）。开关打开后这类威胁回归，是操作员显式决策 |
 | 容器→宿主内核逃逸 | runc CVE 一类 | 缺口。默认 runc 共享内核；档位（§8.1）只换 runtime，没有容器加固 |
-| 资源耗尽 | fork 炸弹；灌满磁盘拖死邻居工作区 | 一半。cpu/mem 已在 options；pids 与磁盘是缺口。归档大小上限管不到沙箱内直接写文件 |
-| 共享卷侧攻击 | symlink、路径逃逸、`.git` 泄漏 | 已有。归档边界拒绝绝对路径、`..`、逃逸 symlink；`.git` 不上传；沙箱永不 bind-mount 卷，只走 tar 流（§5.3） |
+| 资源耗尽 | fork 炸弹；灌满磁盘拖死邻居工作区 | 一半。cpu/mem 已在 options；pids 已封。磁盘：工作区是 bind-mount，沙箱直接写卷，无写入上限——靠巡检告警与每工作区目录隔离（只拖死自己），硬配额列触发式 |
+| 共享卷侧攻击 | symlink、路径逃逸、跨工作区越权 | 挂载即直写：每个沙箱只挂自己的 `workspace_root/<id>` 子目录（不挂卷根），跨工作区越权被挂载边界挡住；工作区内 symlink/垃圾文件只影响该工作区自身（自伤，可接受）。手工 archive 导入的解包检查保留（§5.3）。卷根内其余路径的防护靠文件面 OpenRoot jail（§5.4） |
 | executor 全权 socket 被利用 | 沙箱攻陷 executor 后横向移动 | 已列触发式后续（socket 代理）。出口关闭时沙箱打不到 executor（§8.2），这条利用链要先过内核逃逸；出口开启时叠加"executor 端口不发布到宿主"的部署约束（§8.2） |
 
 #### 防御清单（ROI 从高到低）
@@ -519,9 +503,9 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 
 - pids 上限：固定值（初版 512），不进 options。底线参数不是管理台旋钮。
 - 磁盘是显式边界，第一版不是硬配额。三件事收口：
-  1. sync 的归档大小上限（`sandbox-archive-max-bytes`）封住回写共享卷的量。超限 run 失败，这是显式上限。
-  2. per-run 容器销毁收口可写层：沙箱写进容器可写层的文件随容器删除消失，不累积。
-  3. executor 定期巡检宿主磁盘水位与工作区目录大小，超限告警。
+  1. 每工作区目录隔离：沙箱只挂自己的子目录，灌满只拖死自己（bind-mount 边界）。
+  2. per-run 容器销毁收口容器内其余可写层：`/tmp` tmpfs 等随容器删除消失，不累积。
+  3. executor 定期巡检宿主磁盘水位与工作区目录大小，超限告警。手工 `archive` 导入导出走 `sandbox-archive-max-bytes` 上限。
 - 文件系统级每工作区硬配额依赖卷类型（local driver pquota、NFS、EFS 各不相同），列为触发式后续（§16）。
 
 ### 8.5 宿主内核与 runc 升级纪律
@@ -545,7 +529,7 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 6. scheduler 挂了工作区共享卷，能读到卷上所有工作区目录。文件树与预览的路径必须限制在卷根内并按租户过滤。
 7. 沙箱里没有 woca 的凭据与代码。
 8. 工作区文件接口限制在工作区根内。拒绝穿越。
-9. 归档导入导出拒绝绝对路径、`..` 与逃逸 symlink。
+9. 手工归档导入导出拒绝绝对路径、`..` 与逃逸 symlink；沙箱只挂载自己的工作区子目录，不挂卷根。
 10. 沙箱失败一律让 run 失败。不回退本地执行。
 11. 管理台改配置有审计日志，沿用现有 `sandboxLog` 形状。
 
@@ -566,10 +550,8 @@ gVisor 的代价要说清：系统调用被用户态内核翻译，官方数据�
 | 故障 | 行为 |
 |---|---|
 | executor 不可达 | run 失败，错误写明是执行面不可达 |
-| 容器创建失败 | run 失败，错误带 runtime 的原始原因 |
-| 上传失败 | run 失败，销毁容器，宿主目录不动 |
+| 容器创建失败（含挂载失败） | run 失败，错误带 runtime 的原始原因 |
 | 执行超时 | 杀掉进程，run 失败 |
-| 同步失败 | run 失败。宿主保留旧目录，错误写明同步未完成 |
 | executor 失联（ack 超窗） | 绑定工作区标 degraded，新 run 503 拒绝（§3.3 规则 7）。ack 回窗自动恢复 active |
 | executor 崩溃 | run 标记失败。工作区锁随事务释放。旧容器由 executor 启动时清理 |
 | 调度器崩溃 | run 标记失败。不自动重放 |
@@ -646,7 +628,7 @@ demo 断言"沙箱容器被回收"的机制：executor 提供一个内网查询�
 1. 用户在空工作区提交提示词。
 2. 调度器编排 agent 循环，通过 executor 沙箱服务执行。
 3. 沙箱内跑测试，通过。
-4. 产物同步回 executor 磁盘的工作区目录。
+4. 产物直接落在卷上的工作区目录（bind-mount，无同步环节）。
 5. demo 容器断言目录里出现预期文件。
 6. demo 容器断言沙箱容器被回收（经 executor 内部查询端点，§11.2）。
 
@@ -678,8 +660,8 @@ demo 断言"沙箱容器被回收"的机制：executor 提供一个内网查询�
 
 | 层 | 必测 |
 |---|---|
-| contract | 新增 sync 端点；create 的 workspace 字段；fakesandbox 同步更新 |
-| executor 沙箱服务 | 15 端点全覆盖；文件面；归档往返；symlink 与路径逃逸拒绝 |
+| contract | create 的 workspace 字段与路由头；15 端点（无 sync）；fakesandbox 同步更新 |
+| executor 沙箱服务 | 15 端点全覆盖；文件面；工作区 bind-mount；手工 archive 通道检查 |
 | 身份映射 | 同一 tenant 同一路径两次 allocate-or-bind 返回同一 workspace_id；不同租户同路径得到不同 ID；旧 session 首次入队补齐 |
 | 工作区锁 | 同工作区串行（部分唯一索引 + 文件锁）；崩溃后自动释放 |
 | 配置热生效 | 管理台改参数后新建沙箱用新参数；运行中沙箱不变；缺 runsc 时明确报错；verify 经 proxy 走通；`options.network` 只接受 `none`/`bridge` |
@@ -694,8 +676,8 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 | 里程碑 | 内容 | 退出条件 |
 |---|---|---|
 | M0 | 角色改名与编排位置调整 | 调度器本地跑通一个 run，事件走 PG |
-| M1 | contract 增补 sync 端点与测试 | contract 测试全绿 |
-| M2 | executor 沙箱服务（Docker driver，依赖已定 `moby/moby/client`，Docker 操作走窄接口 `Backend`，单测打 fake、真 Docker 只进 `-tags dockerlab`） | 15+1 端点与归档往返测试通过 |
+| M1 | contract 增补 workspace 字段与路由头 | contract 测试全绿 |
+| M2 | executor 沙箱服务（Docker driver，依赖已定 `moby/moby/client`，Docker 操作走窄接口 `Backend`，单测打 fake、真 Docker 只进 `-tags dockerlab`；工作区 bind-mount） | 15 端点与手工 archive 往返测试通过 |
 | M3 | 工作区目录与工作区锁 | 串行与崩溃恢复测试通过 |
 | M4 | 管理台参数与热生效 | 改参数后新建沙箱用新参数 |
 | M5 | compose 改造与 demo profile | `make ent-sandbox-demo` 退出码 0 |
@@ -703,8 +685,8 @@ e2e 用独立 build tag 和 Make 目标。普通 `go test ./...` 不碰容器。
 
 ## 15. 改造面
 
-- `internal/platform/executor/CONTRACT.md`：新增 sync 端点，`create` 加 `workspace` 字段。
-- `internal/platform/executor/sandbox.go`：client 侧 create 发工作区 ID，新增 `SyncWorkspace` 调用。
+- `internal/platform/executor/CONTRACT.md`：`create` 加 `workspace` 字段与路由头（无 sync 端点）。
+- `internal/platform/executor/sandbox.go`：client 侧 create 发工作区 ID（无 SyncWorkspace）。
 - `internal/platform/executor/fakesandbox/`：实现新端点。
 - `internal/server/runs.go`：门控从 `hasLiveSandboxWorker` 改成 executor 在线判定；`enqueueRun` 从 session 继承 workspace_id（§7.1）。
 - `internal/server/sessions.go`：`createSession` 调 proxy 的 allocate-or-bind，session 元数据存 workspace_id。
