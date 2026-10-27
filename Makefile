@@ -467,7 +467,7 @@ sandboxlab:
 	done
 	go test -tags sandboxlab -count=1 -timeout 25m -run 'TestSandboxLab' -v ./e2e/sandboxlab
 
-# ─────────── executor-dockerlab: docker 驱动冒烟（internal/ee/executor） ──────
+# ─────────── executor-dockerlab: docker driver smoke test (internal/ee/executor) ──────
 # The EE sandbox plane's real Docker driver (docker_backend.go) lives behind
 # the dockerlab build tag, so plain `go test ./...` needs no daemon. This
 # target runs its smoke test against the local docker engine: create a

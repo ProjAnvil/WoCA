@@ -12,7 +12,7 @@ export default {
   nav: { model: 'Model', storage: 'Storage', memory: 'Memory', msgplane: 'Message plane', langfuse: 'Observability', skills: 'Skills & MCP', sandbox: 'Sandboxes', websearch: 'Web search', ops: 'Ops' },
   sandbox: {
     intro: 'Register sandbox execution backends; the enabled one runs remote tenants\' tasks. Verify probes the full chain (exec, files, processes, archives).',
-    newBackend: '＋ New backend',
+    newBackend: '+ New backend',
     empty: 'No backends yet — register one to get started.',
     name: 'Name',
     type: 'Type',
@@ -40,7 +40,7 @@ export default {
     env: 'Environment variables',
     envKey: 'KEY',
     envValue: 'VALUE',
-    addEnv: '＋ Add variable',
+    addEnv: '+ Add variable',
     optionsInvalid: 'Invalid options: runtime must be runc or runsc, network must be none or bridge, CPU and memory must not be negative',
   },
   skills: {
@@ -68,7 +68,7 @@ export default {
   model: {
     presetIntro: 'Save named model presets; they are picked from the chat interface.',
     presetName: 'Preset name',
-    newPreset: '＋ New preset',
+    newPreset: '+ New preset',
     delete: 'Delete',
     empty: 'No presets yet — create one to get started.',
     saved: 'Saved',

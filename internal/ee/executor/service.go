@@ -477,7 +477,7 @@ func (s *Service) handleExec(sbx *sandbox, w http.ResponseWriter, r *http.Reques
 	spec := ExecSpec{Cmd: body.Argv, Dir: body.Cwd, Env: envPairs(body.Env), Stdin: stdin}
 	if body.TimeoutMs > 0 {
 		// The backend kills the command at the deadline (design §10.2
-		// "执行超时": kill the process, fail the run).
+		// exec timeout: kill the process, fail the run).
 		spec.Timeout = time.Duration(body.TimeoutMs) * time.Millisecond
 	}
 	res, err := sbx.container.Exec(r.Context(), spec)
