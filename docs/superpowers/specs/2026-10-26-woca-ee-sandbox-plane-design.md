@@ -35,7 +35,7 @@
 | runtime 访问权 | executor 跑在容器里，直连宿主 runtime socket。权限收窄后续做 |
 | 工作区 ID | proxy 生成。ID 是执行环境的身份，不是聊天 session 的 ID |
 | 工作区放置 | proxy 按负载选 executor，绑定持久化。同一工作区固定落在一个 executor |
-| 工作区存储 | 共享卷。scheduler 与 executor 挂同一路径，文件树现有实现直接可用 |
+| 工作区存储 | 固定宿主路径（非命名卷——bind-mount 源在 daemon 命名空间解析）。scheduler 与 executor 挂同一路径，文件树现有实现直接可用 |
 | executor 规模 | 可横向扩容。扩容出的实例只接新工作区 |
 | 个人版 | 不接入这条路径。个人版继续本地执行 |
 | 外部方案 | 全部不接：OpenShell、E2B、Daytona、Runloop、CubeSandbox、OpenSandbox、agent-sandbox |
@@ -587,7 +587,7 @@ executor 可横向扩容。工作区目录在共享卷上，不绑 executor。�
 
 调度器内嵌的执行循环直接复用 `internal/ee/worker` 现有的 claim、事件镜像、transcript 保存逻辑。不重写一套。
 
-新增的卷：`woca-workspaces`。scheduler 与 executor 都挂，路径相同，卷根就是 `workspace_root`。
+工作区存储：**固定宿主路径**（compose 里是 daemon 命名空间的 `/data/workspaces`，env `WOCA_WORKSPACE_ROOT`）。scheduler 与 executor 两容器挂同一字面路径——bind-mount 的源路径在 daemon 命名空间解析，命名卷挂载在 executor 容器上对兄弟沙箱不可见，所以不用命名卷。卷根就是 `workspace_root`。
 
 executor 拿 container runtime 的访问权，走容器内直连：executor 跑在容器里，挂载宿主 runtime socket，直接调用容器管理接口。
 
