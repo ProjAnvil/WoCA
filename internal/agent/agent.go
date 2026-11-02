@@ -1066,10 +1066,10 @@ func (a *Agent) CurrentModelName() string {
 }
 
 // streamModes is the chunk vocabulary the harness consumes: node updates
-// (message batches), custom payloads (token/reasoning deltas), full-state
-// values (final transcript and pause detection), and task events (the
-// observability bridge).
-var streamModes = []lggraph.StreamMode{lggraph.StreamUpdates, lggraph.StreamCustom, lggraph.StreamValues, lggraph.StreamTasks}
+// (message batches), custom payloads (token/reasoning deltas), and full-state
+// values (final transcript and pause detection). Observability does not ride
+// task events — it comes from observedNode's node-boundary events.
+var streamModes = []lggraph.StreamMode{lggraph.StreamUpdates, lggraph.StreamCustom, lggraph.StreamValues}
 
 // Stream runs the agent on threadID and streams graph progress chunks.
 func (a *Agent) Stream(ctx context.Context, history []messages.Message, threadID string) iter.Seq2[lggraph.StreamChunk, error] {

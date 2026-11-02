@@ -196,3 +196,62 @@ func TestThinkingLadder(t *testing.T) {
 		}
 	}
 }
+
+// Adaptive-thinking families (fork modelprofiles: claude-opus-5*,
+// claude-fable-5*, claude-sonnet-5-5*) reject manual thinking configs and
+// take effort via output_config instead; fable-5/sonnet-5-5 also reject
+// non-default sampling. BuildModel must map the thinking level onto
+// WithEffort for them and fail fast on a configured temperature.
+
+func TestBuildModelAdaptiveFamilySendsEffortNotBudget(t *testing.T) {
+	bodies := invokeOnce(t, Config{
+		Provider: ProviderAnthropic, Model: "claude-sonnet-5-5-20261001",
+		ThinkingBudget: ThinkingBudgetMedium, MaxTokens: 8192,
+	})
+	body := (*bodies)[0]
+	oc, _ := body["output_config"].(map[string]any)
+	if oc == nil || oc["effort"] != ThinkingLevelMedium {
+		t.Fatalf("output_config = %v, want effort %q", body["output_config"], ThinkingLevelMedium)
+	}
+	if thinking, _ := body["thinking"].(map[string]any); thinking != nil {
+		if thinking["type"] == "enabled" || thinking["budget_tokens"] != nil {
+			t.Fatalf("thinking = %v, want no manual budget on an adaptive-thinking model", thinking)
+		}
+	}
+}
+
+func TestBuildModelAdaptiveFamilyNoBudgetSendsNeither(t *testing.T) {
+	bodies := invokeOnce(t, Config{
+		Provider: ProviderAnthropic, Model: "claude-opus-5-20260929",
+		MaxTokens: 8192,
+	})
+	body := (*bodies)[0]
+	if _, present := body["output_config"]; present {
+		t.Fatalf("output_config = %v, want absent without a thinking level", body["output_config"])
+	}
+	if thinking, _ := body["thinking"].(map[string]any); thinking != nil && thinking["type"] == "enabled" {
+		t.Fatalf("thinking = %v, want no manual thinking without a level", thinking)
+	}
+}
+
+func TestBuildModelAdaptiveFamilyRejectsTemperature(t *testing.T) {
+	_, err := BuildModel(Config{
+		Provider: ProviderAnthropic, Model: "claude-fable-5-20261015",
+		Temperature: 0.7, MaxTokens: 8192,
+	})
+	if err == nil {
+		t.Fatal("BuildModel accepted a temperature on a sampling-rejecting adaptive model")
+	}
+}
+
+func TestBuildModelLegacyClaudeKeepsBudget(t *testing.T) {
+	// A thinking-capable non-adaptive claude keeps the budget_tokens schema.
+	bodies := invokeOnce(t, Config{
+		Provider: ProviderAnthropic, Model: "claude-sonnet-4-5",
+		ThinkingBudget: 2048, MaxTokens: 8192,
+	})
+	thinking, _ := (*bodies)[0]["thinking"].(map[string]any)
+	if thinking == nil || thinking["type"] != "enabled" || thinking["budget_tokens"].(float64) != 2048 {
+		t.Fatalf("thinking = %v, want enabled budget 2048", thinking)
+	}
+}

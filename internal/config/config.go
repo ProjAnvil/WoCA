@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/projanvil/langchain-golang/core/language"
@@ -309,6 +310,34 @@ func isClaude3(model string) bool {
 	return false
 }
 
+// Adaptive-thinking model families (fork modelprofiles): these models run
+// adaptive thinking by default, take the thinking level as output_config
+// effort (WithEffort), and reject manual budget thinking per-request. Keep
+// the prefixes in sync with the fork's assertValidModelConfiguration.
+var anthropicAdaptivePrefixes = []string{"claude-opus-5", "claude-fable-5", "claude-sonnet-5-5"}
+
+// samplingLockedPrefixes are the adaptive families that additionally reject
+// any non-default sampling (top_k, top_p/temperature != 1).
+var samplingLockedPrefixes = []string{"claude-fable-5", "claude-sonnet-5-5"}
+
+func matchesAnyPrefix(model string, prefixes []string) bool {
+	return slices.ContainsFunc(prefixes, func(p string) bool {
+		return strings.HasPrefix(model, p)
+	})
+}
+
+// isAdaptiveThinkingModel reports whether an anthropic model name belongs to
+// an adaptive-thinking family (effort-based levels, no manual budgets).
+func isAdaptiveThinkingModel(model string) bool {
+	return matchesAnyPrefix(strings.ToLower(strings.TrimSpace(model)), anthropicAdaptivePrefixes)
+}
+
+// rejectsSamplingParams reports whether an anthropic model name belongs to a
+// family that accepts only default sampling parameters.
+func rejectsSamplingParams(model string) bool {
+	return matchesAnyPrefix(strings.ToLower(strings.TrimSpace(model)), samplingLockedPrefixes)
+}
+
 // ThinkingSupportNote explains, per provider, how levels map onto the
 // provider's knobs (shown as the selector's hint).
 func ThinkingSupportNote(p Provider) string {
@@ -330,6 +359,11 @@ func ThinkingSupportNote(p Provider) string {
 // max_tokens cap above the budget) even on un-normalized input, so every
 // construction site stays valid.
 func BuildModel(cfg Config) (language.ChatModel, error) {
+	if cfg.Provider == ProviderAnthropic && rejectsSamplingParams(cfg.Model) && cfg.Temperature > 0 {
+		// Fail at construction instead of per-request: the API rejects any
+		// non-default sampling on these families.
+		return nil, fmt.Errorf("config: model %q accepts only default sampling; unset the temperature setting", cfg.Model)
+	}
 	if cfg.ThinkingBudget > 0 {
 		if cfg.ThinkingBudget < MinThinkingBudget {
 			cfg.ThinkingBudget = MinThinkingBudget
@@ -362,6 +396,15 @@ func BuildModel(cfg Config) (language.ChatModel, error) {
 	}
 	switch cfg.Provider {
 	case ProviderAnthropic, ProviderGLM:
+		if cfg.Provider == ProviderAnthropic && isAdaptiveThinkingModel(cfg.Model) {
+			// Adaptive-thinking families: no manual budget thinking (the API
+			// rejects it); the level rides output_config effort instead.
+			am := anthropic.NewChatModel(opts...)
+			if cfg.ThinkingBudget > 0 {
+				am = am.WithEffort(ThinkingLevel(cfg.ThinkingBudget))
+			}
+			return withName(am, cfg.Model), nil
+		}
 		// GLM rides the Anthropic-compatible endpoint, so its thinking rides
 		// the same budget_tokens schema.
 		am := anthropic.NewChatModel(opts...)

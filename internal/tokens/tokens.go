@@ -142,14 +142,14 @@ func Estimate(msgs []messages.Message) int {
 				n += imageTokenPenalty
 			}
 		}
-		if len(m.ContentBlocks) == 0 {
-			// Tool calls ride the content blocks in Anthropic wire format;
-			// only the plain-string format needs them counted separately.
-			for _, tc := range m.ToolCalls {
-				n += EstimateText(tc.Name)
-				if raw, err := json.Marshal(tc.Args); err == nil {
-					n += EstimateText(string(raw))
-				}
+		// Tool calls always count: stream-fragment blocks never carry them
+		// (the merge drops openai tool_call_chunk slices and anthropic
+		// tool_use partials), so the plain ToolCalls field is the only args
+		// source — block-bearing turns (reasoning, text) must not skip it.
+		for _, tc := range m.ToolCalls {
+			n += EstimateText(tc.Name)
+			if raw, err := json.Marshal(tc.Args); err == nil {
+				n += EstimateText(string(raw))
 			}
 		}
 		if m.Role == messages.RoleTool && m.ToolCallID != "" {

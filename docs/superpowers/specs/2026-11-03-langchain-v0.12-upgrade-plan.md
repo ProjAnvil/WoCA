@@ -1,9 +1,14 @@
 # langchain-golang v0.12 upgrade plan (blocked on a fork fix)
 
-Date: 2026-11-03. Status: **blocked** — remote latest (v0.12.4) carries a
-regression that breaks woca goal mode; woca stays pinned at v0.11.1 /
-checkpoint v0.3.8 until the fork ships the fix. This plan makes the eventual
-re-bump turnkey.
+Date: 2026-11-03. Status: **implemented same day** — the fork shipped the
+nested-Stream emitter fix as v0.12.5 (5710cd7), woca bumped to v0.12.5 /
+checkpoint v0.3.9, and all required adaptations plus the adaptive-family
+adoption landed (merge-time fragment stripping covers both openai
+tool_call_chunk slices and anthropic NonStandard tool_use partials — the
+latter also fixing a pre-existing duplicate-tool_use replay hazard; tokens
+counts ToolCalls unconditionally; StreamTasks dead mode dropped; adaptive
+families map levels to WithEffort with a construction-time temperature
+guard). Draining and progressive tool-args stay deferred as stated below.
 
 ## Blocker
 

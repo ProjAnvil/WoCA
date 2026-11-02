@@ -2,6 +2,7 @@ package agent
 
 import (
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -40,7 +41,12 @@ func ReasoningDeltaText(chunk messages.Message) string {
 
 // MergeStreamChunks accumulates a streaming chunk into full. The first chunk
 // seeds role/ID/metadata; later chunks append text and merge tool calls by ID.
+// tool-call-delta protocol fragments (ToolCallChunkBlock, fork v0.12+ openai
+// chat-completions) are dropped: the terminal chunk carries each call fully
+// assembled in ToolCalls, and stray fragments would pollute the persisted
+// history, the token estimate, and cross-provider replay.
 func MergeStreamChunks(full *messages.Message, chunk messages.Message) {
+	chunk.ContentBlocks = dropToolCallFragments(chunk.ContentBlocks)
 	if full.Role == "" {
 		*full = chunk
 		return
@@ -56,6 +62,43 @@ func MergeStreamChunks(full *messages.Message, chunk messages.Message) {
 	if chunk.ResponseMetadata != nil {
 		full.ResponseMetadata = chunk.ResponseMetadata
 	}
+}
+
+// dropToolCallFragments returns blocks without tool-call stream fragments:
+// openai tool_call_chunk slices (fork v0.12+ tool-call-delta protocol) and
+// anthropic NonStandard tool_use partials (content_block_start and
+// input_json_delta chunks; the complete call arrives in ToolCalls at
+// content_block_stop). Both are redundant in the merged message, and the
+// anthropic partials would replay as duplicate tool_use blocks on the wire.
+// The slice is returned unchanged (no copy) when nothing is dropped.
+func dropToolCallFragments(blocks []messages.ContentBlock) []messages.ContentBlock {
+	out := blocks
+	dropped := false
+	for i, block := range blocks {
+		if isToolCallFragment(block) {
+			if !dropped {
+				out = slices.Clone(blocks[:i])
+				dropped = true
+			}
+			continue
+		}
+		if dropped {
+			out = append(out, block)
+		}
+	}
+	return out
+}
+
+func isToolCallFragment(block messages.ContentBlock) bool {
+	switch v := block.(type) {
+	case messages.ToolCallChunkBlock:
+		return true
+	case messages.NonStandardContentBlock:
+		// tool_use partials only: other NonStandard blocks (e.g. woca's own
+		// restart markers) must survive the merge.
+		return v.Type == "tool_use"
+	}
+	return false
 }
 
 // mergeToolCall merges a tool call into calls, matching by ID (or appending).

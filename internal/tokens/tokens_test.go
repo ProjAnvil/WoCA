@@ -53,6 +53,38 @@ func TestEstimateMonotonic(t *testing.T) {
 	}
 }
 
+// TestEstimateCountsToolCallsAlongsideBlocks pins that tool calls are counted
+// even when the message carries content blocks (e.g. an anthropic thinking
+// turn with ReasoningBlocks, or any block-bearing AI message): the old
+// len(ContentBlocks)==0 gate silently dropped tool-call tokens there.
+func TestEstimateCountsToolCallsAlongsideBlocks(t *testing.T) {
+	withBlocks := []messages.Message{
+		{Role: messages.RoleAI, ContentBlocks: []messages.ContentBlock{
+			messages.ReasoningBlock{Reasoning: "pondering deeply about the task"},
+		}, ToolCalls: []messages.ToolCall{
+			{Name: "Bash", Args: map[string]any{"command": "ls -la /var/log/system.log"}},
+		}},
+	}
+	withoutBlocks := []messages.Message{
+		{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+			{Name: "Bash", Args: map[string]any{"command": "ls -la /var/log/system.log"}},
+		}},
+	}
+	withReasoningOnly := []messages.Message{
+		{Role: messages.RoleAI, ContentBlocks: []messages.ContentBlock{
+			messages.ReasoningBlock{Reasoning: "pondering deeply about the task"},
+		}},
+	}
+	if got, base := Estimate(withBlocks), Estimate(withReasoningOnly); got <= base {
+		t.Fatalf("Estimate with blocks+tool call = %d, want > reasoning-only %d (tool calls must count alongside blocks)",
+			got, base)
+	}
+	if got, plain := Estimate(withBlocks), Estimate(withoutBlocks); got != plain {
+		t.Fatalf("Estimate with blocks = %d, blocks-free = %d, want equal (same tool call counted on both paths)",
+			got, plain)
+	}
+}
+
 func FuzzEstimateText(f *testing.F) {
 	f.Add("hello world")
 	f.Add("if err != nil { return }")
