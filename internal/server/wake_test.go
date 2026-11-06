@@ -574,3 +574,83 @@ func TestWakeSessionAffinity(t *testing.T) {
 		t.Fatalf("%d runs, want the 2 user runs only", n)
 	}
 }
+
+// Scenario 6: workspace affinity — a session whose recorded workspace
+// differs from the server workdir has its wake run execute in the session's
+// workspace, exactly like the session's user runs. The wake driver has no
+// request to carry a workspace, so it must resolve it from the session
+// store; the memory engine's per-run retain (which keys off the run ctx's
+// workspace, cf. TestRunScopesMemoryToSessionWorkspace) makes the run's
+// workspace observable.
+func TestWakeRunUsesSessionWorkspace(t *testing.T) {
+	f := &fakeMemEngine{}
+	a := newWakeAgent(t, 0,
+		bgShellCall("sleep 0.2 && echo bg-done"),
+		messages.AI("armed"),
+		messages.AI("noted"),
+	)
+	a.SetMemoryEngine(f)
+	s, ts := newWakeServer(t, a, nil) // WorkDir = one temp dir...
+
+	// ...and the session is created against a DIFFERENT workspace, the way
+	// the web client creates sessions (activeWorkspace.path).
+	ws := t.TempDir()
+	resp, err := http.Post(ts.URL+"/api/sessions", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"workspace":%q}`, ws)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if created.SessionID == "" {
+		t.Fatal("no session id from POST /api/sessions")
+	}
+	sid := created.SessionID
+
+	// The user run repeats the workspace per run (again mirroring the web
+	// client); its completion persists the session meta under that workspace.
+	body := fmt.Sprintf(`{"prompt":"start the shell","session_id":%q,"workspace":%q}`, sid, ws)
+	resp, err = http.Post(ts.URL+"/api/runs", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runCreated struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&runCreated); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	runID := runCreated.RunID
+	waitRunDoneInProc(t, s, runID)
+
+	// The shell finishes while idle; the driver starts the wake run.
+	ids := waitForRuns(t, s, 2)
+	wakeID := ids[len(ids)-1]
+	waitRunDoneInProc(t, s, wakeID)
+
+	// Quiesce: the wake reply arms nothing, so no further runs appear.
+	time.Sleep(250 * time.Millisecond)
+	if n := len(registeredRuns(t, s)); n != 2 {
+		t.Fatalf("%d runs after settle, want exactly 2", n)
+	}
+
+	// Both retains keyed off the session workspace: the user run's (request
+	// workspace) and — the point — the wake run's, which only resolves
+	// through the session store; before the fix it fell back to the server
+	// workdir.
+	ev := f.Events()
+	if len(ev) != 2 {
+		t.Fatalf("memory events = %v, want 2 (user + wake)", ev)
+	}
+	for i, e := range ev {
+		if !strings.HasPrefix(e, ws+"|") {
+			t.Fatalf("memory event %d = %q, want workspace %s", i, e, ws)
+		}
+	}
+}

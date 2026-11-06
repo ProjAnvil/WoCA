@@ -90,7 +90,17 @@ func (s *Server) wakeLocked(sid string) {
 		return // drained between the count and here; the taker owns delivery
 	}
 	trigger := items[0].Tag
-	run, _, _, err := s.startRunWith(context.Background(), sid, agent.CoalesceQueuedInputs(items), "", nil, runOptions{auto: true, trigger: trigger})
+	// The wake run has no request to carry a workspace, so resolve the
+	// session's recorded one from the store — the same value the web client
+	// sent at session creation — keeping tools, prompt, hooks and memory
+	// scoped to the session's project (and, in dispatch mode, feeding the
+	// ledger snapshot's Workspace). A session with no recorded workspace
+	// still falls back to the server workdir inside newRegisteredRun/
+	// enqueueRun. The base context derives from the server lifecycle
+	// (rootCtx), not a detached Background, so a dispatched wake run's
+	// workspace binding (resolveRunWorkspace) and cancellation follow the
+	// server.
+	run, _, _, err := s.startRunWith(s.rootCtx, sid, agent.CoalesceQueuedInputs(items), s.sessions.workspaceOf(sid), nil, runOptions{auto: true, trigger: trigger})
 	if err != nil {
 		// One attempt, no retry ladder (design §5.2): log the failure, put
 		// the items back, and stall this session's driver until a user run
