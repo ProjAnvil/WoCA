@@ -607,6 +607,11 @@ func New(cfg Config) (*Agent, error) {
 	a.registry.Background().SetNotify(func(session, text string) {
 		a.QueueNotificationFor(session, "background-task-completed", strings.TrimSpace(text))
 	})
+	// Background-task completions (Task run_in_background) ride the same
+	// session-scoped queue and tag as background shells.
+	a.tasks.SetNotify(func(session, text string) {
+		a.QueueNotificationFor(session, "background-task-completed", strings.TrimSpace(text))
+	})
 	return a, nil
 }
 

@@ -269,7 +269,7 @@ func TestTeamSpawnStopConcurrent(t *testing.T) {
 // the status back to completed.
 func TestBackgroundTaskStopBeatsLateCompletion(t *testing.T) {
 	tm := newTaskManager()
-	task, err := tm.start("subject", "description")
+	task, err := tm.start(t.Context(), "subject", "description")
 	if err != nil {
 		t.Fatal(err)
 	}

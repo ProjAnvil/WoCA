@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/skills"
 	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // newBypassAgent builds a bypass-permission agent over a fake model.
@@ -74,10 +76,15 @@ func TestBackgroundTaskOutputBuffering(t *testing.T) {
 }
 
 func TestBackgroundTaskFinalStateTransitions(t *testing.T) {
-	bt := &backgroundTask{status: TaskRunning}
+	bt := &backgroundTask{status: TaskRunning, done: make(chan struct{})}
 	bt.setFinal(TaskCompleted, "done")
 	if st, _, final := bt.snapshot(); st != TaskCompleted || final != "done" {
 		t.Fatalf("setFinal = %v/%q", st, final)
+	}
+	select {
+	case <-bt.done:
+	default:
+		t.Fatal("setFinal did not close done")
 	}
 	// A late completion must not flip a stopped task back.
 	bt2 := &backgroundTask{status: TaskStopped}
@@ -85,15 +92,20 @@ func TestBackgroundTaskFinalStateTransitions(t *testing.T) {
 	if st, _, final := bt2.snapshot(); st != TaskStopped || final != "" {
 		t.Fatalf("setFinalIfRunning overrode stop: %v/%q", st, final)
 	}
-	bt3 := &backgroundTask{status: TaskRunning}
+	bt3 := &backgroundTask{status: TaskRunning, done: make(chan struct{})}
 	bt3.setFinalIfRunning(TaskCompleted, "ok")
 	if st, _, final := bt3.snapshot(); st != TaskCompleted || final != "ok" {
 		t.Fatalf("setFinalIfRunning = %v/%q", st, final)
 	}
+	select {
+	case <-bt3.done:
+	default:
+		t.Fatal("setFinalIfRunning did not close done")
+	}
 }
 
 func TestBackgroundTaskStopCancels(t *testing.T) {
-	bt := &backgroundTask{status: TaskRunning}
+	bt := &backgroundTask{status: TaskRunning, done: make(chan struct{})}
 	ctx, cancel := context.WithCancel(t.Context())
 	bt.setCancel(cancel)
 	bt.stop()
@@ -102,14 +114,47 @@ func TestBackgroundTaskStopCancels(t *testing.T) {
 	default:
 		t.Fatal("stop did not cancel the run context")
 	}
+	select {
+	case <-bt.done:
+	default:
+		t.Fatal("stop did not close done")
+	}
 	if st, _, _ := bt.snapshot(); st != TaskStopped {
 		t.Fatalf("status = %v", st)
 	}
-	// Stopping twice keeps the stopped status; a nil cancel is tolerated.
+	// Stopping twice keeps the stopped status without a second done close; a
+	// nil cancel is tolerated.
 	bt.setCancel(nil)
 	bt.stop()
 	if st, _, _ := bt.snapshot(); st != TaskStopped {
 		t.Fatalf("status after double stop = %v", st)
+	}
+}
+
+// TestBackgroundTaskDoneClosedExactlyOnce races setFinalIfRunning against
+// stop: done must end closed, and the losing transition must not close it a
+// second time (close of a closed channel panics).
+func TestBackgroundTaskDoneClosedExactlyOnce(t *testing.T) {
+	for range 50 {
+		bt := &backgroundTask{status: TaskRunning, done: make(chan struct{})}
+		var wg sync.WaitGroup
+		for i := range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if i%2 == 0 {
+					bt.setFinalIfRunning(TaskCompleted, "done")
+				} else {
+					bt.stop()
+				}
+			}()
+		}
+		wg.Wait()
+		select {
+		case <-bt.done:
+		default:
+			t.Fatal("done not closed after concurrent finalization")
+		}
 	}
 }
 
@@ -121,11 +166,11 @@ func TestTaskManagerStartGetList(t *testing.T) {
 	if list := m.list(); len(list) != 0 {
 		t.Fatalf("list = %v", list)
 	}
-	first, err := m.start("subject", "description")
+	first, err := m.start(t.Context(), "subject", "description")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := m.start("another", "d2")
+	second, err := m.start(t.Context(), "another", "d2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +187,21 @@ func TestTaskManagerStartGetList(t *testing.T) {
 	list := m.list()
 	if len(list) != 2 || list[0].ID != "task-1" || list[1].ID != "task-2" {
 		t.Fatalf("list not sorted by ID: %+v", list)
+	}
+	// start captures the starting run's session from ctx; "" outside a run
+	// scope (completion notifications deliver there).
+	scoped, err := m.start(tracing.WithRun(t.Context(), "r1", "sess-a"), "s3", "d3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scoped.session != "sess-a" {
+		t.Fatalf("scoped task session = %q", scoped.session)
+	}
+	if first.session != "" {
+		t.Fatalf("unscoped task session = %q", first.session)
+	}
+	if scoped.done == nil {
+		t.Fatal("started task has no done channel")
 	}
 }
 
@@ -596,14 +656,168 @@ func TestRunTaskDescriptionFallsBackToPrompt(t *testing.T) {
 func TestTaskManagerCap(t *testing.T) {
 	m := newTaskManager()
 	for i := range maxBackgroundTasks {
-		if _, err := m.start("s", "d"); err != nil {
+		if _, err := m.start(t.Context(), "s", "d"); err != nil {
 			t.Fatalf("start %d: %v", i, err)
 		}
 	}
-	if _, err := m.start("s", "d"); err == nil || !strings.Contains(err.Error(), "limit reached") {
+	if _, err := m.start(t.Context(), "s", "d"); err == nil || !strings.Contains(err.Error(), "limit reached") {
 		t.Fatalf("err = %v, want cap error", err)
 	}
 	if n := m.RunningCount(); n != maxBackgroundTasks {
 		t.Fatalf("RunningCount = %d, want %d", n, maxBackgroundTasks)
 	}
+}
+
+// slowSubagentModel delays every response so a background task stays
+// observably running across a short TaskOutput wait.
+type slowSubagentModel struct {
+	*language.FakeChatModel
+	delay time.Duration
+}
+
+func (s slowSubagentModel) Invoke(ctx context.Context, input []messages.Message, opts ...runnables.Option) (messages.Message, error) {
+	time.Sleep(s.delay)
+	return s.FakeChatModel.Invoke(ctx, input, opts...)
+}
+
+func (s slowSubagentModel) Stream(ctx context.Context, input []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	time.Sleep(s.delay)
+	return s.FakeChatModel.Stream(ctx, input, opts...)
+}
+
+// TestBackgroundTaskCompletionNotification verifies the notify callback: a
+// background task started in session "s1" completes and the callback receives
+// ("s1", text) where the text names the task, its final status and
+// description, and carries the report tail capped by
+// tools.NotificationOutputCap (leading ellipsis, dropped head).
+func TestBackgroundTaskCompletionNotification(t *testing.T) {
+	report := "ZZHEAD" + strings.Repeat("a", 2950) + "VISIBLE-TAIL" // 2968 bytes, cap is 2000
+	sub := language.NewFakeChatModel(language.WithResponses(messages.AI(report)))
+	a := newBackgroundTaskAgent(t, sub)
+
+	type notification struct{ session, text string }
+	got := make(chan notification, 1)
+	a.tasks.SetNotify(func(session, text string) { got <- notification{session, text} })
+
+	ctx := tracing.WithRun(t.Context(), "run-1", "s1")
+	if _, err := a.runTask(ctx, taskArgs{Description: "notify work", RunInBackground: true}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case n := <-got:
+		if n.session != "s1" {
+			t.Fatalf("notify session = %q, want s1", n.session)
+		}
+		for _, want := range []string{"task-1", "completed", "notify work", "VISIBLE-TAIL", "…"} {
+			if !strings.Contains(n.text, want) {
+				t.Fatalf("notification missing %q: %q", want, n.text)
+			}
+		}
+		if strings.Contains(n.text, "ZZHEAD") {
+			t.Fatal("notification carries the uncapped report head")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("completion notification never fired")
+	}
+}
+
+// TestBackgroundTaskNotificationQueuedForSession locks the agent.New wiring:
+// the manager's default notify callback queues the completion as a
+// background-task-completed notification scoped to the starting session.
+func TestBackgroundTaskNotificationQueuedForSession(t *testing.T) {
+	sub := language.NewFakeChatModel(language.WithResponses(messages.AI("queued report body")))
+	a := newBackgroundTaskAgent(t, sub)
+
+	ctx := tracing.WithRun(t.Context(), "run-2", "s2")
+	if _, err := a.runTask(ctx, taskArgs{Description: "queue me", RunInBackground: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 10*time.Second, func() bool { return a.QueuedInputCountFor("s2") == 1 },
+		"task completion queued for session s2")
+	items := a.DrainQueuedInputsFor("s2")
+	if len(items) != 1 || items[0].Tag != "background-task-completed" || items[0].Session != "s2" {
+		t.Fatalf("queued items = %+v", items)
+	}
+	if !strings.Contains(items[0].Text, "task-1") || !strings.Contains(items[0].Text, "queued report body") {
+		t.Fatalf("notification text = %q", items[0].Text)
+	}
+}
+
+// TestTaskOutputWaitMS covers TaskOutput's blocking wait: a wait shorter than
+// the model delay reports the task still running; a wait longer than the
+// delay returns the completed report in the same call, no second poll.
+func TestTaskOutputWaitMS(t *testing.T) {
+	sub := &slowSubagentModel{
+		FakeChatModel: language.NewFakeChatModel(language.WithResponses(messages.AI("slow report"))),
+		delay:         500 * time.Millisecond,
+	}
+	a := newBackgroundTaskAgent(t, sub)
+	if _, err := a.runTask(t.Context(), taskArgs{Description: "slow", RunInBackground: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := a.taskOutput(t.Context(), taskOutputArgs{TaskID: "task-1", WaitMS: 150})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.Content, "still running") {
+		t.Fatalf("short-wait output = %q", out.Content)
+	}
+
+	out, err = a.taskOutput(t.Context(), taskOutputArgs{TaskID: "task-1", WaitMS: 5000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The wait must have covered the model's remaining delay: a TaskOutput
+	// that returned without blocking would still see "still running".
+	if out.Content != "slow report" {
+		t.Fatalf("blocking-wait output = %q", out.Content)
+	}
+}
+
+// TestTaskStopWakesTaskOutputWaiterAndNotifies verifies both stop-side
+// behaviors: closing done releases a blocked TaskOutput waiter promptly with
+// the stopped status (far ahead of its wait), and the stopped task still
+// notifies — with the stopped status line, never a silent drop.
+func TestTaskStopWakesTaskOutputWaiterAndNotifies(t *testing.T) {
+	gate := make(chan struct{})
+	sub := &gatedModel{FakeChatModel: language.NewFakeChatModel(), gate: gate}
+	a := newBackgroundTaskAgent(t, sub)
+
+	notify := make(chan string, 1)
+	a.tasks.SetNotify(func(session, text string) { notify <- text })
+
+	if _, err := a.runTask(t.Context(), taskArgs{Description: "stoppable", RunInBackground: true}); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan string, 1)
+	go func() {
+		res, err := a.taskOutput(t.Context(), taskOutputArgs{TaskID: "task-1", WaitMS: 30000})
+		if err != nil {
+			waited <- "error: " + err.Error()
+			return
+		}
+		waited <- res.Content
+	}()
+	time.Sleep(50 * time.Millisecond) // let the waiter block first
+	if _, err := a.taskStop(t.Context(), taskStopArgs{TaskID: "task-1"}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case content := <-waited:
+		if !strings.Contains(content, "was stopped") {
+			t.Fatalf("released wait output = %q", content)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("TaskStop did not release the TaskOutput waiter")
+	}
+	select {
+	case text := <-notify:
+		if !strings.Contains(text, "task-1") || !strings.Contains(text, "stopped") {
+			t.Fatalf("stopped notification = %q", text)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("stopped task never notified")
+	}
+	close(gate) // release the cancelled subagent so the test can end cleanly
 }

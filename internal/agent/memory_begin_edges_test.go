@@ -534,7 +534,7 @@ func TestTeamSpawnToolTypedSubagentAndDuplicate(t *testing.T) {
 func TestRunTaskBackgroundCapReached(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
 	for range maxBackgroundTasks {
-		if _, err := a.tasks.start("s", "d"); err != nil {
+		if _, err := a.tasks.start(t.Context(), "s", "d"); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -158,6 +158,14 @@ type backgroundTask struct {
 	Subject     string
 	Description string
 
+	// session is the starting run's session id (sessionFromCtx); "" outside a
+	// run scope. The completion notification is delivered to it.
+	session string
+	// done is closed exactly once, when the task first leaves the running
+	// state (completion or TaskStop), releasing TaskOutput waiters. Immutable
+	// after start, like the exported fields above.
+	done chan struct{}
+
 	mu     sync.Mutex
 	status TaskStatus
 	output []string
@@ -190,8 +198,12 @@ func (t *backgroundTask) snapshot() (TaskStatus, string, string) {
 func (t *backgroundTask) setFinal(status TaskStatus, final string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	wasRunning := t.status == TaskRunning
 	t.status = status
 	t.final = final
+	if wasRunning {
+		t.signalDone()
+	}
 }
 
 // setFinalIfRunning records a terminal state only while the task is still
@@ -205,6 +217,18 @@ func (t *backgroundTask) setFinalIfRunning(status TaskStatus, final string) {
 	}
 	t.status = status
 	t.final = final
+	t.signalDone()
+}
+
+// signalDone closes the done channel, releasing TaskOutput waiters. The
+// caller holds mu and has just moved the task off running, so per task the
+// close runs exactly once — whichever terminal transition wins the race, the
+// losers see a non-running status and never reach here. A bare task without a
+// channel (unit tests) is tolerated, like the nil cancel in stop.
+func (t *backgroundTask) signalDone() {
+	if t.done != nil {
+		close(t.done)
+	}
 }
 
 // setCancel stores the cancellation handle under the mutex; taskStop reads it
@@ -227,13 +251,40 @@ func (t *backgroundTask) stop() {
 		return
 	}
 	t.status = TaskStopped
+	t.signalDone()
+}
+
+// notification renders the completion message handed to the notify callback,
+// mirroring backgroundShell.notification() (internal/tools/background.go):
+// id, final status, description, and the report tail bounded by
+// tools.NotificationOutputCap so a chatty report cannot flood the context.
+// The subject line (the model-facing description) names the task; the full
+// prompt deliberately stays out. A stopped task renders the stopped status
+// line and no report — stop leaves no final report behind.
+func (t *backgroundTask) notification() string {
+	t.mu.Lock()
+	status, final := t.status, t.final
+	t.mu.Unlock()
+	report := final
+	if len(report) > tools.NotificationOutputCap {
+		report = "…\n" + report[len(report)-tools.NotificationOutputCap:]
+	}
+	var b strings.Builder
+	b.WriteString("<background-task-completed>\n")
+	fmt.Fprintf(&b, "Background task %s finished (%s): %s\n", t.ID, status, t.Subject)
+	if report != "" {
+		fmt.Fprintf(&b, "Report (tail):\n%s\n", strings.TrimRight(report, "\n"))
+	}
+	b.WriteString("</background-task-completed>")
+	return b.String()
 }
 
 // TaskManager holds all background tasks for a session.
 type TaskManager struct {
-	mu    sync.Mutex
-	tasks map[string]*backgroundTask
-	next  int
+	mu     sync.Mutex
+	tasks  map[string]*backgroundTask
+	next   int
+	notify func(session, text string)
 }
 
 func newTaskManager() *TaskManager {
@@ -243,7 +294,7 @@ func newTaskManager() *TaskManager {
 // maxBackgroundTasks caps concurrently running background tasks.
 const maxBackgroundTasks = 16
 
-func (m *TaskManager) start(subject, description string) (*backgroundTask, error) {
+func (m *TaskManager) start(ctx context.Context, subject, description string) (*backgroundTask, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	running := 0
@@ -260,10 +311,35 @@ func (m *TaskManager) start(subject, description string) (*backgroundTask, error
 		ID:          fmt.Sprintf("task-%d", m.next),
 		Subject:     subject,
 		Description: description,
+		session:     sessionFromCtx(ctx),
 		status:      TaskRunning,
+		done:        make(chan struct{}),
 	}
 	m.tasks[t.ID] = t
 	return t, nil
+}
+
+// SetNotify installs the completion callback. It fires once per finished task
+// as fn(session, text), where session is the starting run's session id (""
+// outside a run scope) and text is the rendered completion notification. It
+// is called in the task's run goroutine; it must not block.
+func (m *TaskManager) SetNotify(fn func(session, text string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notify = fn
+}
+
+// notifyDone delivers t's completion notification through the installed
+// callback (a no-op without one). Called from the task's run goroutine once
+// the task has reached its terminal state — completed or stopped alike, so a
+// stopped task is never silently dropped.
+func (m *TaskManager) notifyDone(t *backgroundTask) {
+	m.mu.Lock()
+	fn := m.notify
+	m.mu.Unlock()
+	if fn != nil {
+		fn(t.session, t.notification())
+	}
 }
 
 // RunningCount reports running background tasks (for /api/stats).
@@ -307,10 +383,11 @@ type taskArgs struct {
 	Fork            bool   `json:"fork,omitempty"`
 }
 
-const taskOutputDescription = `Fetch the current output and status of a background task launched with the Task tool.`
+const taskOutputDescription = `Fetch the current output and status of a background task launched with the Task tool. Set wait_ms to block inside this call until the task finishes or the wait elapses (max 600000ms), instead of polling repeatedly.`
 
 type taskOutputArgs struct {
 	TaskID string `json:"task_id"`
+	WaitMS int    `json:"wait_ms,omitempty"`
 }
 
 const taskStopDescription = `Stop a running background task launched with the Task tool.`
@@ -358,7 +435,7 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 	}
 
 	if args.RunInBackground {
-		t, err := a.tasks.start(args.Description, prompt)
+		t, err := a.tasks.start(ctx, args.Description, prompt)
 		if err != nil {
 			return coretools.Result{}, err
 		}
@@ -370,6 +447,10 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 				report = "Error: " + err.Error()
 			}
 			t.setFinalIfRunning(TaskCompleted, report)
+			// Completion notification for the starting run's session. It
+			// fires for stopped tasks too — notification() then renders the
+			// stopped status line — so TaskStop never silently drops a task.
+			a.tasks.notifyDone(t)
 			// L1 episode for the completed subagent task. runCtx may already
 			// be cancelled by TaskStop, but its values (run workspace) are
 			// still readable; the write itself is detached.
@@ -407,6 +488,20 @@ func (a *Agent) taskOutput(ctx context.Context, args taskOutputArgs) (coretools.
 	t, ok := a.tasks.get(args.TaskID)
 	if !ok {
 		return coretools.Result{}, fmt.Errorf("no task with id %q", args.TaskID)
+	}
+	if args.WaitMS > 0 {
+		// Block until the task reaches a terminal state, the (clamped) wait
+		// elapses, or the surrounding tool call is cancelled. NewTimer over
+		// time.After so an early return stops the timer instead of letting it
+		// fire for the full wait (up to MaxWaitMS) after the caller moved on.
+		wait := time.Duration(min(args.WaitMS, tools.MaxWaitMS)) * time.Millisecond
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-t.done:
+		case <-timer.C:
+		case <-ctx.Done():
+		}
 	}
 	status, output, final := t.snapshot()
 	switch status {
