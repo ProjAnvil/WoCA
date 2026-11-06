@@ -124,6 +124,10 @@ func TestEnterWhileRunningSteersImmediately(t *testing.T) {
 		t.Fatalf("agent queued input count = %d, want 1 (steered immediately)", got)
 	}
 
+	// The run's tool rounds delivered the steer in-turn (emptying the agent
+	// queue), so a natural completion leaves the session idle — the wake
+	// driver (wake.go) has nothing queued to wake on.
+	m.agent.DrainQueuedInputs()
 	mm, _ := m.Update(runDone{result: []messages.Message{messages.AI("done")}})
 	m = mm.(*Model)
 	if m.running {

@@ -25,9 +25,20 @@ func TestInitStartsSpinner(t *testing.T) {
 	m := New(nil, nil, config.Config{})
 	cmd := m.Init()
 	if cmd == nil {
-		t.Fatal("Init must return the spinner tick command")
+		t.Fatal("Init must return the startup command")
 	}
-	mm, next := m.Update(cmd())
+	// Init batches the spinner tick with the notification arm (wake.go);
+	// the runtime runs the batched commands, and the arm parks on the
+	// notify channel, so the test only checks the batch shape and drives
+	// the tick itself.
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("Init must batch commands, got %T", cmd())
+	}
+	if len(batch) != 2 {
+		t.Fatalf("Init batch = %d commands, want 2 (spinner tick + notification arm)", len(batch))
+	}
+	mm, next := m.Update(m.spinner.Tick())
 	if mm == nil || next == nil {
 		t.Fatalf("spinner tick did not schedule the next tick: %v", next)
 	}

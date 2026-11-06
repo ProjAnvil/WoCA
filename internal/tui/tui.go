@@ -108,17 +108,21 @@ type runDone struct {
 
 // Model is the bubbletea application state.
 type Model struct {
-	agent     *agent.Agent
-	cfg       config.Config
-	console   *console.Console
-	version   string
-	history   []messages.Message
-	todos     []tools.Todo
-	input     string
-	lines     []string
-	cur       string
-	running   bool
-	ch        <-chan tea.Msg
+	agent   *agent.Agent
+	cfg     config.Config
+	console *console.Console
+	version string
+	history []messages.Message
+	todos   []tools.Todo
+	input   string
+	lines   []string
+	cur     string
+	running bool
+	ch      <-chan tea.Msg
+	// notifyCh hands queued notifications (background shell/task
+	// completions, cron firings) from the agent observer to the Update
+	// loop; see wake.go.
+	notifyCh  chan agent.QueuedInput
 	viewport  *Viewport
 	height    int
 	inFlight  []string
@@ -216,7 +220,7 @@ func New(a *agent.Agent, history []messages.Message, cfg config.Config) *Model {
 	if path, err := keybindings.DefaultPath(); err == nil {
 		keys, _ = keybindings.Load(path)
 	}
-	return &Model{
+	m := &Model{
 		agent:        a,
 		history:      history,
 		cfg:          cfg,
@@ -226,15 +230,31 @@ func New(a *agent.Agent, history []messages.Message, cfg config.Config) *Model {
 		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		reviewFolded: map[int]bool{},
 		keys:         keys,
+		notifyCh:     make(chan agent.QueuedInput, notifyBufferSize),
 	}
+	if a != nil {
+		// The observer runs synchronously on producer goroutines (background
+		// shells, tasks, cron), so it only hands the item to the Update loop
+		// without ever blocking; the agent queue stays the source of truth,
+		// so a dropped signal is recovered by the next one or by the
+		// clean-finish re-check in the runDone branch.
+		a.SetNotificationObserver(func(q agent.QueuedInput) {
+			select {
+			case m.notifyCh <- q:
+			default:
+			}
+		})
+	}
+	return m
 }
 
 // SetConsole attaches the shared console command layer (/web, /clear, /model,
 // ...). Without it only /help works.
 func (m *Model) SetConsole(c *console.Console) { m.console = c }
 
-// Init returns the initial command (starts the spinner ticker).
-func (m *Model) Init() tea.Cmd { return m.spinner.Tick }
+// Init returns the initial command: the spinner ticker plus the armed
+// notification listener (see wake.go).
+func (m *Model) Init() tea.Cmd { return tea.Batch(m.spinner.Tick, m.armNotifications()) }
 
 // Update handles messages.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -497,6 +517,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case notificationQueued:
+		// A notification landed (background shell/task completion, cron
+		// firing): wake the idle session and re-arm the listener.
+		return m, tea.Batch(m.maybeWake(), m.armNotifications())
 	case runDone:
 		m.running = false
 		m.cancelRun = nil
@@ -537,8 +561,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingSteers = nil
 		// Goal continuation scheduling (Codex's idle detection): after a run
 		// finishes and the session is idle, an active goal keeps looping.
+		// A clean finish also re-checks the notification queue (see wake.go):
+		// a signal that landed after the run's last tool round would
+		// otherwise wait for a user turn. Canceled or failed runs never wake
+		// — the user stopped the agent (or it failed) — and the resubmitted
+		// steer turn above is a user turn that drains the queue at its start.
 		if msg.err == nil {
-			return m, m.maybeKickGoal()
+			return m, tea.Batch(m.maybeKickGoal(), m.maybeWake())
 		}
 	}
 	return m, nil
