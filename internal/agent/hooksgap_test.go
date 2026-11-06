@@ -179,10 +179,18 @@ type firingLog struct {
 	fired   []string
 	events  []hooks.Event
 	results map[string]hooks.CommandResult
+	// failOnCtxDone mirrors the production command runner (the executor
+	// surfaces context-cancellation errors unchanged): a hook invoked on a
+	// cancelled context fails before its command runs, so it is never
+	// recorded as fired.
+	failOnCtxDone bool
 }
 
 func (l *firingLog) runner() hooks.CommandRunner {
 	return func(ctx context.Context, command, stdin, cwd string) (hooks.CommandResult, error) {
+		if l.failOnCtxDone && ctx.Err() != nil {
+			return hooks.CommandResult{}, ctx.Err()
+		}
 		var ev hooks.Event
 		_ = json.Unmarshal([]byte(stdin), &ev)
 		l.mu.Lock()
@@ -267,6 +275,50 @@ func TestSubagentStopFeedbackAppendedToReport(t *testing.T) {
 	want := "report body\n<subagent-stop-feedback>\nverify the diff before trusting it\n</subagent-stop-feedback>"
 	if res.Content != want {
 		t.Fatalf("report = %q, want %q", res.Content, want)
+	}
+}
+
+// TestStoppedBackgroundTaskStillFiresSubagentStop: TaskStop cancels the task
+// run context — the very cancellation that ends the subagent run — and the
+// production command runner fails on a cancelled context, so SubagentStop
+// must fire on a detached context (mirroring recordTaskEvent) or a stopped
+// task would silently skip the hook. failOnCtxDone reproduces the executor's
+// cancellation behavior, making the hook observably run or not run.
+func TestStoppedBackgroundTaskStillFiresSubagentStop(t *testing.T) {
+	gate := make(chan struct{})
+	sub := &gatedModel{FakeChatModel: language.NewFakeChatModel(), gate: gate}
+	log := &firingLog{failOnCtxDone: true}
+	a, err := New(Config{
+		Model:          language.NewFakeChatModel(language.WithResponses(messages.AI("done"))),
+		SubagentModel:  sub,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeBypass,
+		Hooks: hooks.NewRunner(hooks.Config{
+			SubagentStop: []hooks.Entry{{Matcher: "*", Hooks: []hooks.Hook{{Type: "command", Command: "on-stop"}}}},
+		}, ".", "s1", hooks.WithCommandRunner(log.runner())),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer close(gate) // release the cancelled subagent so the test can end cleanly
+
+	if _, err := a.runTask(t.Context(), taskArgs{Description: "stoppable", RunInBackground: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.taskStop(t.Context(), taskStopArgs{TaskID: "task-1"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, 10*time.Second, func() bool {
+		fired, _ := log.snapshot()
+		return len(fired) == 1
+	}, "SubagentStop hook on the stopped task")
+	fired, events := log.snapshot()
+	if len(fired) != 1 || fired[0] != "on-stop" {
+		t.Fatalf("hook firings = %v, want [on-stop]", fired)
+	}
+	if len(events) != 1 || events[0].AgentName != "general" {
+		t.Fatalf("event = %+v", events)
 	}
 }
 

@@ -451,11 +451,15 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 				report = "Error: " + err.Error()
 			}
 			// SubagentStop fires once the subagent run is over (report or
-			// error alike — both leave a final report). It runs BEFORE the
-			// final state lands so the exit-2 feedback reaches every report
-			// consumer: TaskOutput, the completion notification and the L1
-			// episode.
-			report = a.withSubagentStopFeedback(runCtx, name, report)
+			// error alike — both leave a final report; completed or stopped
+			// alike). It runs on a detached copy of runCtx — TaskStop's
+			// cancellation is exactly what ended the subagent run, and the
+			// command runner fails on a cancelled context, so a stopped task
+			// would otherwise skip the hook (same reasoning as recordTaskEvent
+			// below). It runs BEFORE the final state lands so the exit-2
+			// feedback reaches every report consumer: TaskOutput, the
+			// completion notification and the L1 episode.
+			report = a.withSubagentStopFeedback(context.WithoutCancel(runCtx), name, report)
 			t.setFinalIfRunning(TaskCompleted, report)
 			// Completion notification for the starting run's session. It
 			// fires for stopped tasks too — notification() then renders the
