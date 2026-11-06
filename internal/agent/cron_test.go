@@ -71,7 +71,7 @@ func newCronAgent(t *testing.T) *Agent {
 
 func TestScheduleCronFiresNotifications(t *testing.T) {
 	a := newCronAgent(t)
-	id, err := a.addCron("check", "run the checks", "* * * * *")
+	id, err := a.addCron(t.Context(), "check", "run the checks", "* * * * *")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,17 +185,42 @@ func TestCronRangeRejectsTrailingGarbage(t *testing.T) {
 	}
 }
 
+// TestCronSchedulerSessionScoped pins that a firing entry carries the session
+// it was created for: the sink's first argument is the entry's captured
+// session, so a multi-session host delivers each notification to its owner.
+func TestCronSchedulerSessionScoped(t *testing.T) {
+	var mu sync.Mutex
+	fired := [][3]string{}
+	s := newCronScheduler(func(session, tag, text string) {
+		mu.Lock()
+		fired = append(fired, [3]string{session, tag, text})
+		mu.Unlock()
+	})
+	if _, err := s.Add("s1", "check", "run the checks", "* * * * *"); err != nil {
+		t.Fatal(err)
+	}
+	s.fireDue(time.Date(2026, 8, 16, 12, 0, 0, 0, time.Local))
+	mu.Lock()
+	defer mu.Unlock()
+	if len(fired) != 1 {
+		t.Fatalf("fired %d notifications, want 1: %v", len(fired), fired)
+	}
+	if got := fired[0]; got[0] != "s1" || got[1] != "scheduled-task" || !strings.Contains(got[2], "run the checks") {
+		t.Fatalf("sink got (%q, %q, %q), want (s1, scheduled-task, …run the checks…)", got[0], got[1], got[2])
+	}
+}
+
 // TestCronSchedulerStandalone pins the component contract: the scheduler
 // works without an Agent, delivering through the injected sink only.
 func TestCronSchedulerStandalone(t *testing.T) {
 	var mu sync.Mutex
 	fired := []string{}
-	s := newCronScheduler(func(tag, text string) {
+	s := newCronScheduler(func(session, tag, text string) {
 		mu.Lock()
 		fired = append(fired, tag+"|"+text)
 		mu.Unlock()
 	})
-	id, err := s.Add("check", "run the checks", "* * * * *")
+	id, err := s.Add("", "check", "run the checks", "* * * * *")
 	if err != nil {
 		t.Fatal(err)
 	}

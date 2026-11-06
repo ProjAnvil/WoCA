@@ -22,9 +22,10 @@ import (
 // delivery path as background-shell completions. Entries die with the
 // session (nothing is persisted).
 
-// cronEntry is one scheduled prompt.
+// cronEntry is one scheduled prompt, scoped to the session that created it.
 type cronEntry struct {
 	ID        string
+	Session   string
 	Name      string
 	Prompt    string
 	Spec      string
@@ -33,8 +34,8 @@ type cronEntry struct {
 }
 
 // notificationSink is the single capability the scheduler needs from its
-// host: delivering a due prompt into the session's input queue.
-type notificationSink func(tag, text string)
+// host: delivering a due prompt into the creating session's input queue.
+type notificationSink func(session, tag, text string)
 
 // cronScheduler is the session-scoped scheduled-prompt loop, extracted from
 // the Agent so the scheduling logic (parse / match / fire / ticker) is
@@ -85,8 +86,8 @@ func (s *cronScheduler) Stop() {
 	}
 }
 
-// Add registers a scheduled prompt and returns its ID.
-func (s *cronScheduler) Add(name, prompt, spec string) (string, error) {
+// Add registers a scheduled prompt owned by session and returns its ID.
+func (s *cronScheduler) Add(session, name, prompt, spec string) (string, error) {
 	m, err := parseCron(spec)
 	if err != nil {
 		return "", err
@@ -96,7 +97,7 @@ func (s *cronScheduler) Add(name, prompt, spec string) (string, error) {
 	s.next++
 	id := fmt.Sprintf("cron-%d", s.next)
 	s.entries = append(s.entries, &cronEntry{
-		ID: id, Name: name, Prompt: prompt, Spec: spec, matcher: m,
+		ID: id, Session: session, Name: name, Prompt: prompt, Spec: spec, matcher: m,
 	})
 	return id, nil
 }
@@ -120,7 +121,7 @@ func (s *cronScheduler) List() []cronEntry {
 	defer s.mu.Unlock()
 	out := make([]cronEntry, 0, len(s.entries))
 	for _, e := range s.entries {
-		out = append(out, cronEntry{ID: e.ID, Name: e.Name, Prompt: e.Prompt, Spec: e.Spec})
+		out = append(out, cronEntry{ID: e.ID, Session: e.Session, Name: e.Name, Prompt: e.Prompt, Spec: e.Spec})
 	}
 	slices.SortFunc(out, func(a, b cronEntry) int { return cmp.Compare(a.ID, b.ID) })
 	return out
@@ -140,15 +141,16 @@ func (s *cronScheduler) fireDue(now time.Time) {
 	}
 	s.mu.Unlock()
 	for _, e := range due {
-		s.notify("scheduled-task",
+		s.notify(e.Session, "scheduled-task",
 			fmt.Sprintf("Scheduled task %s (%s) is due now:\n%s", e.displayName(), e.Spec, e.Prompt))
 	}
 }
 
 // Agent delegates: the tool wiring, Close() teardown and the tests keep
-// their entry points; the mechanics live on the scheduler.
-func (a *Agent) addCron(name, prompt, spec string) (string, error) {
-	return a.cron.Add(name, prompt, spec)
+// their entry points; the mechanics live on the scheduler. The entry is
+// owned by the session of the run that scheduled it.
+func (a *Agent) addCron(ctx context.Context, name, prompt, spec string) (string, error) {
+	return a.cron.Add(sessionFromCtx(ctx), name, prompt, spec)
 }
 
 func (a *Agent) deleteCron(id string) bool { return a.cron.Delete(id) }
@@ -290,7 +292,7 @@ func (a *Agent) scheduleCronTool() []coretools.Tool {
 			if args.Prompt == "" || args.Cron == "" {
 				return coretools.Result{Content: "Error: creating an entry requires prompt and cron"}, nil
 			}
-			id, err := a.addCron(args.Name, args.Prompt, args.Cron)
+			id, err := a.addCron(ctx, args.Name, args.Prompt, args.Cron)
 			if err != nil {
 				return coretools.Result{Content: "Error: " + err.Error()}, nil
 			}

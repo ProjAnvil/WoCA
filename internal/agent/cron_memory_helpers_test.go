@@ -26,7 +26,7 @@ import (
 
 func TestCronSchedulerStartStopLifecycle(t *testing.T) {
 	fired := false
-	s := newCronScheduler(func(tag, text string) { fired = true })
+	s := newCronScheduler(func(session, tag, text string) { fired = true })
 	s.Start()
 	s.Start() // idempotent: no second loop
 	s.Stop()
@@ -40,16 +40,16 @@ func TestCronFireDueDisplayNameAndDedup(t *testing.T) {
 	var mu sync.Mutex
 	var texts []string
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
-	a.cron = newCronScheduler(func(tag, text string) {
+	a.cron = newCronScheduler(func(session, tag, text string) {
 		mu.Lock()
 		texts = append(texts, tag+"|"+text)
 		mu.Unlock()
 	})
 	// A named entry renders its name; an unnamed one its id.
-	if _, err := a.addCron("daily", "do the thing", "* * * * *"); err != nil {
+	if _, err := a.addCron(t.Context(), "daily", "do the thing", "* * * * *"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.addCron("", "other thing", "* * * * *"); err != nil {
+	if _, err := a.addCron(t.Context(), "", "other thing", "* * * * *"); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 17, 9, 30, 0, 0, time.Local)

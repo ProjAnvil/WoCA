@@ -493,8 +493,9 @@ func New(cfg Config) (*Agent, error) {
 	a.wsHooks = newWSCache[*hooks.Runner](wsCacheCapacity)
 	// The cron scheduler's only host dependency is the notification queue;
 	// the method value is safe to capture before the rest of the wiring
-	// because it is only invoked by the scheduler loop, never here.
-	a.cron = newCronScheduler(a.QueueNotification)
+	// because it is only invoked by the scheduler loop, never here. The
+	// session-scoped sink matches the session captured on each entry.
+	a.cron = newCronScheduler(a.QueueNotificationFor)
 	// The memory runtime takes its dependencies as inputs: the KV store,
 	// the engine, the settings loader and a nil-safe obs log sink.
 	a.mem.init(cfg.Memory, cfg.MemoryEngine, cfg.LoadSettings, a.obsLogSink())

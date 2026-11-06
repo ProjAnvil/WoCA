@@ -75,11 +75,11 @@ func TestParseCronInvalidFieldValue(t *testing.T) {
 }
 
 func TestCronListSortsByID(t *testing.T) {
-	s := newCronScheduler(func(tag, text string) {})
-	if _, err := s.Add("b", "p2", "0 * * * *"); err != nil {
+	s := newCronScheduler(func(session, tag, text string) {})
+	if _, err := s.Add("", "b", "p2", "0 * * * *"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Add("a", "p1", "5 * * * *"); err != nil {
+	if _, err := s.Add("", "a", "p1", "5 * * * *"); err != nil {
 		t.Fatal(err)
 	}
 	entries := s.List()
