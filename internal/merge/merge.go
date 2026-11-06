@@ -19,6 +19,11 @@ const (
 	LevelUser      Level = iota // ~/.woca (user level)
 	LevelWorkspace              // workDir and its ancestors up to the git root
 	LevelFlag                   // session injection (--mcp etc.), highest
+
+	// LevelPlugin holds plugin-contributed entries. Its slot sits between
+	// Managed (-1) and User (2) so users can override plugins while plugins
+	// override operator-managed defaults; 0 is unused.
+	LevelPlugin Level = 1
 )
 
 // String returns the log-friendly layer name.
@@ -28,6 +33,8 @@ func (l Level) String() string {
 		return "flag"
 	case LevelWorkspace:
 		return "workspace"
+	case LevelPlugin:
+		return "plugin"
 	case LevelManaged:
 		return "managed"
 	case LevelBuiltin:

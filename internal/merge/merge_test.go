@@ -76,11 +76,42 @@ func TestEntriesSkipsEmptyNames(t *testing.T) {
 	}
 }
 
+// TestPluginLayerBeatsManagedLosesToUser: LevelPlugin sits between managed
+// and user, so plugin contributions override managed ones but yield to user
+// entries.
+func TestPluginLayerBeatsManagedLosesToUser(t *testing.T) {
+	out, conflicts := Entries([]Entry[string]{
+		{Name: "x", Value: "plugin", Level: LevelPlugin, Source: "plugin"},
+		{Name: "x", Value: "user", Level: LevelUser, Source: "user"},
+	})
+	if len(out) != 1 || out[0].Value != "user" {
+		t.Fatalf("user must win over plugin, got %+v", out)
+	}
+	if len(conflicts) != 1 || conflicts[0].Winner != "user" || conflicts[0].Loser != "plugin" {
+		t.Fatalf("conflicts = %+v", conflicts)
+	}
+
+	out, conflicts = Entries([]Entry[string]{
+		{Name: "x", Value: "plugin", Level: LevelPlugin, Source: "plugin"},
+		{Name: "x", Value: "managed", Level: LevelManaged, Source: "managed"},
+	})
+	if len(out) != 1 || out[0].Value != "plugin" {
+		t.Fatalf("plugin must win over managed, got %+v", out)
+	}
+	if len(conflicts) != 1 || conflicts[0].Winner != "plugin" || conflicts[0].Loser != "managed" {
+		t.Fatalf("conflicts = %+v", conflicts)
+	}
+
+	if !(LevelManaged < LevelPlugin && LevelPlugin < LevelUser) {
+		t.Fatalf("LevelPlugin = %d must sort between managed and user", LevelPlugin)
+	}
+}
+
 func TestLevelString(t *testing.T) {
 	for _, tc := range []struct {
 		l    Level
 		want string
-	}{{LevelUser, "user"}, {LevelWorkspace, "workspace"}, {LevelFlag, "flag"}} {
+	}{{LevelUser, "user"}, {LevelWorkspace, "workspace"}, {LevelFlag, "flag"}, {LevelPlugin, "plugin"}} {
 		if got := tc.l.String(); got != tc.want {
 			t.Fatalf("Level(%d).String() = %q, want %q", tc.l, got, tc.want)
 		}
