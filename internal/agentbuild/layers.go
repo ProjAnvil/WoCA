@@ -19,13 +19,16 @@ import (
 	"github.com/projanvil/woca/internal/merge"
 	"github.com/projanvil/woca/internal/permissions"
 	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/plugins"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/skills"
 )
 
 // loadHooksConfig merges the user (~/.woca/settings.json) and project
-// (.woca/settings.json) hook configs.
-func loadHooksConfig(workdir string) hooks.Config {
+// (.woca/settings.json) hook configs, then appends the plugins' hook
+// entries: hooks run together (append semantics, no dedupe), with project
+// entries first and plugin entries after.
+func loadHooksConfig(workdir string, pluginList []plugins.Plugin) hooks.Config {
 	paths := []string{}
 	if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths, filepath.Join(home, ".woca", "settings.json"))
@@ -52,7 +55,40 @@ func loadHooksConfig(workdir string) hooks.Config {
 		merged.PermissionRequest = append(merged.PermissionRequest, cfg.PermissionRequest...)
 		merged.PostSampling = append(merged.PostSampling, cfg.PostSampling...)
 	}
+	for _, pl := range pluginList {
+		appendHookEvents(&merged, pl.Hooks, "plugin/"+pl.Manifest.Name)
+	}
 	return merged
+}
+
+// appendHookEvents appends src's event entries to dst, tagging every entry
+// with source ("plugin/<name>", display-only). Entries are copied so the
+// shared plugin list is never mutated.
+func appendHookEvents(dst *hooks.Config, src hooks.Config, source string) {
+	tag := func(entries []hooks.Entry) []hooks.Entry {
+		if len(entries) == 0 {
+			return nil
+		}
+		out := make([]hooks.Entry, len(entries))
+		for i, e := range entries {
+			e.Source = source
+			out[i] = e
+		}
+		return out
+	}
+	dst.PreToolUse = append(dst.PreToolUse, tag(src.PreToolUse)...)
+	dst.PostToolUse = append(dst.PostToolUse, tag(src.PostToolUse)...)
+	dst.UserPromptSubmit = append(dst.UserPromptSubmit, tag(src.UserPromptSubmit)...)
+	dst.Stop = append(dst.Stop, tag(src.Stop)...)
+	dst.SessionStart = append(dst.SessionStart, tag(src.SessionStart)...)
+	dst.SessionEnd = append(dst.SessionEnd, tag(src.SessionEnd)...)
+	dst.SubagentStart = append(dst.SubagentStart, tag(src.SubagentStart)...)
+	dst.SubagentStop = append(dst.SubagentStop, tag(src.SubagentStop)...)
+	dst.Notification = append(dst.Notification, tag(src.Notification)...)
+	dst.PreCompact = append(dst.PreCompact, tag(src.PreCompact)...)
+	dst.PostCompact = append(dst.PostCompact, tag(src.PostCompact)...)
+	dst.PermissionRequest = append(dst.PermissionRequest, tag(src.PermissionRequest)...)
+	dst.PostSampling = append(dst.PostSampling, tag(src.PostSampling)...)
 }
 
 // loadPermissions loads permission rules from settings.json files (user and
@@ -124,7 +160,7 @@ func builtinSkills(allow []string) []skills.Skill {
 	return list
 }
 
-func loadSkills(workdir string, builtinAllow []string, log zerolog.Logger) []skills.Skill {
+func loadSkills(workdir string, builtinAllow []string, pluginList []plugins.Plugin, log zerolog.Logger) []skills.Skill {
 	var es []merge.Entry[skills.Skill]
 	// Builtin layer (lowest): method skills shipped in the binary.
 	for _, s := range builtinSkills(builtinAllow) {
@@ -141,6 +177,17 @@ func loadSkills(workdir string, builtinAllow []string, log zerolog.Logger) []ski
 					Name: s.Name, Value: s, Level: merge.LevelManaged, Order: 0, Source: s.Source,
 				})
 			}
+		}
+	}
+	// Plugin layer: plugin skills (already namespaced "<plugin>-<skill>"
+	// by the loader) sit between managed and user — user and workspace
+	// skills shadow them, they shadow managed and builtin ones.
+	for i, pl := range pluginList {
+		for _, s := range pl.Skills {
+			es = append(es, merge.Entry[skills.Skill]{
+				Name: s.Name, Value: s, Level: merge.LevelPlugin,
+				Order: i, Source: "plugin/" + pl.Manifest.Name,
+			})
 		}
 	}
 	for i, dir := range merge.WorkspaceDirs(workdir) {
@@ -173,6 +220,11 @@ func loadSkills(workdir string, builtinAllow []string, log zerolog.Logger) []ski
 	out := make([]skills.Skill, 0, len(merged))
 	for _, e := range merged {
 		out = append(out, e.Value)
+	}
+	// Plugin commands append after the merge: their "<plugin>:<command>"
+	// names cannot collide with any layer's skill names.
+	for _, pl := range pluginList {
+		out = append(out, pl.Commands...)
 	}
 	return out
 }
@@ -253,13 +305,14 @@ func loadManagedMCPSpecs() []string {
 	return specs
 }
 
-func mergeMCPSpecs(flag, workspace, user []string, log zerolog.Logger) []string {
-	return mergeMCPSpecsLayered(flag, workspace, user, loadManagedMCPSpecs(), log)
+func mergeMCPSpecs(flag, workspace, user, plugin []string, log zerolog.Logger) []string {
+	return mergeMCPSpecsLayered(flag, workspace, user, plugin, loadManagedMCPSpecs(), log)
 }
 
-// mergeMCPSpecsLayered is mergeMCPSpecs with an explicit managed layer
-// (lowest priority — the user's own config wins).
-func mergeMCPSpecsLayered(flag, workspace, user, managed []string, log zerolog.Logger) []string {
+// mergeMCPSpecsLayered is mergeMCPSpecs with explicit plugin and managed
+// layers: flag > workspace > user > plugin > managed. The user's own config
+// beats plugins; plugins beat operator-managed defaults.
+func mergeMCPSpecsLayered(flag, workspace, user, plugin, managed []string, log zerolog.Logger) []string {
 	layer := func(specs []string, lvl merge.Level) []merge.Entry[string] {
 		var es []merge.Entry[string]
 		for i, spec := range specs {
@@ -275,7 +328,7 @@ func mergeMCPSpecsLayered(flag, workspace, user, managed []string, log zerolog.L
 		}
 		return es
 	}
-	es := append(append(append(layer(flag, merge.LevelFlag), layer(workspace, merge.LevelWorkspace)...), layer(user, merge.LevelUser)...), layer(managed, merge.LevelManaged)...)
+	es := append(append(append(append(layer(flag, merge.LevelFlag), layer(workspace, merge.LevelWorkspace)...), layer(user, merge.LevelUser)...), layer(plugin, merge.LevelPlugin)...), layer(managed, merge.LevelManaged)...)
 	merged, conflicts := merge.Entries(es)
 	logMergeConflicts(log, "mcp", conflicts)
 	out := make([]string, 0, len(merged))

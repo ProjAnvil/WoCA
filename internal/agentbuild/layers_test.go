@@ -13,6 +13,7 @@ import (
 
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/merge"
+	"github.com/projanvil/woca/internal/plugins"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/skills"
 )
@@ -43,7 +44,7 @@ func TestLoadSkillsLayered(t *testing.T) {
 	t.Cleanup(merge.ResetWorkspaceCache)
 
 	var buf bytes.Buffer
-	list := loadSkills(deep, nil, zerolog.New(&buf))
+	list := loadSkills(deep, nil, nil, zerolog.New(&buf))
 
 	byName := map[string]skills.Skill{}
 	for _, s := range list {
@@ -73,7 +74,7 @@ func TestLoadSkillsSameDirWocaBeatsClaude(t *testing.T) {
 	merge.ResetWorkspaceCache()
 	t.Cleanup(merge.ResetWorkspaceCache)
 
-	list := loadSkills(dir, []string{"none"}, zerolog.Nop())
+	list := loadSkills(dir, []string{"none"}, nil, zerolog.Nop())
 	if len(list) != 1 || list[0].Body != "WOCA" {
 		t.Fatalf("same-dir .woca must beat .claude, got %+v", list)
 	}
@@ -90,7 +91,7 @@ func TestLoadSkillsNearClaudeBeatsFarWoca(t *testing.T) {
 	merge.ResetWorkspaceCache()
 	t.Cleanup(merge.ResetWorkspaceCache)
 
-	list := loadSkills(deep, []string{"none"}, zerolog.Nop())
+	list := loadSkills(deep, []string{"none"}, nil, zerolog.Nop())
 	if len(list) != 1 || list[0].Body != "NEAR CLAUDE" {
 		t.Fatalf("near .claude must beat far .woca, got %+v", list)
 	}
@@ -137,6 +138,7 @@ func TestMergeMCPSpecs(t *testing.T) {
 		[]string{"dup=flag-cmd", "flagonly=flag-cmd", "dup2=flag-a", "dup2=flag-b", "bad-no-eq"},
 		[]string{"dup=ws-cmd", "wsonly=ws-cmd"},
 		[]string{"dup=user-cmd", "useronly=user-cmd"},
+		nil,
 		zerolog.New(&buf),
 	)
 	slices.Sort(got)
@@ -206,7 +208,7 @@ func TestLoadHooksConfig(t *testing.T) {
 	if err := os.WriteFile(settings, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cfg := loadHooksConfig(dir)
+	cfg := loadHooksConfig(dir, nil)
 	if len(cfg.PreToolUse) != 1 || cfg.PreToolUse[0].Hooks[0].Command != "echo hi" {
 		t.Fatalf("hooks = %+v", cfg)
 	}
@@ -222,7 +224,7 @@ func TestLoadSkills(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: commit\ndescription: commit\n---\nbody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	list := loadSkills(dir, []string{"none"}, zerolog.Nop())
+	list := loadSkills(dir, []string{"none"}, nil, zerolog.Nop())
 	if len(list) != 1 || list[0].Name != "commit" {
 		t.Fatalf("skills = %+v", list)
 	}
@@ -437,17 +439,20 @@ func TestLoadAgents(t *testing.T) {
 
 func TestPluginListOrEmpty(t *testing.T) {
 	home := isolateEnv(t)
-	if got := pluginListOrEmpty(); len(got) != 0 {
+	if got := pluginListOrEmpty(nil); len(got) != 0 {
 		t.Fatalf("empty root = %+v", got)
 	}
-	// A root that is a regular file makes Load fail; the list must stay empty
-	// (errors swallowed).
-	bad := filepath.Join(home, "plugins")
+	// A default root that is a regular file makes the load fail; the list
+	// must stay empty (errors swallowed — a live skill reload must not
+	// break on a broken plugin tree).
+	bad := filepath.Join(home, ".woca", "plugins")
+	if err := os.MkdirAll(filepath.Dir(bad), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(bad, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("WOCA_PLUGIN_ROOT", bad)
-	if got := pluginListOrEmpty(); len(got) != 0 {
+	if got := pluginListOrEmpty(nil); len(got) != 0 {
 		t.Fatalf("broken root = %+v", got)
 	}
 }
@@ -461,7 +466,7 @@ func TestLoadHooksPermissionsInvalidJSON(t *testing.T) {
 	if err := os.WriteFile(p, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if cfg := loadHooksConfig(dir); len(cfg.PreToolUse) != 0 {
+	if cfg := loadHooksConfig(dir, nil); len(cfg.PreToolUse) != 0 {
 		t.Fatal("invalid hooks json should be skipped")
 	}
 	if rules := loadPermissions(dir); rules == nil || len(rules.Allow) != 0 {
@@ -477,13 +482,13 @@ func TestHomeUnsetBranches(t *testing.T) {
 	if got := loadOAuthAccessToken(); got != "" {
 		t.Fatalf("loadOAuthAccessToken = %q", got)
 	}
-	if cfg := loadHooksConfig(t.TempDir()); len(cfg.PreToolUse) != 0 {
+	if cfg := loadHooksConfig(t.TempDir(), nil); len(cfg.PreToolUse) != 0 {
 		t.Fatal("hooks should be empty without home")
 	}
 	if rules := loadPermissions(t.TempDir()); len(rules.Allow) != 0 {
 		t.Fatal("permissions should be empty without home")
 	}
-	if got := loadSkills(t.TempDir(), []string{"none"}, zerolog.Nop()); len(got) != 0 {
+	if got := loadSkills(t.TempDir(), []string{"none"}, nil, zerolog.Nop()); len(got) != 0 {
 		t.Fatal("skills should be empty without home")
 	}
 	if got := loadAgents(t.TempDir(), zerolog.Nop()); len(got) != 0 {
@@ -499,7 +504,7 @@ func TestLoadSkillsBuiltinLayer(t *testing.T) {
 	t.Cleanup(merge.ResetWorkspaceCache)
 
 	// Default (empty allowlist): the vendored set is present.
-	list := loadSkills(dir, nil, zerolog.Nop())
+	list := loadSkills(dir, nil, nil, zerolog.Nop())
 	var tdd skills.Skill
 	found := false
 	for _, s := range list {
@@ -512,7 +517,7 @@ func TestLoadSkillsBuiltinLayer(t *testing.T) {
 	}
 
 	// A non-empty allowlist keeps only the named skills.
-	only := loadSkills(dir, []string{"brainstorming"}, zerolog.Nop())
+	only := loadSkills(dir, []string{"brainstorming"}, nil, zerolog.Nop())
 	if len(only) != 1 || only[0].Name != "brainstorming" {
 		t.Fatalf("allowlist not applied: %+v", only)
 	}
@@ -521,7 +526,7 @@ func TestLoadSkillsBuiltinLayer(t *testing.T) {
 	// log records the builtin as the loser.
 	writeFileT(t, filepath.Join(home, ".woca", "skills", "test-driven-development", "SKILL.md"), "USER TDD")
 	var buf bytes.Buffer
-	list = loadSkills(dir, nil, zerolog.New(&buf))
+	list = loadSkills(dir, nil, nil, zerolog.New(&buf))
 	for _, s := range list {
 		if s.Name == "test-driven-development" && s.Body != "USER TDD" {
 			t.Fatalf("user skill must shadow the builtin, got %q", s.Body)
@@ -529,5 +534,159 @@ func TestLoadSkillsBuiltinLayer(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "builtin/test-driven-development") {
 		t.Fatalf("builtin loser not logged: %q", buf.String())
+	}
+}
+
+// pluginFixture writes a plugin tree carrying every contribution kind —
+// two skills, a command, a hooks entry and an MCP server named after the
+// plugin — under root/name, and loads it ready to inject into the layered
+// loaders (tests inject the plugin list directly instead of reaching for
+// the ~/.woca/plugins default root).
+func pluginFixture(t *testing.T, root, name string) plugins.Plugin {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	writeFileT(t, filepath.Join(dir, "plugin.json"), `{"name":"`+name+`"}`)
+	writeFileT(t, filepath.Join(dir, "skills", "deploy", "SKILL.md"),
+		"---\nname: deploy\ndescription: Deploys things\n---\nPLUGIN DEPLOY")
+	writeFileT(t, filepath.Join(dir, "skills", "lint", "SKILL.md"),
+		"---\nname: lint\ndescription: Lints things\n---\nPLUGIN LINT")
+	writeFileT(t, filepath.Join(dir, "commands", "ping.md"), "Ping $ARGUMENTS\n")
+	writeFileT(t, filepath.Join(dir, "hooks", "hooks.json"),
+		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo plugin-hook"}]}]}}`)
+	writeFileT(t, filepath.Join(dir, ".mcp.json"),
+		`{"mcpServers":{"`+name+`":{"command":"echo","args":["hi"]}}}`)
+	pl, err := plugins.LoadPlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pl
+}
+
+// TestLoadSkillsPluginLayer: plugin skills enter the merge at the plugin
+// level (between managed and user). A user skill of the same namespaced
+// name wins and the conflict log names the plugin layer as the loser;
+// plugin-only skills survive, and plugin commands append after the merge
+// under their "<plugin>:<command>" namespace (no conflicts by design).
+func TestLoadSkillsPluginLayer(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workdir := t.TempDir()
+	merge.ResetWorkspaceCache()
+	t.Cleanup(merge.ResetWorkspaceCache)
+	pl := pluginFixture(t, t.TempDir(), "toolkit")
+	writeFileT(t, filepath.Join(home, ".woca", "skills", "toolkit-deploy", "SKILL.md"),
+		"---\nname: toolkit-deploy\ndescription: user copy\n---\nUSER DEPLOY")
+
+	var buf bytes.Buffer
+	list := loadSkills(workdir, []string{"none"}, []plugins.Plugin{pl}, zerolog.New(&buf))
+
+	byName := map[string]skills.Skill{}
+	for _, s := range list {
+		byName[s.Name] = s
+	}
+	if got := byName["toolkit-deploy"]; got.Body != "USER DEPLOY" {
+		t.Fatalf("user skill must shadow the plugin skill, got %q", got.Body)
+	}
+	logs := buf.String()
+	if !strings.Contains(logs, "config merge conflict resolved") {
+		t.Fatalf("conflict not logged: %q", logs)
+	}
+	if !strings.Contains(logs, "plugin/toolkit") {
+		t.Fatalf("plugin layer not named in the conflict log: %q", logs)
+	}
+	if got := byName["toolkit-lint"]; got.Body != "PLUGIN LINT" {
+		t.Fatalf("plugin-only skill missing: %+v", list)
+	}
+	if got := byName["toolkit:ping"]; len(got.Body) == 0 {
+		t.Fatalf("plugin command not appended after merge: %+v", list)
+	}
+}
+
+// TestLoadHooksConfigPluginEntries: plugin hook entries append after the
+// project's entries for the same event (they run together, no dedupe) and
+// every plugin entry carries Source "plugin/<name>" for the /hooks display.
+func TestLoadHooksConfigPluginEntries(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workdir := t.TempDir()
+	writeFileT(t, filepath.Join(workdir, ".woca", "settings.json"),
+		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo project"}]}]}}`)
+	pl := pluginFixture(t, t.TempDir(), "toolkit")
+
+	cfg := loadHooksConfig(workdir, []plugins.Plugin{pl})
+	if len(cfg.PreToolUse) != 2 {
+		t.Fatalf("PreToolUse = %+v; want project entry plus plugin entry", cfg.PreToolUse)
+	}
+	if cfg.PreToolUse[0].Hooks[0].Command != "echo project" {
+		t.Fatalf("project entry must run first: %+v", cfg.PreToolUse)
+	}
+	plug := cfg.PreToolUse[1]
+	if plug.Hooks[0].Command != "echo plugin-hook" {
+		t.Fatalf("plugin entry must run after the project entries: %+v", cfg.PreToolUse)
+	}
+	if plug.Source != "plugin/toolkit" {
+		t.Fatalf("plugin entry Source = %q; want plugin/toolkit", plug.Source)
+	}
+	if cfg.PreToolUse[0].Source != "" {
+		t.Fatalf("project entry must stay untagged: %+v", cfg.PreToolUse[0])
+	}
+}
+
+// TestMergeMCPSpecsPluginLayer: the plugin MCP layer sits below the user
+// layer — a same-name user spec survives the merge, plugin-only names fill
+// gaps, and the conflict is logged.
+func TestMergeMCPSpecsPluginLayer(t *testing.T) {
+	var buf bytes.Buffer
+	got := mergeMCPSpecsLayered(
+		nil,
+		nil,
+		[]string{"ctx=user-cmd", "useronly=user-cmd"},
+		[]string{"ctx=plugin-cmd", "plugonly=plugin-cmd"},
+		nil,
+		zerolog.New(&buf),
+	)
+	slices.Sort(got)
+	want := []string{"ctx=user-cmd", "plugonly=plugin-cmd", "useronly=user-cmd"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	if !strings.Contains(buf.String(), "config merge conflict resolved") {
+		t.Fatalf("conflicts not logged: %q", buf.String())
+	}
+}
+
+// TestDisabledPluginContributesNothing: LoadWithSkipped drops the disabled
+// plugin from the list the loaders consume, so it contributes no skills
+// (nor commands), no hooks and no MCP specs.
+func TestDisabledPluginContributesNothing(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	root := t.TempDir()
+	pluginFixture(t, root, "toolkit")
+	pluginFixture(t, root, "other")
+	workdir := t.TempDir()
+	merge.ResetWorkspaceCache()
+	t.Cleanup(merge.ResetWorkspaceCache)
+
+	list, skipped, errs := plugins.LoadWithSkipped(root, []string{"toolkit"})
+	if len(errs) != 0 || !slices.Equal(skipped, []string{"toolkit"}) ||
+		len(list) != 1 || list[0].Manifest.Name != "other" {
+		t.Fatalf("LoadWithSkipped = list:%+v skipped:%v errs:%v", list, skipped, errs)
+	}
+
+	for _, s := range loadSkills(workdir, []string{"none"}, list, zerolog.Nop()) {
+		if strings.HasPrefix(s.Name, "toolkit") {
+			t.Fatalf("disabled plugin skill or command leaked: %+v", s)
+		}
+	}
+	for _, e := range loadHooksConfig(workdir, list).PreToolUse {
+		if e.Source == "plugin/toolkit" {
+			t.Fatalf("disabled plugin hook leaked: %+v", e)
+		}
+	}
+	var specs []string
+	for _, pl := range list {
+		specs = append(specs, pl.MCPSpecs...)
+	}
+	if got := mergeMCPSpecsLayered(nil, nil, nil, specs, nil, zerolog.Nop()); !slices.Equal(got, []string{"other=echo hi"}) {
+		t.Fatalf("disabled plugin mcp spec leaked: %v", got)
 	}
 }

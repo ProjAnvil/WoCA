@@ -103,6 +103,16 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		log.Info().Str("endpoint", opts.Sandbox.Endpoint).Msg("process side effects routed to the sandbox executor")
 	}
 
+	// Plugins (marketplace-level units under ~/.woca/plugins) contribute
+	// skills, subagent definitions, hooks and MCP servers; the
+	// disabled-plugins setting skips whole plugins (they contribute
+	// nothing and report no errors). A broken plugin is skipped with its
+	// error surfaced.
+	pluginList, _, pluginErrs := plugins.LoadWithSkipped(plugins.DefaultRoot(), st.Load().DisabledPlugins)
+	for _, perr := range pluginErrs {
+		log.Warn().Err(perr).Msg("plugin skipped")
+	}
+
 	// Assemble the system prompt with collected context. The same builder
 	// runs for every run workspace and the active model name (the agent
 	// caches per workspace+model), so serve-mode sessions in other projects
@@ -115,14 +125,14 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		if c := contextx.Collect(ws); c != "" {
 			sys += "\n\n" + c
 		}
-		if list := loadSkills(ws, st.Load().BuiltinSkills, log); len(list) > 0 {
+		if list := loadSkills(ws, st.Load().BuiltinSkills, pluginList, log); len(list) > 0 {
 			sys += "\n\n# Available skills\n\nInvoke with the Skill tool; the list is scoped to this workspace.\n" + skillManifest(list)
 		}
 		return sys
 	}
 	sysPrompt := sysFor(cfg.WorkDir, cfg.Model)
 
-	hookRunner := hooks.NewRunner(loadHooksConfig(workdir), workdir, "woca",
+	hookRunner := hooks.NewRunner(loadHooksConfig(workdir, pluginList), workdir, "woca",
 		hooks.WithLogger(log), hooks.WithCommandRunner(hooks.ExecutorCommandRunner(x)))
 	// Claude environment import (settings claude-skills / claude-mcp):
 	// selected ~/.claude skills are symlinked into ~/.woca/skills (loadSkills
@@ -133,22 +143,21 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	} else if len(linked) > 0 {
 		log.Info().Strs("skills", linked).Msg("imported claude skills via ~/.woca/skills")
 	}
-	skillList := loadSkills(workdir, st.Load().BuiltinSkills, log)
+	skillList := loadSkills(workdir, st.Load().BuiltinSkills, pluginList, log)
 	agentDefs := loadAgents(workdir, log)
-	// Plugins (marketplace-level units under ~/.woca/plugins) contribute
-	// namespaced skills and subagent definitions.
-	pluginList, pluginErrs := plugins.Load(plugins.DefaultRoot())
-	for _, perr := range pluginErrs {
-		log.Warn().Err(perr).Msg("plugin skipped")
-	}
+	// Plugin agents keep append semantics (no layered merge); Source is
+	// tagged for the /agents display.
 	for _, pl := range pluginList {
-		skillList = append(skillList, pl.Skills...)
-		agentDefs = append(agentDefs, pl.Agents...)
+		for _, d := range pl.Agents {
+			d.Source = "plugin/" + pl.Manifest.Name
+			agentDefs = append(agentDefs, d)
+		}
 	}
-	// MCP servers resolve as three layers: --mcp flags (highest), the
-	// workspace file workDir/.woca/mcp.json (no upward walk, D5), and the
-	// user ~/.woca/mcp.json kept in sync with the ~/.claude import
-	// selection. Same-name servers connect once, from the winning layer.
+	// MCP servers resolve as layers: --mcp flags (highest), the workspace
+	// file workDir/.woca/mcp.json (no upward walk, D5), the user
+	// ~/.woca/mcp.json kept in sync with the ~/.claude import selection,
+	// then the plugins' servers. Same-name servers connect once, from the
+	// winning layer.
 	var userSpecs []string
 	if specs, err := claudeMCPStartupSpecs(wocaRoot(), dbSettings.ClaudeMCP); err != nil {
 		log.Warn().Err(err).Msg("claude mcp import failed")
@@ -160,7 +169,12 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	if err != nil {
 		log.Warn().Err(err).Msg("workspace mcp.json unreadable")
 	}
-	extraTools, mcpClients := connectMCP(ctx, log, mergeMCPSpecs(opts.MCPServers, wsSpecs, userSpecs, log), st, x)
+	// The plugins' MCP specs form the layer below the user's own config.
+	var pluginSpecs []string
+	for _, pl := range pluginList {
+		pluginSpecs = append(pluginSpecs, pl.MCPSpecs...)
+	}
+	extraTools, mcpClients := connectMCP(ctx, log, mergeMCPSpecs(opts.MCPServers, wsSpecs, userSpecs, pluginSpecs, log), st, x)
 
 	// Built-in capability plugins (browser via pinchtab, python/pdf via uv):
 	// tools register when enabled in settings; runtimes install on demand
@@ -276,11 +290,13 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		ModelHooks:      opts.ModelHooks,
 		ModelWrappers:   opts.ModelWrappers,
 		HooksFor: func(ws string) *hooks.Runner {
-			return hooks.NewRunner(loadHooksConfig(ws), ws, "woca",
+			return hooks.NewRunner(loadHooksConfig(ws, pluginList), ws, "woca",
 				hooks.WithLogger(log), hooks.WithCommandRunner(hooks.ExecutorCommandRunner(x)))
 		},
-		Skills:             skillList,
-		SkillsFor:          func(ws string) []skills.Skill { return loadSkills(ws, st.Load().BuiltinSkills, log) },
+		Skills: skillList,
+		SkillsFor: func(ws string) []skills.Skill {
+			return loadSkills(ws, st.Load().BuiltinSkills, pluginList, log)
+		},
 		ExtraTools:         extraTools,
 		CompactThreshold:   opts.CompactLimit,
 		Summarizer:         model,
@@ -555,19 +571,19 @@ func (ap *App) ApplyClaudeEnv(skills, mcp []string) error {
 	if _, err := syncMCPConfig(root, mcp); err != nil {
 		return err
 	}
-	// Live skill reload (mirrors BuildAgent's load + plugin merge).
-	list := loadSkills(ap.Workdir, ap.Settings.Load().BuiltinSkills, ap.Log)
-	for _, pl := range pluginListOrEmpty() {
-		list = append(list, pl.Skills...)
-	}
+	// Live skill reload: loadSkills folds the plugin layer in (plugin
+	// skills merge at their level, commands append).
+	list := loadSkills(ap.Workdir, ap.Settings.Load().BuiltinSkills, pluginListOrEmpty(ap.Settings), ap.Log)
 	ap.Agent.SetSkills(list)
 	return nil
 }
 
-// pluginListOrEmpty loads marketplace plugins, swallowing errors (a broken
-// plugin tree must not break a skill reload).
-func pluginListOrEmpty() []plugins.Plugin {
-	list, _ := plugins.Load(plugins.DefaultRoot())
+// pluginListOrEmpty loads the enabled marketplace plugins (the
+// disabled-plugins setting skips whole plugins), swallowing errors: a
+// broken plugin tree must not break a live skill reload. BuildAgent
+// surfaces load errors via plugins.LoadWithSkipped directly.
+func pluginListOrEmpty(st *settings.Store) []plugins.Plugin {
+	list, _, _ := plugins.LoadWithSkipped(plugins.DefaultRoot(), st.Load().DisabledPlugins)
 	return list
 }
 
