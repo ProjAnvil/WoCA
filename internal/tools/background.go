@@ -324,15 +324,16 @@ const NotificationOutputCap = 2000
 // are clamped so a typo cannot pin a tool round for hours.
 const MaxWaitMS = 600000
 
-// notification renders the completion message injected after the next tool
-// round: exit status plus a bounded output tail.
+// notification renders the completion body handed to the notify callback:
+// exit status plus a bounded output tail. It carries no wrapper tags — the
+// queue tag the agent wraps around this text is the single
+// <background-task-completed> wrapper the model sees.
 func (sh *backgroundShell) notification() string {
 	sh.mu.Lock()
 	st := BackgroundShellStatus{ID: sh.id, Command: sh.command, ExitCode: sh.exit}
 	out := sh.buf.String()
 	sh.mu.Unlock()
 	var b strings.Builder
-	b.WriteString("<background-task-completed>\n")
 	fmt.Fprintf(&b, "Background shell %s finished (exit code %d): %s\n", st.ID, st.ExitCode, st.Command)
 	if out != "" {
 		if len(out) > NotificationOutputCap {
@@ -340,7 +341,6 @@ func (sh *backgroundShell) notification() string {
 		}
 		fmt.Fprintf(&b, "Output (tail):\n%s\n", strings.TrimRight(out, "\n"))
 	}
-	b.WriteString("</background-task-completed>")
 	return b.String()
 }
 

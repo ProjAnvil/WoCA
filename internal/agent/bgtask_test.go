@@ -716,6 +716,11 @@ func TestBackgroundTaskCompletionNotification(t *testing.T) {
 		if strings.Contains(n.text, "ZZHEAD") {
 			t.Fatal("notification carries the uncapped report head")
 		}
+		// R4: the producer emits the body only — the queue tag is the single
+		// wrapper — so the raw callback text carries no wrapper lines.
+		if strings.Contains(n.text, "<background-task-completed>") {
+			t.Fatalf("producer text must carry no wrapper: %q", n.text)
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("completion notification never fired")
 	}
@@ -740,6 +745,9 @@ func TestBackgroundTaskNotificationQueuedForSession(t *testing.T) {
 	}
 	if !strings.Contains(items[0].Text, "task-1") || !strings.Contains(items[0].Text, "queued report body") {
 		t.Fatalf("notification text = %q", items[0].Text)
+	}
+	if strings.Contains(items[0].Text, "<background-task-completed>") {
+		t.Fatalf("producer text must carry no wrapper (the queue tag adds it): %q", items[0].Text)
 	}
 }
 

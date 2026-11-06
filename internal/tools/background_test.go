@@ -91,8 +91,13 @@ func TestBackgroundShellCompletionNotification(t *testing.T) {
 	}
 	select {
 	case text := <-notifications:
-		if !strings.Contains(text, "<background-task-completed>") ||
-			!strings.Contains(text, "hello-bg") || !strings.Contains(text, "hello") {
+		// R4: the producer emits the body only — the queue tag is the single
+		// wrapper — so the raw callback text carries no wrapper lines.
+		if strings.Contains(text, "<background-task-completed>") ||
+			strings.Contains(text, "</background-task-completed>") {
+			t.Fatalf("producer text must carry no wrapper: %q", text)
+		}
+		if !strings.Contains(text, "hello-bg") || !strings.Contains(text, "hello") {
 			t.Fatalf("notification = %q", text)
 		}
 	case <-time.After(5 * time.Second):
@@ -122,8 +127,8 @@ func TestBackgroundShellNotificationCarriesSession(t *testing.T) {
 		if n.session != "sess-1" {
 			t.Fatalf("session = %q, want %q", n.session, "sess-1")
 		}
-		if !strings.Contains(n.text, "<background-task-completed>") || !strings.Contains(n.text, "scoped") {
-			t.Fatalf("notification = %q", n.text)
+		if strings.Contains(n.text, "<background-task-completed>") || !strings.Contains(n.text, "scoped") {
+			t.Fatalf("notification = %q, want wrapper-free body naming the command", n.text)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("no completion notification")

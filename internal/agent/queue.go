@@ -44,6 +44,19 @@ func formatQueuedInput(q QueuedInput) messages.Message {
 	return messages.Human("<" + tag + ">\n" + strings.TrimSpace(q.Text) + "\n</" + tag + ">")
 }
 
+// CoalesceQueuedInputs renders several queued inputs as ONE Human message:
+// each item's tagged block (exactly what formatQueuedInput produces) joined
+// by a blank line. Surfaces use it to fold everything that accumulated
+// while the agent was busy into a single message. A nil/empty slice yields
+// an empty Human message; callers with nothing queued skip the call.
+func CoalesceQueuedInputs(items []QueuedInput) messages.Message {
+	blocks := make([]string, len(items))
+	for i, q := range items {
+		blocks[i] = formatQueuedInput(q).Content
+	}
+	return messages.Human(strings.Join(blocks, "\n\n"))
+}
+
 // sessionFromCtx returns the session id the ctx's run is scoped to. TUI/REPL
 // runs carry no run scope; "" means unscoped delivery (the whole queue).
 func sessionFromCtx(ctx context.Context) string {
@@ -69,14 +82,16 @@ func (q *queue) add(text string) {
 }
 
 // addTagged buffers a tagged notification (machine-generated input) scoped
-// to session; "" is unscoped.
-func (q *queue) addTagged(session, tag, text string) {
+// to session; "" is unscoped. It reports whether an item was queued — blank
+// text is dropped, nothing queues.
+func (q *queue) addTagged(session, tag, text string) bool {
 	if strings.TrimSpace(text) == "" {
-		return
+		return false
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.items = append(q.items, QueuedInput{Text: text, Tag: tag, Session: session})
+	return true
 }
 
 // drain removes and returns the items a run in session receives: everything
@@ -133,14 +148,42 @@ func (a *Agent) QueueInput(text string) {
 // background-shell completion) for delivery after the next tool round,
 // wrapped in its own tag so the model can tell it from typed user input.
 func (a *Agent) QueueNotification(tag, text string) {
-	a.inputs.addTagged("", tag, text)
+	a.queueNotification(QueuedInput{Text: text, Tag: tag})
 }
 
 // QueueNotificationFor is the session-scoped QueueNotification: the
 // notification is delivered to the next run in that session (or to any
 // unscoped run) and never to other sessions' runs.
 func (a *Agent) QueueNotificationFor(session, tag, text string) {
-	a.inputs.addTagged(session, tag, text)
+	a.queueNotification(QueuedInput{Text: text, Tag: tag, Session: session})
+}
+
+// queueNotification queues one notification item and fires the observer
+// (if installed) after the item is queued. Blank text queues nothing and
+// fires nothing — the observer contract is "the item you just saw is in the
+// queue".
+func (a *Agent) queueNotification(q QueuedInput) {
+	if !a.inputs.addTagged(q.Session, q.Tag, q.Text) {
+		return
+	}
+	a.mu.Lock()
+	fn := a.notifyObserver
+	a.mu.Unlock()
+	if fn != nil {
+		fn(q)
+	}
+}
+
+// SetNotificationObserver installs fn as the callback fired whenever a
+// notification is queued (QueueNotification/QueueNotificationFor). fn runs
+// synchronously on the producer's goroutine — background shells, tasks and
+// cron completions — so it must not block; hand off to a channel and return.
+// nil uninstalls the observer. This is the seam UI surfaces (web server,
+// TUI, REPL) use to surface completions without polling the queue.
+func (a *Agent) SetNotificationObserver(fn func(QueuedInput)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.notifyObserver = fn
 }
 
 // DrainQueuedInputs returns and clears the queued mid-turn inputs.

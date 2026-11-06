@@ -359,6 +359,10 @@ type Agent struct {
 	toolBudget int
 	// inputs buffers mid-turn user input (queued commands).
 	inputs queue
+	// notifyObserver is the optional notification seam (see
+	// SetNotificationObserver): fired synchronously from producer goroutines
+	// after a notification is queued; guarded by mu and must not block.
+	notifyObserver func(QueuedInput)
 	// emitSummaries enables async tool-use summary generation; summaries
 	// buffers them for non-blocking consumption.
 	emitSummaries bool

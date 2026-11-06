@@ -254,10 +254,12 @@ func (t *backgroundTask) stop() {
 	t.signalDone()
 }
 
-// notification renders the completion message handed to the notify callback,
+// notification renders the completion body handed to the notify callback,
 // mirroring backgroundShell.notification() (internal/tools/background.go):
 // id, final status, description, and the report tail bounded by
 // tools.NotificationOutputCap so a chatty report cannot flood the context.
+// It carries no wrapper tags — the queue tag the agent wraps around this
+// text is the single <background-task-completed> wrapper the model sees.
 // The subject line (the model-facing description) names the task; the full
 // prompt deliberately stays out. A stopped task renders the stopped status
 // line and no report — stop leaves no final report behind.
@@ -270,12 +272,10 @@ func (t *backgroundTask) notification() string {
 		report = "…\n" + report[len(report)-tools.NotificationOutputCap:]
 	}
 	var b strings.Builder
-	b.WriteString("<background-task-completed>\n")
 	fmt.Fprintf(&b, "Background task %s finished (%s): %s\n", t.ID, status, t.Subject)
 	if report != "" {
 		fmt.Fprintf(&b, "Report (tail):\n%s\n", strings.TrimRight(report, "\n"))
 	}
-	b.WriteString("</background-task-completed>")
 	return b.String()
 }
 
