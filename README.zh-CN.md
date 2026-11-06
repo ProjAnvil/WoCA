@@ -115,7 +115,7 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
 **生态**
 
 - **Skills**（`SKILL.md` + YAML frontmatter）、**自定义子代理**
-  （`.woca/agents/*.md`）、**hooks**（12 组事件、匹配器、退出码语义）、
+  （`.woca/agents/*.md`）、**hooks**（13 组事件、匹配器、退出码语义）、
   **MCP** 客户端（stdio + streamable HTTP，工具 / 资源 / prompts / 通知 /
   OAuth）、**能力插件**（托管浏览器自动化、PDF 工具链与 Office 文档支
   持）—— 见
@@ -339,7 +339,7 @@ internal/platform/       共享平台原语（authn、authz、httpx、
                          machineid …）
 internal/skills          SKILL.md 加载器（分层：flag > 工作区 > 用户）
 internal/agents          子代理定义（.woca/agents/*.md）
-internal/hooks           hook 运行器（12 组事件）
+internal/hooks           hook 运行器（13 组事件）
 internal/mcp             MCP 客户端（stdio + streamable HTTP、OAuth）
 internal/plugins         市场插件（skills/agents 捆绑包）
 internal/pluginrt        能力插件运行时（browser、pdf、office）
@@ -613,11 +613,16 @@ description: 撰写 conventional commit 信息
 }
 ```
 
-支持十二组事件：`PreToolUse`、`PostToolUse`、`UserPromptSubmit`、`Stop`、
-`SessionStart`、`SessionEnd`、`SubagentStop`、`Notification`、`PreCompact`、
-`PostCompact`、`PermissionRequest`、`PostSampling`。每个 hook 从 stdin 收到
-JSON 事件；stdout 回喂为上下文。`PreToolUse` hook 以 `2` 退出即拒绝工具；
-`PostToolUse` hook 以 `2` 退出则阻断继续。
+支持十三组事件：`PreToolUse`、`PostToolUse`、`UserPromptSubmit`、`Stop`、
+`SessionStart`、`SessionEnd`、`SubagentStart`、`SubagentStop`、
+`Notification`、`PreCompact`、`PostCompact`、`PermissionRequest`、
+`PostSampling`。每个 hook 从 stdin 收到 JSON 事件；stdout 回喂为上下文。
+`PreToolUse` hook 以 `2` 退出即拒绝工具；`PostToolUse` hook 以 `2` 退出则
+阻断继续。`SubagentStart`/`SubagentStop` 包裹每次 Task 子代理运行（载荷
+字段 `agent_name`）；`SubagentStop` hook 以 `2` 退出时，其 stdout 会作为
+`<subagent-stop-feedback>` 追加到子代理报告（子代理不会重跑）。
+`Notification` 在权限中断触发前立即执行，消息为
+`permission required: <tool>`。
 
 ### MCP 服务器
 
