@@ -186,6 +186,13 @@ type Settings struct {
 	// denied wins over allowed.
 	SearchAllowedDomains []string `json:"search_allowed_domains"`
 	SearchDeniedDomains  []string `json:"search_denied_domains"`
+	// AutoWake runs the idle wake driver: when a notification queues while
+	// no run is active, a run starts automatically to consume it.
+	// AutoWakeLimit caps the chained auto-wake runs (a user-initiated run
+	// resets the chain); 0 means unlimited, and DefaultAutoWakeLimit applies
+	// when the key is unset or stored as 0.
+	AutoWake      bool `json:"auto_wake"`
+	AutoWakeLimit int  `json:"auto_wake_limit"`
 }
 
 // Default returns the default settings: sqlite storage under ~/.woca.
@@ -200,6 +207,8 @@ func Default() Settings {
 		MemoryEngine:      MemoryEngineLadyM,
 		LadyMAutoRetain:   true,
 		LadyMSystem2:      true,
+		AutoWake:          true,
+		AutoWakeLimit:     DefaultAutoWakeLimit,
 	}
 }
 
@@ -257,6 +266,12 @@ func (s Settings) Normalize() (Settings, error) {
 	}
 	if out.LadyMSystem2Interval == 0 {
 		out.LadyMSystem2Interval = DefaultLadyMSystem2Interval
+	}
+	if out.AutoWakeLimit == 0 {
+		out.AutoWakeLimit = DefaultAutoWakeLimit
+	}
+	if out.AutoWakeLimit < 0 {
+		out.AutoWakeLimit = 0 // a stored negative is the unlimited spelling
 	}
 	return out, nil
 }
@@ -573,6 +588,14 @@ func applyPairs(out *Settings, pairs map[string]string) {
 	if v, ok := pairs["search_denied_domains"]; ok {
 		out.SearchDeniedDomains = parseNameList(v)
 	}
+	if v, ok := pairs["auto_wake"]; ok {
+		out.AutoWake, _ = ParseBool(v)
+	}
+	if v, ok := pairs["auto_wake_limit"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			out.AutoWakeLimit = n
+		}
+	}
 }
 
 // Save persists non-empty settings fields (empty fields are left unchanged so
@@ -692,6 +715,13 @@ func (s *Store) Save(cfg Settings) error {
 	}
 	if cfg.LadyMSystem2Interval != 0 {
 		fields = append(fields, field{"ladym_system2_interval", strconv.Itoa(cfg.LadyMSystem2Interval)})
+	}
+	// auto-wake is always written explicitly (false included) so turning the
+	// wake driver off persists; auto-wake-limit skips when zero (the default
+	// applies on load) while a negative value persists as unlimited.
+	fields = append(fields, field{"auto_wake", strconv.FormatBool(cfg.AutoWake)})
+	if cfg.AutoWakeLimit != 0 {
+		fields = append(fields, field{"auto_wake_limit", strconv.Itoa(cfg.AutoWakeLimit)})
 	}
 	for _, f := range fields {
 		if f.val == "" {

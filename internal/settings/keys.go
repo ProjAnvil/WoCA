@@ -69,6 +69,11 @@ const (
 	KeyLangfusePublicKey      = "langfuse-public-key"
 	KeyLangfuseSecretKey      = "langfuse-secret-key"
 	KeySandboxArchiveMaxBytes = "sandbox-archive-max-bytes"
+	// Idle wake driver (background loop closure): auto-wake re-runs the
+	// agent on queued notifications while idle; auto-wake-limit caps the
+	// wake chain (a user-initiated run resets it).
+	KeyAutoWake      = "auto-wake"
+	KeyAutoWakeLimit = "auto-wake-limit"
 	// Web search (internal/websearch). The provider list carries the
 	// enable/disable state: a backend is on when its id is present, so an
 	// enterprise overlay can pin the exact allowed set by listing it.
@@ -89,6 +94,11 @@ const DefaultSandboxArchiveMaxBytes int64 = 536870912
 // not depend on the enterprise plane package.
 const DefaultMsgPlaneSubject = "runs.dispatch"
 
+// DefaultAutoWakeLimit is the default cap on chained auto-wake runs. A
+// stored 0 (or absent row) loads as this default; a stored negative value
+// loads as 0 = unlimited.
+const DefaultAutoWakeLimit = 20
+
 // KeyNames lists all settable keys in display order.
 func KeyNames() []string {
 	return []string{
@@ -107,6 +117,7 @@ func KeyNames() []string {
 		KeyMemoryPGHost, KeyMemoryPGPort, KeyMemoryPGDB, KeyMemoryPGUser,
 		KeyLangfuseEnabled, KeyLangfuseBaseURL, KeyLangfusePublicKey, KeyLangfuseSecretKey,
 		KeySandboxArchiveMaxBytes,
+		KeyAutoWake, KeyAutoWakeLimit,
 		KeySearchProviders, KeySearchSearXNGEndpoint, KeySearchCustomEndpoint,
 		KeySearchCustomKey, KeySearchAllowedDomains, KeySearchDeniedDomains,
 	}
@@ -267,6 +278,10 @@ func KeyHelp(key string) string {
 		return "langfuse secret API key (stored encrypted)"
 	case KeySandboxArchiveMaxBytes:
 		return "max bytes of the workspace tar.gz the worker uploads to / downloads from a sandbox (default 536870912 = 512 MiB)"
+	case KeyAutoWake:
+		return "start a run automatically when notifications arrive while idle: true | false"
+	case KeyAutoWakeLimit:
+		return "max chained auto-wake runs before capping (a user run resets the chain; set -1 for unlimited; default 20)"
 	case KeySearchProviders:
 		return "web-search backends in failover order as a JSON array (ddg-html, ddg-lite, searxng, tavily, custom); a backend is enabled by being listed"
 	case KeySearchSearXNGEndpoint:
@@ -499,6 +514,20 @@ func Apply(cfg *Settings, key, value string) error {
 			return fmt.Errorf("sandbox-archive-max-bytes must be a positive integer, got %q", value)
 		}
 		cfg.SandboxArchiveMaxBytes = n
+	case KeyAutoWake:
+		b, err := ParseBool(value)
+		if err != nil {
+			return err
+		}
+		cfg.AutoWake = b
+	case KeyAutoWakeLimit:
+		// Any integer is valid: 0 falls back to the default on load, and a
+		// negative value is the stored spelling of "unlimited" (loads as 0).
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("auto-wake-limit must be an integer, got %q", value)
+		}
+		cfg.AutoWakeLimit = n
 	case KeySearchProviders:
 		list, err := ParseNameList(value)
 		if err != nil {
@@ -657,6 +686,8 @@ func Describe(cfg Settings, secretSet func(string) bool, dbPath string) string {
 	fmt.Fprintf(&b, "langfuse-public-key: %s\n", orDefault(cfg.LangfusePublicKey, "(unset)"))
 	fmt.Fprintf(&b, "langfuse-secret-key: %s\n", mask(SecretLangfuseSecretKey))
 	fmt.Fprintf(&b, "sandbox-archive-max-bytes: %s\n", orDefault(strconv.FormatInt(cfg.SandboxArchiveMaxBytes, 10), strconv.FormatInt(DefaultSandboxArchiveMaxBytes, 10)))
+	fmt.Fprintf(&b, "auto-wake: %s\n", strconv.FormatBool(cfg.AutoWake))
+	fmt.Fprintf(&b, "auto-wake-limit: %s\n", strconv.Itoa(cfg.AutoWakeLimit))
 	return b.String()
 }
 
@@ -754,6 +785,10 @@ func KeyValue(cfg Settings, key string) string {
 		return cfg.LangfusePublicKey
 	case KeySandboxArchiveMaxBytes:
 		return strconv.FormatInt(cfg.SandboxArchiveMaxBytes, 10)
+	case KeyAutoWake:
+		return strconv.FormatBool(cfg.AutoWake)
+	case KeyAutoWakeLimit:
+		return strconv.Itoa(cfg.AutoWakeLimit)
 	case KeySearchProviders:
 		return FormatNameList(cfg.SearchProviders)
 	case KeySearchSearXNGEndpoint:
