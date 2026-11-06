@@ -3,8 +3,22 @@ package plugins
 import (
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
+
+// writePluginFile writes content under a plugin tree, creating parent
+// directories as needed.
+func writePluginFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // makePlugin writes a plugin tree with one skill and one agent definition.
 func makePlugin(t *testing.T, root, name string) string {
@@ -206,5 +220,205 @@ func TestDefaultRootAndInstallEdgeCases(t *testing.T) {
 	}
 	if _, err := Install(src2, root); err == nil {
 		t.Fatal("expected validation failure")
+	}
+}
+
+// TestLoadPluginContributions: a woca manifest declaring a hooks file, an
+// MCP file and a commands dir — all three resolve, and ${...PLUGIN_ROOT}
+// placeholders are substituted with the plugin install path.
+func TestLoadPluginContributions(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "p1")
+	writePluginFile(t, filepath.Join(dir, "plugin.json"),
+		`{"name":"p1","version":"1.0.0","hooks":"hooks/hooks.json","mcp_servers":".mcp.json","commands_dir":"cmds"}`)
+	writePluginFile(t, filepath.Join(dir, "hooks", "hooks.json"),
+		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"run ${CLAUDE_PLUGIN_ROOT}/check.sh"}]}]}}`)
+	writePluginFile(t, filepath.Join(dir, ".mcp.json"),
+		`{"mcpServers":{"ctx":{"command":"node","args":["${CLAUDE_PLUGIN_ROOT}/server.js"]}}}`)
+	writePluginFile(t, filepath.Join(dir, "cmds", "deploy.md"),
+		"---\ndescription: Deploy the app\n---\nDeploy $ARGUMENTS with $1 and $2.\n")
+
+	p, err := LoadPlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Hooks.PreToolUse) != 1 {
+		t.Fatalf("hooks = %+v", p.Hooks)
+	}
+	entry := p.Hooks.PreToolUse[0]
+	if entry.Matcher != "Bash" || len(entry.Hooks) != 1 {
+		t.Fatalf("entry = %+v", entry)
+	}
+	if want := "run " + filepath.Join(dir, "check.sh"); entry.Hooks[0].Command != want {
+		t.Fatalf("hook command = %q; want %q (PLUGIN_ROOT substituted)", entry.Hooks[0].Command, want)
+	}
+	if len(p.MCPSpecs) != 1 {
+		t.Fatalf("mcpSpecs = %v", p.MCPSpecs)
+	}
+	if spec := p.MCPSpecs[0]; !strings.HasPrefix(spec, "ctx=node") || !strings.Contains(spec, filepath.Join(dir, "server.js")) {
+		t.Fatalf("mcp spec = %q; want ctx=node with substituted root", spec)
+	}
+	if len(p.Commands) != 1 {
+		t.Fatalf("commands = %+v", p.Commands)
+	}
+	cmd := p.Commands[0]
+	if cmd.Name != "p1:deploy" {
+		t.Fatalf("command name = %q; want p1:deploy", cmd.Name)
+	}
+	if cmd.Description != "Deploy the app" {
+		t.Fatalf("command description = %q", cmd.Description)
+	}
+	if cmd.Body != "Deploy {arguments} with {arg1} and {arg2}." {
+		t.Fatalf("command body = %q; want placeholders rewritten", cmd.Body)
+	}
+	var args []string
+	for _, a := range cmd.Args {
+		args = append(args, a.Name)
+	}
+	if !slices.Equal(args, []string{"arguments", "arg1", "arg2"}) {
+		t.Fatalf("command args = %v; want only placeholders actually present", args)
+	}
+	if len(p.Ignored) != 0 {
+		t.Fatalf("ignored = %v", p.Ignored)
+	}
+}
+
+// A broken contribution must never yield a partial silent load: the plugin
+// is skipped and its error collected (same treatment as a broken
+// manifest), while intact plugins still load.
+func TestLoadPluginBrokenContributionIsCollected(t *testing.T) {
+	root := t.TempDir()
+	makePlugin(t, root, "good")
+	writePluginFile(t, filepath.Join(root, "badhooks", "plugin.json"), `{"name":"badhooks","hooks":42}`)
+
+	list, errs := Load(root)
+	if len(list) != 1 || list[0].Manifest.Name != "good" {
+		t.Fatalf("list = %+v (badhooks must be skipped)", list)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "badhooks") {
+		t.Fatalf("errs = %v; want the broken contribution surfaced", errs)
+	}
+}
+
+func TestLoadPluginContributionErrors(t *testing.T) {
+	cases := []struct {
+		name     string
+		manifest string
+		files    map[string]string
+	}{
+		{"hooks wrong shape", `{"name":"x","hooks":42}`, nil},
+		{"hooks file invalid json", `{"name":"x","hooks":"hooks/h.json"}`,
+			map[string]string{"hooks/h.json": "{"}},
+		{"hooks declared file missing", `{"name":"x","hooks":"hooks/nope.json"}`, nil},
+		{"hooks wrapper non-object", `{"name":"x","hooks":{"hooks":"nope"}}`, nil},
+		{"mcp entry missing url", `{"name":"x","mcp_servers":{"httpd":{"type":"http"}}}`, nil},
+		{"mcp wrong shape", `{"name":"x","mcp_servers":17}`, nil},
+		{"mcp wrapper non-object", `{"name":"x","mcp_servers":{"mcpServers":"nope"}}`, nil},
+		{"commands wrong shape", `{"name":"x","commands_dir":17}`, nil},
+		{"skills wrong shape", `{"name":"x","skills":{"dir":"x"}}`, nil},
+		{"agents wrong shape", `{"name":"x","agents":true}`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "x")
+			writePluginFile(t, filepath.Join(dir, "plugin.json"), tc.manifest)
+			for path, content := range tc.files {
+				writePluginFile(t, filepath.Join(dir, path), content)
+			}
+			if _, err := LoadPlugin(dir); err == nil {
+				t.Fatal("expected broken contribution to fail LoadPlugin")
+			}
+		})
+	}
+}
+
+// TestManifestPolymorphicShapes: Claude spellings (skills, agents,
+// commands) and path arrays for every contribution field.
+func TestManifestPolymorphicShapes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "poly")
+	writePluginFile(t, filepath.Join(dir, "plugin.json"), `{
+		"name": "poly",
+		"skills": "abilities",
+		"agents": "bots",
+		"hooks": ["h/a.json", "h/b.json"],
+		"mcp_servers": ["m.json"],
+		"commands": ["c1", "c2"]
+	}`)
+	writePluginFile(t, filepath.Join(dir, "abilities", "greeter", "SKILL.md"),
+		"---\nname: greeter\ndescription: g\n---\nHi.\n")
+	writePluginFile(t, filepath.Join(dir, "bots", "helper.md"),
+		"---\nname: helper\ndescription: h\n---\nYou help.\n")
+	writePluginFile(t, filepath.Join(dir, "h", "a.json"),
+		`{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"a"}]}]}}`)
+	writePluginFile(t, filepath.Join(dir, "h", "b.json"),
+		`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"b","timeout":1}]}]}}`)
+	writePluginFile(t, filepath.Join(dir, "m.json"), `{"mcpServers":{"one":{"command":"echo"}}}`)
+	writePluginFile(t, filepath.Join(dir, "c1", "alpha.md"), "Alpha $ARGUMENTS\n")
+	writePluginFile(t, filepath.Join(dir, "c2", "beta.md"), "Beta $3\n")
+
+	p, err := LoadPlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Skills) != 1 || p.Skills[0].Name != "poly-greeter" {
+		t.Fatalf("skills = %+v (Claude 'skills' alias)", p.Skills)
+	}
+	if p.Manifest.SkillsDir != "abilities" {
+		t.Fatalf("SkillsDir = %q", p.Manifest.SkillsDir)
+	}
+	if len(p.Agents) != 1 || p.Agents[0].Name != "helper" {
+		t.Fatalf("agents = %+v (Claude 'agents' alias)", p.Agents)
+	}
+	if p.Manifest.AgentsDir != "bots" {
+		t.Fatalf("AgentsDir = %q", p.Manifest.AgentsDir)
+	}
+	// Two hooks files merged; the Claude timeout alias normalized.
+	if len(p.Hooks.PreToolUse) != 1 || len(p.Hooks.Stop) != 1 {
+		t.Fatalf("hooks = %+v (list-of-paths merged)", p.Hooks)
+	}
+	if ms := p.Hooks.Stop[0].Hooks[0].TimeoutMS; ms != 1000 {
+		t.Fatalf("TimeoutMS = %d; want alias-normalized 1000", ms)
+	}
+	if !slices.Equal(p.MCPSpecs, []string{"one=echo"}) {
+		t.Fatalf("mcpSpecs = %v", p.MCPSpecs)
+	}
+	if len(p.Commands) != 2 || p.Commands[0].Name != "poly:alpha" || p.Commands[1].Name != "poly:beta" {
+		t.Fatalf("commands = %+v", p.Commands)
+	}
+	if !strings.Contains(p.Commands[0].Body, "{arguments}") || !strings.Contains(p.Commands[1].Body, "{arg3}") {
+		t.Fatalf("command bodies not rewritten: %+v", p.Commands)
+	}
+	var betaArgs []string
+	for _, a := range p.Commands[1].Args {
+		betaArgs = append(betaArgs, a.Name)
+	}
+	if !slices.Equal(betaArgs, []string{"arg3"}) {
+		t.Fatalf("beta args = %v; want only arg3", betaArgs)
+	}
+}
+
+// TestContributionDefaults: with no contribution fields declared,
+// hooks/hooks.json, .mcp.json and commands/ are discovered by default.
+func TestContributionDefaults(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "defaults")
+	writePluginFile(t, filepath.Join(dir, "plugin.json"), `{"name":"defaults"}`)
+	writePluginFile(t, filepath.Join(dir, "hooks", "hooks.json"),
+		`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"tail"}]}]}}`)
+	writePluginFile(t, filepath.Join(dir, ".mcp.json"),
+		`{"mcpServers":{"two":{"command":"echo","args":["hi"]}}}`)
+	writePluginFile(t, filepath.Join(dir, "commands", "ping.md"), "Ping $ARGUMENTS\n")
+
+	p, err := LoadPlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Hooks.Stop) != 1 || p.Hooks.Stop[0].Hooks[0].Command != "tail" {
+		t.Fatalf("hooks = %+v (default hooks/hooks.json)", p.Hooks)
+	}
+	if len(p.MCPSpecs) != 1 || !strings.HasPrefix(p.MCPSpecs[0], "two=echo") {
+		t.Fatalf("mcpSpecs = %v (default .mcp.json)", p.MCPSpecs)
+	}
+	if len(p.Commands) != 1 || p.Commands[0].Name != "defaults:ping" {
+		t.Fatalf("commands = %+v (default commands/ dir)", p.Commands)
 	}
 }

@@ -345,6 +345,28 @@ func TestLoadTimeoutSecZeroKeepsUnbounded(t *testing.T) {
 	}
 }
 
+// Parse is the byte-level equivalent of Load (plugin hooks files and
+// inline manifest objects carry no path): same {"hooks": {...}} wrapper
+// shape, same timeout-seconds alias normalization.
+func TestParseBytes(t *testing.T) {
+	cfg, err := Parse([]byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi","timeout":3}]}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Stop) != 1 || cfg.Stop[0].Hooks[0].Command != "echo hi" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+	if ms := cfg.Stop[0].Hooks[0].TimeoutMS; ms != 3000 {
+		t.Fatalf("TimeoutMS = %d; want alias-normalized 3000", ms)
+	}
+}
+
+func TestParseInvalidJSON(t *testing.T) {
+	if _, err := Parse([]byte("{")); err == nil {
+		t.Fatal("Parse accepted invalid JSON")
+	}
+}
+
 func TestProjectDirSubstitution(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "flag.txt"), []byte("claude-flag"), 0o644); err != nil {

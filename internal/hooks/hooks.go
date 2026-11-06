@@ -44,6 +44,10 @@ type Hook struct {
 type Entry struct {
 	Matcher string `json:"matcher,omitempty"`
 	Hooks   []Hook `json:"hooks"`
+	// Source names the configuration layer this entry came from (e.g. a
+	// plugin name, for /hooks display). Display-only: set by loaders,
+	// never parsed from user configuration.
+	Source string `json:"-"`
 }
 
 // Config holds all hook events.
@@ -64,7 +68,8 @@ type Config struct {
 }
 
 // Load reads hook configuration from a JSON settings file of the form
-// {"hooks": {"PreToolUse": [...], ...}}.
+// {"hooks": {"PreToolUse": [...], ...}}. A missing file is an empty
+// configuration, not an error. Byte-level decoding lives in Parse.
 func Load(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -73,11 +78,24 @@ func Load(path string) (Config, error) {
 		}
 		return Config{}, err
 	}
+	cfg, err := Parse(data)
+	if err != nil {
+		return Config{}, fmt.Errorf("hooks: parse %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// Parse decodes hook configuration bytes of the form
+// {"hooks": {"PreToolUse": [...], ...}}, normalizing the Claude Code
+// "timeout" (seconds) alias into timeout_ms. It is the byte-level
+// equivalent of Load (plugin hooks files and inline manifest objects
+// carry no path); Load reads the file and delegates here.
+func Parse(data []byte) (Config, error) {
 	var wrapper struct {
 		Hooks Config `json:"hooks"`
 	}
 	if err := json.Unmarshal(data, &wrapper); err != nil {
-		return Config{}, fmt.Errorf("hooks: parse %s: %w", path, err)
+		return Config{}, fmt.Errorf("invalid hooks JSON: %w", err)
 	}
 	wrapper.Hooks.normalizeTimeouts()
 	return wrapper.Hooks, nil
