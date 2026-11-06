@@ -41,19 +41,9 @@ func loadHooksConfig(workdir string, pluginList []plugins.Plugin) hooks.Config {
 		if err != nil {
 			continue
 		}
-		merged.PreToolUse = append(merged.PreToolUse, cfg.PreToolUse...)
-		merged.PostToolUse = append(merged.PostToolUse, cfg.PostToolUse...)
-		merged.UserPromptSubmit = append(merged.UserPromptSubmit, cfg.UserPromptSubmit...)
-		merged.Stop = append(merged.Stop, cfg.Stop...)
-		merged.SessionStart = append(merged.SessionStart, cfg.SessionStart...)
-		merged.SessionEnd = append(merged.SessionEnd, cfg.SessionEnd...)
-		merged.SubagentStart = append(merged.SubagentStart, cfg.SubagentStart...)
-		merged.SubagentStop = append(merged.SubagentStop, cfg.SubagentStop...)
-		merged.Notification = append(merged.Notification, cfg.Notification...)
-		merged.PreCompact = append(merged.PreCompact, cfg.PreCompact...)
-		merged.PostCompact = append(merged.PostCompact, cfg.PostCompact...)
-		merged.PermissionRequest = append(merged.PermissionRequest, cfg.PermissionRequest...)
-		merged.PostSampling = append(merged.PostSampling, cfg.PostSampling...)
+		// Same append merge as the plugin pass below; source "" leaves the
+		// settings entries' (always empty) Source untouched.
+		appendHookEvents(&merged, cfg, "")
 	}
 	for _, pl := range pluginList {
 		appendHookEvents(&merged, pl.Hooks, "plugin/"+pl.Manifest.Name)
@@ -76,19 +66,11 @@ func appendHookEvents(dst *hooks.Config, src hooks.Config, source string) {
 		}
 		return out
 	}
-	dst.PreToolUse = append(dst.PreToolUse, tag(src.PreToolUse)...)
-	dst.PostToolUse = append(dst.PostToolUse, tag(src.PostToolUse)...)
-	dst.UserPromptSubmit = append(dst.UserPromptSubmit, tag(src.UserPromptSubmit)...)
-	dst.Stop = append(dst.Stop, tag(src.Stop)...)
-	dst.SessionStart = append(dst.SessionStart, tag(src.SessionStart)...)
-	dst.SessionEnd = append(dst.SessionEnd, tag(src.SessionEnd)...)
-	dst.SubagentStart = append(dst.SubagentStart, tag(src.SubagentStart)...)
-	dst.SubagentStop = append(dst.SubagentStop, tag(src.SubagentStop)...)
-	dst.Notification = append(dst.Notification, tag(src.Notification)...)
-	dst.PreCompact = append(dst.PreCompact, tag(src.PreCompact)...)
-	dst.PostCompact = append(dst.PostCompact, tag(src.PostCompact)...)
-	dst.PermissionRequest = append(dst.PermissionRequest, tag(src.PermissionRequest)...)
-	dst.PostSampling = append(dst.PostSampling, tag(src.PostSampling)...)
+	dstEvents := map[string]*[]hooks.Entry{}
+	dst.EachEvent(func(name string, entries *[]hooks.Entry) { dstEvents[name] = entries })
+	src.EachEvent(func(name string, entries *[]hooks.Entry) {
+		*dstEvents[name] = append(*dstEvents[name], tag(*entries)...)
+	})
 }
 
 // loadPermissions loads permission rules from settings.json files (user and

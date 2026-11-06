@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -595,4 +597,41 @@ func TestMatcherCompileErrors(t *testing.T) {
 		t.Fatalf("empty glob: %v", err)
 	}
 	_ = errors.New
+}
+
+// TestEachEventCoversAllEventFields keeps EachEvent in lockstep with
+// Config's field set: every exported []Entry field is visited exactly once,
+// in struct order, under its field name — and the pointer handed to fn
+// really addresses the config (an append through it is visible on the
+// field), so a future event field can only be forgotten from Config
+// itself, never from EachEvent's consumers.
+func TestEachEventCoversAllEventFields(t *testing.T) {
+	var cfg Config
+	entryType := reflect.TypeOf(Entry{})
+	v := reflect.ValueOf(&cfg).Elem()
+	var want []string
+	for i := range v.Type().NumField() {
+		f := v.Type().Field(i)
+		if f.PkgPath == "" && f.Type.Kind() == reflect.Slice && f.Type.Elem() == entryType {
+			want = append(want, f.Name)
+		}
+	}
+	if len(want) == 0 {
+		t.Fatal("Config has no exported []Entry fields to cover")
+	}
+
+	var got []string
+	cfg.EachEvent(func(name string, entries *[]Entry) {
+		got = append(got, name)
+		*entries = append(*entries, Entry{Matcher: name})
+	})
+	if !slices.Equal(got, want) {
+		t.Fatalf("EachEvent visited %v, want %v (struct order)", got, want)
+	}
+	for _, name := range want {
+		f := v.FieldByName(name)
+		if f.Len() != 1 || f.Index(0).FieldByName("Matcher").String() != name {
+			t.Fatalf("field %s not mutated through EachEvent's pointer", name)
+		}
+	}
 }

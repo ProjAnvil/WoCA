@@ -127,13 +127,11 @@ func writePluginRow(b *strings.Builder, p plugins.Plugin, disabled bool) {
 	}
 }
 
-// hookEntries counts a hooks configuration's entries across all 13 events.
+// hookEntries counts a hooks configuration's entries across every event.
 func hookEntries(cfg hooks.Config) int {
-	return len(cfg.PreToolUse) + len(cfg.PostToolUse) + len(cfg.UserPromptSubmit) +
-		len(cfg.Stop) + len(cfg.SessionStart) + len(cfg.SessionEnd) +
-		len(cfg.SubagentStart) + len(cfg.SubagentStop) + len(cfg.Notification) +
-		len(cfg.PreCompact) + len(cfg.PostCompact) + len(cfg.PermissionRequest) +
-		len(cfg.PostSampling)
+	n := 0
+	cfg.EachEvent(func(_ string, entries *[]hooks.Entry) { n += len(*entries) })
+	return n
 }
 
 // pluginsToggle adds or removes name in the disabled-plugins settings key.

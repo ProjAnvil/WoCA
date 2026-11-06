@@ -437,20 +437,11 @@ func (l loader) substRoot(s string) string {
 // mergeHookConfigs appends b's entries to a's: multiple hooks documents
 // from one plugin run together.
 func mergeHookConfigs(a, b hooks.Config) hooks.Config {
-	appendList := func(dst *[]hooks.Entry, src []hooks.Entry) { *dst = append(*dst, src...) }
-	appendList(&a.PreToolUse, b.PreToolUse)
-	appendList(&a.PostToolUse, b.PostToolUse)
-	appendList(&a.UserPromptSubmit, b.UserPromptSubmit)
-	appendList(&a.Stop, b.Stop)
-	appendList(&a.SessionStart, b.SessionStart)
-	appendList(&a.SessionEnd, b.SessionEnd)
-	appendList(&a.SubagentStart, b.SubagentStart)
-	appendList(&a.SubagentStop, b.SubagentStop)
-	appendList(&a.Notification, b.Notification)
-	appendList(&a.PreCompact, b.PreCompact)
-	appendList(&a.PostCompact, b.PostCompact)
-	appendList(&a.PermissionRequest, b.PermissionRequest)
-	appendList(&a.PostSampling, b.PostSampling)
+	aEvents := map[string]*[]hooks.Entry{}
+	(&a).EachEvent(func(name string, entries *[]hooks.Entry) { aEvents[name] = entries })
+	b.EachEvent(func(name string, entries *[]hooks.Entry) {
+		*aEvents[name] = append(*aEvents[name], *entries...)
+	})
 	return a
 }
 
@@ -459,13 +450,7 @@ func mergeHookConfigs(a, b hooks.Config) hooks.Config {
 // ${...PLUGIN_ROOT} placeholders in hook commands are substituted with
 // the install path.
 func tagAndSubstHooks(cfg *hooks.Config, source string, subst func(string) string) {
-	events := []*[]hooks.Entry{
-		&cfg.PreToolUse, &cfg.PostToolUse, &cfg.UserPromptSubmit, &cfg.Stop,
-		&cfg.SessionStart, &cfg.SessionEnd, &cfg.SubagentStart, &cfg.SubagentStop,
-		&cfg.Notification, &cfg.PreCompact, &cfg.PostCompact, &cfg.PermissionRequest,
-		&cfg.PostSampling,
-	}
-	for _, entries := range events {
+	cfg.EachEvent(func(_ string, entries *[]hooks.Entry) {
 		for i := range *entries {
 			e := &(*entries)[i]
 			if e.Source == "" {
@@ -475,5 +460,5 @@ func tagAndSubstHooks(cfg *hooks.Config, source string, subst func(string) strin
 				e.Hooks[j].Command = subst(e.Hooks[j].Command)
 			}
 		}
-	}
+	})
 }

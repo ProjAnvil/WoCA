@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -67,6 +68,26 @@ type Config struct {
 	PostSampling      []Entry `json:"PostSampling"`
 }
 
+// EachEvent calls fn once per event field, in canonical (struct) order,
+// with the event's name and a pointer to its entries slice. fn may mutate
+// through the pointer (append, replace, tag) — this is the single
+// enumeration of Config's event list, so consumers (loaders, mergers,
+// counters) stay correct when an event is added instead of hand-maintaining
+// the 13-field list in each package.
+func (c *Config) EachEvent(fn func(name string, entries *[]Entry)) {
+	entryType := reflect.TypeOf(Entry{})
+	v := reflect.ValueOf(c).Elem()
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.PkgPath != "" || f.Type.Kind() != reflect.Slice || f.Type.Elem() != entryType {
+			continue
+		}
+		list, _ := v.Field(i).Addr().Interface().(*[]Entry)
+		fn(f.Name, list)
+	}
+}
+
 // Load reads hook configuration from a JSON settings file of the form
 // {"hooks": {"PreToolUse": [...], ...}}. A missing file is an empty
 // configuration, not an error. Byte-level decoding lives in Parse.
@@ -106,13 +127,7 @@ func Parse(data []byte) (Config, error) {
 // otherwise timeout seconds are converted to milliseconds. Zero values keep
 // the unbounded default.
 func (c *Config) normalizeTimeouts() {
-	events := []*[]Entry{
-		&c.PreToolUse, &c.PostToolUse, &c.UserPromptSubmit, &c.Stop,
-		&c.SessionStart, &c.SessionEnd, &c.SubagentStart, &c.SubagentStop,
-		&c.Notification, &c.PreCompact, &c.PostCompact, &c.PermissionRequest,
-		&c.PostSampling,
-	}
-	for _, entries := range events {
+	c.EachEvent(func(_ string, entries *[]Entry) {
 		for i := range *entries {
 			hooks := (*entries)[i].Hooks
 			for j := range hooks {
@@ -121,7 +136,7 @@ func (c *Config) normalizeTimeouts() {
 				}
 			}
 		}
-	}
+	})
 }
 
 // Matcher matches a tool name (and optionally a glob over the tool input).
@@ -407,34 +422,16 @@ func (r *Runner) PostSampling(ctx context.Context, response string) error {
 // Configured summarizes which events have hooks configured (for /doctor):
 // one "Event(count)" entry per configured event, in canonical order.
 func (r *Runner) Configured() []string {
-	entries := []struct {
-		name string
-		list []Entry
-	}{
-		{"PreToolUse", r.cfg.PreToolUse},
-		{"PostToolUse", r.cfg.PostToolUse},
-		{"UserPromptSubmit", r.cfg.UserPromptSubmit},
-		{"Stop", r.cfg.Stop},
-		{"SessionStart", r.cfg.SessionStart},
-		{"SessionEnd", r.cfg.SessionEnd},
-		{"SubagentStart", r.cfg.SubagentStart},
-		{"SubagentStop", r.cfg.SubagentStop},
-		{"Notification", r.cfg.Notification},
-		{"PreCompact", r.cfg.PreCompact},
-		{"PostCompact", r.cfg.PostCompact},
-		{"PermissionRequest", r.cfg.PermissionRequest},
-		{"PostSampling", r.cfg.PostSampling},
-	}
-	out := make([]string, 0, len(entries))
-	for _, e := range entries {
+	out := []string{}
+	r.cfg.EachEvent(func(name string, entries *[]Entry) {
 		n := 0
-		for _, entry := range e.list {
+		for _, entry := range *entries {
 			n += len(entry.Hooks)
 		}
 		if n > 0 {
-			out = append(out, fmt.Sprintf("%s(%d)", e.name, n))
+			out = append(out, fmt.Sprintf("%s(%d)", name, n))
 		}
-	}
+	})
 	return out
 }
 

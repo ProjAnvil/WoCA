@@ -303,14 +303,12 @@ func writePluginRow(w io.Writer, p plugins.Plugin, disabled bool) {
 	}
 }
 
-// pluginHookEntries counts a hooks configuration's entries across all 13
-// events (same count the console prints per plugin row).
+// pluginHookEntries counts a hooks configuration's entries across every
+// event (same count the console prints per plugin row).
 func pluginHookEntries(cfg hooks.Config) int {
-	return len(cfg.PreToolUse) + len(cfg.PostToolUse) + len(cfg.UserPromptSubmit) +
-		len(cfg.Stop) + len(cfg.SessionStart) + len(cfg.SessionEnd) +
-		len(cfg.SubagentStart) + len(cfg.SubagentStop) + len(cfg.Notification) +
-		len(cfg.PreCompact) + len(cfg.PostCompact) + len(cfg.PermissionRequest) +
-		len(cfg.PostSampling)
+	n := 0
+	cfg.EachEvent(func(_ string, entries *[]hooks.Entry) { n += len(*entries) })
+	return n
 }
 
 // newConfigCmd builds `woca config list|get|set` for managing persisted
