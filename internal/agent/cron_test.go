@@ -11,6 +11,7 @@ import (
 
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 func TestCronParser(t *testing.T) {
@@ -97,7 +98,7 @@ func TestScheduleCronFiresNotifications(t *testing.T) {
 	}
 	a.DrainQueuedInputs()
 
-	if !a.deleteCron(id) {
+	if !a.deleteCron(t.Context(), id) {
 		t.Fatal("delete failed")
 	}
 	a.fireDueCron(now.Add(2 * time.Minute))
@@ -228,7 +229,7 @@ func TestCronSchedulerStandalone(t *testing.T) {
 	s.fireDue(now)
 	s.fireDue(now.Add(30 * time.Second)) // same minute: suppressed
 	s.fireDue(now.Add(time.Minute))      // next minute: fires again
-	if !s.Delete(id) || s.Delete(id) {
+	if !s.Delete(id, "") || s.Delete(id, "") {
 		t.Fatal("delete should succeed exactly once")
 	}
 	s.fireDue(now.Add(2 * time.Minute))
@@ -236,5 +237,81 @@ func TestCronSchedulerStandalone(t *testing.T) {
 	defer mu.Unlock()
 	if len(fired) != 2 {
 		t.Fatalf("fired %d notifications, want 2 (minute de-dup + post-delete silence): %v", len(fired), fired)
+	}
+}
+
+// TestScheduleCronListDeleteSessionScoped mirrors the queue's
+// TestQueueNotificationForOtherSessionStaysQueuedMidRun: one Agent serves
+// many web sessions, so session B's model must not see or delete session
+// A's entries — a foreign id reads as not-found and the entry survives.
+// Unscoped ("") entries — the TUI/REPL single-session case — stay visible
+// and deletable for every session, and the unscoped caller sees everything.
+func TestScheduleCronListDeleteSessionScoped(t *testing.T) {
+	a := newCronAgent(t)
+	tool := a.toolByName["ScheduleCron"]
+	ctxA := tracing.WithRun(t.Context(), "run-a", "sess-a")
+	ctxB := tracing.WithRun(t.Context(), "run-b", "sess-b")
+
+	idA, err := a.addCron(ctxA, "a-checks", "a's checks", "*/10 * * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idB, err := a.addCron(ctxB, "b-checks", "b's checks", "*/10 * * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idU, err := a.addCron(t.Context(), "shared", "unscoped prompt", "* * * * *") // session ""
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// B's list: its own entry plus the unscoped one — never A's.
+	res, err := tool.Invoke(ctxB, map[string]any{"list": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Content, "a-checks") {
+		t.Fatalf("session B sees session A's entry: %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "b-checks") || !strings.Contains(res.Content, "shared") {
+		t.Fatalf("session B's list missing its own/unscoped entries: %q", res.Content)
+	}
+
+	// B cannot delete A's entry: the id reads as not-found and the entry
+	// survives for A.
+	res, _ = tool.Invoke(ctxB, map[string]any{"delete_id": idA})
+	if !strings.Contains(res.Content, "Error") {
+		t.Fatalf("session B deleting session A's entry = %q, want not-found error", res.Content)
+	}
+	if entries := a.cron.List(""); len(entries) != 3 {
+		t.Fatalf("%d entries after the cross-session delete attempt, want 3", len(entries))
+	}
+
+	// B deletes its own; A's list still shows A's own plus the unscoped one.
+	res, _ = tool.Invoke(ctxB, map[string]any{"delete_id": idB})
+	if !strings.Contains(res.Content, "Deleted "+idB) {
+		t.Fatalf("session B deleting its own entry = %q", res.Content)
+	}
+	res, _ = tool.Invoke(ctxA, map[string]any{"list": true})
+	if !strings.Contains(res.Content, "a-checks") || !strings.Contains(res.Content, "shared") ||
+		strings.Contains(res.Content, "b-checks") {
+		t.Fatalf("session A's list wrong after B's delete: %q", res.Content)
+	}
+
+	// The unscoped caller (TUI/REPL) still sees and deletes everything.
+	res, _ = tool.Invoke(t.Context(), map[string]any{"list": true})
+	if !strings.Contains(res.Content, "a-checks") || !strings.Contains(res.Content, "shared") {
+		t.Fatalf("unscoped list missing entries: %q", res.Content)
+	}
+	res, _ = tool.Invoke(t.Context(), map[string]any{"delete_id": idA})
+	if !strings.Contains(res.Content, "Deleted "+idA) {
+		t.Fatalf("unscoped delete of session A's entry = %q", res.Content)
+	}
+	res, _ = tool.Invoke(t.Context(), map[string]any{"delete_id": idU})
+	if !strings.Contains(res.Content, "Deleted "+idU) {
+		t.Fatalf("unscoped delete of the unscoped entry = %q", res.Content)
+	}
+	if entries := a.cron.List(""); len(entries) != 0 {
+		t.Fatalf("%d entries at the end, want 0", len(entries))
 	}
 }

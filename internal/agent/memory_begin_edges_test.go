@@ -82,7 +82,7 @@ func TestCronListSortsByID(t *testing.T) {
 	if _, err := s.Add("", "a", "p1", "5 * * * *"); err != nil {
 		t.Fatal(err)
 	}
-	entries := s.List()
+	entries := s.List("")
 	if len(entries) != 2 {
 		t.Fatalf("entries = %d, want 2", len(entries))
 	}

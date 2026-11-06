@@ -102,25 +102,38 @@ func (s *cronScheduler) Add(session, name, prompt, spec string) (string, error) 
 	return id, nil
 }
 
-// Delete removes an entry by ID.
-func (s *cronScheduler) Delete(id string) bool {
+// Delete removes an entry by ID when the calling session may touch it:
+// session "" (the TUI/REPL single-session case) deletes any entry, and a
+// scoped session deletes its own plus unscoped ("") entries — the same
+// scope rule as queue.drain. An entry that exists but belongs to another
+// session is returned as not-found, never removed.
+func (s *cronScheduler) Delete(id, session string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, e := range s.entries {
-		if e.ID == id {
-			s.entries = append(s.entries[:i], s.entries[i+1:]...)
-			return true
+		if e.ID != id {
+			continue
 		}
+		if session != "" && e.Session != "" && e.Session != session {
+			return false // exists, but another session owns it
+		}
+		s.entries = append(s.entries[:i], s.entries[i+1:]...)
+		return true
 	}
 	return false
 }
 
-// List snapshots the entries.
-func (s *cronScheduler) List() []cronEntry {
+// List snapshots the entries a run in session sees: everything when
+// unscoped ("" — the single-session surfaces see the whole list),
+// otherwise the unscoped entries plus the session's own, in ID order.
+func (s *cronScheduler) List(session string) []cronEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]cronEntry, 0, len(s.entries))
 	for _, e := range s.entries {
+		if session != "" && e.Session != "" && e.Session != session {
+			continue
+		}
 		out = append(out, cronEntry{ID: e.ID, Session: e.Session, Name: e.Name, Prompt: e.Prompt, Spec: e.Spec})
 	}
 	slices.SortFunc(out, func(a, b cronEntry) int { return cmp.Compare(a.ID, b.ID) })
@@ -148,14 +161,20 @@ func (s *cronScheduler) fireDue(now time.Time) {
 
 // Agent delegates: the tool wiring, Close() teardown and the tests keep
 // their entry points; the mechanics live on the scheduler. The entry is
-// owned by the session of the run that scheduled it.
+// owned by the session of the run that scheduled it, and list/delete are
+// scoped the same way: the session on the ctx sees its own entries plus
+// the unscoped ones ("" sees everything).
 func (a *Agent) addCron(ctx context.Context, name, prompt, spec string) (string, error) {
 	return a.cron.Add(sessionFromCtx(ctx), name, prompt, spec)
 }
 
-func (a *Agent) deleteCron(id string) bool { return a.cron.Delete(id) }
+func (a *Agent) deleteCron(ctx context.Context, id string) bool {
+	return a.cron.Delete(id, sessionFromCtx(ctx))
+}
 
-func (a *Agent) listCron() []cronEntry { return a.cron.List() }
+func (a *Agent) listCron(ctx context.Context) []cronEntry {
+	return a.cron.List(sessionFromCtx(ctx))
+}
 
 func (a *Agent) startCron() { a.cron.Start() }
 
@@ -253,7 +272,7 @@ func (m cronMatcher) matches(t time.Time) bool {
 	return m.fields[2][t.Day()] && m.fields[4][int(t.Weekday())]
 }
 
-const scheduleCronDescription = `Schedule a recurring or one-shot scheduled prompt using a cron expression (5 fields: minute hour day-of-month month day-of-week, local time). When an entry is due, its prompt is delivered to you as a <scheduled-task> notification — act on it like new user input. Entries live for the current session only.
+const scheduleCronDescription = `Schedule a recurring or one-shot scheduled prompt using a cron expression (5 fields: minute hour day-of-month month day-of-week, local time). When an entry is due, its prompt is delivered to you as a <scheduled-task> notification — act on it like new user input. Entries live for the current session only and are scoped to the creating session: list and delete only see entries your session created (plus unscoped ones from single-session surfaces).
 
 Actions:
 - create: set prompt + cron (and optionally name)
@@ -273,13 +292,13 @@ func (a *Agent) scheduleCronTool() []coretools.Tool {
 	t := tools.MustTool(coretools.FromFunc("ScheduleCron", scheduleCronDescription,
 		func(ctx context.Context, args scheduleCronArgs) (coretools.Result, error) {
 			if args.DeleteID != "" {
-				if a.deleteCron(args.DeleteID) {
+				if a.deleteCron(ctx, args.DeleteID) {
 					return coretools.Result{Content: "Deleted " + args.DeleteID}, nil
 				}
 				return coretools.Result{Content: "Error: no scheduled entry " + args.DeleteID}, nil
 			}
 			if args.List {
-				entries := a.listCron()
+				entries := a.listCron(ctx)
 				if len(entries) == 0 {
 					return coretools.Result{Content: "(no scheduled entries)"}, nil
 				}
