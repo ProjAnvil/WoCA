@@ -144,6 +144,17 @@ func (a *admission) stop() {
 	a.stopOnce()
 }
 
+// busy reports whether sessionID has a run holding its gate or waiting on
+// it. The wake driver uses it to tell an idle session (a queued notification
+// needs a wake run) from a busy one (the running run's tool rounds drain the
+// queue in-turn, so waking would only queue behind them).
+func (a *admission) busy(sessionID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	g := a.gates[sessionID]
+	return g != nil && (g.running || len(g.queue) > 0)
+}
+
 // stats reports total queued waiters and per-session depths (for /api/stats).
 func (a *admission) stats() (int, map[string]int) {
 	a.mu.Lock()

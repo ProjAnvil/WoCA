@@ -22,6 +22,7 @@ export const SSE_EVENT_TYPES = [
   'done',
   'error',
   'session_state',
+  'wake_capped',
 ] as const
 
 export type SSEEventType = (typeof SSE_EVENT_TYPES)[number]
@@ -92,6 +93,19 @@ export interface SessionStatePayload {
   run_id?: string
 }
 
+/** run_started — auto/trigger are present only on wake-driver runs. */
+export interface RunStartedPayload {
+  auto?: boolean
+  trigger?: string
+}
+
+/** Global stream: the session hit its auto-wake chain budget; queued items
+ * wait for the next user run. */
+export interface WakeCappedPayload {
+  session: string
+  queued: number
+}
+
 export interface SSEEventPayloadMap {
   delta: TextPayload
   reasoning: TextPayload
@@ -104,12 +118,13 @@ export interface SSEEventPayloadMap {
   goal: GoalPayload
   run_queued: QueuePositionPayload
   queue_position: QueuePositionPayload
-  run_started: Record<string, never>
+  run_started: RunStartedPayload
   resync: ResyncPayload
   auth_revoked: AuthRevokedPayload
   done: DonePayload
   error: ErrorPayload
   session_state: SessionStatePayload
+  wake_capped: WakeCappedPayload
 }
 
 export type SSEEventPayload<T extends SSEEventType> = SSEEventPayloadMap[T]

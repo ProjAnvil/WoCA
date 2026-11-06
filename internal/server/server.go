@@ -258,6 +258,13 @@ type Server struct {
 	goalMu    sync.Mutex
 	goalOwner string
 
+	// Wake driver state (Task 8, wake.go): wakeMu guards the bookkeeping
+	// maps AND serializes the drain+start pair so concurrent completions
+	// coalesce into a single wake run.
+	wakeMu      sync.Mutex
+	wakeChain   map[string]int  // consecutive wake runs per session (reset by a user run)
+	wakeStalled map[string]bool // wake start failed; needs a user run to clear
+
 	// rootCtx is the server lifecycle context: contexts that must outlive
 	// their triggering request but die with the server (e.g. dispatched
 	// queue runs) derive from it. rootCancel fires in shutdown.
@@ -352,6 +359,8 @@ func New(cfg Config) *Server {
 		applyClaudeEnv:  cfg.ApplyClaudeEnv,
 		plugins:         cfg.Plugins,
 		installPlugin:   cfg.InstallPlugin,
+		wakeChain:       map[string]int{},
+		wakeStalled:     map[string]bool{},
 		rootCtx:         rootCtx,
 		rootCancel:      rootCancel,
 	}
@@ -361,6 +370,11 @@ func New(cfg Config) *Server {
 		s.sandboxEnabled = func() bool { return false }
 	}
 	if cfg.Agent != nil {
+		// Idle wake driver (Task 8, wake.go): a notification queued for an
+		// idle session starts a wake run that delivers it. The observer
+		// contract is synchronous-and-non-blocking; the driver hands the
+		// actual drain+start to its own goroutine.
+		cfg.Agent.SetNotificationObserver(s.onQueuedNotification)
 		// Goal persistence: every live goal change mirrors to the owning
 		// session's sidecar; a clear deletes it.
 		cfg.Agent.SubscribeGoal(func(g *agent.Goal) {

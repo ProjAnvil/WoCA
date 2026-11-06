@@ -24,6 +24,7 @@ const (
 	EventDone              = "done"
 	EventError             = "error"
 	EventSessionState      = "session_state"
+	EventWakeCapped        = "wake_capped"
 )
 
 // toolCallPayload is the data of a tool_call event. Fields are declared in

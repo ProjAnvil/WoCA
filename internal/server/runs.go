@@ -102,6 +102,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// User-initiated run: the session's auto-wake budget restarts here (the
+	// chain counter and any stall from a failed wake start reset with it).
+	s.resetWakeChain(sid)
 	state := "running"
 	if pos > 0 {
 		state = "queued"
@@ -438,6 +441,14 @@ func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, st
 // session already has maxQueuedPerSession runs waiting on its gate.
 var errQueueFull = errors.New("session run queue is full")
 
+// runOptions annotates how a run was initiated: auto marks a wake-driver
+// run (its run_started event gains auto/trigger), and trigger names the
+// queued notification tag that started it.
+type runOptions struct {
+	auto    bool
+	trigger string
+}
+
 // startRun creates, registers and launches a run behind the session
 // admission gate. It returns the run, the session id and the queue
 // position (0 = running immediately). errQueueFull is returned when the
@@ -445,7 +456,21 @@ var errQueueFull = errors.New("session run queue is full")
 // In dispatch mode (DispatchToQueue) the run goes to the shared queue
 // instead — see enqueueRun.
 func (s *Server) startRun(ctx context.Context, sessionID string, human messages.Message, workspace string, atts []runAttachment) (*Run, string, int, error) {
+	return s.startRunWith(ctx, sessionID, human, workspace, atts, runOptions{})
+}
+
+// startRunWith is startRun with the wake driver's run annotations (opts).
+// Wake runs are ordinary runs — same admission gate, ledger, persistence and
+// permission posture; opts only decorates the run_started event (and the
+// dispatch-mode log line, since a queued run carries no local events).
+func (s *Server) startRunWith(ctx context.Context, sessionID string, human messages.Message, workspace string, atts []runAttachment, opts runOptions) (*Run, string, int, error) {
 	if s.dispatch {
+		if opts.auto {
+			// No auto marker exists on the ledger row (the executor's run
+			// events live on another instance); the log line is the local
+			// trace that this queued run is a wake.
+			s.log.Info().Str("session", sessionID).Str("trigger", opts.trigger).Msg("auto-wake run dispatched to queue")
+		}
 		return s.enqueueRun(ctx, sessionID, human, workspace, atts)
 	}
 	run, sid, workspace, _ := s.newRegisteredRun(sessionID, workspace) // preloaded history discarded: reloaded after acquiring the gate so the previous run's persisted reply is visible
@@ -453,7 +478,12 @@ func (s *Server) startRun(ctx context.Context, sessionID string, human messages.
 	s.refreshDebugLog()
 	if obs := s.agent.Obs(); obs != nil {
 		s.agent.SetObsRun(workspace, sid, run.id)
-		obs.Log("info", "run_start", map[string]any{"session": sid, "run": run.id})
+		obsFields := map[string]any{"session": sid, "run": run.id}
+		if opts.auto {
+			obsFields["auto"] = true
+			obsFields["trigger"] = opts.trigger
+		}
+		obs.Log("info", "run_start", obsFields)
 	}
 	w, pos, ok := s.admission.enter(sid, func(p int) {
 		run.emit(Event{Type: EventQueuePosition, Data: map[string]any{"position": p}})
@@ -468,7 +498,18 @@ func (s *Server) startRun(ctx context.Context, sessionID string, human messages.
 	// Session run-state tracking: mark on start, flip on interrupt parking,
 	// clear on the terminal event. clearSessionState is compare-and-clear, so
 	// a queued run promoted behind this one never loses its row.
-	run.onFinish = func() { s.clearSessionState(sid, run.id) }
+	run.onFinish = func() {
+		s.clearSessionState(sid, run.id)
+		// Loop closure: a clean finish hands the session back to the wake
+		// driver — a notification that landed after the final tool-round
+		// drain queued with the session busy, so the finish is its last
+		// chance to wake. Cancelled or errored runs skip it: their turn
+		// never completed, and restarting a session the user just stopped
+		// would fight the user.
+		if run.ranClean() {
+			s.wakeAfterRun(sid)
+		}
+	}
 	run.onPark = func() { s.markSessionState(sid, wocadb.SessionAwaiting, run.id) }
 	run.onResume = func() { s.markSessionState(sid, wocadb.SessionRunning, run.id) }
 	go func() {
@@ -498,7 +539,13 @@ func (s *Server) startRun(ctx context.Context, sessionID string, human messages.
 			}
 			s.trackRunLease(run, sid)
 		}
-		run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
+		started := map[string]any{}
+		if opts.auto {
+			// Wake provenance for the UI: only wake runs carry the marker.
+			started["auto"] = true
+			started["trigger"] = opts.trigger
+		}
+		run.emit(Event{Type: EventRunStarted, Data: started})
 		s.markSessionState(sid, wocadb.SessionRunning, run.id)
 		history := s.sessions.load(run.ctx, sid)
 		run.start(append(history, human), func(final []messages.Message) {

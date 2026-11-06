@@ -52,6 +52,10 @@ type Run struct {
 	done    bool // terminal event (done or error) emitted
 	// finishKind records the terminal event type for the run ledger.
 	finishKind string
+	// finishCancelled, under mu, records whether the terminal done event was
+	// a cancellation. The wake driver skips cancelled (and errored) runs
+	// when deciding whether to re-check the session's queue — see ranClean.
+	finishCancelled bool
 	// mirror, when set, persists every emitted event to the run ledger's
 	// run_events stream (cross-instance SSE replay). Failures are the
 	// caller's to log; they never block the live stream.
@@ -321,12 +325,24 @@ func (r *Run) finish(evType string, data map[string]any) {
 	first := !r.done
 	r.done = true
 	r.finishKind = evType
+	if evType == EventDone {
+		r.finishCancelled, _ = data["cancelled"].(bool)
+	}
 	hook := r.onFinish
 	r.mu.Unlock()
 	r.emit(Event{Type: evType, Data: data})
 	if first && hook != nil {
 		hook()
 	}
+}
+
+// ranClean reports whether the run ended with a normal, non-cancelled done —
+// the finish state that hands the session back to the wake driver (a clean
+// turn completed, so anything still queued deserves a wake run).
+func (r *Run) ranClean() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.finishKind == EventDone && !r.finishCancelled
 }
 
 // isDone reports whether the run already emitted its terminal event.
