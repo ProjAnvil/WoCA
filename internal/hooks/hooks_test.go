@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 )
@@ -294,6 +295,108 @@ func TestLoadConfigMissingFile(t *testing.T) {
 	}
 	if len(cfg.PreToolUse) != 0 {
 		t.Fatalf("expected empty config, got %+v", cfg)
+	}
+}
+
+// writeSettings writes a raw settings JSON body to a temp file, returning its path.
+func writeSettings(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadTimeoutSecAlias(t *testing.T) {
+	path := writeSettings(t,
+		`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi","timeout":2}]}]}}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := cfg.Stop[0].Hooks[0]
+	if h.TimeoutSec != 2 || h.TimeoutMS != 2000 {
+		t.Fatalf("TimeoutSec = %d, TimeoutMS = %d; want 2, 2000", h.TimeoutSec, h.TimeoutMS)
+	}
+}
+
+func TestLoadTimeoutMSWinsOverTimeoutSec(t *testing.T) {
+	path := writeSettings(t,
+		`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi","timeout":2,"timeout_ms":500}]}]}}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := cfg.Stop[0].Hooks[0]; h.TimeoutMS != 500 {
+		t.Fatalf("TimeoutMS = %d; want 500 (timeout_ms wins)", h.TimeoutMS)
+	}
+}
+
+func TestLoadTimeoutSecZeroKeepsUnbounded(t *testing.T) {
+	path := writeSettings(t,
+		`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := cfg.Stop[0].Hooks[0]; h.TimeoutMS != 0 {
+		t.Fatalf("TimeoutMS = %d; want 0 (unbounded)", h.TimeoutMS)
+	}
+}
+
+func TestProjectDirSubstitution(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "flag.txt"), []byte("claude-flag"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{UserPromptSubmit: []Entry{{Matcher: "*", Hooks: []Hook{
+		{Type: "command", Command: "cat ${CLAUDE_PROJECT_DIR}/flag.txt"},
+	}}}}
+	r := NewRunner(cfg, dir, "s1", WithCommandRunner(DefaultCommandRunner))
+	out, err := r.UserPromptSubmit(t.Context(), "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "claude-flag" {
+		t.Fatalf("out = %q; want %q", out, "claude-flag")
+	}
+}
+
+func TestWocaProjectDirSubstitution(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "flag.txt"), []byte("woca-flag"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{UserPromptSubmit: []Entry{{Matcher: "*", Hooks: []Hook{
+		{Type: "command", Command: "cat ${WOCA_PROJECT_DIR}/flag.txt"},
+	}}}}
+	r := NewRunner(cfg, dir, "s1", WithCommandRunner(DefaultCommandRunner))
+	out, err := r.UserPromptSubmit(t.Context(), "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "woca-flag" {
+		t.Fatalf("out = %q; want %q", out, "woca-flag")
+	}
+}
+
+func TestHookTimeoutKillsLongCommand(t *testing.T) {
+	cfg := Config{Stop: []Entry{{Matcher: "*", Hooks: []Hook{
+		{Type: "command", Command: "sleep 2", TimeoutMS: 300},
+	}}}}
+	r := NewRunner(cfg, ".", "s1", WithCommandRunner(DefaultCommandRunner))
+	start := time.Now()
+	_, _, err := r.Stop(t.Context(), "done")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected an error from the killed command")
+	}
+	// The local executor's CommandContext kill surfaces as an os/exec
+	// "signal: killed" error (not wrapped in context.DeadlineExceeded); what
+	// matters is that it propagates and the 2s command died at ~300ms.
+	if elapsed >= time.Second {
+		t.Fatalf("hook ran for %v; want a sub-second kill after 300ms", elapsed)
 	}
 }
 

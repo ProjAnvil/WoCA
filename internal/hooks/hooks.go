@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -33,9 +34,10 @@ type Event struct {
 
 // Hook is a single hook definition.
 type Hook struct {
-	Type      string `json:"type"` // currently only "command"
-	Command   string `json:"command"`
-	TimeoutMS int    `json:"timeout_ms,omitempty"`
+	Type       string `json:"type"` // currently only "command"
+	Command    string `json:"command"`
+	TimeoutMS  int    `json:"timeout_ms,omitempty"`
+	TimeoutSec int    `json:"timeout,omitempty"` // Claude Code alias (seconds); normalized into TimeoutMS by Load
 }
 
 // Entry groups hooks under a matcher.
@@ -77,7 +79,31 @@ func Load(path string) (Config, error) {
 	if err := json.Unmarshal(data, &wrapper); err != nil {
 		return Config{}, fmt.Errorf("hooks: parse %s: %w", path, err)
 	}
+	wrapper.Hooks.normalizeTimeouts()
 	return wrapper.Hooks, nil
+}
+
+// normalizeTimeouts resolves the Claude Code "timeout" (seconds) alias into
+// TimeoutMS across every configured event: an explicit timeout_ms wins;
+// otherwise timeout seconds are converted to milliseconds. Zero values keep
+// the unbounded default.
+func (c *Config) normalizeTimeouts() {
+	events := []*[]Entry{
+		&c.PreToolUse, &c.PostToolUse, &c.UserPromptSubmit, &c.Stop,
+		&c.SessionStart, &c.SessionEnd, &c.SubagentStart, &c.SubagentStop,
+		&c.Notification, &c.PreCompact, &c.PostCompact, &c.PermissionRequest,
+		&c.PostSampling,
+	}
+	for _, entries := range events {
+		for i := range *entries {
+			hooks := (*entries)[i].Hooks
+			for j := range hooks {
+				if hooks[j].TimeoutMS == 0 && hooks[j].TimeoutSec > 0 {
+					hooks[j].TimeoutMS = hooks[j].TimeoutSec * 1000
+				}
+			}
+		}
+	}
 }
 
 // Matcher matches a tool name (and optionally a glob over the tool input).
@@ -426,7 +452,16 @@ func (r *Runner) runMatching(ctx context.Context, entries []Entry, toolName stri
 				r.logger.Warn().Str("type", hook.Type).Msg("unsupported hook type, skipping")
 				continue
 			}
-			res, runErr := r.run(ctx, hook.Command, stdin, r.cwd)
+			cmd := expandProjectDir(hook.Command, r.cwd)
+			runCtx := ctx
+			var cancel context.CancelFunc
+			if hook.TimeoutMS > 0 {
+				runCtx, cancel = context.WithTimeout(ctx, time.Duration(hook.TimeoutMS)*time.Millisecond)
+			}
+			res, runErr := r.run(runCtx, cmd, stdin, r.cwd)
+			if cancel != nil {
+				cancel()
+			}
 			if runErr != nil {
 				return out.String(), errOut.String(), blocked, runErr
 			}
@@ -444,4 +479,11 @@ func (r *Runner) runMatching(ctx context.Context, entries []Entry, toolName stri
 		}
 	}
 	return out.String(), errOut.String(), blocked, nil
+}
+
+// expandProjectDir substitutes ${CLAUDE_PROJECT_DIR} and ${WOCA_PROJECT_DIR}
+// with the project directory. Plain text replacement — no shell evaluation.
+func expandProjectDir(command, dir string) string {
+	command = strings.ReplaceAll(command, "${CLAUDE_PROJECT_DIR}", dir)
+	return strings.ReplaceAll(command, "${WOCA_PROJECT_DIR}", dir)
 }
