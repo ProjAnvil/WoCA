@@ -11,11 +11,12 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/projanvil/woca/internal/mcp"
 )
 
 // homeDir is swappable in tests.
@@ -230,60 +231,42 @@ func Servers() ([]MCPServer, error) {
 	return out, nil
 }
 
-// parseServer decodes one mcpServers entry across the shapes found in
-// ~/.claude.json: remote servers carry type http|sse + url; local ones carry
-// command + args (+ env), with the type omitted.
+// parseServer decodes one mcpServers entry via mcp.ParseServerEntry and
+// keeps claudeenv's JSON-facing view of it (env values stay unexported).
 func parseServer(name string, raw json.RawMessage) (MCPServer, error) {
-	var cfg struct {
-		Type    string            `json:"type"`
-		URL     string            `json:"url"`
-		Command string            `json:"command"`
-		Args    []string          `json:"args"`
-		Env     map[string]string `json:"env"`
-	}
-	if err := json.Unmarshal(raw, &cfg); err != nil {
+	e, err := mcp.ParseServerEntry(name, raw)
+	if err != nil {
 		return MCPServer{}, err
 	}
-	srv := MCPServer{
-		Name:   name,
-		Type:   cfg.Type,
-		URL:    cfg.URL,
-		HasEnv: len(cfg.Env) > 0,
-		args:   cfg.Args,
-		env:    cfg.Env,
-		inline: strings.TrimSpace(cfg.Command),
-	}
-	switch {
-	case cfg.Type == "http", cfg.Type == "sse":
-		if srv.URL == "" {
-			return MCPServer{}, fmt.Errorf("server %s: missing url", name)
-		}
-	case cfg.Type == "stdio", cfg.Type == "" && cfg.Command != "":
-		srv.Type = "stdio"
-		srv.Command = shellQuote(cfg.Command, cfg.Args)
-	default:
-		return MCPServer{}, fmt.Errorf("server %s: unsupported shape", name)
-	}
-	return srv, nil
+	return MCPServer{
+		Name:    e.Name,
+		Type:    e.Type,
+		URL:     e.URL,
+		Command: e.Command,
+		HasEnv:  e.HasEnv,
+		args:    e.Args,
+		env:     e.Env,
+		inline:  e.Inline,
+	}, nil
 }
 
 // Spec renders the server as a woca --mcp spec (name=command or name=url).
 func (s MCPServer) Spec() string {
-	if s.URL != "" {
-		return s.Name + "=" + s.URL
+	return s.entry().Spec()
+}
+
+// entry converts the claudeenv view back into the shared mcp.ServerEntry.
+func (s MCPServer) entry() mcp.ServerEntry {
+	return mcp.ServerEntry{
+		Name:    s.Name,
+		Type:    s.Type,
+		URL:     s.URL,
+		Command: s.Command,
+		HasEnv:  s.HasEnv,
+		Args:    s.args,
+		Env:     s.env,
+		Inline:  s.inline,
 	}
-	parts := make([]string, 0, len(s.env)+2)
-	for _, k := range sortedKeys(s.env) {
-		// sh -c prefix assignment: only the value is quoted.
-		parts = append(parts, k+"="+shellWord(s.env[k]))
-	}
-	cmd := s.inline
-	if len(s.args) > 0 {
-		cmd = shellQuote(cmd, s.args)
-	}
-	// A stored shell line without args runs as-is under sh -c.
-	parts = append(parts, cmd)
-	return s.Name + "=" + strings.Join(parts, " ")
 }
 
 // WriteMCPConfig materializes the selected servers into <wocaRoot>/mcp.json
@@ -291,17 +274,17 @@ func (s MCPServer) Spec() string {
 // the source of truth at agent startup.
 func WriteMCPConfig(wocaRoot string, servers []MCPServer) error {
 	doc := map[string]any{"mcpServers": map[string]any{}}
-	mcp := doc["mcpServers"].(map[string]any)
+	serversMap := doc["mcpServers"].(map[string]any)
 	for _, s := range servers {
 		switch s.Type {
 		case "http", "sse":
-			mcp[s.Name] = map[string]any{"type": s.Type, "url": s.URL}
+			serversMap[s.Name] = map[string]any{"type": s.Type, "url": s.URL}
 		default:
 			entry := map[string]any{"type": "stdio", "command": s.inline, "args": s.args}
 			if len(s.env) > 0 {
 				entry["env"] = s.env
 			}
-			mcp[s.Name] = entry
+			serversMap[s.Name] = entry
 		}
 	}
 	b, err := json.MarshalIndent(doc, "", "  ")
@@ -361,33 +344,4 @@ func LoadMCPConfig(wocaRoot string) ([]string, error) {
 func mustJSON(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
-}
-
-func sortedKeys(m map[string]string) []string {
-	return slices.Sorted(maps.Keys(m))
-}
-
-// shellSpecials are the characters that force quoting in an sh -c word.
-const shellSpecials = " \t\n\"'\\`$&();|<>{}*?[]~^#"
-
-// shellQuote joins a command and its args into one sh -c line, quoting
-// pieces that contain whitespace or specials.
-func shellQuote(command string, args []string) string {
-	parts := []string{command}
-	parts = append(parts, args...)
-	out := make([]string, len(parts))
-	for i, p := range parts {
-		out[i] = shellWord(p)
-	}
-	return strings.Join(out, " ")
-}
-
-func shellWord(s string) string {
-	if s == "" {
-		return "''"
-	}
-	if !strings.ContainsAny(s, shellSpecials) && !strings.HasPrefix(s, "~") {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

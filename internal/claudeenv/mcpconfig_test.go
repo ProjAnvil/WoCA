@@ -120,22 +120,9 @@ func TestMCPConfigRoundTripShapes(t *testing.T) {
 	}
 }
 
-func TestShellWordQuoting(t *testing.T) {
-	for _, c := range []struct{ in, want string }{
-		{"plain", "plain"},
-		{"", "''"},
-		{"has space", "'has space'"},
-		{"it's", `'it'\''s'`},
-		{"~home", "'~home'"},
-	} {
-		if got := shellWord(c.in); got != c.want {
-			t.Errorf("shellWord(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-	if got := shellQuote("cmd", []string{"a b", "c"}); got != "cmd 'a b' c" {
-		t.Errorf("shellQuote = %q", got)
-	}
-	// mustJSON marshals without error.
+// The shellWord/shellQuote quoting cases moved to internal/mcp's
+// spec_test.go along with the helpers; mustJSON stays here (LoadMCPConfig).
+func TestMustJSON(t *testing.T) {
 	if got := string(mustJSON(map[string]int{"a": 1})); got != `{"a":1}` {
 		t.Errorf("mustJSON = %s", got)
 	}
