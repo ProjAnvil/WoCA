@@ -84,6 +84,7 @@ export default {
   charCount: '{count} 字符',
   goalLoopLive: '目标循环进行中…',
   goalLoopDone: '目标循环过程',
+  notice: '系统通知',
   input: '输入',
   output: '输出',
   toolOutput: '工具输出',

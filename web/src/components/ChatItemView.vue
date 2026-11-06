@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Brain, Bug, Check, ChevronDown, Copy, Target, Wrench } from 'lucide-vue-next'
+import { Bell, Brain, Bug, Check, ChevronDown, Copy, Target, Wrench } from 'lucide-vue-next'
 import type { ChatItem } from '../types'
 import { renderMarkdown, markdownToPlain } from '../lib/markdown'
 import { decorateCodeBlocks, highlightCodeBlocks } from '../lib/codeBlocks'
@@ -121,6 +121,13 @@ const goalNoteOpen = ref(goalNoteStreaming.value)
 watch(goalNoteStreaming, (live) => {
   if (!live) goalNoteOpen.value = false
 })
+
+const noticeContent = computed(() => {
+  const it = props.item
+  return it.kind === 'notice' ? it.content : ''
+})
+// Notices are static (harness-injected, never streamed): start collapsed.
+const noticeOpen = ref(false)
 
 const toolName = computed(() => {
   const it = props.item
@@ -309,6 +316,16 @@ function copyDebugInfo() {
     <template #icon><Target :size="13" class="goal-note-icon" /></template>
     <pre class="tool-output reasoning-body">{{ goalNoteContent }}</pre>
     <span v-if="goalNoteStreaming" class="cursor reasoning-cursor"></span>
+  </WCollapseCard>
+
+  <!-- harness notification (background completion / scheduled task / queued
+       input): compact dim system notice — collapsed monospace card, no avatar,
+       never a user bubble -->
+  <WCollapseCard class="stream-card" v-else-if="item.kind === 'notice'" :title="t('chat.notice')" :open="noticeOpen" @update:open="noticeOpen = $event">
+    <template #icon><Bell :size="13" /></template>
+    <template v-if="noticeOpen">
+      <pre class="tool-output">{{ noticeContent }}</pre>
+    </template>
   </WCollapseCard>
 
   <!-- tool call: input and output share one card (result merges in when it

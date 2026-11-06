@@ -6,6 +6,20 @@ import type { Attachment, ChatItem, TranscriptMessage } from '../types'
 let seq = 0
 export const nid = () => `i${Date.now().toString(36)}${(seq++).toString(36)}`
 
+// Harness-injected notification wrappers: background-shell/task completions,
+// cron-fired scheduled prompts, and input queued while a run was busy. Human
+// messages that start with one of these tags are machine notifications for
+// the model, never user speech — they render as dim system notices.
+const NOTICE_TAGS = ['<background-task-completed>', '<scheduled-task>', '<queued-user-input>']
+
+// isNoticeContent reports whether a Human message's content is one of the
+// harness-injected notification wrappers (raw content, tags included).
+// Shared by the reload path (messagesToItems) and the live send path (the
+// sessions store's optimistic push) so both render them identically.
+export function isNoticeContent(content: string): boolean {
+  return NOTICE_TAGS.some((tag) => content.startsWith(tag))
+}
+
 // Rebuild the UI item list from the backend's transcript (messages.Message
 // JSON). Tool calls and results are preserved across turns this way. Human
 // multimodal blocks become attachment thumbnails.
@@ -38,6 +52,14 @@ export function messagesToItems(msgs: TranscriptMessage[]): ChatItem[] {
         if (content.startsWith('<relevant-memory')) {
           // ladyM recall context injected after tool results — model input,
           // never user speech (same class of harness message as goal-cycle).
+          break
+        }
+        if (isNoticeContent(content)) {
+          // Harness-injected notification (background completion, scheduled
+          // task, queued input): a dim system notice, not a user bubble. Like
+          // the harness messages above it does not end a goal segment — the
+          // loop keeps narrating past it until the unified reply.
+          out.push({ id: nid(), kind: 'notice', content })
           break
         }
         inGoal = false

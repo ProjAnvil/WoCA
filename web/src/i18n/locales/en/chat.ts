@@ -84,6 +84,7 @@ export default {
   charCount: '{count} chars',
   goalLoopLive: 'Goal loop running…',
   goalLoopDone: 'Goal loop progress',
+  notice: 'System notice',
   input: 'Input',
   output: 'Output',
   toolOutput: 'Tool output',

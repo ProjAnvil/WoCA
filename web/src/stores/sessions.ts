@@ -12,7 +12,7 @@ import type {
 import * as api from '../api/client'
 import i18n from '../i18n'
 import { truncate, baseName } from '../lib/format'
-import { messagesToItems, nid } from '../lib/transcript'
+import { isNoticeContent, messagesToItems, nid } from '../lib/transcript'
 import { useAgentStore, isPermissionMode, isThinkingLevel } from './agent'
 import { toErrorMessage } from '../lib/errors'
 import { createItemMutations } from './sessions/items'
@@ -350,13 +350,21 @@ export const useSessionStore = defineStore('sessions', () => {
     // the dedicated APIs instead of a model turn.
     if (await tryAgentCommand(prompt)) return
 
-    push(sid, {
-      id: nid(),
-      kind: 'user',
-      content: prompt,
-      attachments: attachments?.length ? attachments : undefined,
-      fresh: true,
-    })
+    // Tagged notifications are harness-injected, never user speech: the
+    // isNoticeContent rule messagesToItems applies on reload keeps the live
+    // optimistic item and the reloaded transcript identical. (The command
+    // echoes below push "/…"-prefixed strings — they can never match a tag.)
+    if (isNoticeContent(prompt)) {
+      push(sid, { id: nid(), kind: 'notice', content: prompt })
+    } else {
+      push(sid, {
+        id: nid(),
+        kind: 'user',
+        content: prompt,
+        attachments: attachments?.length ? attachments : undefined,
+        fresh: true,
+      })
+    }
     error.value[sid] = ''
     interrupt.value[sid] = null
     streamingId.value[sid] = null

@@ -73,6 +73,57 @@ describe('messagesToItems', () => {
     expect(items[1]).toMatchObject({ kind: 'assistant', content: 'the answer' })
   })
 
+  it('renders tagged harness notifications as dim notices, not user bubbles', () => {
+    const tagged = [
+      '<background-task-completed>\ntask t1 finished (done)\n</background-task-completed>',
+      '<scheduled-task>\ncheck the build\n</scheduled-task>',
+      '<queued-user-input>\nand this too\n</queued-user-input>',
+    ]
+    const items = messagesToItems([
+      ...tagged.map((content) => msg({ role: 'user', content })),
+      msg({ role: 'user', content: 'plain question' }),
+    ])
+
+    // One notice per tagged message — never a user bubble.
+    expect(items.filter((i) => i.kind === 'notice')).toHaveLength(3)
+    expect(items.filter((i) => i.kind === 'user')).toEqual([
+      expect.objectContaining({ content: 'plain question' }),
+    ])
+    // The notice keeps the raw message content (tags included).
+    expect(items.filter((i) => i.kind === 'notice').map((i) => i.content)).toEqual(tagged)
+  })
+
+  it('keeps a tagged notification with an empty body a notice', () => {
+    const items = messagesToItems([
+      msg({ role: 'user', content: '<queued-user-input>\n\n</queued-user-input>' }),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'notice', content: '<queued-user-input>\n\n</queued-user-input>' })
+  })
+
+  it('folds a coalesced multi-block notification into one notice', () => {
+    // CoalesceQueuedInputs joins several tagged blocks with a blank line.
+    const content =
+      '<queued-user-input>\ntyped while busy\n</queued-user-input>\n\n<background-task-completed>\ndone\n</background-task-completed>'
+    const items = messagesToItems([msg({ role: 'user', content })])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'notice', content })
+  })
+
+  it('does not end a goal segment: chatter after a notification stays goal narration', () => {
+    const items = messagesToItems([
+      msg({ role: 'user', content: '<goal-cycle n=1>' }),
+      msg({ role: 'user', content: '<background-task-completed>\ndone\n</background-task-completed>' }),
+      msg({ role: 'ai', content: 'cycle chatter' }),
+      msg({ role: 'ai', content: '<goal-report>\nfinal\n</goal-report>' }),
+    ])
+    expect(items.find((i) => i.kind === 'notice')).toMatchObject({
+      content: '<background-task-completed>\ndone\n</background-task-completed>',
+    })
+    expect(items.find((i) => i.kind === 'goal_note')).toMatchObject({ content: 'cycle chatter' })
+    expect(items.find((i) => i.kind === 'assistant')).toMatchObject({ content: 'final' })
+  })
+
   it('extracts image attachments from human multimodal blocks', () => {
     const items = messagesToItems([
       msg({

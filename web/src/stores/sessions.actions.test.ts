@@ -257,3 +257,24 @@ describe('sendGoalCommand', () => {
     expect(store.activeError).toContain('bad goal')
   })
 })
+
+// R1: the live optimistic push applies the same notification-tag rule as
+// messagesToItems (the reload authority) so both paths render identically.
+describe('send: harness notification tags', () => {
+  it('routes tag-prefixed prompts to a notice item, never a user bubble', async () => {
+    const store = storeWithRun()
+    store.status = { s1: 'idle' }
+    const tagged = '<background-task-completed>\ntask t1 finished\n</background-task-completed>'
+    await store.send(tagged)
+    expect(userItems(store)).toHaveLength(0)
+    expect(lastItem(store)).toMatchObject({ kind: 'notice', content: tagged })
+  })
+
+  it('keeps plain typed text a fresh user bubble', async () => {
+    const store = storeWithRun()
+    store.status = { s1: 'idle' }
+    await store.send('hello there')
+    expect(userItems(store)).toHaveLength(1)
+    expect(userItems(store)[0]).toMatchObject({ content: 'hello there', fresh: true })
+  })
+})

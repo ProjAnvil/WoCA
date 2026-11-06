@@ -62,6 +62,11 @@ export type ChatItem =
     }
   | {
       id: string
+      kind: 'notice'
+      content: string
+    }
+  | {
+      id: string
       kind: 'tool_call'
       toolCallId: string
       name: string
