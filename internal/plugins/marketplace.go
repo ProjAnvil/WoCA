@@ -70,7 +70,7 @@ func installFromMarketplace(name, marketSrc, root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 
 	marketDir, err := fetchSource(marketSrc, tmp)
 	if err != nil {

@@ -41,6 +41,7 @@ import (
 	"github.com/projanvil/woca/internal/agentbuild"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/console"
+	"github.com/projanvil/woca/internal/hooks"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/mcp"
 	"github.com/projanvil/woca/internal/oauth"
@@ -198,7 +199,9 @@ func newMcpAuthCmd() *cobra.Command {
 }
 
 // newPluginCmd builds `woca plugin list|install|remove` for managing the
-// plugin root (~/.woca/plugins) outside the interactive UIs.
+// plugin root (~/.woca/plugins) outside the interactive UIs. The list rows
+// mirror the console's /plugins rendering, including (disabled) markers for
+// plugins skipped via the disabled-plugins settings key.
 func newPluginCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plugin",
@@ -208,27 +211,35 @@ func newPluginCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List installed plugins",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			list, errs := plugins.Load(plugins.DefaultRoot())
+			root := plugins.DefaultRoot()
+			list, skipped, errs := plugins.LoadWithSkipped(root, pluginDisabledList(cmd))
 			for _, err := range errs {
 				fmt.Fprintln(os.Stderr, "woca:", err)
 			}
-			if len(list) == 0 {
-				fmt.Println("no plugins installed (woca plugin install <path-or-git-url>)")
+			if len(list) == 0 && len(skipped) == 0 && len(errs) == 0 {
+				fmt.Println("no plugins installed (woca plugin install <path-or-git-url-or-name@marketplace>)")
 				return nil
 			}
 			for _, p := range list {
-				extra := ""
-				if n := len(p.Skills) + len(p.Agents); n > 0 {
-					extra = fmt.Sprintf(" (%d skills, %d agents)", len(p.Skills), len(p.Agents))
+				writePluginRow(os.Stdout, p, false)
+			}
+			for _, name := range skipped {
+				// A skipped name may be recorded as the directory or the
+				// manifest spelling; display the manifest name like the
+				// enabled rows.
+				p, err := plugins.LoadPlugin(filepath.Join(root, name))
+				if err != nil {
+					fmt.Printf("  %-18s (disabled)\n", name)
+					continue
 				}
-				fmt.Printf("%-20s %-8s %s%s\n", p.Manifest.Name, p.Manifest.Version, p.Manifest.Description, extra)
+				writePluginRow(os.Stdout, p, true)
 			}
 			return nil
 		},
 	})
 	cmd.AddCommand(&cobra.Command{
-		Use:   "install <path-or-git-url>",
-		Short: "Install a plugin from a local directory or git URL",
+		Use:   "install <path-or-git-url-or-name@marketplace>",
+		Short: "Install a plugin from a local path, git URL or marketplace",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := plugins.Install(args[0], plugins.DefaultRoot())
@@ -252,6 +263,54 @@ func newPluginCmd() *cobra.Command {
 		},
 	})
 	return cmd
+}
+
+// pluginDisabledList reads the disabled-plugins settings key so `woca
+// plugin list` can mark skipped plugins. Same --db/WOCA_DB resolution as
+// `woca config`; an unavailable settings database (--db none, open error)
+// only drops the markers — the warning goes to stderr and the listing
+// itself stays useful.
+func pluginDisabledList(cmd *cobra.Command) []string {
+	dbTarget, _ := cmd.Flags().GetString("db")
+	if dbTarget == "" {
+		dbTarget = os.Getenv("WOCA_DB")
+	}
+	st, err := settings.Open(dbTarget)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "woca:", err)
+		return nil
+	}
+	if st == nil {
+		return nil
+	}
+	defer func() { _ = st.Close() }()
+	return st.Load().DisabledPlugins
+}
+
+// writePluginRow renders one `woca plugin list` row, byte-identical to the
+// console's /plugins row (internal/console writePluginRow) so both
+// surfaces report the same contribution counts and disabled markers.
+func writePluginRow(w io.Writer, p plugins.Plugin, disabled bool) {
+	marker := ""
+	if disabled {
+		marker = " (disabled)"
+	}
+	fmt.Fprintf(w, "  %-18s %-8s %s (%d skills, %d agents, %d commands, %d hooks, %d MCP)%s\n",
+		p.Manifest.Name, p.Manifest.Version, p.Manifest.Description,
+		len(p.Skills), len(p.Agents), len(p.Commands), pluginHookEntries(p.Hooks), len(p.MCPSpecs), marker)
+	for _, key := range p.Ignored {
+		fmt.Fprintf(w, "    ⚠ ignored: %s\n", key)
+	}
+}
+
+// pluginHookEntries counts a hooks configuration's entries across all 13
+// events (same count the console prints per plugin row).
+func pluginHookEntries(cfg hooks.Config) int {
+	return len(cfg.PreToolUse) + len(cfg.PostToolUse) + len(cfg.UserPromptSubmit) +
+		len(cfg.Stop) + len(cfg.SessionStart) + len(cfg.SessionEnd) +
+		len(cfg.SubagentStart) + len(cfg.SubagentStop) + len(cfg.Notification) +
+		len(cfg.PreCompact) + len(cfg.PostCompact) + len(cfg.PermissionRequest) +
+		len(cfg.PostSampling)
 }
 
 // newConfigCmd builds `woca config list|get|set` for managing persisted
