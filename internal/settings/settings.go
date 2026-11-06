@@ -153,6 +153,9 @@ type Settings struct {
 	// skills tree). Empty means all of them; user and workspace skills of
 	// the same name shadow the built-ins regardless.
 	BuiltinSkills []string `json:"builtin_skills"`
+	// DisabledPlugins lists installed plugin names skipped at load
+	// (plugins.LoadFiltered); empty means every installed plugin is enabled.
+	DisabledPlugins []string `json:"disabled_plugins"`
 	// Langfuse observability plugin (personal forms configure it from the
 	// settings UI; enterprise forms receive it from the config plane).
 	// The secret key lives in the secrets table (SecretLangfuseSecretKey).
@@ -468,6 +471,9 @@ func applyPairs(out *Settings, pairs map[string]string) {
 	if v, ok := pairs["builtin_skills"]; ok {
 		out.BuiltinSkills = parseNameList(v)
 	}
+	if v, ok := pairs["disabled_plugins"]; ok {
+		out.DisabledPlugins = parseNameList(v)
+	}
 	if v, ok := pairs["checkpoint_backend"]; ok {
 		out.CheckpointBackend = v
 	}
@@ -646,6 +652,7 @@ func (s *Store) Save(cfg Settings) error {
 	fields = append(fields, field{"claude_mcp", FormatNameList(cfg.ClaudeMCP)})
 	fields = append(fields, field{"builtin_plugins", FormatNameList(cfg.BuiltinPlugins)})
 	fields = append(fields, field{"builtin_skills", FormatNameList(cfg.BuiltinSkills)})
+	fields = append(fields, field{"disabled_plugins", FormatNameList(cfg.DisabledPlugins)})
 	// Message plane keys are always written explicitly (empty included) so
 	// clearing the NATS URL persists, not just setting it.
 	fields = append(fields,

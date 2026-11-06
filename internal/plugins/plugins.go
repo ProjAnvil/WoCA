@@ -98,20 +98,41 @@ func hasManifest(dir string) bool {
 	return err == nil
 }
 
-// Load walks a plugin root and loads every plugin directory. A directory
-// without plugin.json is not a plugin and is skipped silently — the root
-// also hosts non-plugin state such as the built-in capability plugins'
-// runtimes/ dir and their per-plugin environments. A plugin with a broken
-// manifest is skipped (its error is collected for diagnostics).
+// Load walks a plugin root and loads every plugin directory: Load is
+// LoadFiltered with nothing disabled. A directory without plugin.json is
+// not a plugin and is skipped silently — the root also hosts non-plugin
+// state such as the built-in capability plugins' runtimes/ dir and their
+// per-plugin environments. A plugin with a broken manifest is skipped
+// (its error is collected for diagnostics).
 func Load(root string) ([]Plugin, []error) {
+	return LoadFiltered(root, nil)
+}
+
+// LoadFiltered loads root like Load, skipping the named disabled plugins
+// entirely: they contribute nothing and report no errors. A name matches
+// the plugin's directory name or manifest name.
+func LoadFiltered(root string, disabled []string) ([]Plugin, []error) {
+	list, _, errs := LoadWithSkipped(root, disabled)
+	return list, errs
+}
+
+// LoadWithSkipped is LoadFiltered that also returns the names of the
+// installed plugins skipped because they are disabled — /plugins lists
+// them as disabled rather than absent.
+func LoadWithSkipped(root string, disabled []string) ([]Plugin, []string, []error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, []error{err}
+		return nil, nil, []error{err}
+	}
+	disabledSet := make(map[string]bool, len(disabled))
+	for _, name := range disabled {
+		disabledSet[name] = true
 	}
 	var out []Plugin
+	var skipped []string
 	var errs []error
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") || e.Name() == "runtimes" {
@@ -121,6 +142,19 @@ func Load(root string) ([]Plugin, []error) {
 		if !hasManifest(dir) {
 			continue // no manifest: built-in plugin environment or unrelated state
 		}
+		if disabledSet[e.Name()] {
+			skipped = append(skipped, e.Name())
+			continue
+		}
+		if len(disabledSet) > 0 {
+			// /plugins shows manifest names; disabling by that spelling
+			// must work too. A broken manifest falls through to LoadPlugin
+			// so the error is still surfaced for enabled plugins.
+			if m, err := readManifest(dir); err == nil && m.Name != "" && disabledSet[m.Name] {
+				skipped = append(skipped, m.Name)
+				continue
+			}
+		}
 		p, err := LoadPlugin(dir)
 		if err != nil {
 			errs = append(errs, err)
@@ -128,33 +162,32 @@ func Load(root string) ([]Plugin, []error) {
 		}
 		out = append(out, p)
 	}
-	return out, errs
+	return out, skipped, errs
 }
 
-// Install installs a plugin from a local directory or a git URL into root.
-// Local paths are copied (excluding .git); URLs are cloned with --depth 1.
-// The returned path is the installed plugin directory.
+// Install installs a plugin into root from a local directory, a git URL,
+// or a marketplace: the "<name>@<marketplace>" form fetches the
+// marketplace (git URL or local path), resolves name via its
+// .claude-plugin/marketplace.json and installs that plugin under
+// root/name. Local paths are copied (excluding .git); URLs are cloned
+// with --depth 1. The returned path is the installed plugin directory.
 func Install(src, root string) (string, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", err
 	}
-	name := ""
-	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") || strings.HasPrefix(src, "git@") {
+	if name, market, ok := splitMarketplaceRef(src); ok {
+		return installFromMarketplace(name, market, root)
+	}
+	if isGitURL(src) {
 		base := strings.TrimSuffix(filepath.Base(src), ".git")
 		if base == "" {
 			return "", fmt.Errorf("plugins: cannot derive name from %s", src)
 		}
-		name = base
-		dst := filepath.Join(root, name)
+		dst := filepath.Join(root, base)
 		if err := os.RemoveAll(dst); err != nil {
 			return "", err
 		}
-		cmd := exec.Command("git", "clone", "--depth", "1", src, dst)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			_ = os.RemoveAll(dst)
-			return "", fmt.Errorf("plugins: git clone: %w: %s", err, strings.TrimSpace(string(out)))
-		}
-		if err := os.RemoveAll(filepath.Join(dst, ".git")); err != nil {
+		if err := cloneInto(src, dst); err != nil {
 			return "", err
 		}
 		return validateInstalled(dst)
@@ -168,12 +201,31 @@ func Install(src, root string) (string, error) {
 	if !hasManifest(abs) {
 		return "", fmt.Errorf("plugins: %s has no plugin.json", src)
 	}
-	name = filepath.Base(abs)
-	dst := filepath.Join(root, name)
+	dst := filepath.Join(root, filepath.Base(abs))
 	if err := copyTree(abs, dst); err != nil {
 		return "", err
 	}
 	return validateInstalled(dst)
+}
+
+// isGitURL reports whether src is a git URL: http(s) or the git@ SSH
+// spelling.
+func isGitURL(src string) bool {
+	return strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") || strings.HasPrefix(src, "git@")
+}
+
+// cloneInto shallow-clones src into dst (which must not exist) and strips
+// the clone's .git metadata.
+func cloneInto(src, dst string) error {
+	cmd := exec.Command("git", "clone", "--depth", "1", src, dst)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(dst)
+		return fmt.Errorf("plugins: git clone: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	if err := os.RemoveAll(filepath.Join(dst, ".git")); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateInstalled(dst string) (string, error) {

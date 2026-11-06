@@ -19,6 +19,7 @@ func TestApplyAllKeysAndErrors(t *testing.T) {
 		{KeyClaudeSkills, `["a","b"]`},
 		{KeyClaudeMCP, `["m"]`},
 		{KeyBuiltinPlugins, `["browser"]`},
+		{KeyDisabledPlugins, `["toolkit"]`},
 		{KeyCheckpoint, "file"},
 		{KeyMemory, "postgres"},
 		{KeyCheckpointDir, "/tmp/ck"},
@@ -55,7 +56,7 @@ func TestApplyAllKeysAndErrors(t *testing.T) {
 	if cfg.LadyMTopK != 12 || cfg.LadyMSystem2Interval != 120 {
 		t.Fatalf("cfg ladym = %+v", cfg)
 	}
-	if len(cfg.ClaudeSkills) != 2 || len(cfg.ClaudeMCP) != 1 || len(cfg.BuiltinPlugins) != 1 {
+	if len(cfg.ClaudeSkills) != 2 || len(cfg.ClaudeMCP) != 1 || len(cfg.BuiltinPlugins) != 1 || len(cfg.DisabledPlugins) != 1 {
 		t.Fatalf("cfg lists = %+v", cfg)
 	}
 
@@ -76,6 +77,7 @@ func TestApplyAllKeysAndErrors(t *testing.T) {
 		{KeyClaudeSkills, "not json"},
 		{KeyClaudeMCP, "not json"},
 		{KeyBuiltinPlugins, "not json"},
+		{KeyDisabledPlugins, "not json"},
 		{KeyCheckpoint, "bamboo"},
 		{KeyMemory, "bamboo"},
 		{KeyMemoryEngine, "bamboo"},
