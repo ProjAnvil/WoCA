@@ -176,6 +176,21 @@ func TestBareManifestNoContributions(t *testing.T) {
 	}
 }
 
+// TestEmptyContributionListLoadsCleanly: an explicitly empty path list
+// declares no contribution files — an explicit none, not a broken
+// contribution, so the plugin loads with zero hooks/servers.
+func TestEmptyContributionListLoadsCleanly(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "quiet")
+	writePluginFile(t, filepath.Join(dir, "plugin.json"), `{"name":"quiet","hooks":[],"mcp_servers":[]}`)
+	p, err := LoadPlugin(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(p.Hooks, hooks.Config{}) || len(p.MCPSpecs) != 0 {
+		t.Fatalf("contributions = %+v %v; want none", p.Hooks, p.MCPSpecs)
+	}
+}
+
 // TestInstallClaudeLayout: a source tree with only
 // .claude-plugin/plugin.json installs and validates like a woca plugin.
 func TestInstallClaudeLayout(t *testing.T) {

@@ -107,19 +107,25 @@ func (m manifest) ignored() []string {
 }
 
 // pathList decodes a path-shaped contribution field: a string or a list
-// of strings. Empty entries are dropped; anything else is a broken
-// contribution.
+// of strings. An empty path names nothing and is a broken contribution;
+// an explicitly empty list declares no paths (an explicit none). Anything
+// else is a broken contribution too.
 func pathList(field string, raw json.RawMessage) ([]string, error) {
 	var one string
 	if err := json.Unmarshal(raw, &one); err == nil {
 		if one == "" {
-			return nil, nil
+			return nil, fmt.Errorf("%s: path must not be empty", field)
 		}
 		return []string{one}, nil
 	}
 	var many []string
 	if err := json.Unmarshal(raw, &many); err == nil {
-		return slices.DeleteFunc(many, func(s string) bool { return s == "" }), nil
+		for _, s := range many {
+			if s == "" {
+				return nil, fmt.Errorf("%s: path must not be empty", field)
+			}
+		}
+		return many, nil
 	}
 	return nil, fmt.Errorf("%s: expected path or list of paths", field)
 }
@@ -137,7 +143,10 @@ func wrapJSON(key string, value json.RawMessage) json.RawMessage {
 //     read — a declared path that cannot be read is a broken contribution;
 //   - inline object: the body directly ({"PreToolUse": ...} event keys or
 //     a server-name map), the {"<wrapperKey>": {...}} wrapper form, or a
-//     {"source": "<path>"} reference to an external file.
+//     {"source": "<path>"} reference to an external file — the reference
+//     must be the object's only key, a non-empty string naming a readable
+//     file (mixing or misshaping it is a broken contribution, never a
+//     silent drop).
 func contributionDocs(field, wrapperKey, defaultPath, dir string, raw json.RawMessage) ([]json.RawMessage, error) {
 	if len(raw) == 0 {
 		data, err := os.ReadFile(filepath.Join(dir, defaultPath))
@@ -173,13 +182,17 @@ func contributionDocs(field, wrapperKey, defaultPath, dir string, raw json.RawMe
 	}
 	if src, ok := obj["source"]; ok {
 		var p string
-		if err := json.Unmarshal(src, &p); err == nil && p != "" {
-			data, err := os.ReadFile(filepath.Join(dir, p))
-			if err != nil {
-				return nil, fmt.Errorf("%s %s: %w", field, p, err)
-			}
-			return []json.RawMessage{data}, nil
+		if err := json.Unmarshal(src, &p); err != nil || p == "" {
+			return nil, fmt.Errorf("%s: inline object's \"source\" reference must be a non-empty path", field)
 		}
+		if len(obj) > 1 {
+			return nil, fmt.Errorf("%s: \"source\" reference cannot be combined with inline content", field)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, p))
+		if err != nil {
+			return nil, fmt.Errorf("%s %s: %w", field, p, err)
+		}
+		return []json.RawMessage{data}, nil
 	}
 	return []json.RawMessage{wrapJSON(wrapperKey, raw)}, nil
 }
