@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -220,6 +223,118 @@ func TestRunREPLSubmitError(t *testing.T) {
 	}
 	if !strings.Contains(errBuf.String(), "woca:") {
 		t.Fatalf("submit error output = %q", errBuf.String())
+	}
+}
+
+// fakeOpenAIBackgroundWake scripts the background-loop closure over the real
+// Bash run_in_background path: conversation call 1 starts a background
+// `sleep 0.1 && echo done-marker`; conversation call 2 (the turn's final
+// model call) is held open for 300ms so the shell finishes and queues its
+// completion notification in the window AFTER the tool round's mid-turn
+// drain (the sleep keeps the shell from racing that drain) and BEFORE the
+// turn ends. Every later conversation call only acks with the delivered
+// marker when the request body actually carries the queued notification.
+// Requests are classified by body: the async tool-use summarizer shares this
+// endpoint and must not consume the scripted conversation responses.
+// Returns the server URL and the conversation-call counter.
+func fakeOpenAIBackgroundWake(t *testing.T) (string, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	srv := startHTTPServer(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		writeChunk := func(delta map[string]any, finish any) {
+			chunk := map[string]any{
+				"id":     "chatcmpl-1",
+				"object": "chat.completion.chunk",
+				"choices": []map[string]any{{
+					"index":         0,
+					"delta":         delta,
+					"finish_reason": finish,
+				}},
+			}
+			b, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "data: %s\n\n", b)
+		}
+		text := func(s string) {
+			writeChunk(map[string]any{"role": "assistant", "content": s}, nil)
+			writeChunk(map[string]any{}, "stop")
+		}
+		if bytes.Contains(body, []byte("Write a short summary label describing what these tool calls accomplished")) {
+			text("started a shell")
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			flusher.Flush()
+			return
+		}
+		switch calls.Add(1) {
+		case 1:
+			writeChunk(map[string]any{
+				"role": "assistant",
+				"tool_calls": []map[string]any{{
+					"index": 0,
+					"id":    "call_bg_1",
+					"type":  "function",
+					"function": map[string]any{
+						"name":      "Bash",
+						"arguments": `{"command":"sleep 0.1 && echo done-marker","run_in_background":true}`,
+					},
+				}},
+			}, nil)
+			writeChunk(map[string]any{}, "tool_calls")
+		case 2:
+			// Hold the turn's final model call open until the background
+			// shell has certainly finished, so its notification is queued
+			// before the REPL's post-run wake check. The role chunk goes out
+			// first so the stream is never dead air.
+			writeChunk(map[string]any{"role": "assistant"}, nil)
+			flusher.Flush()
+			time.Sleep(300 * time.Millisecond)
+			writeChunk(map[string]any{"content": "shell started"}, nil)
+			writeChunk(map[string]any{}, "stop")
+		default:
+			// The continuation turn: proof of delivery is the notification
+			// text (tag block + output tail) reaching the model.
+			if bytes.Contains(body, []byte("background-task-completed")) && bytes.Contains(body, []byte("done-marker")) {
+				text("wake-delivered-done-marker")
+			} else {
+				text("wake-ran-without-notification")
+			}
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	})
+	return srv, &calls
+}
+
+func TestRunREPLBackgroundWakeContinuation(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url, calls := fakeOpenAIBackgroundWake(t)
+	opts := baseOpts(t, url)
+	// The Bash run_in_background call must execute, not park on a permission
+	// prompt the non-interactive stdin cannot answer.
+	opts.SkipPerms = true
+
+	// One typed prompt; the continuation turn must run without new stdin.
+	var out, errBuf bytes.Buffer
+	if err := run(t.Context(), opts, strings.NewReader("start the marker shell\n/exit\n"), &out, &errBuf); err != nil {
+		t.Fatal(err)
+	}
+	combined := out.String() + errBuf.String()
+	if !strings.Contains(combined, "⏵ background notification") {
+		t.Fatalf("wake marker missing (model calls = %d): %q", calls.Load(), combined)
+	}
+	if !strings.Contains(combined, "wake-delivered-done-marker") {
+		t.Fatalf("done-marker not delivered in the continuation turn: %q", combined)
+	}
+	if strings.Contains(combined, "wake-ran-without-notification") {
+		t.Fatalf("continuation ran without the notification: %q", combined)
+	}
+	// Exactly one user turn (two model calls: tool round + final text) plus
+	// one continuation call — no extra prompts consumed.
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("model calls = %d, want 3", got)
 	}
 }
 

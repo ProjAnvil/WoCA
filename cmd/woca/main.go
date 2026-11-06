@@ -651,7 +651,11 @@ func run(ctx context.Context, opts agentbuild.Options, stdin io.Reader, stdout, 
 		_ = a.RunSessionEnd(context.Background(), "exit")
 		return err
 	}
-	loop := newREPLLoop(r, history, in, stdout, stderr, a, cons)
+	// Auto-wake policy for the line REPL's idle-notification continuation.
+	// Load is nil-safe: a nil store (embedders without settings) yields the
+	// design defaults, wake on with the default chain budget.
+	wake := ap.Settings.Load()
+	loop := newREPLLoop(r, history, in, stdout, stderr, a, cons, wake.AutoWake, wake.AutoWakeLimit)
 	return loop.Loop(ctx)
 }
 
@@ -765,11 +769,15 @@ type replLoop struct {
 	cons    *console.Console
 	agent   *agent.Agent
 	hist    *repl.History
+	// wakeEnabled gates the idle-notification continuation; wakeLimit caps
+	// the chained continuation runs one submit may start (0 = unlimited).
+	wakeEnabled bool
+	wakeLimit   int
 }
 
-func newREPLLoop(r *runner.Runner, history []messages.Message, stdin io.Reader, stdout, stderr io.Writer, a *agent.Agent, cons *console.Console) *replLoop {
+func newREPLLoop(r *runner.Runner, history []messages.Message, stdin io.Reader, stdout, stderr io.Writer, a *agent.Agent, cons *console.Console, wakeEnabled bool, wakeLimit int) *replLoop {
 	hist := &repl.History{}
-	return &replLoop{r: r, history: history, editor: repl.NewEditor(stdin, stdout, hist), stdout: stdout, stderr: stderr, cons: cons, agent: a, hist: hist}
+	return &replLoop{r: r, history: history, editor: repl.NewEditor(stdin, stdout, hist), stdout: stdout, stderr: stderr, cons: cons, agent: a, hist: hist, wakeEnabled: wakeEnabled, wakeLimit: wakeLimit}
 }
 
 func (r *replLoop) Loop(ctx context.Context) error {
@@ -819,7 +827,12 @@ func (r *replLoop) Loop(ctx context.Context) error {
 }
 
 // submit appends a user message and runs one agent turn, keeping the history
-// in sync on both success and failure.
+// in sync on both success and failure. After a successful run it delivers, as
+// chained continuation turns, any notifications that queued while the turn
+// was busy or finishing (a background shell or task completion, a cron
+// firing) — otherwise they would sit in the agent's queue until the next
+// typed prompt. Continuations bypass submitHooks: the input is
+// machine-generated, not a user prompt.
 func (r *replLoop) submit(ctx context.Context, text string) {
 	r.history = append(r.history, messages.Human(text))
 	result, err := r.r.Run(ctx, r.history)
@@ -829,6 +842,27 @@ func (r *replLoop) submit(ctx context.Context, text string) {
 		return
 	}
 	r.history = stripSystem(result)
+	if !r.wakeEnabled {
+		return
+	}
+	for i := 0; r.wakeLimit <= 0 || i < r.wakeLimit; i++ {
+		if r.agent.QueuedInputCountFor("") == 0 {
+			break
+		}
+		fmt.Fprintln(r.stdout, "\x1b[2m⏵ background notification\x1b[0m")
+		items := r.agent.DrainQueuedInputsFor("")
+		if len(items) == 0 {
+			break
+		}
+		r.history = append(r.history, agent.CoalesceQueuedInputs(items))
+		result, err := r.r.Run(ctx, r.history)
+		if err != nil {
+			fmt.Fprintln(r.stderr, "woca:", err)
+			r.history = r.history[:len(r.history)-1]
+			return
+		}
+		r.history = stripSystem(result)
+	}
 }
 
 // turnTokenBudgetFromEnv resolves WOCA_TURN_TOKEN_BUDGET: the per-turn
