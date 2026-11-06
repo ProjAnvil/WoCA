@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -114,19 +113,6 @@ func wakeSettings(t *testing.T, kv ...string) *settings.Store {
 		t.Fatal(err)
 	}
 	return st
-}
-
-// setAutoWake flips the live auto-wake switch (the driver reads the policy
-// per wake).
-func setAutoWake(t *testing.T, st *settings.Store, on bool) {
-	t.Helper()
-	cfg := st.Load()
-	if err := settings.Apply(&cfg, settings.KeyAutoWake, strconv.FormatBool(on)); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Save(cfg); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // registeredRuns snapshots the run-registration order.

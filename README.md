@@ -89,12 +89,19 @@ every conversation is persisted as a resumable transcript.
   flight in the TUI or web UI and it is queued into the live run immediately
   instead of waiting for the turn to finish; interrupting a run with a
   pending steer resubmits it as a fresh turn right away instead of losing it.
+- **Background loop closure**: `Bash run_in_background` shells, background
+  `Task` subagents, and session cron (`ScheduleCron`) queue tagged
+  notifications that ride the next run; when the session is idle they start
+  a run on their own (`auto-wake`), with the chain capped by
+  `auto-wake-limit` so a notification loop cannot run forever.
 - **Thinking / reasoning support**: reasoning effort levels and streamed
   reasoning content, rendered as collapsible blocks in the web UI.
 
 **Tools & safety**
 
-- **20+ built-in tools**: `Bash`, `Read`, `Write`, `Edit`, `NotebookEdit`,
+- **20+ built-in tools**: `Bash`, `BashOutput`/`BashInput`/`KillShell`
+  (background shells: poll output — `wait_ms` blocks until the shell
+  finishes — write stdin), `Read`, `Write`, `Edit`, `NotebookEdit`,
   `Glob`, `Grep`, `ListDir`, `TodoWrite`, `WebFetch`, `WebSearch`,
   `AskUserQuestion`, `EnterPlanMode`/`ExitPlanMode`, `Task`/`TaskOutput`/
   `TaskStop`, `TaskCreate`/`TaskGet`/`TaskUpdate`/`TaskList`, `Skill`,
@@ -558,6 +565,11 @@ Key resolution order: `--api-key` flag → `ANTHROPIC_API_KEY` /
 and the memory store each pick a backend (`sqlite`, `postgres`, `file`,
 `memory`, `none`).
 
+Behavior settings live in the same store: `auto-wake` (default on) starts a
+run when a notification queues for an idle session, and `auto-wake-limit`
+(default 20) caps chained auto-wake runs — past the cap notifications stay
+queued until the next user run resets the chain (`-1` lifts the cap).
+
 Important flags:
 
 | Flag | Description |
@@ -756,6 +768,7 @@ The web server exposes the agent over REST + SSE:
 | `DELETE /api/sessions/{id}` | delete a session (tombstoned against revival) |
 | `POST /api/runs` | start a run: `{"session_id":"…","prompt":"…"}` |
 | `GET /api/runs/{id}/events` | SSE: `delta` / `reasoning` / `tool_call` / `tool_result` / `goal` / `goal_note` / `interrupt` / `done` / `error` (goal runs stream cycle narration as `goal_note` and end with one unified `delta` reply) |
+| `GET /api/events` | global SSE: `session_state` snapshots, plus `wake_capped` when a session's auto-wake chain hits its limit (notifications stay queued) |
 | `POST /api/runs/{id}/answer` | resolve an interrupt: `{"approve":true}` or `{"answers":[…]}` |
 | `POST /api/runs/{id}/input` | queue mid-turn input |
 | `POST /api/runs/{id}/cancel` | cancel a run |

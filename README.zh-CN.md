@@ -80,12 +80,18 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
 - **自动压缩**：CJK 感知的 token 估算器；先裁剪旧工具结果、再微压缩大结
   果，最后才摘要对话头部；连续失败后熔断（`/compact` 可重置）。
 - **轮中引导（对齐 Codex）**：TUI 或 web UI 中在运行中提交的消息会立即加入当前运行的实时输入，而不等待本轮结束；若在有待发引导时中断运行，会立即将其作为新回合重新发送，而不会丢失。
+- **后台闭环**：`Bash run_in_background`、后台 `Task` 子代理与会话级
+  cron（`ScheduleCron`）完成时排队带标签的通知，随下一次运行投递；会话
+  空闲时自动唤醒开跑（`auto-wake`），链式唤醒受 `auto-wake-limit` 约
+  束，通知循环不会无限运行。
 - **思考 / 推理支持**：reasoning effort 级别与流式推理内容，Web UI 渲染为
   可折叠块。
 
 **工具与安全**
 
-- **20+ 内置工具**：`Bash`、`Read`、`Write`、`Edit`、`NotebookEdit`、
+- **20+ 内置工具**：`Bash`、`BashOutput`/`BashInput`/`KillShell`
+  （后台 shell：轮询输出 —— `wait_ms` 阻塞至命令结束 —— 写入 stdin）、
+  `Read`、`Write`、`Edit`、`NotebookEdit`、
   `Glob`、`Grep`、`ListDir`、`TodoWrite`、`WebFetch`、`WebSearch`、
   `AskUserQuestion`、`EnterPlanMode`/`ExitPlanMode`、`Task`/`TaskOutput`/
   `TaskStop`、`TaskCreate`/`TaskGet`/`TaskUpdate`/`TaskList`、`Skill`、
@@ -509,6 +515,10 @@ $ woca config list
 （加密）→ OAuth token。图 checkpoint 与 memory store 各自选择后端
 （`sqlite`、`postgres`、`file`、`memory`、`none`）。
 
+行为设置同样存于该库：`auto-wake`（默认开启）在通知排队而会话空闲时自动
+发起运行；`auto-wake-limit`（默认 20）限制连续自动唤醒次数 —— 超限后通
+知保持排队，直到下一次用户运行重置计数（`-1` 表示不设上限）。
+
 常用 flags：
 
 | Flag | 说明 |
@@ -686,6 +696,7 @@ Web 服务器经 REST + SSE 暴露代理能力：
 | `DELETE /api/sessions/{id}` | 删除会话（墓碑标记防复活） |
 | `POST /api/runs` | 发起运行：`{"session_id":"…","prompt":"…"}` |
 | `GET /api/runs/{id}/events` | SSE：`delta` / `reasoning` / `tool_call` / `tool_result` / `goal` / `goal_note` / `interrupt` / `done` / `error`（goal 运行的循环过程走 `goal_note`，结束时以一条统一 `delta` 回复收尾） |
+| `GET /api/events` | 全局 SSE：`session_state` 快照，以及会话的自动唤醒链触及上限时的 `wake_capped`（通知保持排队） |
 | `POST /api/runs/{id}/answer` | 响应中断：`{"approve":true}` 或 `{"answers":[…]}` |
 | `POST /api/runs/{id}/input` | 排队轮中输入 |
 | `POST /api/runs/{id}/cancel` | 取消运行 |
