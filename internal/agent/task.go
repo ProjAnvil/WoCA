@@ -422,6 +422,10 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 		}
 		def = &d
 	}
+	name := subagentName(def, args)
+	// SubagentStart fires once the task is validated and named, ahead of both
+	// the foreground and background runs. Its feedback is informational.
+	_, _ = a.runSubagentStart(ctx, name)
 
 	history := []messages.Message{messages.Human(prompt)}
 	if args.Fork {
@@ -446,6 +450,12 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 			if err != nil {
 				report = "Error: " + err.Error()
 			}
+			// SubagentStop fires once the subagent run is over (report or
+			// error alike — both leave a final report). It runs BEFORE the
+			// final state lands so the exit-2 feedback reaches every report
+			// consumer: TaskOutput, the completion notification and the L1
+			// episode.
+			report = a.withSubagentStopFeedback(runCtx, name, report)
 			t.setFinalIfRunning(TaskCompleted, report)
 			// Completion notification for the starting run's session. It
 			// fires for stopped tasks too — notification() then renders the
@@ -454,17 +464,31 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 			// L1 episode for the completed subagent task. runCtx may already
 			// be cancelled by TaskStop, but its values (run workspace) are
 			// still readable; the write itself is detached.
-			a.recordTaskEvent(runCtx, subagentName(def, args), args.Description, report, err)
+			a.recordTaskEvent(runCtx, name, args.Description, report, err)
 		}()
 		return coretools.Result{Content: fmt.Sprintf("Started background task %s: %s", t.ID, args.Description)}, nil
 	}
 
-	report, err := a.runForegroundTask(ctx, history, def, subagentName(def, args), prompt)
+	report, err := a.runForegroundTask(ctx, history, def, name, prompt)
 	if err != nil {
 		return coretools.Result{}, err
 	}
-	a.recordTaskEvent(ctx, subagentName(def, args), args.Description, report, nil)
+	report = a.withSubagentStopFeedback(ctx, name, report)
+	a.recordTaskEvent(ctx, name, args.Description, report, nil)
 	return coretools.Result{Content: report}, nil
+}
+
+// withSubagentStopFeedback fires the SubagentStop hooks for a finished
+// subagent and appends exit-2 feedback to its report inside the documented
+// wrapper. There is no re-run loop (a divergence from Claude Code's
+// continue-the-subagent semantics): the blocked flag is informational and
+// only the feedback travels, into the report.
+func (a *Agent) withSubagentStopFeedback(ctx context.Context, name, report string) string {
+	feedback, blocked := a.runSubagentStop(ctx, name)
+	if blocked && feedback != "" {
+		return report + "\n<subagent-stop-feedback>\n" + feedback + "\n</subagent-stop-feedback>"
+	}
+	return report
 }
 
 // subagentName resolves the display name for task events.

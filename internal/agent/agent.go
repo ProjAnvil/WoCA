@@ -1223,6 +1223,34 @@ func (a *Agent) RunSessionEnd(ctx context.Context, reason string) error {
 	return err
 }
 
+// runSubagentStart runs SubagentStart hooks when a Task subagent spawns
+// (name is the resolved subagent name/type).
+func (a *Agent) runSubagentStart(ctx context.Context, name string) (string, error) {
+	h := a.hooksFor(ctx)
+	if h == nil {
+		return "", nil
+	}
+	return h.SubagentStart(ctx, name)
+}
+
+// runSubagentStop runs SubagentStop hooks when a Task subagent finishes,
+// returning the feedback and whether a hook exited 2. There is no re-run
+// loop: the blocked flag is informational, and the caller appends the
+// feedback to the subagent report instead (documented divergence from
+// Claude Code's continue-the-subagent semantics). A failing hook never
+// disturbs the finished task: it degrades to no feedback.
+func (a *Agent) runSubagentStop(ctx context.Context, name string) (feedback string, blocked bool) {
+	h := a.hooksFor(ctx)
+	if h == nil {
+		return "", false
+	}
+	feedback, blocked, err := h.SubagentStop(ctx, name)
+	if err != nil {
+		return "", false
+	}
+	return feedback, blocked
+}
+
 // modelNode streams the (tool-bound) model, emitting text deltas and
 // accumulating the full message (including tool calls). Tool calls that
 // arrive stream-complete are started in the background (streaming tool
@@ -1819,6 +1847,11 @@ func (a *Agent) askPermission(ctx context.Context, call messages.ToolCall) (bool
 		ToolArgs:   call.Args,
 		Reason:     toolReason(call),
 		IsReadOnly: tools.IsReadOnly(call.Name, call.Args),
+	}
+	// Notification hooks fire immediately before the permission interrupt
+	// (desktop notifiers and the like); their output is not injected.
+	if h := a.hooksFor(ctx); h != nil {
+		_, _ = h.Notification(ctx, "permission required: "+call.Name)
 	}
 	answer := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(req))))
 	return parseAnswer(answer), nil

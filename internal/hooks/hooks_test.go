@@ -145,6 +145,40 @@ func TestSessionStartHook(t *testing.T) {
 	}
 }
 
+func TestSubagentStartPassesAgentName(t *testing.T) {
+	cfg := Config{SubagentStart: []Entry{{Matcher: "*", Hooks: []Hook{{Command: "spawn"}}}}}
+	var seen []Event
+	r := NewRunner(cfg, "/tmp", "s1", WithCommandRunner(fakeRunner(
+		map[string]CommandResult{"spawn": {Stdout: "spawn noted", ExitCode: 0}},
+		&seen,
+	)))
+	out, err := r.SubagentStart(t.Context(), "researcher")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "spawn noted" {
+		t.Fatalf("out = %q", out)
+	}
+	if len(seen) != 1 || seen[0].AgentName != "researcher" {
+		t.Fatalf("event = %+v", seen)
+	}
+}
+
+func TestSubagentStopPassesAgentName(t *testing.T) {
+	cfg := Config{SubagentStop: []Entry{{Matcher: "*", Hooks: []Hook{{Command: "sub"}}}}}
+	var seen []Event
+	r := NewRunner(cfg, "/tmp", "s1", WithCommandRunner(fakeRunner(
+		map[string]CommandResult{"sub": {Stdout: "", ExitCode: 0}},
+		&seen,
+	)))
+	if _, _, err := r.SubagentStop(t.Context(), "general-purpose"); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 1 || seen[0].AgentName != "general-purpose" {
+		t.Fatalf("event = %+v", seen)
+	}
+}
+
 func TestSubagentStopBlock(t *testing.T) {
 	cfg := Config{SubagentStop: []Entry{{Matcher: "*", Hooks: []Hook{{Command: "sub"}}}}}
 	var seen []Event
@@ -152,12 +186,15 @@ func TestSubagentStopBlock(t *testing.T) {
 		map[string]CommandResult{"sub": {Stdout: "stop subagent", ExitCode: 2}},
 		&seen,
 	)))
-	out, blocked, err := r.SubagentStop(t.Context())
+	out, blocked, err := r.SubagentStop(t.Context(), "researcher")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !blocked || out != "stop subagent" {
 		t.Fatalf("out = %q blocked = %v", out, blocked)
+	}
+	if len(seen) != 1 || seen[0].AgentName != "researcher" {
+		t.Fatalf("event = %+v", seen)
 	}
 }
 
@@ -290,6 +327,7 @@ func hookCmd(event string, command string) Config {
 		Stop:              []Entry{{Hooks: []Hook{{Type: "command", Command: command}}}},
 		SessionStart:      []Entry{{Hooks: []Hook{{Type: "command", Command: command}}}},
 		SessionEnd:        []Entry{{Hooks: []Hook{{Type: "command", Command: command}}}},
+		SubagentStart:     []Entry{{Hooks: []Hook{{Type: "command", Command: command}}}},
 		SubagentStop:      []Entry{{Hooks: []Hook{{Type: "command", Command: command}}}},
 		Notification:      []Entry{{Hooks: []Hook{{Type: "command", Command: command}}}},
 		PreCompact:        []Entry{{Hooks: []Hook{{Type: "command", Command: command}}}},
@@ -346,10 +384,16 @@ func TestAllHookEventsHappyAndError(t *testing.T) {
 	if _, err := fail.SessionEnd(ctx, "exit"); err == nil {
 		t.Fatal("end fail")
 	}
-	if fb, blocked, err := ok.SubagentStop(ctx); err != nil || fb != "feedback" || blocked {
+	if fb, err := ok.SubagentStart(ctx, "researcher"); err != nil || fb != "feedback" {
+		t.Fatalf("substart ok = %q %v", fb, err)
+	}
+	if _, err := fail.SubagentStart(ctx, "researcher"); err == nil {
+		t.Fatal("substart fail")
+	}
+	if fb, blocked, err := ok.SubagentStop(ctx, "researcher"); err != nil || fb != "feedback" || blocked {
 		t.Fatalf("substop ok = %q %v %v", fb, blocked, err)
 	}
-	if _, _, err := fail.SubagentStop(ctx); err == nil {
+	if _, _, err := fail.SubagentStop(ctx, "researcher"); err == nil {
 		t.Fatal("substop fail")
 	}
 	if fb, err := ok.Notification(ctx, "tool needs approval"); err != nil || fb != "feedback" {

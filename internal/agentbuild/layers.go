@@ -44,6 +44,7 @@ func loadHooksConfig(workdir string) hooks.Config {
 		merged.Stop = append(merged.Stop, cfg.Stop...)
 		merged.SessionStart = append(merged.SessionStart, cfg.SessionStart...)
 		merged.SessionEnd = append(merged.SessionEnd, cfg.SessionEnd...)
+		merged.SubagentStart = append(merged.SubagentStart, cfg.SubagentStart...)
 		merged.SubagentStop = append(merged.SubagentStop, cfg.SubagentStop...)
 		merged.Notification = append(merged.Notification, cfg.Notification...)
 		merged.PreCompact = append(merged.PreCompact, cfg.PreCompact...)

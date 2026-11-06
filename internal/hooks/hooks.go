@@ -28,6 +28,7 @@ type Event struct {
 	StopReason   string         `json:"stop_reason,omitempty"`
 	Message      string         `json:"message,omitempty"`
 	Source       string         `json:"source,omitempty"`
+	AgentName    string         `json:"agent_name,omitempty"`
 }
 
 // Hook is a single hook definition.
@@ -51,6 +52,7 @@ type Config struct {
 	Stop              []Entry `json:"Stop"`
 	SessionStart      []Entry `json:"SessionStart"`
 	SessionEnd        []Entry `json:"SessionEnd"`
+	SubagentStart     []Entry `json:"SubagentStart"`
 	SubagentStop      []Entry `json:"SubagentStop"`
 	Notification      []Entry `json:"Notification"`
 	PreCompact        []Entry `json:"PreCompact"`
@@ -254,10 +256,24 @@ func (r *Runner) SessionStart(ctx context.Context) (string, error) {
 	return strings.TrimSpace(stdout), nil
 }
 
+// SubagentStart runs when a Task subagent starts (name is the resolved
+// subagent name/type); returns feedback.
+func (r *Runner) SubagentStart(ctx context.Context, name string) (string, error) {
+	ev := Event{SessionID: r.sessionID, CWD: r.cwd, AgentName: name}
+	stdout, _, _, err := r.runMatching(ctx, r.cfg.SubagentStart, "", nil, ev)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(stdout), nil
+}
+
 // SubagentStop runs when a subagent finishes; returns feedback (and blocked
-// when a hook exits 2).
-func (r *Runner) SubagentStop(ctx context.Context) (string, bool, error) {
-	ev := Event{SessionID: r.sessionID, CWD: r.cwd}
+// when a hook exits 2). The blocked flag is informational: woca does not
+// re-enter the finished subagent (a documented divergence from Claude Code's
+// continue-the-subagent semantics); the caller appends the feedback to the
+// subagent report instead.
+func (r *Runner) SubagentStop(ctx context.Context, name string) (string, bool, error) {
+	ev := Event{SessionID: r.sessionID, CWD: r.cwd, AgentName: name}
 	stdout, _, blocked, err := r.runMatching(ctx, r.cfg.SubagentStop, "", nil, ev)
 	if err != nil {
 		return "", false, err
@@ -357,6 +373,7 @@ func (r *Runner) Configured() []string {
 		{"Stop", r.cfg.Stop},
 		{"SessionStart", r.cfg.SessionStart},
 		{"SessionEnd", r.cfg.SessionEnd},
+		{"SubagentStart", r.cfg.SubagentStart},
 		{"SubagentStop", r.cfg.SubagentStop},
 		{"Notification", r.cfg.Notification},
 		{"PreCompact", r.cfg.PreCompact},

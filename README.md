@@ -119,7 +119,7 @@ every conversation is persisted as a resumable transcript.
 **Ecosystem**
 
 - **Skills** (`SKILL.md` + YAML frontmatter), **custom subagents**
-  (`.woca/agents/*.md`), **hooks** (12 event groups, matchers, exit-code
+  (`.woca/agents/*.md`), **hooks** (13 event groups, matchers, exit-code
   semantics), **MCP** client (stdio + streamable HTTP, tools, resources,
   prompts, notifications, OAuth), and **capability plugins** (managed
   browser automation, PDF tooling, and Office document support) — see
@@ -358,7 +358,7 @@ internal/platform/       shared platform primitives (authn, authz, httpx,
                          machineid, …)
 internal/skills          SKILL.md loader (layered: flag > workspace > user)
 internal/agents          subagent definitions (.woca/agents/*.md)
-internal/hooks           hook runner (12 event groups)
+internal/hooks           hook runner (13 event groups)
 internal/mcp             MCP client (stdio + streamable HTTP, OAuth)
 internal/plugins         marketplace plugins (skills/agents bundles)
 internal/pluginrt        capability-plugin runtimes (browser, pdf, office)
@@ -659,12 +659,17 @@ Configure lifecycle hooks in `~/.woca/settings.json` or
 }
 ```
 
-Twelve event groups are supported: `PreToolUse`, `PostToolUse`,
-`UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`, `SubagentStop`,
-`Notification`, `PreCompact`, `PostCompact`, `PermissionRequest`, and
-`PostSampling`. Each hook receives a JSON event on stdin;
-stdout is fed back as context. A `PreToolUse` hook exiting `2` denies the
-tool; a `PostToolUse` hook exiting `2` blocks continuation.
+Thirteen event groups are supported: `PreToolUse`, `PostToolUse`,
+`UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`, `SubagentStart`,
+`SubagentStop`, `Notification`, `PreCompact`, `PostCompact`,
+`PermissionRequest`, and `PostSampling`. Each hook receives a JSON event on
+stdin; stdout is fed back as context. A `PreToolUse` hook exiting `2` denies
+the tool; a `PostToolUse` hook exiting `2` blocks continuation.
+`SubagentStart`/`SubagentStop` wrap every Task subagent run (payload field
+`agent_name`); a `SubagentStop` hook exiting `2` has its stdout appended to
+the subagent report as `<subagent-stop-feedback>` (the subagent is not
+re-run). `Notification` fires immediately before the permission interrupt
+with `permission required: <tool>`.
 
 ### MCP servers
 

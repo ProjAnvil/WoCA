@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -168,5 +169,147 @@ func TestSessionEndHook(t *testing.T) {
 	}
 	if len(seen) != 1 || seen[0].StopReason != "exit" {
 		t.Fatalf("events = %+v", seen)
+	}
+}
+
+// firingLog records hook firings in order: each entry pairs the hook command
+// with the decoded event, so tests can assert both sequence and payloads.
+type firingLog struct {
+	mu      sync.Mutex
+	fired   []string
+	events  []hooks.Event
+	results map[string]hooks.CommandResult
+}
+
+func (l *firingLog) runner() hooks.CommandRunner {
+	return func(ctx context.Context, command, stdin, cwd string) (hooks.CommandResult, error) {
+		var ev hooks.Event
+		_ = json.Unmarshal([]byte(stdin), &ev)
+		l.mu.Lock()
+		l.fired = append(l.fired, command)
+		l.events = append(l.events, ev)
+		l.mu.Unlock()
+		if r, ok := l.results[command]; ok {
+			return r, nil
+		}
+		return hooks.CommandResult{}, nil
+	}
+}
+
+func (l *firingLog) snapshot() ([]string, []hooks.Event) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.fired), slices.Clone(l.events)
+}
+
+// newSubagentHookAgent builds a bypass agent whose subagent model answers
+// "report body", wired to the given hook configuration.
+func newSubagentHookAgent(t *testing.T, hookCfg hooks.Config, hr hooks.CommandRunner) *Agent {
+	t.Helper()
+	a, err := New(Config{
+		Model:          language.NewFakeChatModel(language.WithResponses(messages.AI("done"))),
+		SubagentModel:  language.NewFakeChatModel(language.WithResponses(messages.AI("report body"))),
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeBypass,
+		Hooks:          hooks.NewRunner(hookCfg, ".", "s1", hooks.WithCommandRunner(hr)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// TestForegroundTaskFiresSubagentStartThenStop: a foreground Task fires
+// SubagentStart before the subagent runs and SubagentStop after its report,
+// both carrying the resolved agent_name.
+func TestForegroundTaskFiresSubagentStartThenStop(t *testing.T) {
+	log := &firingLog{}
+	a := newSubagentHookAgent(t, hooks.Config{
+		SubagentStart: []hooks.Entry{{Matcher: "*", Hooks: []hooks.Hook{{Type: "command", Command: "on-start"}}}},
+		SubagentStop:  []hooks.Entry{{Matcher: "*", Hooks: []hooks.Hook{{Type: "command", Command: "on-stop"}}}},
+	}, log.runner())
+
+	res, err := a.runTask(t.Context(), taskArgs{Description: "hooked work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fired, events := log.snapshot()
+	if len(fired) != 2 || fired[0] != "on-start" || fired[1] != "on-stop" {
+		t.Fatalf("hook firing order = %v, want [on-start on-stop]", fired)
+	}
+	for i, ev := range events {
+		if ev.AgentName != "general" {
+			t.Fatalf("event %d agent_name = %q, want general", i, ev.AgentName)
+		}
+	}
+	// No exit-2 feedback: the report passes through unwrapped.
+	if res.Content != "report body" {
+		t.Fatalf("report = %q", res.Content)
+	}
+}
+
+// TestSubagentStopFeedbackAppendedToReport: a SubagentStop hook exiting 2 has
+// its stdout appended to the subagent report inside the documented wrapper
+// (no re-run of the subagent).
+func TestSubagentStopFeedbackAppendedToReport(t *testing.T) {
+	log := &firingLog{results: map[string]hooks.CommandResult{
+		"on-stop": {Stdout: "verify the diff before trusting it", ExitCode: 2},
+	}}
+	a := newSubagentHookAgent(t, hooks.Config{
+		SubagentStop: []hooks.Entry{{Matcher: "*", Hooks: []hooks.Hook{{Type: "command", Command: "on-stop"}}}},
+	}, log.runner())
+
+	res, err := a.runTask(t.Context(), taskArgs{Description: "checked work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "report body\n<subagent-stop-feedback>\nverify the diff before trusting it\n</subagent-stop-feedback>"
+	if res.Content != want {
+		t.Fatalf("report = %q, want %q", res.Content, want)
+	}
+}
+
+// TestNotificationHookFiresOnPermissionInterrupt: on the permission path a
+// Notification hook observes "permission required: <tool>" immediately before
+// the permission interrupt pauses the run.
+func TestNotificationHookFiresOnPermissionInterrupt(t *testing.T) {
+	log := &firingLog{}
+	a, err := New(Config{
+		Model: language.NewFakeChatModel(
+			language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+			language.WithResponses(
+				messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+					{ID: "w1", Name: "Write", Args: map[string]any{"file_path": "x.txt", "content": "hi"}},
+				}},
+				messages.AI("written"),
+			),
+		),
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeDefault,
+		Hooks: hooks.NewRunner(hooks.Config{
+			Notification: []hooks.Entry{{Matcher: "*", Hooks: []hooks.Hook{{Type: "command", Command: "notify"}}}},
+		}, ".", "s1", hooks.WithCommandRunner(log.runner())),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	intrs, _ := pumpStream(t, a.Stream(t.Context(), []messages.Message{messages.Human("write it")}, "thread-notify"))
+	// The run must have paused on the permission interrupt (the Notification
+	// hook's fire site sits immediately in front of it).
+	if len(intrs) != 1 {
+		t.Fatalf("interrupts = %d, want 1", len(intrs))
+	}
+	if req, ok := decodeInterruptPayload(intrs[0].Value).(PermissionRequest); !ok || req.ToolName != "Write" {
+		t.Fatalf("interrupt payload = %#v, want PermissionRequest for Write", DecodeInterruptValue(intrs[0].Value))
+	}
+	fired, events := log.snapshot()
+	if len(fired) != 1 || fired[0] != "notify" {
+		t.Fatalf("hook firings = %v, want [notify]", fired)
+	}
+	if len(events) != 1 || events[0].Message != "permission required: Write" {
+		t.Fatalf("notification event = %+v", events)
 	}
 }
