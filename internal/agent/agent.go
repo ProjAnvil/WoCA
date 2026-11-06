@@ -1011,6 +1011,10 @@ func (a *Agent) resetThread(ctx context.Context, threadID string) {
 // runTurn compacts history and runs one full graph turn.
 func (a *Agent) runTurn(ctx context.Context, history []messages.Message, threadID string) ([]messages.Message, error) {
 	history = a.CompactHistory(ctx, history)
+	// Run-start delivery: input that arrived while idle rides in ahead of
+	// the fresh turn. After compaction, so the just-drained items reach the
+	// model verbatim instead of being summarized away.
+	history = a.prependQueued(ctx, history)
 	a.lastThread.Store(threadID)
 	a.resetThread(ctx, threadID)
 	res, err := a.graph.InvokeWithOptions(ctx, a.NewState(ctx, history), lggraph.Options{ThreadID: threadID})
@@ -1088,6 +1092,7 @@ func (a *Agent) ResumeStream(ctx context.Context, threadID string, resumeValue a
 func (a *Agent) streamWithBudget(ctx context.Context, history []messages.Message, threadID string, budget int) iter.Seq2[lggraph.StreamChunk, error] {
 	a.lastThread.Store(threadID)
 	history = a.CompactHistory(ctx, history)
+	history = a.prependQueued(ctx, history) // run-start delivery; see runTurn
 	a.resetThread(ctx, threadID)
 	return a.graph.Stream(ctx, a.NewState(ctx, history), lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: threadID, RecursionLimit: budget},
@@ -1615,8 +1620,10 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		// forbids interleaving tool results with user messages — so the model
 		// addresses it in this turn. Drained after execution, so input
 		// submitted during the tools' run is included; an interrupt-resume
-		// re-execution drains an already-emptied queue and adds nothing.
-		for _, q := range a.inputs.drain() {
+		// re-execution drains an already-emptied queue and adds nothing. The
+		// drain is scoped to the run's session; other sessions' items stay
+		// queued ("" drains everything — the single-session callers).
+		for _, q := range a.inputs.drain(sessionFromCtx(ctx)) {
 			results = append(results, formatQueuedInput(q))
 		}
 		// Kick off the async tool-use summary: UI-only, generated

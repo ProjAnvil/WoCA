@@ -11,6 +11,7 @@ import (
 
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // newQueueTestAgent builds an agent whose model requests one Sleep call then
@@ -41,13 +42,29 @@ func newQueueTestAgent(t *testing.T, rec *recorder, sleepMS int) *Agent {
 }
 
 func TestQueuedInputInjectedAfterToolResults(t *testing.T) {
-	a := newQueueTestAgent(t, &recorder{}, 10)
+	rec := &recorder{}
+	a := newQueueTestAgent(t, rec, 300)
+
+	// Input queued before a run starts is delivered at run start
+	// (prependQueued); the after-tool-results attachment only applies to
+	// input arriving mid-run, so submit it while the tool is still sleeping.
+	type result struct {
+		out []messages.Message
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("run the check")}, "t")
+		done <- result{out, err}
+	}()
+	time.Sleep(80 * time.Millisecond)
 	a.QueueInput("actually, also check the tests")
 
-	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("run the check")}, "t")
-	if err != nil {
-		t.Fatal(err)
+	res := <-done
+	if res.err != nil {
+		t.Fatal(res.err)
 	}
+	out := res.out
 
 	var toolIdx, queuedIdx, finalIdx = -1, -1, -1
 	for i, m := range out {
@@ -158,5 +175,179 @@ func TestQueueInputConcurrent(t *testing.T) {
 	wg.Wait()
 	if got := a.QueuedInputCount(); got != 32 {
 		t.Fatalf("queued count = %d, want 32", got)
+	}
+}
+
+// TestQueueSessionDrainSemantics pins the session-scoped drain contract:
+// draining for session "a" returns the unscoped items plus "a"'s own and
+// leaves other sessions' items queued; the count for a session mirrors what
+// a run in that session would drain.
+func TestQueueSessionDrainSemantics(t *testing.T) {
+	a := newQueueTestAgent(t, &recorder{}, 1)
+	a.QueueInput("unscoped")                      // Session ""
+	a.QueueNotificationFor("a", "tag-a", "for-a") // Session "a"
+	a.QueueNotificationFor("b", "tag-b", "for-b") // Session "b"
+
+	if got := a.QueuedInputCount(); got != 3 {
+		t.Fatalf("unscoped count = %d, want 3 (counts every session)", got)
+	}
+	if got := a.QueuedInputCountFor("a"); got != 2 {
+		t.Fatalf("count for a = %d, want 2 (unscoped + a)", got)
+	}
+	if got := a.QueuedInputCountFor("b"); got != 2 {
+		t.Fatalf("count for b = %d, want 2 (unscoped + b)", got)
+	}
+
+	items := a.DrainQueuedInputsFor("a")
+	if len(items) != 2 ||
+		items[0].Text != "unscoped" || items[0].Session != "" ||
+		items[1].Text != "for-a" || items[1].Session != "a" {
+		t.Fatalf("drain for a = %+v", items)
+	}
+	if got := a.QueuedInputCountFor("a"); got != 0 {
+		t.Fatalf("after drain for a: count for a = %d, want 0", got)
+	}
+	if got := a.QueuedInputCount(); got != 1 {
+		t.Fatalf("after drain for a: total = %d, want 1 (b still queued)", got)
+	}
+
+	// The unscoped drain takes everything that is left, across sessions.
+	rest := a.DrainQueuedInputs()
+	if len(rest) != 1 || rest[0].Text != "for-b" || rest[0].Session != "b" {
+		t.Fatalf("unscoped drain = %+v", rest)
+	}
+}
+
+// TestQueueDrainUnscopedReturnsEverything verifies drain("") — an unscoped
+// run such as the TUI — takes every queued item regardless of session.
+func TestQueueDrainUnscopedReturnsEverything(t *testing.T) {
+	a := newQueueTestAgent(t, &recorder{}, 1)
+	a.QueueInput("unscoped")
+	a.QueueNotificationFor("a", "tag-a", "for-a")
+	a.QueueNotificationFor("b", "tag-b", "for-b")
+
+	items := a.inputs.drain("")
+	if len(items) != 3 {
+		t.Fatalf("drain(\"\") = %+v, want all 3 items", items)
+	}
+	if got := a.QueuedInputCount(); got != 0 {
+		t.Fatalf("queue not cleared: %d", got)
+	}
+}
+
+// TestQueueNotificationForSessionDelivery verifies session-scoped delivery
+// end to end: with notifications queued for sessions "a" and "b", a run whose
+// ctx carries tracing.WithRun(ctx, "r1", "a") receives only the "a" one —
+// delivered at run start, ahead of the fresh user turn — and the "b" item
+// stays queued for its own session.
+func TestQueueNotificationForSessionDelivery(t *testing.T) {
+	a := newQueueTestAgent(t, &recorder{}, 10)
+	a.QueueNotificationFor("a", "bg-done", "result for session a")
+	a.QueueNotificationFor("b", "bg-done", "result for session b")
+
+	ctx := tracing.WithRun(t.Context(), "r1", "a")
+	out, err := a.Invoke(ctx, []messages.Message{messages.Human("run the check")}, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var notifA, notifB, humanIdx = -1, -1, -1
+	for i, m := range out {
+		switch {
+		case m.Role == messages.RoleHuman && strings.Contains(m.Content, "result for session a"):
+			notifA = i
+		case m.Role == messages.RoleHuman && strings.Contains(m.Content, "result for session b"):
+			notifB = i
+		case m.Role == messages.RoleHuman && m.Content == "run the check":
+			humanIdx = i
+		}
+	}
+	if notifA == -1 || humanIdx == -1 {
+		t.Fatalf("transcript missing pieces: notifA=%d human=%d (%+v)", notifA, humanIdx, out)
+	}
+	if notifB != -1 {
+		t.Fatalf("session-b notification leaked into session a's run at %d: %+v", notifB, out)
+	}
+	// Run-start delivery: the notification rides in ahead of the fresh user
+	// turn instead of waiting for a tool round.
+	if notifA > humanIdx {
+		t.Fatalf("notification not prepended: notif=%d human=%d", notifA, humanIdx)
+	}
+	if got := a.QueuedInputCountFor("b"); got != 1 {
+		t.Fatalf("queued for b = %d, want 1", got)
+	}
+	if got := a.QueuedInputCount(); got != 1 {
+		t.Fatalf("total queued = %d, want 1", got)
+	}
+}
+
+// TestPrependQueuedInsertion pins where run-start queued input lands in the
+// history: ahead of the trailing Human turn when there is one, appended at
+// the end otherwise, and a no-op on an empty queue.
+func TestPrependQueuedInsertion(t *testing.T) {
+	a := newQueueTestAgent(t, &recorder{}, 1)
+	ctx := tracing.WithRun(t.Context(), "r9", "s")
+
+	a.QueueNotificationFor("s", "bg-done", "note one")
+	a.QueueNotificationFor("s", "bg-done", "note two")
+	ending := []messages.Message{messages.AI("prior"), messages.Human("fresh turn")}
+	got := a.prependQueued(ctx, ending)
+	if len(got) != 4 ||
+		got[0].Content != "prior" ||
+		got[1].Role != messages.RoleHuman || !strings.Contains(got[1].Content, "note one") ||
+		got[2].Role != messages.RoleHuman || !strings.Contains(got[2].Content, "note two") ||
+		got[3].Content != "fresh turn" {
+		t.Fatalf("insertion ahead of trailing Human wrong: %+v", got)
+	}
+
+	// History not ending in Human appends at the end.
+	a.QueueNotificationFor("s", "bg-done", "note three")
+	noHuman := []messages.Message{messages.Human("old"), messages.AI("prior")}
+	got = a.prependQueued(ctx, noHuman)
+	if len(got) != 3 || !strings.Contains(got[2].Content, "note three") {
+		t.Fatalf("append fallback wrong: %+v", got)
+	}
+
+	// An empty queue leaves the history untouched.
+	fresh := []messages.Message{messages.Human("fresh turn")}
+	if got := a.prependQueued(ctx, fresh); len(got) != 1 || got[0].Content != "fresh turn" {
+		t.Fatalf("empty-queue passthrough wrong: %+v", got)
+	}
+}
+
+// TestQueueNotificationForOtherSessionStaysQueuedMidRun covers the toolsNode
+// attach point: a notification for session "b" arriving while session "a"'s
+// run is mid-turn must not leak into "a"'s transcript — it stays queued for
+// "b"'s own run.
+func TestQueueNotificationForOtherSessionStaysQueuedMidRun(t *testing.T) {
+	rec := &recorder{}
+	a := newQueueTestAgent(t, rec, 300)
+
+	type result struct {
+		out []messages.Message
+		err error
+	}
+	done := make(chan result, 1)
+	ctx := tracing.WithRun(t.Context(), "r1", "a")
+	go func() {
+		out, err := a.Invoke(ctx, []messages.Message{messages.Human("run the check")}, "t")
+		done <- result{out, err}
+	}()
+
+	// Arrives mid-turn, so only the toolsNode drain can pick it up.
+	time.Sleep(80 * time.Millisecond)
+	a.QueueNotificationFor("b", "bg-done", "result for session b")
+
+	res := <-done
+	if res.err != nil {
+		t.Fatal(res.err)
+	}
+	for _, m := range res.out {
+		if strings.Contains(m.Content, "result for session b") {
+			t.Fatalf("session-b notification leaked into session a's run: %+v", res.out)
+		}
+	}
+	if got := a.QueuedInputCountFor("b"); got != 1 {
+		t.Fatalf("queued for b = %d, want 1 (must survive a's run)", got)
 	}
 }
