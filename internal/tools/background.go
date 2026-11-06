@@ -4,14 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/platform/executor"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // BackgroundShells manages Bash commands started with run_in_background:
@@ -29,13 +32,13 @@ type BackgroundShellStatus struct {
 }
 
 // notifyBackgroundDone, when set, is called once when a background shell
-// finishes, with the rendered completion notification. The agent wires this to
-// its mid-turn input queue.
+// finishes, with the starting run's session id and the rendered completion
+// notification. The agent wires this to its session-scoped mid-turn queue.
 type BackgroundShells struct {
 	mu     sync.Mutex
 	next   int
 	shells map[string]*backgroundShell
-	onDone func(notification string)
+	onDone func(session, notification string)
 	// execFor resolves the execution backend per start, so a run executor
 	// injected into the invoking context (a per-run sandbox) serves the
 	// background shell too.
@@ -45,6 +48,9 @@ type BackgroundShells struct {
 type backgroundShell struct {
 	id      string
 	command string
+	// session is the starting run's session id (tracing.RunFrom); "" when
+	// the shell started outside any run scope.
+	session string
 	proc    executor.Process
 	buf     strings.Builder
 	mu      sync.Mutex
@@ -80,9 +86,11 @@ func NewBackgroundShellsWithExecFor(execFor func(context.Context) executor.Execu
 	return &BackgroundShells{shells: map[string]*backgroundShell{}, execFor: execFor}
 }
 
-// SetNotify installs the completion callback (called in the shell's run
-// goroutine; it must not block).
-func (b *BackgroundShells) SetNotify(fn func(notification string)) {
+// SetNotify installs the completion callback. It fires once per finished
+// shell as fn(session, notification), where session is the starting run's
+// session id ("" outside a run scope). It is called in the shell's run
+// goroutine; it must not block.
+func (b *BackgroundShells) SetNotify(fn func(session, notification string)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.onDone = fn
@@ -109,6 +117,7 @@ func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWork
 	sh := &backgroundShell{
 		id:      id,
 		command: command,
+		session: sessionFromCtx(ctx),
 		done:    make(chan struct{}),
 		exit:    -1,
 	}
@@ -146,10 +155,19 @@ func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWork
 		sh.mu.Unlock()
 		close(sh.done)
 		if onDone != nil {
-			onDone(sh.notification())
+			onDone(sh.session, sh.notification())
 		}
 	}()
 	return id, nil
+}
+
+// sessionFromCtx returns the session id of the run scope in ctx, if any;
+// shells started outside a run scope carry "" (unscoped delivery).
+func sessionFromCtx(ctx context.Context) string {
+	if sc, ok := tracing.RunFrom(ctx); ok {
+		return sc.SessionID
+	}
+	return ""
 }
 
 // lineWriter appends to a background shell's buffer under its lock.
@@ -217,6 +235,67 @@ func (b *BackgroundShells) Output(id string) (output string, status BackgroundSh
 	return sh.buf.String(), st, true
 }
 
+// Wait blocks until the shell finishes, d elapses, or ctx is canceled, then
+// returns its snapshot: final status on completion, running status on timeout
+// or cancellation. ok=false reports an unknown id (without blocking).
+func (b *BackgroundShells) Wait(ctx context.Context, id string, d time.Duration) (BackgroundShellStatus, bool) {
+	b.mu.Lock()
+	sh := b.shells[id]
+	b.mu.Unlock()
+	if sh == nil {
+		return BackgroundShellStatus{}, false
+	}
+	// NewTimer over time.After so an early return stops the timer instead of
+	// letting it fire for the full wait (up to MaxWaitMS) after the caller
+	// moved on.
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-sh.done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	return sh.snapshot(), true
+}
+
+// WriteStdin writes input to a running shell's standard input and, when
+// closeStdin is set, closes the pipe to signal EOF — the standard way to
+// finish a stdin consumer such as cat. Writing to an unknown or already
+// finished shell is an error.
+func (b *BackgroundShells) WriteStdin(id, input string, closeStdin bool) error {
+	b.mu.Lock()
+	sh := b.shells[id]
+	b.mu.Unlock()
+	if sh == nil {
+		return fmt.Errorf("no background shell %q", id)
+	}
+	sh.mu.Lock()
+	exited := sh.exited
+	exit := sh.exit
+	var stdin io.WriteCloser
+	if !exited && sh.proc != nil {
+		stdin = sh.proc.Stdin()
+	}
+	sh.mu.Unlock()
+	if exited {
+		return fmt.Errorf("background shell %s already finished (exit code %d)", sh.id, exit)
+	}
+	if stdin == nil {
+		return fmt.Errorf("background shell %s has no stdin yet", sh.id)
+	}
+	if input != "" {
+		if _, err := io.WriteString(stdin, input); err != nil {
+			return fmt.Errorf("write stdin: %w", err)
+		}
+	}
+	if closeStdin {
+		if err := stdin.Close(); err != nil {
+			return fmt.Errorf("close stdin: %w", err)
+		}
+	}
+	return nil
+}
+
 // Kill terminates a running shell. Killing an already-finished shell is a
 // no-op. Returns the (possibly new) status.
 func (b *BackgroundShells) Kill(id string) (BackgroundShellStatus, error) {
@@ -237,9 +316,13 @@ func (b *BackgroundShells) Kill(id string) (BackgroundShellStatus, error) {
 	return st, nil
 }
 
-// notificationOutputCap bounds the output tail included in a completion
+// NotificationOutputCap bounds the output tail included in a completion
 // notification so a chatty command cannot flood the context.
-const notificationOutputCap = 2000
+const NotificationOutputCap = 2000
+
+// MaxWaitMS is the largest BashOutput wait_ms (10 minutes); longer requests
+// are clamped so a typo cannot pin a tool round for hours.
+const MaxWaitMS = 600000
 
 // notification renders the completion message injected after the next tool
 // round: exit status plus a bounded output tail.
@@ -252,8 +335,8 @@ func (sh *backgroundShell) notification() string {
 	b.WriteString("<background-task-completed>\n")
 	fmt.Fprintf(&b, "Background shell %s finished (exit code %d): %s\n", st.ID, st.ExitCode, st.Command)
 	if out != "" {
-		if len(out) > notificationOutputCap {
-			out = "…\n" + out[len(out)-notificationOutputCap:]
+		if len(out) > NotificationOutputCap {
+			out = "…\n" + out[len(out)-NotificationOutputCap:]
 		}
 		fmt.Fprintf(&b, "Output (tail):\n%s\n", strings.TrimRight(out, "\n"))
 	}
@@ -261,13 +344,21 @@ func (sh *backgroundShell) notification() string {
 	return b.String()
 }
 
-// bashOutputTool polls a background shell's output.
+// bashOutputTool polls a background shell's output, optionally blocking
+// until it finishes.
 func bashOutputTool(bg *BackgroundShells) coretools.Tool {
 	t := MustTool(coretools.FromFunc("BashOutput",
-		"Get the current output and status of a background shell started with Bash run_in_background. Returns the accumulated stdout/stderr, whether it is still running, and its exit code once finished. Poll repeatedly for long-running commands.",
+		"Get the current output and status of a background shell started with Bash run_in_background. Returns the accumulated stdout/stderr, whether it is still running, and its exit code once finished. Set wait_ms to block inside this call until the shell finishes or the wait elapses (max 600000ms), instead of polling repeatedly.",
 		func(ctx context.Context, a struct {
 			ShellID string `json:"shell_id"`
+			WaitMS  int    `json:"wait_ms,omitempty"`
 		}) (coretools.Result, error) {
+			if a.WaitMS > 0 {
+				wait := time.Duration(min(a.WaitMS, MaxWaitMS)) * time.Millisecond
+				// Unknown ids return immediately from Wait; Output renders the
+				// error below.
+				_, _ = bg.Wait(ctx, strings.TrimSpace(a.ShellID), wait)
+			}
 			out, st, ok := bg.Output(strings.TrimSpace(a.ShellID))
 			if !ok {
 				return coretools.Result{Content: fmt.Sprintf("Error: no background shell %q (started shells: %s)", a.ShellID, formatShellIDs(bg.List()))}, nil
@@ -306,6 +397,28 @@ func killShellTool(bg *BackgroundShells) coretools.Tool {
 				return coretools.Result{Content: fmt.Sprintf("kill signal sent to shell %s (%s)", st.ID, st.Command)}, nil
 			}
 			return coretools.Result{Content: fmt.Sprintf("shell %s already finished (exit code %d)", st.ID, st.ExitCode)}, nil
+		}))
+	return t
+}
+
+// bashInputTool writes to a background shell's standard input.
+func bashInputTool(bg *BackgroundShells) coretools.Tool {
+	t := MustTool(coretools.FromFunc("BashInput",
+		"Write to the standard input of a background shell started with Bash run_in_background — answer prompts, feed data to filters. Set close_stdin=true to signal EOF once you are done writing; stdin consumers (cat, read loops) usually finish only then.",
+		func(ctx context.Context, a struct {
+			ShellID    string `json:"shell_id"`
+			Input      string `json:"input"`
+			CloseStdin bool   `json:"close_stdin"`
+		}) (coretools.Result, error) {
+			id := strings.TrimSpace(a.ShellID)
+			if err := bg.WriteStdin(id, a.Input, a.CloseStdin); err != nil {
+				return coretools.Result{Content: "Error: " + err.Error()}, nil
+			}
+			action := fmt.Sprintf("wrote %d bytes to shell %s stdin", len(a.Input), id)
+			if a.CloseStdin {
+				action += " and closed it (EOF)"
+			}
+			return coretools.Result{Content: action}, nil
 		}))
 	return t
 }

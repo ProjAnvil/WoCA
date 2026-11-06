@@ -13,7 +13,7 @@ import (
 
 const bashDescription = `Run a shell command in the working directory. Returns combined stdout/stderr and the exit code. Use for inspecting the repo, running builds/tests, and any command the other tools cannot do.
 
-Long-running commands (builds, dev servers, watchers) should set run_in_background=true: the command starts detached, the tool returns a shell ID immediately, and a completion notification with the output tail arrives when it finishes. Poll interim output with the BashOutput tool and terminate early with KillShell. Foreground commands are killed after timeout_ms (default 120s).`
+Long-running commands (builds, dev servers, watchers) should set run_in_background=true: the command starts detached, the tool returns a shell ID immediately, and a completion notification with the output tail arrives when it finishes. Poll interim output with the BashOutput tool (its wait_ms blocks until the shell finishes), feed the command's standard input with BashInput, and terminate early with KillShell. Foreground commands are killed after timeout_ms (default 120s).`
 
 type bashArgs struct {
 	Command         string `json:"command"`

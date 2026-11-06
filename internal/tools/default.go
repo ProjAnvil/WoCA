@@ -18,6 +18,7 @@ func defaultTools(d *Dir, todos *TodoStore, bg *BackgroundShells, fh *FileHistor
 	return []coretools.Tool{
 		bashTool(d, bg, execFor),
 		bashOutputTool(bg),
+		bashInputTool(bg),
 		killShellTool(bg),
 		readTool(d, execFor),
 		writeTool(d, fh, execFor),

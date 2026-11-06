@@ -602,9 +602,10 @@ func New(cfg Config) (*Agent, error) {
 	}
 	a.graph = cg
 	// Background-shell completions (Bash run_in_background) are delivered as
-	// tagged queue notifications after the next tool round.
-	a.registry.Background().SetNotify(func(text string) {
-		a.QueueNotification("background-task-completed", strings.TrimSpace(text))
+	// tagged queue notifications after the next tool round, scoped to the
+	// session whose run started the shell.
+	a.registry.Background().SetNotify(func(session, text string) {
+		a.QueueNotificationFor(session, "background-task-completed", strings.TrimSpace(text))
 	})
 	return a, nil
 }

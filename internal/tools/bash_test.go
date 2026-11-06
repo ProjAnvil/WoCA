@@ -129,3 +129,48 @@ func TestBashOutputWithOutputAndKillShellEdges(t *testing.T) {
 		t.Fatalf("KillShell finished = %q", res.Content)
 	}
 }
+
+// BashOutput wait_ms blocks inside the call until the shell finishes (or the
+// wait elapses), so the agent gets the final result without a poll loop.
+func TestBashOutputWaitMS(t *testing.T) {
+	reg := NewRegistry(t.TempDir())
+	bg := reg.Background()
+	bash, _ := reg.Get("Bash")
+	poll, _ := reg.Get("BashOutput")
+
+	if _, err := bash.Invoke(t.Context(), map[string]any{
+		"command": "sleep 0.3 && echo done", "run_in_background": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	res, err := poll.Invoke(t.Context(), map[string]any{"shell_id": "1", "wait_ms": 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Content, "done (exit code 0)") || !strings.Contains(res.Content, "done\n") {
+		t.Fatalf("BashOutput with wait_ms = %q", res.Content)
+	}
+	if elapsed := time.Since(start); elapsed < 300*time.Millisecond {
+		t.Fatalf("wait_ms returned before completion: %s", elapsed)
+	}
+
+	// A short wait on a long shell returns the running state promptly.
+	if _, err := bash.Invoke(t.Context(), map[string]any{
+		"command": "sleep 5", "run_in_background": true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = bg.Kill("2") })
+	start = time.Now()
+	res, err = poll.Invoke(t.Context(), map[string]any{"shell_id": "2", "wait_ms": 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Content, "running") {
+		t.Fatalf("BashOutput short wait = %q", res.Content)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("short wait_ms blocked %s", elapsed)
+	}
+}
