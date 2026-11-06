@@ -3,6 +3,7 @@ package console
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -109,6 +110,108 @@ func TestPluginsCommand(t *testing.T) {
 	}
 	if _, err := c.Execute(t.Context(), "plugins", []string{"bogus"}, nil); err == nil {
 		t.Fatal("unknown subcommand should fail")
+	}
+}
+
+// TestPluginsContributionsAndToggle covers /plugins list contribution
+// counts (skills/agents/commands/hooks/MCP), the ignore warning for
+// unsupported manifest keys, the (disabled) marker for skipped plugins,
+// and the enable/disable round-trip persisted through the settings store.
+func TestPluginsContributionsAndToggle(t *testing.T) {
+	c, _, _ := newTestConsole(t, nil)
+	root := filepath.Join(t.TempDir(), "plugins")
+	c.deps.PluginsRoot = root
+	st, err := settings.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	c.deps.Settings = st
+
+	// Fixture plugin: one of every contribution plus an unsupported
+	// lspServers key (Claude inline spellings).
+	pdir := filepath.Join(root, "p1")
+	for _, d := range []string{
+		filepath.Join(pdir, "skills", "greet"),
+		filepath.Join(pdir, "agents"),
+		filepath.Join(pdir, "commands"),
+	} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(pdir, "plugin.json"), []byte(`{
+		"name": "p1", "version": "1.0.0", "description": "fixture",
+		"commands": "commands",
+		"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "guard"}]}]},
+		"mcpServers": {"db": {"command": "postgres-mcp"}},
+		"lspServers": {}
+	}`), 0o644)
+	os.WriteFile(filepath.Join(pdir, "skills", "greet", "SKILL.md"),
+		[]byte("---\nname: greet\ndescription: hi\n---\nHi.\n"), 0o644)
+	os.WriteFile(filepath.Join(pdir, "agents", "helper.md"),
+		[]byte("---\nname: helper\ndescription: Helps\n---\nHelp out.\n"), 0o644)
+	os.WriteFile(filepath.Join(pdir, "commands", "deploy.md"),
+		[]byte("---\ndescription: Deploy\n---\nDeploy $ARGUMENTS.\n"), 0o644)
+
+	// List reports per-plugin contribution counts and the ignore warning.
+	res, err := c.Execute(t.Context(), "plugins", []string{"list"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"p1",
+		"1 skills, 1 agents, 1 commands, 1 hooks, 1 MCP",
+		"⚠ ignored: lspServers",
+	} {
+		if !strings.Contains(res.Output, want) {
+			t.Fatalf("list missing %q:\n%s", want, res.Output)
+		}
+	}
+
+	// Disable persists the name in the disabled-plugins settings key and
+	// the plugin is listed as disabled (skipped at load).
+	if _, err := c.Execute(t.Context(), "plugins", []string{"disable", "p1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Load().DisabledPlugins; !slices.Contains(got, "p1") {
+		t.Fatalf("disabled-plugins = %v; want p1 persisted", got)
+	}
+	res, err = c.Execute(t.Context(), "plugins", []string{"list"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "p1") || !strings.Contains(res.Output, "(disabled)") {
+		t.Fatalf("disabled listing = %q", res.Output)
+	}
+
+	// Unknown names are rejected against loaded ∪ skipped plugins.
+	if _, err := c.Execute(t.Context(), "plugins", []string{"disable", "ghost"}, nil); err == nil {
+		t.Fatal("disable of an unknown plugin should fail")
+	}
+	if _, err := c.Execute(t.Context(), "plugins", []string{"enable", "ghost"}, nil); err == nil {
+		t.Fatal("enable of an unknown plugin should fail")
+	}
+
+	// Enable removes the name again; p1 loads once more.
+	if _, err := c.Execute(t.Context(), "plugins", []string{"enable", "p1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Load().DisabledPlugins; slices.Contains(got, "p1") {
+		t.Fatalf("disabled-plugins = %v; want p1 removed", got)
+	}
+	res, err = c.Execute(t.Context(), "plugins", []string{"list"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Output, "(disabled)") {
+		t.Fatalf("enabled listing still shows a disabled marker:\n%s", res.Output)
+	}
+
+	// The install usage string advertises the marketplace spelling.
+	_, err = c.Execute(t.Context(), "plugins", []string{"install"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "name@marketplace") {
+		t.Fatalf("install usage = %v", err)
 	}
 }
 

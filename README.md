@@ -55,6 +55,7 @@ every conversation is persisted as a resumable transcript.
   - [Custom subagents](#custom-subagents)
   - [Hooks](#hooks)
   - [MCP servers](#mcp-servers)
+  - [Marketplace plugins](#marketplace-plugins)
   - [Capability plugins](#capability-plugins)
   - [Reuse your existing setup](#reuse-your-existing-setup)
 - [Slash commands](#slash-commands)
@@ -698,6 +699,43 @@ supported; OAuth-protected servers are authorized once with
 definitions resolve layered: `--mcp` flag > workspace
 `.woca/mcp.json` > user `~/.woca/mcp.json`, and tools added mid-session are
 picked up between rounds.
+
+### Marketplace plugins
+
+A plugin is a directory with a `plugin.json` manifest (a Claude-style
+`.claude-plugin/plugin.json` layout works too) installed under
+`~/.woca/plugins`:
+
+```text
+/plugins install ./my-plugin
+/plugins install https://github.com/me/my-plugin.git
+/plugins install deploy@acme-marketplace
+```
+
+The last form resolves `deploy` inside a marketplace — a git URL or local
+directory carrying `.claude-plugin/marketplace.json`. `/plugins list`
+shows each plugin's contribution counts; `/plugins enable|disable <name>`
+toggles a plugin through the `disabled-plugins` settings key (a JSON name
+array; disabled plugins contribute nothing and are listed with a
+`(disabled)` marker until re-enabled).
+
+Plugins contribute skills (`skills/`), subagents (`agents/`), commands
+(`commands/*.md`, exposed as skills named `<plugin>:<command>`), hooks
+and MCP servers. Manifest keys accept both spellings:
+
+| Contribution | woca key | Claude key |
+|--------------|----------|------------|
+| skills directory | `skills_dir` | `skills` |
+| agents directory | `agents_dir` | `agents` |
+| commands directory | `commands_dir` | `commands` |
+| hooks | `hooks` (file path or list) | `hooks` (inline object or `{"source": …}`) |
+| MCP servers | `mcp_servers` (file path list) | `mcpServers` (inline object) |
+
+Unsupported keys (`lspServers`, `outputStyles`, …) are ignored and
+reported by `/plugins list`. Hook commands and MCP server definitions can
+reference the plugin's install directory as `${WOCA_PLUGIN_ROOT}` or
+`${CLAUDE_PLUGIN_ROOT}`. Subagents are usable immediately after install;
+skills, commands, hooks and MCP servers attach at the next startup.
 
 ### Capability plugins
 
