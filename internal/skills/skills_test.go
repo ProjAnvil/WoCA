@@ -44,7 +44,7 @@ func TestLoadAndParse(t *testing.T) {
 }
 
 func TestParseWithoutFrontmatter(t *testing.T) {
-	s := parseSkill("myname", []byte("just body text"))
+	s := Parse("myname", []byte("just body text"))
 	if s.Name != "myname" {
 		t.Fatalf("name = %q", s.Name)
 	}
@@ -54,7 +54,7 @@ func TestParseWithoutFrontmatter(t *testing.T) {
 }
 
 func TestParseArgsCommaSeparated(t *testing.T) {
-	s := parseSkill("myname", []byte("---\nargs: foo, bar, baz\n---\nbody"))
+	s := Parse("myname", []byte("---\nargs: foo, bar, baz\n---\nbody"))
 	if len(s.Args) != 3 {
 		t.Fatalf("args = %+v", s.Args)
 	}
@@ -70,7 +70,7 @@ func TestParseArgsCommaSeparated(t *testing.T) {
 
 func TestParseArgsList(t *testing.T) {
 	content := "---\nname: review\nargs:\n  - files: files to review\n  - depth: how deep to go\n---\nbody"
-	s := parseSkill("myname", []byte(content))
+	s := Parse("myname", []byte(content))
 	if len(s.Args) != 2 {
 		t.Fatalf("args = %+v", s.Args)
 	}
@@ -83,9 +83,24 @@ func TestParseArgsList(t *testing.T) {
 }
 
 func TestParseNoArgs(t *testing.T) {
-	s := parseSkill("myname", []byte("---\nname: plain\n---\nbody"))
+	s := Parse("myname", []byte("---\nname: plain\n---\nbody"))
 	if s.Args != nil {
 		t.Fatalf("Args should be nil for files without args, got %+v", s.Args)
+	}
+}
+
+// TestParseExported: Parse is the exported parser for plugin command
+// markdown; without a frontmatter name the default name sticks.
+func TestParseExported(t *testing.T) {
+	s := Parse("myplugin:deploy", []byte("---\ndescription: Ship it\n---\nBody $ARGUMENTS"))
+	if s.Name != "myplugin:deploy" {
+		t.Fatalf("Name = %q, want %q", s.Name, "myplugin:deploy")
+	}
+	if s.Description != "Ship it" {
+		t.Fatalf("Description = %q", s.Description)
+	}
+	if !strings.Contains(s.Body, "$ARGUMENTS") {
+		t.Fatalf("Body = %q, want body containing $ARGUMENTS", s.Body)
 	}
 }
 

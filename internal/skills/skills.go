@@ -58,7 +58,7 @@ func Load(root string) ([]Skill, error) {
 				if err != nil {
 					continue
 				}
-				sk := parseSkill(filepath.Base(dir), data)
+				sk := Parse(filepath.Base(dir), data)
 				if abs, err := filepath.Abs(path); err == nil {
 					sk.Source = abs
 				} else {
@@ -92,7 +92,7 @@ func LoadFS(fsys fs.FS) ([]Skill, error) {
 		if err != nil {
 			continue
 		}
-		sk := parseSkill(e.Name(), data)
+		sk := Parse(e.Name(), data)
 		sk.Source = "builtin/" + sk.Name
 		out = append(out, sk)
 	}
@@ -142,9 +142,10 @@ func (l *Loader) Load() ([]Skill, error) {
 	return skills, err
 }
 
-// parseSkill parses a SKILL.md with optional YAML frontmatter delimited by
-// leading "---" lines.
-func parseSkill(defaultName string, data []byte) Skill {
+// Parse parses a SKILL.md (or plugin command markdown) with optional YAML
+// frontmatter delimited by leading "---" lines, using defaultName when the
+// frontmatter has no name key. Unknown frontmatter keys are ignored.
+func Parse(defaultName string, data []byte) Skill {
 	text := strings.TrimSpace(string(data))
 	s := Skill{Name: defaultName}
 
