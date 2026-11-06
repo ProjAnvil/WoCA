@@ -9,8 +9,11 @@ export const nid = () => `i${Date.now().toString(36)}${(seq++).toString(36)}`
 // Harness-injected notification wrappers: background-shell/task completions,
 // cron-fired scheduled prompts, and input queued while a run was busy. Human
 // messages that start with one of these tags are machine notifications for
-// the model, never user speech — they render as dim system notices.
-const NOTICE_TAGS = ['<background-task-completed>', '<scheduled-task>', '<queued-user-input>']
+// the model, never user speech — they render as dim system notices. The
+// prefixes stop at the tag name (no closing >) so wrappers carrying
+// attributes match too — the same tolerance the Go retain filter
+// (runQuestion) applies to these tags.
+const NOTICE_TAGS = ['<background-task-completed', '<scheduled-task', '<queued-user-input']
 
 // isNoticeContent reports whether a Human message's content is one of the
 // harness-injected notification wrappers (raw content, tags included).

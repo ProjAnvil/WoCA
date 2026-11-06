@@ -101,6 +101,17 @@ describe('messagesToItems', () => {
     expect(items[0]).toMatchObject({ kind: 'notice', content: '<queued-user-input>\n\n</queued-user-input>' })
   })
 
+  it('tolerates attributes on the wrapper tags (parity with the Go retain filter)', () => {
+    const tagged = [
+      '<background-task-completed id="t7">\ndone\n</background-task-completed>',
+      '<scheduled-task id="cron-2">\ncheck the build\n</scheduled-task>',
+      '<queued-user-input ts="1">\nand this too\n</queued-user-input>',
+    ]
+    const items = messagesToItems(tagged.map((content) => msg({ role: 'user', content })))
+    expect(items.filter((i) => i.kind === 'notice')).toHaveLength(3)
+    expect(items.filter((i) => i.kind === 'user')).toEqual([])
+  })
+
   it('folds a coalesced multi-block notification into one notice', () => {
     // CoalesceQueuedInputs joins several tagged blocks with a blank line.
     const content =
