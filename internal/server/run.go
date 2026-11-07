@@ -15,6 +15,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/runner"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // Event is one SSE frame. Seq is a per-run monotonic sequence (from 1)
@@ -84,6 +85,17 @@ func newRun(id string, a *agent.Agent, ctx context.Context, cancel context.Cance
 
 // ID returns the run identifier.
 func (r *Run) ID() string { return r.id }
+
+// Session returns the session id this run is scoped to — the run scope its
+// ctx carries (set by newRunContext before the run exists, so it is stable
+// for the Run's lifetime); "" for a run without one. The steer endpoint
+// uses it to scope queued input to the session the user is looking at.
+func (r *Run) Session() string {
+	if sc, ok := tracing.RunFrom(r.ctx); ok {
+		return sc.SessionID
+	}
+	return ""
+}
 
 // start runs the agent loop in a goroutine. onDone fires exactly once on
 // every exit path; final is nil when the run ended with an error or cancel

@@ -348,7 +348,11 @@ func (s *Server) handleBtwRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleQueueInput buffers user input submitted while a run is in flight;
-// the agent attaches it after the current tool round's results.
+// the agent attaches it after the current tool round's results. The steer
+// is scoped to the run's session: it rides that session's runs only — an
+// unscoped item would be visibility-drained by ANY session's tool round
+// (leaking the user's input into another session's transcript) and could
+// be discarded by another session's release/wake paths.
 func (s *Server) handleQueueInput(w http.ResponseWriter, r *http.Request) {
 	run := s.lookupRun(r.PathValue("id"))
 	if run == nil {
@@ -366,8 +370,9 @@ func (s *Server) handleQueueInput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "text is required")
 		return
 	}
-	s.agent.QueueInput(req.Text)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": s.agent.QueuedInputCount()})
+	sid := run.Session()
+	s.agent.QueueInputFor(sid, req.Text)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "queued": s.agent.QueuedInputCountFor(sid)})
 }
 
 // refreshDebugLog re-reads the persisted debug-log setting before each run so

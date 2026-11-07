@@ -8,9 +8,11 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,18 @@ import (
 
 	"github.com/projanvil/woca/internal/tools"
 )
+
+// steerCall scripts one AI turn with a single FOREGROUND Bash tool call —
+// the tool round's runtime is what holds the run open (the mid-turn queue
+// drain fires right after the tool's results).
+func steerCall(t *testing.T, command string) messages.Message {
+	t.Helper()
+	return messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+		ID:   fmt.Sprintf("steer-%d", wakeToolSeq.Add(1)),
+		Name: "Bash",
+		Args: map[string]any{"command": command},
+	}}}
+}
 
 // N10: a todo write in server 1 lands in a per-session sidecar; server 2,
 // started over the same SessionDir, shows the list in its activity snapshot
@@ -240,5 +254,132 @@ func TestSessionStoreTodosSidecar(t *testing.T) {
 	bad.saveTodos("b", []tools.Todo{{Content: "b", Status: "pending"}}, at)
 	if _, _, ok := bad.loadTodos("b"); ok {
 		t.Fatal("a failed write must not read back as persisted")
+	}
+}
+
+// Root-fix regression (review round 1): a steer posted to one session's
+// in-flight run rides only that session's runs. The unscoped form was
+// visibility-drained by ANY session's tool round — here A's — leaking B's
+// user input into A's transcript and starving B's run of it.
+func TestSteerScopedToItsSessionRun(t *testing.T) {
+	a := newWakeAgent(t, 0,
+		steerCall(t, "sleep 1"),  // B round 1: hold B inside its tool round
+		steerCall(t, "echo a"),   // A round 1: fast tool, so A's drain runs early
+		messages.AI("a done"),    // A round 2
+		messages.AI("b done"),    // B round 2
+	)
+	s, ts := newWakeServer(t, a, nil)
+
+	// B starts first and is inside its 1s tool round (its first model call
+	// consumed response 0 within microseconds of the POST).
+	bRun, bSid, _ := postRun(t, ts.URL, "s-b", "b work")
+	time.Sleep(150 * time.Millisecond)
+
+	// The user steers B's in-flight run through the HTTP endpoint.
+	resp, err := http.Post(ts.URL+"/api/runs/"+bRun+"/input", "application/json",
+		strings.NewReader(`{"text":"steer: use port 8081"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queued struct {
+		OK     bool `json:"ok"`
+		Queued int  `json:"queued"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&queued); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if !queued.OK || queued.Queued != 1 {
+		t.Fatalf("steer response = %+v, want ok queued 1", queued)
+	}
+
+	// A's run executes a tool round while the steer is queued; its drain
+	// must not take B's item.
+	aRun, aSid, _ := postRun(t, ts.URL, "s-a", "a work")
+	waitRunDoneInProc(t, s, aRun)
+	waitRunDoneInProc(t, s, bRun)
+
+	for _, m := range sessionMessages(t, ts.URL, aSid) {
+		if strings.Contains(m.Content, "port 8081") || strings.Contains(m.Content, "queued-user-input") {
+			t.Fatalf("B's steer leaked into session %s's transcript: %q", aSid, m.Content)
+		}
+	}
+	found := false
+	for _, m := range sessionMessages(t, ts.URL, bSid) {
+		if m.Role == messages.RoleHuman && strings.Contains(m.Content, "port 8081") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("B's steer was never delivered to B's run (transcript: %+v)", sessionMessages(t, ts.URL, bSid))
+	}
+	if n := a.QueuedInputCountFor(bSid); n != 0 {
+		t.Fatalf("B queue after delivery = %d, want 0", n)
+	}
+}
+
+// Root-fix + defense regression (review round 1): deleting session A while
+// A's run is in flight must discard ONLY A's queued items. B's steer (HTTP,
+// for B's in-flight run) and B's background notification survive A's
+// tombstone wake discard and the post-release re-check, and are delivered
+// to B's run — not to A's, not dropped.
+func TestDeleteSessionKeepsOtherSessionsQueuedInput(t *testing.T) {
+	a := newWakeAgent(t, 0,
+		steerCall(t, "sleep 2"),    // B round 1: hold B inside its tool round
+		steerCall(t, "sleep 0.4"),  // A round 1: hold A in flight across the delete
+		messages.AI("a done"),      // A round 2
+		messages.AI("b done"),      // B round 2
+	)
+	s, ts := newWakeServer(t, a, nil)
+
+	// B starts first; at +150ms it is inside its 2s tool round.
+	bRun, bSid, _ := postRun(t, ts.URL, "s-b", "b work")
+	time.Sleep(150 * time.Millisecond)
+
+	// The user steers B's in-flight run, and a B background completion
+	// queues — both while A's queue-discard paths are about to run.
+	resp, err := http.Post(ts.URL+"/api/runs/"+bRun+"/input", "application/json",
+		strings.NewReader(`{"text":"steer: use port 8081"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	a.QueueNotificationFor(bSid, "background-task-completed",
+		"Background shell 7 finished (exit code 0): echo b-bg\nOutput (tail):\nb-bg")
+
+	// A's run starts (its 0.4s tool round holds it in flight) and the
+	// session is deleted mid-flight.
+	aRun, _, _ := postRun(t, ts.URL, "s-a", "a work")
+	time.Sleep(100 * time.Millisecond)
+	status, body := activityDo(t, http.MethodDelete, ts.URL+"/api/sessions/s-a")
+	if status != http.StatusOK {
+		t.Fatalf("DELETE session: status %d body %s", status, body)
+	}
+
+	// A finishes clean: wakeAfterRun(A) hits the tombstone branch and the
+	// R4 re-check calls maybeWake(A) — both may discard; both must touch
+	// only A-scoped items.
+	waitRunDoneInProc(t, s, aRun)
+	waitRunDoneInProc(t, s, bRun)
+
+	// B's run delivered both items to B.
+	var sawSteer, sawNote bool
+	for _, m := range sessionMessages(t, ts.URL, bSid) {
+		if m.Role != messages.RoleHuman {
+			continue
+		}
+		sawSteer = sawSteer || strings.Contains(m.Content, "port 8081")
+		sawNote = sawNote || strings.Contains(m.Content, "b-bg")
+	}
+	if !sawSteer || !sawNote {
+		t.Fatalf("B's steer=%v notification=%v after A's delete+finish; both must reach B (transcript: %+v)",
+			sawSteer, sawNote, sessionMessages(t, ts.URL, bSid))
+	}
+	// Nothing woke the deleted session, and B's queue is fully drained.
+	if ids := registeredRuns(t, s); len(ids) != 2 {
+		t.Fatalf("%d runs total, want exactly 2 (the two user runs; no wake for the deleted session): %v", len(ids), ids)
+	}
+	if n := a.QueuedInputCountFor(bSid); n != 0 {
+		t.Fatalf("B queue after delivery = %d, want 0", n)
 	}
 }

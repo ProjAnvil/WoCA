@@ -207,6 +207,21 @@ func (a *Agent) QueueInput(text string) {
 	a.inputs.add(text)
 }
 
+// QueueInputFor is the session-scoped QueueInput: the input is delivered to
+// a run in that session only — its next tool round, or the start of its
+// next run — and never to another session's runs. The web server's steer
+// endpoint (POST /api/runs/{id}/input) queues through it (the run id names
+// the session), so a steer typed for one session's in-flight run can
+// neither ride another session's tool-round drain nor be discarded by
+// another session's release/wake paths, which drop by exact session scope.
+// An empty session keeps QueueInput's unscoped semantics (TUI/REPL). A
+// released session's steer is refused like any other queued item (D2).
+// Steers do not fire the notification observer: the user typed the input
+// for a run they can see, not to wake a session.
+func (a *Agent) QueueInputFor(session, text string) {
+	a.inputs.addTagged(QueuedInput{Text: text, Session: session}, a.sessionReleased)
+}
+
 // QueueNotification buffers a machine-generated notification (e.g. a
 // background-shell completion) for delivery after the next tool round,
 // wrapped in its own tag so the model can tell it from typed user input.
@@ -309,6 +324,17 @@ func (a *Agent) QueuedInputCountFor(session string) int {
 // QueuedInputCountFor, so a Quiet notification never starts a run (D1).
 func (a *Agent) WakeableCountFor(session string) int {
 	return a.inputs.wakeableCount(session)
+}
+
+// DropScopedInputsFor removes every queued item scoped exactly to session
+// (steers and notifications alike) and reports how many went. Unlike
+// DrainQueuedInputsFor it has no visibility semantics: unscoped items —
+// deliverable by any run — and other sessions' items are never touched.
+// The wake driver's tombstone branch discards a deleted session's queue
+// through it, so discarding session A can never eat an item queued for
+// session B.
+func (a *Agent) DropScopedInputsFor(session string) int {
+	return a.inputs.dropScope(session)
 }
 
 // QueuedNotificationCountFor reports how many tagged notification items

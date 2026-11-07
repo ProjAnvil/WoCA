@@ -281,6 +281,62 @@ func TestQueueNotificationForSessionDelivery(t *testing.T) {
 	}
 }
 
+// TestQueueInputForScopedDelivery pins the web steer path's seam: input
+// queued for session "a" is delivered to a's runs only — another session's
+// drain never takes it — and DropScopedInputsFor (the wake driver's delete
+// discard) removes exactly the session's own items, leaving unscoped and
+// foreign items queued. QueueInput keeps its unscoped TUI semantics.
+func TestQueueInputForScopedDelivery(t *testing.T) {
+	a := newQueueTestAgent(t, &recorder{}, 1)
+	a.QueueInputFor("a", "steer for a")
+
+	if got := a.QueuedInputCountFor("a"); got != 1 {
+		t.Fatalf("count for a = %d, want 1", got)
+	}
+	if got := a.QueuedInputCountFor("b"); got != 0 {
+		t.Fatalf("count for b = %d, want 0 (b's drain never sees a's steer)", got)
+	}
+	if items := a.DrainQueuedInputsFor("b"); len(items) != 0 {
+		t.Fatalf("drain for b = %+v, want nothing", items)
+	}
+	items := a.DrainQueuedInputsFor("a")
+	if len(items) != 1 || items[0].Text != "steer for a" || items[0].Session != "a" || items[0].Tag != "" {
+		t.Fatalf("drain for a = %+v, want the untagged a-scoped steer", items)
+	}
+
+	// The delete discard is exact-scope: dropping b's queue leaves a's items
+	// (and unscoped ones) untouched.
+	a.QueueInputFor("a", "another for a")
+	a.QueueInputFor("b", "b only")
+	a.QueueInput("tui note") // unscoped: any run may deliver it
+	if n := a.DropScopedInputsFor("b"); n != 1 {
+		t.Fatalf("DropScopedInputsFor(b) = %d, want 1", n)
+	}
+	// a's drain still sees a's own item plus the unscoped one; b's item is
+	// gone but the unscoped TUI note remains visible to every session.
+	items = a.DrainQueuedInputsFor("a")
+	if len(items) != 2 ||
+		(items[0].Text != "another for a" || items[0].Session != "a") ||
+		(items[1].Text != "tui note" || items[1].Session != "") {
+		t.Fatalf("drain for a after dropping b = %+v, want a's steer plus the unscoped note", items)
+	}
+	if got := a.QueuedInputCount(); got != 0 {
+		t.Fatalf("queue not empty at the end = %d", got)
+	}
+}
+
+// TestQueueInputForReleasedSessionRefused: a steer for a released (deleted)
+// session is refused like any other queued item (D2) instead of lingering
+// where nothing will ever drain it.
+func TestQueueInputForReleasedSessionRefused(t *testing.T) {
+	a := newQueueTestAgent(t, &recorder{}, 1)
+	a.ReleaseSession("a")
+	a.QueueInputFor("a", "late steer")
+	if got := a.QueuedInputCountFor("a"); got != 0 {
+		t.Fatalf("queued for released session = %d, want 0", got)
+	}
+}
+
 // TestPrependQueuedInsertion pins where run-start queued input lands in the
 // history: ahead of the trailing Human turn when there is one, appended at
 // the end otherwise, and a no-op on an empty queue.

@@ -47,7 +47,10 @@ type sessionStore struct {
 	// owning Server wires its own in.
 	log zerolog.Logger
 
-	// mu guards mem, tombstones and index ONLY — no file I/O under it.
+	// mu guards mem, tombstones and index ONLY — no file I/O under it. One
+	// deliberate exception: saveTodos publishes its final rename under mu so
+	// the tombstone check and the rename are atomic with delete() setting
+	// the tombstone (a rename is metadata, not buffered I/O; see saveTodos).
 	mu         sync.Mutex
 	mem        map[string][]messages.Message
 	tombstones map[string]bool
@@ -452,19 +455,14 @@ func (s *sessionStore) todosPath(id string) string {
 	return filepath.Join(s.dir, id+".todos.json")
 }
 
-// saveTodos persists the todo sidecar atomically (tmp+rename). Write
-// failures are warned, never silent — unlike saveGoal's swallow, a lost
-// todo sidecar is a user-visible regression the operator should see. A
-// tombstoned session is not written: a save racing the delete must not
-// resurrect the sidecar the delete just removed.
+// saveTodos persists the todo sidecar atomically. Write failures are
+// warned, never silent — unlike saveGoal's swallow, a lost todo sidecar is
+// a user-visible regression the operator should see. A tombstoned session
+// is not published: the check and the rename share the mutex delete() sets
+// the tombstone under, so a save racing the delete can never resurrect the
+// sidecar the delete just removed.
 func (s *sessionStore) saveTodos(id string, items []tools.Todo, updatedAt time.Time) {
 	if s.dir == "" {
-		return
-	}
-	s.mu.Lock()
-	deleted := s.tombstones[id]
-	s.mu.Unlock()
-	if deleted {
 		return
 	}
 	b, err := json.MarshalIndent(todoSidecar{UpdatedAt: updatedAt, Items: items}, "", "  ")
@@ -472,12 +470,40 @@ func (s *sessionStore) saveTodos(id string, items []tools.Todo, updatedAt time.T
 		s.log.Warn().Err(err).Str("session", id).Msg("todo sidecar marshal failed")
 		return
 	}
-	tmp := s.todosPath(id) + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	// A unique temp name in the target dir (same filesystem, so the rename
+	// stays atomic) keeps concurrent writers from clobbering each other's
+	// tmp file.
+	tmp, err := os.CreateTemp(s.dir, id+".todos.json.*")
+	if err != nil {
 		s.log.Warn().Err(err).Str("session", id).Msg("todo sidecar write failed")
 		return
 	}
-	if err := os.Rename(tmp, s.todosPath(id)); err != nil {
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		s.log.Warn().Err(err).Str("session", id).Msg("todo sidecar write failed")
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		s.log.Warn().Err(err).Str("session", id).Msg("todo sidecar write failed")
+		return
+	}
+	_ = os.Chmod(tmpName, 0o644)
+	// Publish under mu, paired with delete()'s tombstone set: either the
+	// rename lands first and the delete's removal takes the fresh file, or
+	// the tombstone is visible here and the rename is skipped. The rename
+	// is local-FS metadata, not buffered I/O — the one deliberate exception
+	// to "no file I/O under mu" (see the field comment).
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tombstones[id] {
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := os.Rename(tmpName, s.todosPath(id)); err != nil {
+		_ = os.Remove(tmpName)
 		s.log.Warn().Err(err).Str("session", id).Msg("todo sidecar rename failed")
 	}
 }

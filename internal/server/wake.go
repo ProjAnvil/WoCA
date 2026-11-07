@@ -68,10 +68,12 @@ func (s *Server) wakeLocked(sid string) {
 		// refused new completions and dropped queued ones; this guard holds
 		// for the race it cannot cover — a session deleted while one of its
 		// runs was still in flight (the run's finish reaches wakeAfterRun
-		// after the delete). Drain and discard whatever is still queued for
-		// it; nothing is retried or requeued.
-		if items := s.agent.DrainQueuedInputsFor(sid); len(items) > 0 {
-			s.log.Info().Str("session", sid).Int("items", len(items)).
+		// after the delete). Discard only the items scoped EXACTLY to this
+		// session (dropScope semantics): a visibility drain would also take
+		// unscoped items — deliverable by any run — and eat another
+		// session's steer. Nothing is retried or requeued.
+		if n := s.agent.DropScopedInputsFor(sid); n > 0 {
+			s.log.Info().Str("session", sid).Int("items", n).
 				Msg("wake skipped for deleted session; queued items discarded")
 		}
 		if obs := s.agent.Obs(); obs != nil {
