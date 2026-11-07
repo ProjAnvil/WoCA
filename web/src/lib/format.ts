@@ -33,3 +33,22 @@ export function baseName(path: string): string {
   const i = p.lastIndexOf('/')
   return i >= 0 ? p.slice(i + 1) : p
 }
+
+/** 512 → "512 B"; 4096 → "4 KB"; 1_500_000 → "1.5 MB" (output tails). */
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** ISO timestamp → short local "Nov 7, 14:05" (cron fire times). */
+export function fmtDateTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}

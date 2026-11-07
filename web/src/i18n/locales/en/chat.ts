@@ -54,6 +54,7 @@ export default {
   sendSteer: 'Steer this turn (delivered immediately)',
   steeringBadge: 'Steering ({count}) · sent immediately · stop resends now if interrupted',
   runningFor: 'Running for {time}',
+  autoRun: 'Auto',
   doneChanges: 'Done · {count} file changes',
   doneChangesTitle: 'Open the Changes review',
   ctxRingLabel: 'Context window {pct}% used',

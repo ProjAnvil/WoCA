@@ -54,6 +54,7 @@ export default {
   sendSteer: '引导本轮（立即送达）',
   steeringBadge: '引导中 ({count}) · 已立即送达 · 中断后会立即重新发送',
   runningFor: '已运行 {time}',
+  autoRun: '自动',
   doneChanges: '已完成 · {count} 个文件变更',
   doneChangesTitle: '打开变更审查',
   ctxRingLabel: '上下文窗口占用 {pct}%',

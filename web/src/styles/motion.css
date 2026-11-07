@@ -42,26 +42,30 @@
 /* --- panel-pop: overlay cards (settings / goal / memory panels) -------------
  * Backdrop fades in place; the card rises with a hair of scale. Exit is a
  * one-tier-faster settle. Only the card gets transform (backdrop is a huge
- * paint area — opacity only).                                              */
+ * paint area — opacity only). The activity popover reuses the card motion
+ * without a backdrop (its wrapper only carries opacity).                    */
 .panel-pop-enter-active {
   transition: opacity var(--dur-slow) var(--ease-out);
 }
 .panel-pop-enter-active .card,
-.panel-pop-enter-active .interrupt-card {
+.panel-pop-enter-active .interrupt-card,
+.panel-pop-enter-active .act-pop-card {
   transition: opacity 320ms var(--ease-out), transform 320ms var(--ease-out);
 }
 .panel-pop-leave-active {
   transition: opacity var(--dur-fast) var(--ease-in-out);
 }
 .panel-pop-leave-active .card,
-.panel-pop-leave-active .interrupt-card {
+.panel-pop-leave-active .interrupt-card,
+.panel-pop-leave-active .act-pop-card {
   transition: opacity var(--dur-fast) var(--ease-in-out), transform var(--dur-fast) var(--ease-in-out);
 }
 .panel-pop-enter-from {
   opacity: 0;
 }
 .panel-pop-enter-from .card,
-.panel-pop-enter-from .interrupt-card {
+.panel-pop-enter-from .interrupt-card,
+.panel-pop-enter-from .act-pop-card {
   opacity: 0;
   transform: translateY(8px) scale(0.99);
 }
@@ -69,7 +73,8 @@
   opacity: 0;
 }
 .panel-pop-leave-to .card,
-.panel-pop-leave-to .interrupt-card {
+.panel-pop-leave-to .interrupt-card,
+.panel-pop-leave-to .act-pop-card {
   opacity: 0;
   transform: translateY(4px) scale(0.995);
 }

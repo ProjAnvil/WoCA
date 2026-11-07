@@ -262,12 +262,20 @@ describe('user actions', () => {
     expect(api.getActivity).toHaveBeenCalledTimes(2)
   })
 
-  it('action failures write the error channel and skip the refetch', async () => {
+  it('action failures write the item inline error slot, not the session error', async () => {
     const m = useActivityStore()
     api.stopTask.mockRejectedValueOnce(new Error('403 viewer'))
     await m.stopTask('a', 't1')
-    expect(m.stateOf('a').error).toBe('403 viewer')
-    expect(api.getActivity).not.toHaveBeenCalled()
+    expect(m.stateOf('a').error).toBe('') // fetch errors own the session channel
+    expect(m.actionErrorOf('a', 'task', 't1')).toBe('403 viewer')
+    expect(api.getActivity).not.toHaveBeenCalled() // failed action skips refetch
+
+    // A successful retry clears the inline slot.
+    api.stopTask.mockResolvedValueOnce({ task: task('t1', 'stopped'), already_finished: false })
+    api.getActivity.mockResolvedValueOnce(snap('a'))
+    await m.stopTask('a', 't1')
+    expect(m.actionErrorOf('a', 'task', 't1')).toBe('')
+    expect(api.getActivity).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -383,6 +391,26 @@ describe('output polling', () => {
     await vi.advanceTimersByTimeAsync(6000)
     expect(api.getShellOutput).toHaveBeenCalledTimes(1)
   })
+
+  it('re-watching the same key stops the previous watcher (no orphan interval)', async () => {
+    const m = useActivityStore()
+    api.getShellOutput.mockResolvedValue(tail('running'))
+    const w1 = m.watchOutput('a', 'shell', 'sh1')
+    await flush()
+    expect(api.getShellOutput).toHaveBeenCalledTimes(1)
+
+    // A second watcher for the same item supersedes the first: only one
+    // interval keeps polling, and the orphaned handle is a no-op.
+    m.watchOutput('a', 'shell', 'sh1')
+    await flush()
+    expect(api.getShellOutput).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(api.getShellOutput).toHaveBeenCalledTimes(3) // one tick, not two
+
+    w1.stop() // the superseded handle must not stop the live watcher
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(api.getShellOutput).toHaveBeenCalledTimes(4)
+  })
 })
 
 describe('delete-confirm counts (D2) and forget', () => {
@@ -434,6 +462,46 @@ describe('delete-confirm counts (D2) and forget', () => {
     expect(m.snapshotOf('a')).toBeNull()
     expect(m.statusOf('a')).toBe('loading')
     expect(m.unviewedFailureCountOf('a')).toBe(0)
+  })
+
+  it('a fetch resolving after forget never resurrects the session (ghost entry)', async () => {
+    const m = useActivityStore()
+    let resolveFetch: (s: ActivitySnapshot) => void = () => {}
+    api.getActivity.mockImplementationOnce(
+      () => new Promise<ActivitySnapshot>((res) => (resolveFetch = res)),
+    )
+    const pending = m.fetchNow('a')
+    m.forget('a')
+    resolveFetch(snap('a', { shells: [shell('s1', 'running')] }))
+    await pending
+    expect(m.snapshotOf('a')).toBeNull()
+    expect(m.statusOf('a')).toBe('loading') // unseen session, not a ghost cache
+
+    // Same contract for the error path (no ghost error state either).
+    let rejectFetch: (e: Error) => void = () => {}
+    api.getActivity.mockImplementationOnce(
+      () => new Promise<ActivitySnapshot>((_, rej) => (rejectFetch = rej)),
+    )
+    const failing = m.fetchNow('b')
+    m.forget('b')
+    rejectFetch(new Error('late failure'))
+    await failing
+    expect(m.stateOf('b').error).toBe('')
+
+    // A deliberate refresh re-interests the store: the marker is cleared.
+    api.getActivity.mockResolvedValueOnce(snap('a'))
+    m.refresh('a')
+    await vi.advanceTimersByTimeAsync(200)
+    expect(m.statusOf('a')).toBe('ready')
+  })
+
+  it('forget also clears inline action errors', async () => {
+    const m = useActivityStore()
+    api.killShell.mockRejectedValueOnce(new Error('403'))
+    await m.killShell('a', 'sh1')
+    expect(m.actionErrorOf('a', 'shell', 'sh1')).toBe('403')
+    m.forget('a')
+    expect(m.actionErrorOf('a', 'shell', 'sh1')).toBe('')
   })
 })
 

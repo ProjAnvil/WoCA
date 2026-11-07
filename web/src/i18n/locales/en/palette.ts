@@ -8,6 +8,7 @@ export default {
   toggleSettings: 'Open settings',
   openChanges: 'Open the Changes review',
   openBtw: 'Open the /btw side panel',
+  toggleActivity: 'Toggle the tasks & todos panel',
   switchMode: 'Switch to {mode}',
   toggleTheme: 'Toggle dark / light theme',
   interrupt: 'Interrupt the current run',

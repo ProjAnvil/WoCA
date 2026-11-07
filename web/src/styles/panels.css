@@ -485,6 +485,11 @@ html.dark .shiki-host span {
 .pill-queued .pill-dot {
   background: var(--muted);
 }
+/* Auto-wake runs (run_started.auto) carry an explicit marker so a session
+ * starting on its own is explained (UIUX §4.3). */
+.pill-auto {
+  font-weight: 600;
+}
 
 .error-banner {
   max-width: 820px;
@@ -565,6 +570,34 @@ html.dark .shiki-host span {
 }
 .reasoning-cursor {
   margin: 0 12px 8px;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Session activity popover — shared bits across the three tabs (rows and    */
+/* tab-specific styling live scoped in components/activity/*).                */
+/* -------------------------------------------------------------------------- */
+
+.act-tab-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3) 0 var(--space-4);
+}
+
+/* Per-tab one-liner empty state: a 16px glyph + a sentence, centered. */
+.act-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-8) var(--space-5);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-align: center;
 }
 
 /* -------------------------------------------------------------------------- */

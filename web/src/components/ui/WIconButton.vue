@@ -6,9 +6,11 @@ withDefaults(
     size?: 'sm' | 'md'
     variant?: 'ghost' | 'secondary'
     badge?: number
+    /** Badge signal: danger (counts needing attention) or brand (neutral live count). */
+    badgeTone?: 'danger' | 'brand'
     disabled?: boolean
   }>(),
-  { size: 'md', variant: 'ghost', badge: 0, disabled: false },
+  { size: 'md', variant: 'ghost', badge: 0, badgeTone: 'danger', disabled: false },
 )
 </script>
 
@@ -22,7 +24,13 @@ withDefaults(
     :disabled="disabled"
   >
     <slot />
-    <span v-if="badge" class="w-icon-btn-badge" aria-hidden="true">{{ badge > 99 ? '99+' : badge }}</span>
+    <span
+      v-if="badge"
+      class="w-icon-btn-badge"
+      :class="`w-icon-btn-badge--${badgeTone}`"
+      aria-hidden="true"
+      >{{ badge > 99 ? '99+' : badge }}</span
+    >
   </button>
 </template>
 
@@ -90,5 +98,9 @@ withDefaults(
   font-size: 10px;
   line-height: 16px;
   text-align: center;
+}
+.w-icon-btn-badge--brand {
+  background: var(--brand);
+  color: var(--on-brand);
 }
 </style>

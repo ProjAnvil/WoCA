@@ -123,3 +123,47 @@ describe('ChatPanel first-output shimmer', () => {
     expect(wrapper.find('.msg-shimmer-row').exists()).toBe(false)
   })
 })
+
+describe('ChatPanel activity header entry', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('renders the activity trigger immediately left of the Memory button', () => {
+    const wrapper = mountPanel()
+    const header = wrapper.get('.chat-header').element
+    const kids = Array.from(header.children)
+    const act = kids.findIndex((el) => el.classList.contains('act-trigger'))
+    const mem = kids.findIndex((el) => el.classList.contains('mem-toggle'))
+    expect(act).toBeGreaterThanOrEqual(0)
+    expect(mem).toBeGreaterThanOrEqual(0)
+    expect(act).toBe(mem - 1)
+  })
+
+  it('marks auto-wake runs in the header running pill', async () => {
+    const wrapper = mountPanel()
+    const s = useSessionStore()
+    s.seed(
+      [{ id: 's1', title: 'S', updatedAt: '', loaded: true, workspace: '', workspaceName: '' }],
+      { s1: [{ id: 'u1', kind: 'user', content: 'hi' }] },
+    )
+    s.status = { s1: 'running' }
+    s.runAuto['s1'] = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('.pill-running .pill-auto').text()).toBe(i18n.global.t('chat.autoRun'))
+    expect(wrapper.find('.pill-running .lucide-zap').exists()).toBe(true)
+  })
+
+  it('omits the auto marker for user-initiated runs', async () => {
+    const wrapper = mountPanel()
+    const s = useSessionStore()
+    s.seed(
+      [{ id: 's1', title: 'S', updatedAt: '', loaded: true, workspace: '', workspaceName: '' }],
+      { s1: [{ id: 'u1', kind: 'user', content: 'hi' }] },
+    )
+    s.status = { s1: 'running' }
+    s.runAuto['s1'] = false
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.pill-auto').exists()).toBe(false)
+  })
+})

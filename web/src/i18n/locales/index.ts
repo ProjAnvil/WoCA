@@ -1,6 +1,7 @@
 // Locale message modules. One file per domain namespace; index.ts merges
 // them into the two message trees passed to vue-i18n. New domains: add a
 // module under zh-CN/ and en/, then import + spread it below.
+import activityEn from './en/activity'
 import agentEn from './en/agent'
 import errorsEn from './en/errors'
 import btwEn from './en/btw'
@@ -21,6 +22,7 @@ import sessionsEn from './en/sessions'
 import settingsEn from './en/settings'
 import sidebarEn from './en/sidebar'
 import workspaceEn from './en/workspace'
+import activityZh from './zh-CN/activity'
 import agentZh from './zh-CN/agent'
 import errorsZh from './zh-CN/errors'
 import btwZh from './zh-CN/btw'
@@ -44,6 +46,7 @@ import workspaceZh from './zh-CN/workspace'
 
 export const zhCN = {
   btw: btwZh,
+  activity: activityZh,
   common: commonZh,
   fs: fsZh,
   admin: adminZh,
@@ -67,6 +70,7 @@ export const zhCN = {
 
 export const en = {
   btw: btwEn,
+  activity: activityEn,
   common: commonEn,
   fs: fsEn,
   admin: adminEn,

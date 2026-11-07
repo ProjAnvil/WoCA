@@ -1,0 +1,68 @@
+export default {
+  title: 'Tasks & todos',
+  // Trigger label variants — the accessible name always carries the counts.
+  triggerLabel: 'Tasks and todos',
+  triggerLabelRunning: 'Tasks and todos — {running} running',
+  triggerLabelFailed: 'Tasks and todos — {running} running, {failed} failed',
+  // Tabs
+  tabTodo: 'Todo',
+  tabBackground: 'Background',
+  tabScheduled: 'Scheduled',
+  // Panel states
+  loadingSr: 'Loading session activity…',
+  staleNotice: 'May be out of date — will refresh on reconnect',
+  unavailable: 'Task tracking is not available in this deployment.',
+  loadFailed: 'Failed to load activity.',
+  // Todo tab
+  todoProgress: '{done} of {total} done',
+  todoEmpty: 'The agent has not created a plan yet',
+  todoStatus: {
+    pending: 'Pending',
+    in_progress: 'In progress',
+    completed: 'Done',
+    cancelled: 'Cancelled',
+  },
+  // Background tab
+  backgroundEmpty: 'No background tasks in this session',
+  kindShell: 'Shell',
+  kindTask: 'Subagent',
+  status: {
+    running: 'Running',
+    completed: 'Done',
+    failed: 'Failed',
+    failedExit: 'Failed · exit {code}',
+    stopped: 'Stopped',
+    stoppedByUser: 'Stopped by you',
+    stoppedByModel: 'Stopped by the model',
+  },
+  stop: 'Stop',
+  confirmStopTitle: 'Stop background task',
+  confirmStopBody:
+    'Stop "{name}"? The agent will be told it was you with your next message.',
+  confirmStopAction: 'Stop it',
+  outputShow: 'Show output',
+  outputHide: 'Hide output',
+  outputEmpty: 'No output yet',
+  outputTruncated: 'Truncated — showing last {shown} of {total}',
+  outputCopy: 'Copy output',
+  outputRetry: 'Retry',
+  liveFinished: 'Background task {name} finished',
+  liveFailed: 'Background task {name} failed with exit code {code}',
+  // Scheduled tab
+  scheduledEmpty: 'No scheduled prompts in this session',
+  cronNext: 'Next: {time}',
+  cronNoNext: 'No upcoming run',
+  cronLast: 'Last fired: {time}',
+  cronNever: 'Never fired',
+  cronPrompt: 'Prompt',
+  delete: 'Delete',
+  confirmDeleteTitle: 'Delete scheduled prompt',
+  confirmDeleteBody:
+    'Delete "{name}" ({spec})? Its future automatic runs are cancelled.',
+  confirmDeleteAction: 'Delete it',
+  wakeCapped: 'Auto-wake hit its cap — {count} notification(s) are waiting for your next message',
+  wakeStalled: 'Auto-wake stalled; sending a message restarts it',
+  wakeDisabled: 'Auto-wake is off for this session',
+  wakePending: '{count} notification(s) pending',
+  actionFailed: 'Action failed: {error}',
+}

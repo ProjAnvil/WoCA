@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ArrowDown, Brain, Check, PanelRight, Target } from 'lucide-vue-next'
+import { ArrowDown, Brain, Check, PanelRight, Target, Zap } from 'lucide-vue-next'
 import ChatItemView from './ChatItemView.vue'
 import Composer from './composer/Composer.vue'
+import ActivityTrigger from './activity/ActivityTrigger.vue'
 import WSkeleton from './ui/WSkeleton.vue'
 import { useSessionStore } from '../stores/sessions'
 import { useWorkspaceStore } from '../stores/workspace'
@@ -169,6 +170,12 @@ const latestEvent = computed(() => {
         </span>
         <span v-else-if="running" class="task-pill pill-running" role="status">
           <span class="pill-dot" aria-hidden="true" />
+          <!-- Auto-wake run (run_started.auto): the session moving on its own
+             gets an explicit "Auto" marker (UIUX §4.3). -->
+          <template v-if="store.runAuto[store.activeId]">
+            <Zap :size="12" aria-hidden="true" />
+            <span class="pill-auto">{{ t('chat.autoRun') }}</span>
+          </template>
           {{ t('chat.runningFor', { time: elapsedLabel }) }}
         </span>
         <span v-else-if="store.activeStatus === 'awaiting'" class="task-pill pill-awaiting">
@@ -197,6 +204,10 @@ const latestEvent = computed(() => {
           <span class="goal-chip-meta">C{{ store.activeGoal.cycles }}/{{ store.activeGoal.max_cycles }}</span>
         </button>
       </div>
+      <!-- Session activity entry (UIUX §3 option A): sits immediately left of
+         the Memory button; popover is anchored, non-modal, collapsed by
+         default. -->
+      <ActivityTrigger />
       <button
         class="icon-btn mem-toggle"
         :title="t('chat.memoryTitle')"

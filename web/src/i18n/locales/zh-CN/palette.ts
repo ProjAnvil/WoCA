@@ -8,6 +8,7 @@ export default {
   toggleSettings: '打开设置',
   openChanges: '打开变更审查',
   openBtw: '打开 /btw 旁路问答',
+  toggleActivity: '切换任务与待办面板',
   switchMode: '切换到 {mode}',
   toggleTheme: '切换深色 / 浅色主题',
   interrupt: '中断当前运行',

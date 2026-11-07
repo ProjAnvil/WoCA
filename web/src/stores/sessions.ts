@@ -69,6 +69,9 @@ export const useSessionStore = defineStore('sessions', () => {
   const goal = ref<Record<string, Goal | null>>({})
   const goalRunning = ref<Record<string, boolean>>({})
   const goalPanelOpen = ref(false)
+  // Session activity popover (F3): the open flag lives here (goalPanelOpen
+  // precedent) so the header trigger and the ⌘K palette share one source.
+  const activityPanelOpen = ref(false)
   // True while a session's live run was auto-started by the wake driver
   // (run_started.auto) — the header marks such runs "auto" (UIUX §4.3).
   // Cleared when the run reaches done/error.
@@ -626,6 +629,7 @@ export const useSessionStore = defineStore('sessions', () => {
     goal,
     goalRunning,
     goalPanelOpen,
+    activityPanelOpen,
     // True while the session's current run was auto-started by the wake
     // driver — the header's running pill marks it "auto" (UIUX §4.3).
     runAuto,

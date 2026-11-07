@@ -105,6 +105,14 @@ export const useActivityStore = defineStore('activity', () => {
   // Demo mode (no backend): serve empty snapshots, issue no requests.
   const demo = ref(false)
 
+  // Inline per-item action errors (key `${sid}/${kind}:${id}`): rendered
+  // next to the row that triggered them, so one failed stop/delete does not
+  // paint the whole panel's error state (fetch errors stay there).
+  const actionErrors = ref<Record<string, string>>({})
+  // Sessions deleted server-side while a request was in flight: their
+  // resolving responses must not resurrect a bySession entry (ghost state).
+  const forgotten = new Set<string>()
+
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const watchers = new Map<string, Map<string, () => void>>()
   const viewedFailedIds = new Map<string, Set<string>>()
@@ -129,8 +137,10 @@ export const useActivityStore = defineStore('activity', () => {
   // applySnapshot installs a successful fetch: stale and error clear, the
   // unavailable flag resets (a forced refetch can land after a 501 flap),
   // and the unviewed-failure count catches items that failed while nobody
-  // was watching.
+  // was watching. A fetch that started before forget(sid) resolves after it
+  // must not resurrect the deleted session's entry.
   function applySnapshot(sid: string, snapshot: ActivitySnapshot) {
+    if (forgotten.has(sid)) return
     const st = ensure(sid)
     st.snapshot = snapshot
     st.loading = false
@@ -143,8 +153,10 @@ export const useActivityStore = defineStore('activity', () => {
   }
 
   /** Immediate snapshot fetch (retry path / pre-action refresh). Catches
-   * everything into the session's state — this is the store boundary. */
+   * everything into the session's state — this is the store boundary. A
+   * session forgotten while the GET was in flight stays forgotten. */
   async function fetchNow(sid: string): Promise<void> {
+    if (forgotten.has(sid)) return
     if (demo.value) {
       applySnapshot(sid, emptySnapshot(sid))
       return
@@ -154,8 +166,10 @@ export const useActivityStore = defineStore('activity', () => {
     st.error = ''
     try {
       const snapshot = await getActivity(sid)
+      if (forgotten.has(sid)) return
       applySnapshot(sid, snapshot)
     } catch (e) {
+      if (forgotten.has(sid)) return
       st.loading = false
       if (e instanceof ApiError && e.code === 'S-B-0501') {
         // Not an error the user can retry away: this deployment form simply
@@ -171,8 +185,11 @@ export const useActivityStore = defineStore('activity', () => {
 
   /** Debounced (200ms trailing) snapshot refetch for one session — the
    * activity_changed/wake_capped signal path. Once a session is known
-   * 501-unavailable, signals stop re-probing the absent endpoint. */
+   * 501-unavailable, signals stop re-probing the absent endpoint. A
+   * deliberate refresh re-interests the store in the sid (clears any
+   * leftover forgotten marker — e.g. a recreated session id). */
   function refresh(sid: string): void {
+    forgotten.delete(sid)
     if (demo.value) {
       applySnapshot(sid, emptySnapshot(sid))
       return
@@ -234,28 +251,43 @@ export const useActivityStore = defineStore('activity', () => {
   // User actions: await the REST call, then re-read server truth — no
   // optimistic state (PM §F2). already_finished answers 200 with the final
   // state, so it flows through the same refetch; only real failures write
-  // the error channel (and skip the refetch).
-  async function runAction(sid: string, run: () => Promise<unknown>): Promise<void> {
-    if (demo.value) return
+  // the item's inline action-error slot (and skip the refetch) — fetch
+  // errors keep the panel-level session error.
+  function clearActionError(sid: string, itemKey: string): void {
+    const k = `${sid}/${itemKey}`
+    if (actionErrors.value[k]) {
+      const next = { ...actionErrors.value }
+      delete next[k]
+      actionErrors.value = next
+    }
+  }
+
+  async function runAction(
+    sid: string,
+    itemKey: string,
+    run: () => Promise<unknown>,
+  ): Promise<void> {
+    if (demo.value || forgotten.has(sid)) return
+    clearActionError(sid, itemKey)
     try {
       await run()
     } catch (e) {
-      ensure(sid).error = toErrorMessage(e)
+      actionErrors.value = { ...actionErrors.value, [`${sid}/${itemKey}`]: toErrorMessage(e) }
       return
     }
     await fetchNow(sid)
   }
 
   function killShellAction(sid: string, shellId: string): Promise<void> {
-    return runAction(sid, () => killShell(sid, shellId))
+    return runAction(sid, `shell:${shellId}`, () => killShell(sid, shellId))
   }
 
   function stopTaskAction(sid: string, taskId: string): Promise<void> {
-    return runAction(sid, () => stopTask(sid, taskId))
+    return runAction(sid, `task:${taskId}`, () => stopTask(sid, taskId))
   }
 
   function deleteCronAction(sid: string, cronId: string): Promise<void> {
-    return runAction(sid, () => deleteCron(sid, cronId))
+    return runAction(sid, `cron:${cronId}`, () => deleteCron(sid, cronId))
   }
 
   /**
@@ -269,6 +301,10 @@ export const useActivityStore = defineStore('activity', () => {
   function watchOutput(sid: string, kind: OutputKind, id: string, tailBytes = 65536): { stop(): void } {
     const key = outputKey(kind, id)
     if (demo.value) return { stop: () => {} }
+    // A watcher for this key may still be live (expand → collapse raced with
+    // an in-flight poll, or a manual retry): stop it first or its interval
+    // would keep firing with no handle left to stop it.
+    watchers.get(sid)?.get(key)?.()
     const read = kind === 'shell' ? getShellOutput : getTaskOutput
     let timer: ReturnType<typeof setInterval> | null = null
     let stopped = false
@@ -277,7 +313,9 @@ export const useActivityStore = defineStore('activity', () => {
       if (stopped) return
       stopped = true
       if (timer) clearInterval(timer)
-      watchers.get(sid)?.delete(key)
+      // Only the registered handle may unregister itself — a superseded
+      // handle (same key, older watcher) must not evict its replacement.
+      if (watchers.get(sid)?.get(key) === stop) watchers.get(sid)!.delete(key)
     }
 
     async function poll(): Promise<void> {
@@ -341,8 +379,10 @@ export const useActivityStore = defineStore('activity', () => {
   }
 
   /** Drop every trace of a session (deleted server-side): cache, timers,
-   * watchers and badge bookkeeping. */
+   * watchers and badge bookkeeping. In-flight requests for it resolve into
+   * the forgotten set instead of resurrecting state. */
   function forget(sid: string): void {
+    forgotten.add(sid)
     clearDebounce(sid)
     for (const stop of watchers.get(sid)?.values() ?? []) stop()
     watchers.delete(sid)
@@ -366,6 +406,15 @@ export const useActivityStore = defineStore('activity', () => {
       }
     }
     if (changed) outputErrors.value = errs
+    const actionErrs = { ...actionErrors.value }
+    let actionChanged = false
+    for (const k of Object.keys(actionErrs)) {
+      if (k.startsWith(`${sid}/`)) {
+        delete actionErrs[k]
+        actionChanged = true
+      }
+    }
+    if (actionChanged) actionErrors.value = actionErrs
     if (unviewedFailures.value[sid] != null) {
       const next = { ...unviewedFailures.value }
       delete next[sid]
@@ -439,6 +488,11 @@ export const useActivityStore = defineStore('activity', () => {
     return outputErrors.value[`${sid}/${outputKey(kind, id)}`] ?? ''
   }
 
+  /** The last failed action's message for one item ('' when none/unknown). */
+  function actionErrorOf(sid: string, kind: OutputKind | 'cron', id: string): string {
+    return actionErrors.value[`${sid}/${kind}:${id}`] ?? ''
+  }
+
   function setDemo(v: boolean): void {
     demo.value = v
   }
@@ -447,6 +501,7 @@ export const useActivityStore = defineStore('activity', () => {
     bySession,
     outputs,
     outputErrors,
+    actionErrors,
     unviewedFailures,
     demo,
     refresh,
@@ -473,6 +528,7 @@ export const useActivityStore = defineStore('activity', () => {
     unviewedFailureCountOf,
     outputOf,
     outputErrorOf,
+    actionErrorOf,
     setDemo,
   }
 })

@@ -86,6 +86,13 @@ export function useAppCommands() {
       run: () => memory.open(sessions.activeWorkspace?.path ?? '', sessions.activeWorkspace?.name),
     })
     cmds.push({
+      id: 'panel:activity',
+      group: 'panels',
+      label: t('palette.toggleActivity'),
+      keywords: 'tasks todos background cron activity shell',
+      run: () => (sessions.activityPanelOpen = !sessions.activityPanelOpen),
+    })
+    cmds.push({
       id: 'panel:changes',
       group: 'panels',
       label: t('palette.openChanges'),
