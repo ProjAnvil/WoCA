@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -170,6 +171,26 @@ func (q *queue) taggedCount(session string) int {
 	return n
 }
 
+// dropScope removes every item scoped exactly to session and reports how
+// many went; unscoped items and other sessions' items stay queued, in
+// order. Session release (D2): a deleted session's pending input dies with
+// it instead of lingering where nothing will ever drain it.
+func (q *queue) dropScope(session string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	keep := q.items[:0]
+	dropped := 0
+	for _, it := range q.items {
+		if it.Session == session {
+			dropped++
+			continue
+		}
+		keep = append(keep, it)
+	}
+	q.items = keep
+	return dropped
+}
+
 // QueueInput buffers user input submitted while a run is in flight. The
 // next completed tool round attaches it after its results (see toolsNode);
 // input queued after the final tool round is delivered at the start of the
@@ -219,8 +240,15 @@ func (a *Agent) queueBackgroundCompletion(session, text string, stoppedBy tools.
 // (if installed) after the item is queued, Quiet items included (with Quiet
 // set, so surfaces can show them without waking). Blank text queues nothing
 // and fires nothing — the observer contract is "the item you just saw is in
-// the queue".
+// the queue". Notifications scoped to a released session (ReleaseSession,
+// D2) are dropped here: the session is gone, so nothing may deliver to it
+// or wake it — not even its own background work finishing late.
 func (a *Agent) queueNotification(q QueuedInput) {
+	if q.Session != "" && a.sessionReleased(q.Session) {
+		slog.Debug("agent: dropped notification for released session",
+			"session", q.Session, "tag", q.Tag)
+		return
+	}
 	if !a.inputs.addTagged(q) {
 		return
 	}

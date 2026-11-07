@@ -359,6 +359,9 @@ type Agent struct {
 	toolBudget int
 	// inputs buffers mid-turn user input (queued commands).
 	inputs queue
+	// activity is the per-session activity seam's mutable state: the
+	// change observer and the released-session set (see activity.go).
+	activity activityState
 	// notifyObserver is the optional notification seam (see
 	// SetNotificationObserver): fired synchronously from producer goroutines
 	// after a notification is queued; guarded by mu and must not block.
@@ -618,6 +621,15 @@ func New(cfg Config) (*Agent, error) {
 	a.tasks.SetNotify(func(session, text string, stoppedBy tools.StopOrigin) {
 		a.queueBackgroundCompletion(session, text, stoppedBy)
 	})
+	// Activity change seam (B7): one observer for the four session-scoped
+	// managers, wired exactly once and as early as possible — shells capture
+	// onChange per Start and tasks per start, so anything started before
+	// this would miss the hook. SetActivityObserver only swaps the
+	// destination; these wirings are permanent.
+	a.registry.Background().SetOnChange(func(session string) { a.emitActivity(session, ActivityShells) })
+	a.tasks.SetOnChange(func(session string) { a.emitActivity(session, ActivityTasks) })
+	a.cron.SetOnChange(func(session string) { a.emitActivity(session, ActivityCrons) })
+	a.registry.TodoStore().SetOnChange(func(session string) { a.emitActivity(session, ActivityTodos) })
 	return a, nil
 }
 
