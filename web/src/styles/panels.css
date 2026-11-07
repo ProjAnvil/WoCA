@@ -645,6 +645,12 @@ html.dark .shiki-host span {
   .act-wake-action {
     min-height: 44px;
   }
+  /* OutputTail's inline copy/retry links sit inside expanded rows; they are
+   * primary touch targets once the tail is open. */
+  .act-link-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 /* -------------------------------------------------------------------------- */

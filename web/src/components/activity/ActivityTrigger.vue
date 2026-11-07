@@ -112,6 +112,10 @@ function place(): void {
 function onDocPointerdown(e: PointerEvent): void {
   const target = e.target as Node
   if (panelEl.value?.contains(target) || wrapEl.value?.contains(target)) return
+  // Teleported modal layers sit above the popover and are typically opened
+  // from it (the stop/delete confirm dialogs): interacting with one is not
+  // an outside click — the panel must survive its own confirm flow.
+  if (target instanceof Element && target.closest('.w-modal-backdrop')) return
   sessions.activityPanelOpen = false
 }
 
@@ -173,18 +177,35 @@ function onPanelKeydown(e: KeyboardEvent): void {
 /* ------------------- wake-cap toast (§4.3, panel closed too) ---------------- */
 
 // Rising edge of the ACTIVE session's wake.capped: one amber toast per cap
-// episode. Mounting into an already-capped session stays silent — the toast
-// marks the moment the cap is hit, and the Scheduled tab keeps the
-// persistent warning bar afterwards.
+// EPISODE per session. Mounting into an already-capped session stays
+// silent — the toast marks the moment the cap is hit, and the Scheduled tab
+// keeps the persistent warning bar afterwards.
 const wakeCapped = computed(() =>
   sid.value ? (activity.snapshotOf(sid.value)?.wake.capped ?? false) : false,
 )
 
-watch(wakeCapped, (on, was) => {
-  if (!on || was) return
+// Per-session lastToasted guard: sessions that already toasted their current
+// cap episode. Switching away and back to a still-capped session must not
+// re-toast, so the guard survives session switches; observing the cap
+// lifted for a session (falling edge) re-arms it for the next episode.
+// Deliberately kept (documented): when the first snapshot this trigger ever
+// sees for the ACTIVE session is ALREADY capped, the toast still fires —
+// the user was elsewhere when the cap hit and this is how they learn; the
+// Scheduled tab's persistent bar only helps once they know to look.
+const cappedToasted = new Set<string>()
+
+watch([sid, wakeCapped], ([sidNow, on]) => {
+  if (!sidNow) return
+  if (!on) {
+    // Cap observed lifted: a future episode of this session may toast.
+    cappedToasted.delete(sidNow)
+    return
+  }
+  if (cappedToasted.has(sidNow)) return // same episode, already announced
+  cappedToasted.add(sidNow)
   toast.warn(
     t('activity.wakeCapped', {
-      count: activity.snapshotOf(sid.value ?? '')?.wake.pending_notifications ?? 0,
+      count: activity.snapshotOf(sidNow)?.wake.pending_notifications ?? 0,
     }),
   )
 })

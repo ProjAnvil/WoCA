@@ -143,6 +143,26 @@ describe('ActivityTrigger open/close', () => {
     w.unmount()
   })
 
+  it('a pointerdown inside a teleported modal (the stop/delete confirms) keeps the panel open', async () => {
+    const w = mountAttached()
+    await w.get('button').trigger('click')
+    await flush()
+    expect(popover()).toBeTruthy()
+    // The confirm dialogs teleport a .w-modal-backdrop to body — visually
+    // above the popover and opened from it; interacting there is not an
+    // outside click.
+    const backdrop = document.createElement('div')
+    backdrop.className = 'w-modal-backdrop'
+    const action = document.createElement('button')
+    backdrop.appendChild(action)
+    document.body.appendChild(backdrop)
+    action.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await flush()
+    expect(popover()).toBeTruthy()
+    backdrop.remove()
+    w.unmount()
+  })
+
   it('a pointerdown inside the popover or on the trigger does not close it', async () => {
     const w = mountAttached()
     await w.get('button').trigger('click')
@@ -335,6 +355,68 @@ describe('ActivityTrigger wake-cap toast (panel closed)', () => {
     const w = mountAttached()
     await flush()
     expect(useToastStore().toasts).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('does not re-toast when switching away and back to a still-capped session', async () => {
+    const sessions = useSessionStore()
+    sessions.seed([SESSION, { ...SESSION, id: 's2', title: 'S2' }] as never, {})
+    api.getActivity.mockResolvedValueOnce(snap('s1'))
+    await activity.fetchNow('s1')
+    const w = mountAttached()
+    const toast = useToastStore()
+
+    // The cap rises while s1 is active — one toast.
+    api.getActivity.mockResolvedValueOnce(snap('s1', { wake: wake({ capped: true, pending_notifications: 2 }) }))
+    await activity.fetchNow('s1')
+    await flush()
+    expect(toast.toasts).toHaveLength(1)
+
+    // Switch away (s2 is uncapped) and back to s1, whose cached snapshot is
+    // still capped: same episode, the per-session guard holds — no re-toast.
+    api.getActivity.mockResolvedValueOnce(snap('s2'))
+    await activity.fetchNow('s2')
+    sessions.activeId = 's2'
+    await flush()
+    sessions.activeId = 's1'
+    await flush()
+    expect(toast.toasts).toHaveLength(1)
+
+    // The cap lifting re-arms the guard: the next episode toasts again.
+    api.getActivity.mockResolvedValueOnce(snap('s1'))
+    await activity.fetchNow('s1')
+    await flush()
+    api.getActivity.mockResolvedValueOnce(snap('s1', { wake: wake({ capped: true, pending_notifications: 1 }) }))
+    await activity.fetchNow('s1')
+    await flush()
+    expect(toast.toasts.filter((x) => x.kind === 'warn')).toHaveLength(2)
+    w.unmount()
+  })
+
+  it('toasts once when the first snapshot seen for the active session is already capped (kept behaviour)', async () => {
+    const sessions = useSessionStore()
+    sessions.seed([SESSION, { ...SESSION, id: 's2', title: 'S2' }] as never, {})
+    api.getActivity.mockResolvedValueOnce(snap('s1'))
+    await activity.fetchNow('s1')
+    // s2 is armed capped before it is ever shown (the user was elsewhere).
+    api.getActivity.mockResolvedValueOnce(snap('s2', { wake: wake({ capped: true, pending_notifications: 4 }) }))
+    await activity.fetchNow('s2')
+    const w = mountAttached()
+    const toast = useToastStore()
+
+    // Switching onto the still-capped session informs the user — once.
+    sessions.activeId = 's2'
+    await flush()
+    expect(toast.toasts).toHaveLength(1)
+    expect(toast.toasts[0].kind).toBe('warn')
+    expect(toast.toasts[0].message).toContain('4')
+
+    // Away and back: same episode, no second toast.
+    sessions.activeId = 's1'
+    await flush()
+    sessions.activeId = 's2'
+    await flush()
+    expect(toast.toasts.filter((x) => x.kind === 'warn')).toHaveLength(1)
     w.unmount()
   })
 })
