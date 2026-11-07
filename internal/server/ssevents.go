@@ -25,6 +25,7 @@ const (
 	EventError             = "error"
 	EventSessionState      = "session_state"
 	EventWakeCapped        = "wake_capped"
+	EventActivityChanged   = "activity_changed"
 )
 
 // toolCallPayload is the data of a tool_call event. Fields are declared in
@@ -48,4 +49,16 @@ type toolResultPayload struct {
 type interruptPayload struct {
 	Kind    string `json:"kind"`
 	Payload any    `json:"payload"`
+}
+
+// activityChangedPayload is the data of an activity_changed event on the
+// global stream (PM §4.4): which session's activity changed and which
+// slice. It carries no content — clients pull the snapshot through the
+// authorized REST route, so the broadcast never leaks commands, todo text
+// or cron prompts to clients that cannot read the session (D4). kind is
+// one of the agent.ActivityKind values (todos|shells|tasks|crons) plus
+// "wake", which the server's wake driver emits itself.
+type activityChangedPayload struct {
+	Kind      string `json:"kind"`
+	SessionID string `json:"session_id"`
 }

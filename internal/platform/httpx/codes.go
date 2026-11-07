@@ -32,6 +32,7 @@ const (
 // Common internal/downstream codes (0500–0599).
 const (
 	CodeInternal         = "0500"
+	CodeNotImplemented   = "0501" // the deployment form does not mount this surface
 	CodePlaneUnreachable = "0502" // edge → core plane forward failed
 	CodeStarting         = "0503" // surface is booting
 )

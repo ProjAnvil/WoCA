@@ -191,6 +191,14 @@ type Config struct {
 	// The credential travels only between the catalog authority and this
 	// process — it never appears on a client surface.
 	ResolveModel func(ctx context.Context, id, provider, model string) (wocadb.ModelPreset, string, bool)
+	// ActivityAPI mounts the session-activity surface (PM §4.3): the
+	// snapshot/output/stop routes and the activity_changed signal. The
+	// assembly layer decides — the personal edition serves it, the
+	// dispatch/EE forms do not (their runs execute elsewhere, so this
+	// process's agent sees no session activity) — and when it is off every
+	// activity route answers 501 S-B-0501 instead of an empty panel. The
+	// core never sniffs the request or the database to guess the form.
+	ActivityAPI bool
 }
 
 // Server serves the woca web UI and its HTTP API.
@@ -257,6 +265,10 @@ type Server struct {
 	// goal (so a clear can delete the right file).
 	goalMu    sync.Mutex
 	goalOwner string
+
+	// activityAPI is the assembled state of Config.ActivityAPI: gates the
+	// activity routes and the activity_changed signal.
+	activityAPI bool
 
 	// Wake driver state (Task 8, wake.go): wakeMu guards the bookkeeping
 	// maps AND serializes the drain+start pair so concurrent completions
@@ -359,6 +371,7 @@ func New(cfg Config) *Server {
 		applyClaudeEnv:  cfg.ApplyClaudeEnv,
 		plugins:         cfg.Plugins,
 		installPlugin:   cfg.InstallPlugin,
+		activityAPI:     cfg.ActivityAPI,
 		wakeChain:       map[string]int{},
 		wakeStalled:     map[string]bool{},
 		rootCtx:         rootCtx,
@@ -375,6 +388,14 @@ func New(cfg Config) *Server {
 		// contract is synchronous-and-non-blocking; the driver hands the
 		// actual drain+start to its own goroutine.
 		cfg.Agent.SetNotificationObserver(s.onQueuedNotification)
+		if cfg.ActivityAPI {
+			// Session activity signal (PM §4.4, D4): every manager change
+			// becomes a signal-only activity_changed frame on the global
+			// stream; clients re-fetch the snapshot through the REST routes
+			// in activityapi.go. Only assembled deployments install the
+			// observer — with the API off, changes stay silent.
+			cfg.Agent.SetActivityObserver(s.onActivityChanged)
+		}
 		// Goal persistence: every live goal change mirrors to the owning
 		// session's sidecar; a clear deletes it.
 		cfg.Agent.SubscribeGoal(func(g *agent.Goal) {
@@ -431,6 +452,18 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/sessions/{id}/goal", authz.ScopeSessionsRead, s.handleGetGoal)
 	s.route(mux, "POST /api/sessions/{id}/goal", authz.ScopeSessionsWrite, s.handleGoalCommand)
 	s.route(mux, "GET /api/sessions/{id}/context", authz.ScopeSessionsRead, s.handleSessionContext)
+	// Session activity surface (PM §4.3): the panel's snapshot and output
+	// tails read with the session scope; the stop/delete actions control
+	// execution, so they carry the run-control scope like run cancel (the
+	// member role has it, the viewer does not). The routes are always
+	// mounted — unsupported deployment forms answer 501 from the handlers
+	// (Config.ActivityAPI, PM §4.8), never by omitting the route.
+	s.route(mux, "GET /api/sessions/{id}/activity", authz.ScopeSessionsRead, s.handleActivitySnapshot)
+	s.route(mux, "GET /api/sessions/{id}/background/shells/{shell}/output", authz.ScopeSessionsRead, s.handleShellOutput)
+	s.route(mux, "POST /api/sessions/{id}/background/shells/{shell}/kill", authz.ScopeRunsWrite, s.handleShellKill)
+	s.route(mux, "GET /api/sessions/{id}/background/tasks/{task}/output", authz.ScopeSessionsRead, s.handleTaskOutput)
+	s.route(mux, "POST /api/sessions/{id}/background/tasks/{task}/stop", authz.ScopeRunsWrite, s.handleTaskStop)
+	s.route(mux, "DELETE /api/sessions/{id}/background/crons/{cron}", authz.ScopeRunsWrite, s.handleCronDelete)
 	s.route(mux, "GET /api/workspace", authz.ScopeWorkspaceRead, s.handleWorkspace)
 	// Checkpoint/changes plane (web review tab): pending-change diffs,
 	// workspace rollback, conversation truncation and /btw side runs.

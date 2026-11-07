@@ -23,6 +23,7 @@ export const SSE_EVENT_TYPES = [
   'error',
   'session_state',
   'wake_capped',
+  'activity_changed',
 ] as const
 
 export type SSEEventType = (typeof SSE_EVENT_TYPES)[number]
@@ -106,6 +107,14 @@ export interface WakeCappedPayload {
   queued: number
 }
 
+/** Global stream: signal-only — which session's activity changed and which
+ * slice (todos | shells | tasks | crons | wake). Carries no content:
+ * clients refetch the snapshot through the authorized REST route. */
+export interface ActivityChangedPayload {
+  kind: string
+  session_id: string
+}
+
 export interface SSEEventPayloadMap {
   delta: TextPayload
   reasoning: TextPayload
@@ -125,6 +134,7 @@ export interface SSEEventPayloadMap {
   error: ErrorPayload
   session_state: SessionStatePayload
   wake_capped: WakeCappedPayload
+  activity_changed: ActivityChangedPayload
 }
 
 export type SSEEventPayload<T extends SSEEventType> = SSEEventPayloadMap[T]

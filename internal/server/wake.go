@@ -121,6 +121,9 @@ func (s *Server) wakeLocked(sid string) {
 				s.agent.QueueNotificationFor(q.Session, q.Tag, q.Text)
 			}
 		}
+		// The stall is panel-visible state (snapshot wake.stalled): signal
+		// the wake slice change.
+		s.onActivityChanged(sid, agent.ActivityWake)
 		return
 	}
 	s.wakeChain[sid]++
@@ -131,11 +134,19 @@ func (s *Server) wakeLocked(sid string) {
 // user-initiated run is the design's reset point — the budget restarts, and
 // a stalled driver gets another chance (items left queued by a cap or a
 // failed start ride the user run through the agent's run-start delivery).
+// Clearing a consumed budget or a stall changes panel-visible wake state,
+// so it signals the wake slice (a cap hit still additionally emits the
+// existing wake_capped event at the moment it happens).
 func (s *Server) resetWakeChain(sid string) {
 	s.wakeMu.Lock()
-	defer s.wakeMu.Unlock()
+	_, hadChain := s.wakeChain[sid]
+	wasStalled := s.wakeStalled[sid]
 	delete(s.wakeChain, sid)
 	delete(s.wakeStalled, sid)
+	s.wakeMu.Unlock()
+	if hadChain || wasStalled {
+		s.onActivityChanged(sid, agent.ActivityWake)
+	}
 }
 
 // wakePolicy reads the live auto-wake switch and chain budget. A nil store

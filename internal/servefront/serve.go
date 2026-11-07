@@ -512,7 +512,13 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 		NativeAuth:                  native,
 		RunLedger:                   runLedger,
 		DispatchToQueue:             dispatchQueue,
-		RunsOffHost:                 runsOffHost,
+		// Session activity surface (PM §4.8): the personal posture serves it
+		// from this process's agent; a dispatching form runs its sessions on
+		// workers, so the local agent sees no session activity and the API
+		// answers 501 instead of an empty panel. The enterprise edition
+		// keeps this off until its routed activity design lands.
+		ActivityAPI: !dispatchQueue,
+		RunsOffHost: runsOffHost,
 		SandboxEnabled: func() bool {
 			// Enterprise injection wins; the personal posture keeps the
 			// process-level sandbox flag (WOCA_SANDBOX_ENDPOINT) as the
