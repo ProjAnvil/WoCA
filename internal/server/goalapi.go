@@ -225,6 +225,9 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 		run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
 		s.markSessionState(sessionID, wocadb.SessionRunning, id)
 		history := s.sessions.load(run.ctx, sessionID)
+		// Todo sidecar restore, same as startRunWith (B9, PM §4.5): the
+		// goal loop's TodoWrite merges against the restored list.
+		s.restoreTodos(sessionID)
 		run.startGoal(history, func(final []messages.Message) {
 			if final != nil {
 				// Completion persistence must survive run cancellation:

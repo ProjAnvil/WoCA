@@ -241,15 +241,58 @@ func expandHomePath(p string) string {
 	return p
 }
 
-// handleDeleteSession removes a session (transcript, goal sidecar, index
-// entry). Deleting an unknown id still succeeds — the client's goal is for
+// sessionDeleteReport is the DELETE /api/sessions/{id} response (D2): what
+// the release tore down, so the UI can confirm what was stopped. The
+// BEFORE-delete warning comes from the activity snapshot (running items);
+// this reports what the confirmed delete actually did.
+type sessionDeleteReport struct {
+	Deleted      bool `json:"deleted"`
+	ShellsKilled int  `json:"shells_killed"`
+	TasksStopped int  `json:"tasks_stopped"`
+	CronsDeleted int  `json:"crons_deleted"`
+	TodosDropped bool `json:"todos_dropped"`
+}
+
+// handleDeleteSession removes a session and releases its background work
+// (D2): the transcript, goal and todo sidecars and the index entry go, and
+// the agent seam stops the session's running shells and tasks (user
+// attribution), deletes its scheduled prompts, drops its todos and queued
+// notifications, and silences it forever — a late completion is refused
+// instead of queued. The store tombstone additionally keeps the wake driver
+// from ever starting a run for the session, even a completion racing this
+// delete. Deleting an unknown id still succeeds — the client's goal is for
 // the session to be gone.
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	var rep agent.ReleaseReport
+	if s.agent != nil {
+		rep = s.agent.ReleaseSession(id)
+		if obs := s.agent.Obs(); obs != nil {
+			obs.Log("info", "session_release", map[string]any{
+				"session":       id,
+				"shells_killed": rep.ShellsKilled,
+				"tasks_stopped": rep.TasksStopped,
+				"crons_deleted": rep.CronsDeleted,
+				"todos_dropped": rep.TodosDropped,
+			})
+		}
+	}
 	s.sessions.delete(r.Context(), id)
 	s.forgetSessionState(id)
-	s.log.Info().Str("session", id).Msg("session deleted")
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
+	s.forgetWakeState(id)
+	s.log.Info().Str("session", id).
+		Int("shells_killed", rep.ShellsKilled).
+		Int("tasks_stopped", rep.TasksStopped).
+		Int("crons_deleted", rep.CronsDeleted).
+		Bool("todos_dropped", rep.TodosDropped).
+		Msg("session deleted")
+	writeJSON(w, http.StatusOK, sessionDeleteReport{
+		Deleted:      true,
+		ShellsKilled: rep.ShellsKilled,
+		TasksStopped: rep.TasksStopped,
+		CronsDeleted: rep.CronsDeleted,
+		TodosDropped: rep.TodosDropped,
+	})
 }
 
 // Errors of the EE workspace resolution chain (WorkspaceRoot set). Both are

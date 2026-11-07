@@ -19,6 +19,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/platform/blobstore"
 	"github.com/projanvil/woca/internal/session"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // sessionStore persists agent transcripts to JSONL files (one per session),
@@ -312,8 +313,9 @@ func (s *sessionStore) flushIndex() {
 }
 
 // delete removes a session: the in-memory transcript, the .jsonl file, the
-// goal sidecar and the index entry. The tombstone keeps a run still in flight
-// from resurrecting the transcript via its completion save.
+// goal and todo sidecars and the index entry. The tombstone keeps a run
+// still in flight from resurrecting the transcript via its completion save
+// — and lets the wake driver refuse to start a run for the session (D2).
 func (s *sessionStore) delete(ctx context.Context, id string) {
 	s.mu.Lock()
 	delete(s.mem, id)
@@ -332,7 +334,19 @@ func (s *sessionStore) delete(ctx context.Context, id string) {
 	if err := os.Remove(s.goalPath(id)); err != nil && !os.IsNotExist(err) {
 		s.log.Debug().Err(err).Str("session", id).Msg("goal sidecar remove failed")
 	}
+	if err := os.Remove(s.todosPath(id)); err != nil && !os.IsNotExist(err) {
+		s.log.Debug().Err(err).Str("session", id).Msg("todo sidecar remove failed")
+	}
 	s.flushIndex()
+}
+
+// isDeleted reports whether the session was deleted in this process
+// (tombstone): the wake driver consults it so a deleted session is never
+// woken, even by a completion racing the release (D2).
+func (s *sessionStore) isDeleted(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tombstones[id]
 }
 
 // writeIndex rewrites index.json atomically. Callers must hold s.writeMu;
@@ -422,6 +436,70 @@ func (s *sessionStore) loadGoal(id string) *agent.Goal {
 		return nil
 	}
 	return &g
+}
+
+// todoSidecar is the todo sidecar's on-disk shape: the session's list plus
+// its last-write time, so a restart can restore both (an empty items array
+// is a cleared list, distinct from an absent file).
+type todoSidecar struct {
+	UpdatedAt time.Time    `json:"updated_at"`
+	Items     []tools.Todo `json:"items"`
+}
+
+// todosPath is the per-session todo sidecar (PM §4.5), next to the
+// transcript like the goal sidecar.
+func (s *sessionStore) todosPath(id string) string {
+	return filepath.Join(s.dir, id+".todos.json")
+}
+
+// saveTodos persists the todo sidecar atomically (tmp+rename). Write
+// failures are warned, never silent — unlike saveGoal's swallow, a lost
+// todo sidecar is a user-visible regression the operator should see. A
+// tombstoned session is not written: a save racing the delete must not
+// resurrect the sidecar the delete just removed.
+func (s *sessionStore) saveTodos(id string, items []tools.Todo, updatedAt time.Time) {
+	if s.dir == "" {
+		return
+	}
+	s.mu.Lock()
+	deleted := s.tombstones[id]
+	s.mu.Unlock()
+	if deleted {
+		return
+	}
+	b, err := json.MarshalIndent(todoSidecar{UpdatedAt: updatedAt, Items: items}, "", "  ")
+	if err != nil {
+		s.log.Warn().Err(err).Str("session", id).Msg("todo sidecar marshal failed")
+		return
+	}
+	tmp := s.todosPath(id) + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		s.log.Warn().Err(err).Str("session", id).Msg("todo sidecar write failed")
+		return
+	}
+	if err := os.Rename(tmp, s.todosPath(id)); err != nil {
+		s.log.Warn().Err(err).Str("session", id).Msg("todo sidecar rename failed")
+	}
+}
+
+// loadTodos reads the persisted todo sidecar. ok=false means no readable
+// sidecar (absent or corrupt): the live store stays authoritative then.
+func (s *sessionStore) loadTodos(id string) (items []tools.Todo, updatedAt time.Time, ok bool) {
+	if s.dir == "" {
+		return nil, time.Time{}, false
+	}
+	b, err := os.ReadFile(s.todosPath(id))
+	if err != nil {
+		return nil, time.Time{}, false
+	}
+	var sc todoSidecar
+	if err := json.Unmarshal(b, &sc); err != nil {
+		return nil, time.Time{}, false
+	}
+	if sc.Items == nil {
+		sc.Items = []tools.Todo{} // a cleared list reads as [], never null
+	}
+	return sc.Items, sc.UpdatedAt, true
 }
 
 // list returns sessions from the in-memory index, newest first — zero JSONL

@@ -248,13 +248,24 @@ func (s *Server) handleActivitySnapshot(w http.ResponseWriter, r *http.Request) 
 	}
 	sid := r.PathValue("id")
 	act := s.agent.ActivityFor(sid, time.Now())
+	// Todos: live wins, else sidecar (PM §4.5, the goalForSession pattern).
+	// A process that has not written todos for the session (TodosKnown=false,
+	// the post-restart state) displays the persisted list with the sidecar's
+	// updated_at; no sidecar keeps the never-written shape (empty items,
+	// null updated_at).
+	todos, todosUpdatedAt := act.Todos, act.TodosUpdatedAt
+	if !act.TodosKnown {
+		if items, at, ok := s.sessions.loadTodos(sid); ok {
+			todos, todosUpdatedAt = items, at
+		}
+	}
 	snap := activitySnapshot{
 		Crons:      make([]activityCron, 0, len(act.Crons)),
 		ServerTime: rfc3339UTC(time.Now()),
 		SessionID:  sid,
 		Shells:     make([]activityShell, 0, len(act.Shells)),
 		Tasks:      make([]activityTask, 0, len(act.Tasks)),
-		Todos:      activityTodos{Items: act.Todos, UpdatedAt: rfc3339UTCOrNull(act.TodosUpdatedAt)},
+		Todos:      activityTodos{Items: todos, UpdatedAt: rfc3339UTCOrNull(todosUpdatedAt)},
 		Wake:       s.activityWakeInfo(sid, act.PendingNotifications),
 	}
 	for _, st := range act.Shells {
@@ -392,12 +403,19 @@ func (s *Server) handleCronDelete(w http.ResponseWriter, r *http.Request) {
 // path: it publishes the signal-only activity_changed frame on the global
 // stream (the same topic and Publish path session_state uses), carrying
 // just the kind and the session id — clients re-fetch the authorized
-// snapshot (D4). kind=todos will additionally feed the todo sidecar writer
-// (B9). The observer contract is synchronous; the local bus Publish never
-// blocks, and a publish failure is a debug log, not a panic.
+// snapshot (D4). kind=todos additionally feeds the todo sidecar writer
+// (B9, PM §4.5): the write is synchronous with the change, the same
+// contract as the goal sidecar's subscriber. The observer contract is
+// synchronous; the sidecar write and the local bus Publish never block, and
+// a publish failure is a debug log, not a panic.
 func (s *Server) onActivityChanged(session string, kind agent.ActivityKind) {
 	if !s.activityAPI {
 		return
+	}
+	if kind == agent.ActivityTodos && session != "" {
+		// The unscoped "" bucket belongs to the local single-session
+		// surfaces (TUI/REPL), not to a server session — no sidecar for it.
+		s.persistTodos(session)
 	}
 	if _, err := s.hub.Publish(context.Background(), sessionStateTopic, Event{
 		Type: EventActivityChanged,
@@ -405,5 +423,31 @@ func (s *Server) onActivityChanged(session string, kind agent.ActivityKind) {
 	}); err != nil {
 		s.log.Debug().Err(err).Str("session", session).Str("kind", string(kind)).
 			Msg("activity_changed publish failed")
+	}
+}
+
+// persistTodos writes the session's todo sidecar from the live store (the
+// observer path — kind=todos). ok=false (never written this process) writes
+// nothing; a cleared-to-empty list is a list and persists as empty.
+func (s *Server) persistTodos(session string) {
+	items, updatedAt, ok := s.agent.TodosFor(session)
+	if !ok {
+		return
+	}
+	s.sessions.saveTodos(session, items, updatedAt)
+}
+
+// restoreTodos seeds the live todo store from the sidecar when this process
+// has no list for the session yet (the first run after a restart): live
+// wins, else sidecar — a list cleared to empty is still a live list. Called
+// BEFORE run.start so TodoWrite's merge baseline includes the pre-restart
+// items. The restore itself is a todo change, so it re-fires kind=todos
+// (idempotent sidecar rewrite, one activity_changed signal).
+func (s *Server) restoreTodos(sid string) {
+	if _, _, ok := s.agent.TodosFor(sid); ok {
+		return
+	}
+	if items, _, ok := s.sessions.loadTodos(sid); ok {
+		s.agent.SetTodosFor(sid, items)
 	}
 }

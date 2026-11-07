@@ -560,6 +560,11 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 		run.emit(Event{Type: EventRunStarted, Data: started})
 		s.markSessionState(sid, wocadb.SessionRunning, run.id)
 		history := s.sessions.load(run.ctx, sid)
+		// Todo sidecar restore (B9, PM §4.5): a process with no live list
+		// for the session (first run after a restart) seeds it from the
+		// sidecar BEFORE the run starts, so TodoWrite's merge baseline
+		// includes the pre-restart items.
+		s.restoreTodos(sid)
 		run.start(append(history, human), func(final []messages.Message) {
 			if final != nil {
 				// Completion persistence must survive run cancellation:

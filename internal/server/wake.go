@@ -63,6 +63,22 @@ func (s *Server) wakeLocked(sid string) {
 	if s.agent == nil {
 		return
 	}
+	if s.sessions.isDeleted(sid) {
+		// D2: a deleted session is never woken. ReleaseSession already
+		// refused new completions and dropped queued ones; this guard holds
+		// for the race it cannot cover — a session deleted while one of its
+		// runs was still in flight (the run's finish reaches wakeAfterRun
+		// after the delete). Drain and discard whatever is still queued for
+		// it; nothing is retried or requeued.
+		if items := s.agent.DrainQueuedInputsFor(sid); len(items) > 0 {
+			s.log.Info().Str("session", sid).Int("items", len(items)).
+				Msg("wake skipped for deleted session; queued items discarded")
+		}
+		if obs := s.agent.Obs(); obs != nil {
+			obs.Log("info", "wake_skip", map[string]any{"session": sid, "reason": "deleted"})
+		}
+		return
+	}
 	if s.wakeStalled[sid] {
 		return // last wake start failed; a user run must clear the stall
 	}
@@ -147,6 +163,18 @@ func (s *Server) resetWakeChain(sid string) {
 	if hadChain || wasStalled {
 		s.onActivityChanged(sid, agent.ActivityWake)
 	}
+}
+
+// forgetWakeState drops the session's wake-driver bookkeeping (chain budget
+// and stall flag) when the session is deleted: nothing else would ever clear
+// them — a user run cannot arrive for a session that no longer exists — so
+// without this the maps would only grow. Silent by contrast with
+// resetWakeChain: a deleted session has no panel left to signal.
+func (s *Server) forgetWakeState(sid string) {
+	s.wakeMu.Lock()
+	delete(s.wakeChain, sid)
+	delete(s.wakeStalled, sid)
+	s.wakeMu.Unlock()
 }
 
 // wakePolicy reads the live auto-wake switch and chain budget. A nil store
