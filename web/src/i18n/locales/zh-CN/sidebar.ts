@@ -13,6 +13,9 @@ export default {
   awaitingDecision: '等待你的决策',
   deleteSession: '删除会话',
   deleteSessionConfirm: '删除会话「{title}」？聊天记录将被移除，不可恢复。',
+  deleteSessionRunning:
+    '该会话仍有 {shells} 个后台 shell、{tasks} 个后台任务在运行，并有 {crons} 个定时提示；删除会一并终止并移除它们。',
+  deleteSessionReport: '会话已删除：终止 {shells} 个 shell、停止 {tasks} 个任务、移除 {crons} 个定时任务。',
   searchSessions: '搜索会话',
   filterPlaceholder: '输入关键词过滤会话…',
   noMatch: '没有匹配的会话',

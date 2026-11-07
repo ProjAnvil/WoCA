@@ -2,6 +2,8 @@ import { ref, type Ref } from 'vue'
 import type { Goal, Interrupt, RunStatus, Session } from '../../types'
 import { toErrorMessage } from '../../lib/errors'
 import * as api from '../../api/client'
+import type { RunStartedPayload } from '../../api/events'
+import { useActivityStore } from '../activity'
 import type { ItemMutations } from './items'
 
 function isAbortError(value: unknown): boolean {
@@ -25,6 +27,9 @@ export interface StreamDeps {
   goalNoteId: Ref<Record<string, string | null>>
   goal: Ref<Record<string, Goal | null>>
   goalRunning: Ref<Record<string, boolean>>
+  // True while a session's live run was auto-started by the wake driver —
+  // set from run_started.auto, cleared on done/error.
+  runAuto: Ref<Record<string, boolean>>
   items: ItemMutations
   // Sends with a createRun POST in flight own the run they are about to
   // attach to — reattaching over them would reload the pre-run disk
@@ -55,6 +60,7 @@ export function createRunStreams(deps: StreamDeps) {
     goalNoteId,
     goal,
     goalRunning,
+    runAuto,
     items,
     sending,
     loadSession,
@@ -96,10 +102,21 @@ export function createRunStreams(deps: StreamDeps) {
   // connectGlobalEvents subscribes to /api/events. Native EventSource
   // reconnects on its own; every (re)connection is seeded with the current
   // snapshot server-side, which keeps the map fresh without polling. The
-  // activity/wake signals are left unwired here — the activity store (F2)
-  // owns those consumers.
+  // activity/wake/onOpen consumers live in the activity store (F2): this
+  // owner just dispatches. Handlers must never throw — on the native
+  // transport a throwing handler surfaces as reconnect jitter — so the
+  // dispatch boundary routes any escape into the store's explicit
+  // per-session error channel (stored, rendered — not swallowed).
   function connectGlobalEvents() {
     if (demo.value || eventsSource) return
+    const activity = useActivityStore()
+    const dispatch = (sid: string, run: () => void) => {
+      try {
+        run()
+      } catch (e) {
+        activity.noteError(sid, e)
+      }
+    }
     eventsSource = api.streamEvents({
       onSessionState: (ev) => {
         if (ev.status === 'running' || ev.status === 'awaiting') {
@@ -116,6 +133,10 @@ export function createRunStreams(deps: StreamDeps) {
           serverRunState.value = next
         }
       },
+      onWakeCapped: (ev) => dispatch(ev.session, () => activity.onWakeCapped(ev, activeId.value)),
+      onActivityChanged: (ev) =>
+        dispatch(ev.session_id, () => activity.onActivityChanged(ev, activeId.value)),
+      onOpen: () => dispatch(activeId.value, () => activity.onStreamOpen(activeId.value)),
     })
   }
 
@@ -201,10 +222,14 @@ export function createRunStreams(deps: StreamDeps) {
         onQueuePosition(pos) {
           queuePosition.value[sid] = pos
         },
-        onRunStarted() {
+        onRunStarted(ev: RunStartedPayload) {
           status.value[sid] = 'running'
           delete queuePosition.value[sid]
           runId.value[sid] = rid
+          // Wake-driver runs carry auto=true; user runs leave it absent.
+          // The header's running pill marks auto runs (UIUX §4.3) until the
+          // terminal done/error clears the flag.
+          runAuto.value[sid] = ev?.auto === true
         },
         onResync() {
           // The gap exceeds the server's replay window (or a seq jump was
@@ -228,6 +253,7 @@ export function createRunStreams(deps: StreamDeps) {
           interrupt.value[sid] = null
           status.value[sid] = 'done'
           delete queuePosition.value[sid]
+          delete runAuto.value[sid]
           pendingSteers.value[sid] = []
           afterDone?.()
           // The terminal SSE event fires just before the server persists the
@@ -242,6 +268,7 @@ export function createRunStreams(deps: StreamDeps) {
           error.value[sid] = msg
           status.value[sid] = 'error'
           delete queuePosition.value[sid]
+          delete runAuto.value[sid]
           pendingSteers.value[sid] = []
         },
       }, controller.signal)

@@ -14,6 +14,10 @@ export default {
   awaitingDecision: 'Waiting for your decision',
   deleteSession: 'Delete session',
   deleteSessionConfirm: 'Delete session "{title}"? Chat history will be removed and cannot be recovered.',
+  deleteSessionRunning:
+    'It still has {shells} running background shell(s), {tasks} running task(s) and {crons} scheduled prompt(s); deleting will stop and remove them too.',
+  deleteSessionReport:
+    'Session deleted: killed {shells} shell(s), stopped {tasks} task(s), removed {crons} schedule(s).',
   searchSessions: 'Search sessions',
   filterPlaceholder: 'Filter sessions…',
   noMatch: 'No matching sessions',

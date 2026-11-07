@@ -1,5 +1,6 @@
 // The workspace-grouped session list: group drawers, row status icons,
-// relative timestamps, and the confirm-gated delete flow.
+// relative timestamps, and the confirm-gated delete flow (including the D2
+// running-counts warning and the post-delete teardown report).
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +9,21 @@ import SessionList from './SessionList.vue'
 import { useSessionStore } from '../stores/sessions'
 import { useConfirmStore } from '../stores/confirm'
 import { useToastStore } from '../stores/toast'
+
+// The delete flow reads pre-delete counts through the activity store; the
+// mock keeps these component tests off the network (the store's own
+// behavior is covered in stores/activity.test.ts).
+const activityMock = vi.hoisted(() => ({
+  runningCountsFor: vi.fn(),
+  refresh: vi.fn(),
+  forget: vi.fn(),
+  setDemo: vi.fn(),
+  onActivityChanged: vi.fn(),
+  onWakeCapped: vi.fn(),
+  onStreamOpen: vi.fn(),
+  noteError: vi.fn(),
+}))
+vi.mock('../stores/activity', () => ({ useActivityStore: () => activityMock }))
 
 const iso = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString()
 
@@ -42,6 +58,7 @@ async function mountSeeded(sessions: SeedSession[]) {
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.restoreAllMocks()
+  activityMock.runningCountsFor.mockReset().mockResolvedValue(null)
 })
 
 describe('workspace groups', () => {
@@ -108,7 +125,7 @@ describe('delete flow', () => {
   it('asks for confirmation and deletes only on confirm', async () => {
     const { w, store } = await mountSeeded([{ id: 'a', title: 'Named' }])
     const confirmDialog = useConfirmStore()
-    const removeSpy = vi.spyOn(store, 'removeSession').mockResolvedValue()
+    const removeSpy = vi.spyOn(store, 'removeSession').mockResolvedValue(null)
     vi.spyOn(confirmDialog, 'ask').mockResolvedValue(false)
     await w.get('.session-del').trigger('click')
     expect(confirmDialog.ask).toHaveBeenCalled()
@@ -128,5 +145,59 @@ describe('delete flow', () => {
     await new Promise((r) => setTimeout(r, 0))
     const toast = useToastStore()
     expect(toast.toasts.some((x) => x.message.includes('run in flight'))).toBe(true)
+  })
+
+  it('lists the running counts in the confirm body when the target session has live work (D2)', async () => {
+    const { w } = await mountSeeded([{ id: 'a', title: 'Named' }])
+    const confirmDialog = useConfirmStore()
+    const askSpy = vi.spyOn(confirmDialog, 'ask').mockResolvedValue(false)
+    activityMock.runningCountsFor.mockResolvedValueOnce({ shells: 2, tasks: 1, crons: 3 })
+    await w.get('.session-del').trigger('click')
+    expect(activityMock.runningCountsFor).toHaveBeenCalledWith('a')
+    const body = askSpy.mock.calls[0][0].body as string
+    expect(body).toContain(i18n.global.t('sidebar.deleteSessionConfirm', { title: 'Named' }))
+    expect(body).toContain(i18n.global.t('sidebar.deleteSessionRunning', { shells: 2, tasks: 1, crons: 3 }))
+  })
+
+  it('omits the counts line when nothing is running and counts are unknown', async () => {
+    const { w } = await mountSeeded([{ id: 'a', title: 'Named' }])
+    const confirmDialog = useConfirmStore()
+    const askSpy = vi.spyOn(confirmDialog, 'ask').mockResolvedValue(false)
+    const plainBody = i18n.global.t('sidebar.deleteSessionConfirm', { title: 'Named' })
+    // Unknown counts (unavailable deployment / failed read) → null.
+    activityMock.runningCountsFor.mockResolvedValueOnce(null)
+    await w.get('.session-del').trigger('click')
+    expect(askSpy.mock.calls[0][0].body).toBe(plainBody)
+
+    askSpy.mockClear()
+    activityMock.runningCountsFor.mockResolvedValueOnce({ shells: 0, tasks: 0, crons: 0 })
+    await w.get('.session-del').trigger('click')
+    expect(askSpy.mock.calls[0][0].body).toBe(plainBody)
+  })
+
+  it('toasts the teardown report after a successful delete', async () => {
+    const { w, store } = await mountSeeded([
+      { id: 'a', title: 'Named' },
+      { id: 'b', title: 'Other' },
+    ])
+    const confirmDialog = useConfirmStore()
+    vi.spyOn(confirmDialog, 'ask').mockResolvedValue(true)
+    vi.spyOn(store, 'removeSession').mockResolvedValue({
+      deleted: true,
+      shells_killed: 2,
+      tasks_stopped: 1,
+      crons_deleted: 3,
+      todos_dropped: true,
+    })
+    await w.get('.session-del').trigger('click')
+    await new Promise((r) => setTimeout(r, 0))
+    const toast = useToastStore()
+    expect(
+      toast.toasts.some((x) =>
+        x.message.includes(
+          i18n.global.t('sidebar.deleteSessionReport', { shells: 2, tasks: 1, crons: 3 }),
+        ),
+      ),
+    ).toBe(true)
   })
 })

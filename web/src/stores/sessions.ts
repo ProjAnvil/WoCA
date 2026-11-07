@@ -7,6 +7,7 @@ import type {
   Interrupt,
   RunStatus,
   Session,
+  SessionDeleteReport,
   WorkspaceGroup,
 } from '../types'
 import * as api from '../api/client'
@@ -15,6 +16,7 @@ import { truncate, baseName } from '../lib/format'
 import { isNoticeContent, messagesToItems, nid } from '../lib/transcript'
 import { useAgentStore, isPermissionMode, isThinkingLevel } from './agent'
 import { toErrorMessage } from '../lib/errors'
+import { useActivityStore } from './activity'
 import { createItemMutations } from './sessions/items'
 import { createContextTracker } from './sessions/context'
 import { createRunStreams } from './sessions/stream'
@@ -67,6 +69,13 @@ export const useSessionStore = defineStore('sessions', () => {
   const goal = ref<Record<string, Goal | null>>({})
   const goalRunning = ref<Record<string, boolean>>({})
   const goalPanelOpen = ref(false)
+  // True while a session's live run was auto-started by the wake driver
+  // (run_started.auto) — the header marks such runs "auto" (UIUX §4.3).
+  // Cleared when the run reaches done/error.
+  const runAuto = ref<Record<string, boolean>>({})
+  // Session activity panel state (F2): keyed by session inside the store;
+  // this orchestrator only triggers its lifecycle (switch/delete/demo).
+  const activity = useActivityStore()
 
   // --- demo mode (the standalone demo app seeds this instead of the backend) ---
   const demo = ref(false)
@@ -102,6 +111,7 @@ export const useSessionStore = defineStore('sessions', () => {
     goalNoteId,
     goal,
     goalRunning,
+    runAuto,
     items: mutations,
     sending,
     loadSession: (id) => loadSession(id),
@@ -163,6 +173,7 @@ export const useSessionStore = defineStore('sessions', () => {
 
   function setDemo(v: boolean) {
     demo.value = v
+    activity.setDemo(v)
   }
   function seed(seedSessions: Session[], itemsMap: Record<string, ChatItem[]>) {
     sessions.value = seedSessions.map((s) => ({
@@ -265,6 +276,10 @@ export const useSessionStore = defineStore('sessions', () => {
 
   async function setActive(id: string) {
     activeId.value = id
+    // The activity panel follows the active session (PM §F2): schedule its
+    // snapshot refetch before the (slower) transcript load so both land
+    // together; a cached session keeps its snapshot meanwhile.
+    activity.refresh(id)
     await loadSession(id)
     // Switching onto a session whose run lives on the server (started in
     // another tab / before a refresh): pick its stream back up.
@@ -272,21 +287,24 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   // removeSession deletes a session server-side and drops all of its local
-  // state. Deleting the active session switches to the newest remaining
-  // session of the same workspace (else the newest overall, else a fresh one).
-  // A session with a live run refuses — stop it first.
-  async function removeSession(id: string) {
+  // state, returning the D2 teardown report (what the release actually
+  // killed/stopped/removed) for the caller to surface. Deleting the active
+  // session switches to the newest remaining session of the same workspace
+  // (else the newest overall, else a fresh one). A session with a live run
+  // refuses — stop it first.
+  async function removeSession(id: string): Promise<SessionDeleteReport | null> {
     const st = status.value[id] ?? 'idle'
     if (st === 'running' || st === 'awaiting' || st === 'queued') {
       throw new Error(i18n.global.t('sessions.sessionBusyDeleteFirst'))
     }
-    if (!demo.value) await api.deleteSession(id)
+    const report = demo.value ? null : await api.deleteSession(id)
     const target = sessions.value.find((s) => s.id === id)
     const wsPath = target?.workspace ?? ''
     sessions.value = sessions.value.filter((s) => s.id !== id)
-    for (const m of [items, status, queuePosition, error, runId, interrupt, streamingId, reasoningId, goalNoteId, goal, goalRunning]) {
+    for (const m of [items, status, queuePosition, error, runId, interrupt, streamingId, reasoningId, goalNoteId, goal, goalRunning, runAuto]) {
       delete m.value[id]
     }
+    activity.forget(id)
     if (serverRunState.value[id]) {
       const next = { ...serverRunState.value }
       delete next[id]
@@ -298,6 +316,7 @@ export const useSessionStore = defineStore('sessions', () => {
       if (next) await setActive(next.id)
       else await createSession(wsPath ? { path: wsPath } : undefined)
     }
+    return report
   }
 
   /*
@@ -607,6 +626,9 @@ export const useSessionStore = defineStore('sessions', () => {
     goal,
     goalRunning,
     goalPanelOpen,
+    // True while the session's current run was auto-started by the wake
+    // driver — the header's running pill marks it "auto" (UIUX §4.3).
+    runAuto,
     runId,
     queuePosition,
     workspaceGroups,

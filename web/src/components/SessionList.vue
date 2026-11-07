@@ -3,6 +3,7 @@ import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronRight, Folder, Hand, Loader2, MessageSquare, Plus, Trash2 } from 'lucide-vue-next'
 import { useSessionStore } from '../stores/sessions'
+import { useActivityStore } from '../stores/activity'
 import { useConfirmStore } from '../stores/confirm'
 import { useToastStore } from '../stores/toast'
 import type { Session } from '../types'
@@ -13,6 +14,7 @@ import type { Session } from '../types'
 const { t } = useI18n()
 const toast = useToastStore()
 const store = useSessionStore()
+const activity = useActivityStore()
 const confirmDialog = useConfirmStore()
 
 // Collapsed groups (default: expanded); switching the active session's
@@ -49,19 +51,47 @@ function shortTime(iso: string): string {
 }
 
 // Deleting a session removes its transcript server-side; a live run refuses
-// (removeSession throws — surfaced via toast).
+// (removeSession throws — surfaced via toast). D2: before the destructive
+// confirm, list what is still running in the TARGET session (fetched on
+// demand when not cached); afterwards, surface the server's teardown report.
 async function removeSession(s: Session) {
   const title = s.title || t('sidebar.newSession')
+  // Counts null = unknown (activity API unavailable in this deployment, or
+  // the read failed — the error itself lives in that session's activity
+  // state); the confirm then omits the counts line rather than blocking.
+  const counts = await activity.runningCountsFor(s.id)
+  let body = t('sidebar.deleteSessionConfirm', { title })
+  if (counts && (counts.shells > 0 || counts.tasks > 0 || counts.crons > 0)) {
+    body +=
+      ' ' +
+      t('sidebar.deleteSessionRunning', {
+        shells: counts.shells,
+        tasks: counts.tasks,
+        crons: counts.crons,
+      })
+  }
   const ok = await confirmDialog.ask({
     title: t('sidebar.deleteSession'),
-    body: t('sidebar.deleteSessionConfirm', { title }),
+    body,
     confirmLabel: t('common.delete'),
     cancelLabel: t('common.cancel'),
     tone: 'danger',
   })
   if (!ok) return
   try {
-    await store.removeSession(s.id)
+    const report = await store.removeSession(s.id)
+    if (
+      report &&
+      (report.shells_killed > 0 || report.tasks_stopped > 0 || report.crons_deleted > 0)
+    ) {
+      toast.success(
+        t('sidebar.deleteSessionReport', {
+          shells: report.shells_killed,
+          tasks: report.tasks_stopped,
+          crons: report.crons_deleted,
+        }),
+      )
+    }
   } catch (e) {
     toast.error(e)
   }
