@@ -61,6 +61,7 @@ export default {
     'Delete "{name}" ({spec})? Its future automatic runs are cancelled.',
   confirmDeleteAction: 'Delete it',
   wakeCapped: 'Auto-wake hit its cap — {count} notification(s) are waiting for your next message',
+  wakeCappedAction: 'Send a message',
   wakeStalled: 'Auto-wake stalled; sending a message restarts it',
   wakeDisabled: 'Auto-wake is off for this session',
   wakePending: '{count} notification(s) pending',

@@ -207,7 +207,7 @@ const latestEvent = computed(() => {
       <!-- Session activity entry (UIUX §3 option A): sits immediately left of
          the Memory button; popover is anchored, non-modal, collapsed by
          default. -->
-      <ActivityTrigger />
+      <ActivityTrigger @compose="composerEl?.focus()" />
       <button
         class="icon-btn mem-toggle"
         :title="t('chat.memoryTitle')"

@@ -10,7 +10,8 @@ import i18n from '../../i18n'
 import ActivityTrigger from './ActivityTrigger.vue'
 import { useActivityStore } from '../../stores/activity'
 import { useSessionStore } from '../../stores/sessions'
-import type { ActivitySnapshot, BackgroundShell } from '../../types'
+import { useToastStore } from '../../stores/toast'
+import type { ActivitySnapshot, BackgroundShell, CronEntry, WakeState } from '../../types'
 
 const api = vi.hoisted(() => ({
   getActivity: vi.fn(),
@@ -48,6 +49,24 @@ const snap = (sid: string, over: Partial<ActivitySnapshot> = {}): ActivitySnapsh
   tasks: [],
   crons: [],
   wake: { enabled: true, capped: false, stalled: false, pending_notifications: 0 },
+  ...over,
+})
+
+const cron = (id: string): CronEntry => ({
+  id,
+  name: `cron-${id}`,
+  spec: '*/15 * * * *',
+  prompt: 'check',
+  created_at: '2026-11-07T00:00:00Z',
+  last_fired_at: null,
+  next_fire_at: '2026-11-07T00:15:00Z',
+})
+
+const wake = (over: Partial<WakeState> = {}): WakeState => ({
+  enabled: true,
+  capped: false,
+  stalled: false,
+  pending_notifications: 0,
   ...over,
 })
 
@@ -163,6 +182,42 @@ describe('ActivityTrigger open/close', () => {
     expect(document.activeElement).toBe(firstTab)
     w.unmount()
   })
+
+  it('the trap ignores buttons inside hidden v-show tab panels (regression)', async () => {
+    // A cron entry puts a delete button in the SCHEDULED tabpanel, which
+    // v-show keeps in the DOM under display:none while Background (the
+    // default tab) is active. The trap set must exclude it: with the hidden
+    // button counted as "last", Tab from the close button escapes the
+    // popover (the browser skips display:none and leaves the dialog).
+    api.getActivity.mockResolvedValueOnce(snap('s1', { crons: [cron('c1')] }))
+    await activity.fetchNow('s1')
+    const w = mountAttached()
+    await w.get('button').trigger('click')
+    await flush()
+
+    const pop = popover()!
+    const hiddenDelete = pop.querySelector<HTMLButtonElement>('.act-cron-row .act-stop-btn')!
+    expect(hiddenDelete).toBeTruthy()
+    expect(hiddenDelete.closest<HTMLElement>('.act-tabpanel')!.style.display).toBe('none')
+
+    // Tab from the LAST VISIBLE control (close) wraps to the first tab —
+    // the hidden delete button never receives focus.
+    const closeBtn = pop.querySelector<HTMLButtonElement>('.act-close')!
+    closeBtn.focus()
+    pop.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    await flush()
+    const firstTab = pop.querySelector<HTMLElement>('[role="tab"]')!
+    expect(document.activeElement).toBe(firstTab)
+    expect(document.activeElement).not.toBe(hiddenDelete)
+
+    // Shift+Tab from the first tab wraps to the last VISIBLE control (the
+    // close button), not to the hidden delete.
+    firstTab.focus()
+    pop.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }))
+    await flush()
+    expect(document.activeElement).toBe(closeBtn)
+    w.unmount()
+  })
 })
 
 describe('ActivityTrigger badge', () => {
@@ -238,5 +293,68 @@ describe('ActivityTrigger data on open', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('ActivityTrigger wake-cap toast (panel closed)', () => {
+  it('toasts once per cap episode for the active session, without opening the panel', async () => {
+    api.getActivity.mockResolvedValueOnce(snap('s1'))
+    await activity.fetchNow('s1')
+    const w = mountAttached()
+    const toast = useToastStore()
+    expect(toast.toasts).toHaveLength(0)
+
+    // The cap rises while the popover is closed — the typical case.
+    api.getActivity.mockResolvedValueOnce(snap('s1', { wake: wake({ capped: true, pending_notifications: 3 }) }))
+    await activity.fetchNow('s1')
+    await flush()
+    expect(toast.toasts).toHaveLength(1)
+    expect(toast.toasts[0].kind).toBe('warn')
+    expect(toast.toasts[0].message).toContain('3')
+
+    // Still capped on the next refresh: same episode, no second toast.
+    api.getActivity.mockResolvedValueOnce(snap('s1', { wake: wake({ capped: true, pending_notifications: 3 }) }))
+    await activity.fetchNow('s1')
+    await flush()
+    expect(toast.toasts).toHaveLength(1)
+
+    // A new episode (cap lifted, then hit again) toasts again.
+    api.getActivity.mockResolvedValueOnce(snap('s1'))
+    await activity.fetchNow('s1')
+    await flush()
+    api.getActivity.mockResolvedValueOnce(snap('s1', { wake: wake({ capped: true, pending_notifications: 1 }) }))
+    await activity.fetchNow('s1')
+    await flush()
+    expect(toast.toasts.filter((x) => x.kind === 'warn')).toHaveLength(2)
+    w.unmount()
+  })
+
+  it('mounting into an already-capped session stays silent (no retroactive toast)', async () => {
+    api.getActivity.mockResolvedValueOnce(snap('s1', { wake: wake({ capped: true, pending_notifications: 2 }) }))
+    await activity.fetchNow('s1')
+    const w = mountAttached()
+    await flush()
+    expect(useToastStore().toasts).toHaveLength(0)
+    w.unmount()
+  })
+})
+
+describe('ActivityTrigger "send a message" action', () => {
+  it('closes the panel and emits compose from the capped strip', async () => {
+    api.getActivity.mockResolvedValueOnce(
+      snap('s1', { crons: [cron('c1')], wake: wake({ capped: true, pending_notifications: 1 }) }),
+    )
+    await activity.fetchNow('s1')
+    const w = mountAttached()
+    await w.get('button').trigger('click')
+    await flush()
+    const pop = popover()!
+    ;(pop.querySelector('[data-tab="scheduled"]') as HTMLElement).click()
+    await flush()
+    ;(pop.querySelector('.act-wake-action') as HTMLElement).click()
+    await flush()
+    expect(popover()).toBeNull()
+    expect(w.emitted('compose')).toHaveLength(1)
+    w.unmount()
   })
 })

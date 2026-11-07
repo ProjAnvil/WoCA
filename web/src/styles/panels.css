@@ -600,6 +600,53 @@ html.dark .shiki-host span {
   text-align: center;
 }
 
+/* Danger ghost action, shared by BackgroundTab rows (stop shell / stop
+ * task) and ScheduledTab rows (delete cron): a visible label — the
+ * destructive step hides in the confirm dialog, not behind a cryptic
+ * glyph. Lives here (not scoped) because both components render it. */
+.act-stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 2px var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--danger-text);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.act-stop-btn:hover {
+  background: var(--danger-soft);
+}
+.act-stop-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.act-stop-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Narrow screens: inline action targets reach the 44×44 touch minimum
+ * (UIUX §3 A) — the popover stays an anchored popover, never a sheet. */
+@media (max-width: 640px) {
+  .act-out-toggle,
+  .act-close {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .act-stop-btn {
+    min-height: 44px;
+    padding: var(--space-3) var(--space-4);
+  }
+  .act-wake-action {
+    min-height: 44px;
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Interrupt modal                                                             */
 /* -------------------------------------------------------------------------- */

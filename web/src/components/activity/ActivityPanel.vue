@@ -3,7 +3,6 @@ import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CalendarClock, CircleSlash, ListChecks, Terminal, TriangleAlert, X } from 'lucide-vue-next'
 import { useActivityStore } from '../../stores/activity'
-import { useToastStore } from '../../stores/toast'
 import WSkeleton from '../ui/WSkeleton.vue'
 import WButton from '../ui/WButton.vue'
 import TodoTab from './TodoTab.vue'
@@ -16,11 +15,10 @@ import ScheduledTab from './ScheduledTab.vue'
 // inside ActivityTrigger's teleported, fixed-position shell; the trigger
 // owns open/close and focus return.
 const props = defineProps<{ sid: string }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; compose: [] }>()
 
 const { t } = useI18n()
 const activity = useActivityStore()
-const toast = useToastStore()
 
 type TabId = 'todo' | 'background' | 'scheduled'
 const TABS: Array<{ id: TabId; labelKey: string; icon: Component }> = [
@@ -78,18 +76,11 @@ function retry(): void {
   void activity.fetchNow(props.sid)
 }
 
-// wake_capped rising edge for THIS session (while the panel is open): one
-// amber toast (UIUX §4.3); the Scheduled tab keeps the persistent bar and
-// the tab warning afterwards.
+// The Scheduled tab carries a warning glyph while this session is capped
+// (UIUX §4.3); the persistent bar (and its "send a message" action) lives
+// inside the tab. The cap toast is owned by ActivityTrigger — it must fire
+// with the panel closed too.
 const wakeCapped = computed(() => activity.snapshotOf(props.sid)?.wake.capped ?? false)
-watch(wakeCapped, (on, was) => {
-  if (!on || was) return
-  toast.warn(
-    t('activity.wakeCapped', {
-      count: activity.snapshotOf(props.sid)?.wake.pending_notifications ?? 0,
-    }),
-  )
-})
 
 /* ------------------------------ tab keyboard ------------------------------ */
 
@@ -202,7 +193,7 @@ function onTablistKeydown(e: KeyboardEvent): void {
           role="tabpanel"
           aria-labelledby="act-tab-scheduled"
         >
-          <ScheduledTab :sid="props.sid" />
+          <ScheduledTab :sid="props.sid" @compose="emit('compose')" />
         </div>
       </template>
     </div>

@@ -354,33 +354,8 @@ function onListKeydown(e: KeyboardEvent): void {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-/* Danger ghost stop (visible label — the destructive step hides in the
- * confirm dialog, not behind a cryptic glyph). */
-.act-stop-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  padding: 2px var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--danger-text);
-  font: inherit;
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-.act-stop-btn:hover {
-  background: var(--danger-soft);
-}
-.act-stop-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.act-stop-btn:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-}
+/* The stop button's danger-ghost styling is shared with ScheduledTab's
+ * delete — see .act-stop-btn in styles/panels.css (global, not scoped). */
 .act-out-toggle {
   flex-shrink: 0;
   display: inline-flex;

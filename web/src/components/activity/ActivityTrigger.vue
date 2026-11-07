@@ -6,6 +6,7 @@ import WIconButton from '../ui/WIconButton.vue'
 import ActivityPanel from './ActivityPanel.vue'
 import { useSessionStore } from '../../stores/sessions'
 import { useActivityStore } from '../../stores/activity'
+import { useToastStore } from '../../stores/toast'
 
 // The header entry (UIUX §3 option A): an icon button with a live badge
 // (running count, brand; unviewed failures take priority, danger) that
@@ -13,9 +14,15 @@ import { useActivityStore } from '../../stores/activity'
 // positioning model (teleport to body, fixed, flip when space runs out)
 // but dialog semantics: aria-haspopup="dialog", Esc/outside-close, focus
 // returns to the trigger, and a light Tab trap keeps focus inside.
+// Always mounted in the chat header, so it also owns the wake-cap rising
+// edge toast (UIUX §4.3) — with the panel closed, which is the typical
+// case.
 const { t } = useI18n()
 const sessions = useSessionStore()
 const activity = useActivityStore()
+const toast = useToastStore()
+
+const emit = defineEmits<{ compose: [] }>()
 
 const panelId = useId()
 
@@ -112,12 +119,30 @@ function closeExternal(): void {
   sessions.activityPanelOpen = false
 }
 
-function focusables(): HTMLElement[] {
-  return Array.from(
-    panelEl.value?.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ) ?? [],
-  )
+// Focusables the user can actually reach: inactive tab panels stay in the
+// DOM under v-show's inline display:none, and their buttons must not join
+// the trap set (a hidden "last" would let Tab escape the popover, and
+// focusing a hidden element is a no-op). Checked by walking ancestors for
+// display:none/hidden — layout-free, so tests see the same set as browsers.
+function visibleFocusables(): HTMLElement[] {
+  const root = panelEl.value
+  if (!root) return []
+  const out: HTMLElement[] = []
+  for (const el of root.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  )) {
+    let n: HTMLElement | null = el
+    let hidden = false
+    while (n && n !== root) {
+      if (n.style.display === 'none' || n.hidden) {
+        hidden = true
+        break
+      }
+      n = n.parentElement
+    }
+    if (!hidden) out.push(el)
+  }
+  return out
 }
 
 function onPanelKeydown(e: KeyboardEvent): void {
@@ -126,10 +151,10 @@ function onPanelKeydown(e: KeyboardEvent): void {
     close(true)
     return
   }
-  // Light focus trap: Tab cycles within the popover (UIUX §3 A); Esc (and
-  // the outside click) is the way out.
+  // Light focus trap: Tab cycles within the popover's visible controls
+  // (UIUX §3 A); Esc (and the outside click) is the way out.
   if (e.key === 'Tab') {
-    const f = focusables()
+    const f = visibleFocusables()
     if (!f.length) return
     const first = f[0]
     const last = f[f.length - 1]
@@ -143,6 +168,32 @@ function onPanelKeydown(e: KeyboardEvent): void {
       first.focus()
     }
   }
+}
+
+/* ------------------- wake-cap toast (§4.3, panel closed too) ---------------- */
+
+// Rising edge of the ACTIVE session's wake.capped: one amber toast per cap
+// episode. Mounting into an already-capped session stays silent — the toast
+// marks the moment the cap is hit, and the Scheduled tab keeps the
+// persistent warning bar afterwards.
+const wakeCapped = computed(() =>
+  sid.value ? (activity.snapshotOf(sid.value)?.wake.capped ?? false) : false,
+)
+
+watch(wakeCapped, (on, was) => {
+  if (!on || was) return
+  toast.warn(
+    t('activity.wakeCapped', {
+      count: activity.snapshotOf(sid.value ?? '')?.wake.pending_notifications ?? 0,
+    }),
+  )
+})
+
+/** "Send a message" (UIUX §4.3): close the popover and hand focus to the
+ * composer — ChatPanel owns the composer ref and handles the event. */
+function onCompose(): void {
+  close(false)
+  emit('compose')
 }
 
 watch(open, async (on) => {
@@ -189,7 +240,7 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <Transition name="panel-pop">
         <div v-if="open && sid" ref="panelEl" class="act-pop" :style="popStyle" @keydown="onPanelKeydown">
-          <ActivityPanel :id="panelId" :sid="sid" @close="close(true)" />
+          <ActivityPanel :id="panelId" :sid="sid" @close="close(true)" @compose="onCompose" />
         </div>
       </Transition>
     </Teleport>

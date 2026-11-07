@@ -95,11 +95,15 @@ describe('ScheduledTab cron entries', () => {
 })
 
 describe('ScheduledTab wake explanations', () => {
-  it('capped shows the queued-notifications warning', async () => {
+  it('capped shows the queued-notifications warning with a "send a message" action', async () => {
     const w = await mountWith([cron('c1')], wake({ capped: true, pending_notifications: 2 }))
     expect(w.get('.act-wake.warn').text()).toContain(
       i18n.global.t('activity.wakeCapped', { count: 2 }),
     )
+    const action = w.get('.act-wake-action')
+    expect(action.text()).toBe(i18n.global.t('activity.wakeCappedAction'))
+    await action.trigger('click')
+    expect(w.emitted('compose')).toHaveLength(1)
   })
 
   it('stalled and disabled each get a readable line', async () => {

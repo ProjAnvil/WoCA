@@ -59,6 +59,7 @@ export default {
   confirmDeleteBody: '删除「{name}」({spec})？未来的自动触发将全部取消。',
   confirmDeleteAction: '删除',
   wakeCapped: '自动唤醒已达上限 — {count} 条通知等待你发消息触发',
+  wakeCappedAction: '去发消息',
   wakeStalled: '自动唤醒已停滞；发送一条消息即可恢复',
   wakeDisabled: '本会话的自动唤醒已关闭',
   wakePending: '{count} 条通知待发',

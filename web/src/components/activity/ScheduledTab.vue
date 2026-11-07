@@ -12,6 +12,9 @@ import type { CronEntry } from '../../types'
 // look). The wake status lines give capped/stalled/disabled/pending a
 // readable explanation (PM §4.9).
 const props = defineProps<{ sid: string }>()
+// "Send a message" (UIUX §4.3): bubbling up — ActivityTrigger closes the
+// popover and ChatPanel focuses the composer.
+const emit = defineEmits<{ compose: [] }>()
 
 const { t } = useI18n()
 const activity = useActivityStore()
@@ -39,6 +42,9 @@ async function remove(entry: CronEntry): Promise<void> {
   <div class="act-tab-body">
     <p v-if="wake && wake.capped" class="act-wake warn" role="status">
       {{ t('activity.wakeCapped', { count: wake.pending_notifications }) }}
+      <button class="act-wake-action" type="button" @click="emit('compose')">
+        {{ t('activity.wakeCappedAction') }}
+      </button>
     </p>
     <p v-if="wake && wake.stalled" class="act-wake warn" role="status">
       {{ t('activity.wakeStalled') }}
@@ -104,6 +110,10 @@ async function remove(entry: CronEntry): Promise<void> {
 
 <style scoped>
 .act-wake {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
   margin: 0 var(--space-4) var(--space-3);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
@@ -116,6 +126,25 @@ async function remove(entry: CronEntry): Promise<void> {
   border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
   background: var(--warn-soft);
   color: var(--warn-text);
+}
+.act-wake-action {
+  flex-shrink: 0;
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.act-wake-action:hover {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.act-wake-action:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 .act-wake.off {
   color: var(--muted);

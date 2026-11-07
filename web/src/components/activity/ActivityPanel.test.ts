@@ -9,7 +9,6 @@ import { ApiError } from '../../api/transport'
 import i18n from '../../i18n'
 import ActivityPanel from './ActivityPanel.vue'
 import { useActivityStore } from '../../stores/activity'
-import { useToastStore } from '../../stores/toast'
 import type {
   ActivitySnapshot,
   BackgroundShell,
@@ -203,19 +202,18 @@ describe('ActivityPanel data states', () => {
     expect(w.get('.act-stale').text()).toContain(i18n.global.t('activity.staleNotice'))
   })
 
-  it('toasts once when this session hits the wake cap while open (rising edge)', async () => {
-    api.getActivity.mockResolvedValueOnce(snap('s1'))
-    await activity.fetchNow('s1')
-    const w = mountPanel()
-    const toast = useToastStore()
+  it('passes the capped strip "send a message" action through as compose', async () => {
     api.getActivity.mockResolvedValueOnce(
-      snap('s1', { wake: { enabled: true, capped: true, stalled: false, pending_notifications: 2 } }),
+      snap('s1', {
+        crons: [cron('c1')],
+        wake: { enabled: true, capped: true, stalled: false, pending_notifications: 1 },
+      }),
     )
     await activity.fetchNow('s1')
-    await flush()
-    expect(toast.toasts).toHaveLength(1)
-    expect(toast.toasts[0].kind).toBe('warn')
-    expect(toast.toasts[0].message).toContain('2')
+    const w = mountPanel()
+    await w.get('[data-tab="scheduled"]').trigger('click')
+    await w.get('.act-wake-action').trigger('click')
+    expect(w.emitted('compose')).toHaveLength(1)
   })
 
   it('per-tab empty states under a ready snapshot', async () => {

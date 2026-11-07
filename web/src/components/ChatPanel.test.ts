@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../i18n'
 import ChatPanel from './ChatPanel.vue'
 import { useSessionStore } from '../stores/sessions'
+import { useActivityStore } from '../stores/activity'
 import { greetingSlot } from '../lib/greeting'
 
 // The panel renders the full chat surface; the item view is irrelevant to
@@ -165,5 +166,51 @@ describe('ChatPanel activity header entry', () => {
     s.runAuto['s1'] = false
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.pill-auto').exists()).toBe(false)
+  })
+
+  it('focuses the composer after the capped strip "send a message" action', async () => {
+    const wrapper = mount(ChatPanel, {
+      global: { plugins: [i18n, createPinia()] },
+      stubs,
+      attachTo: document.body,
+    })
+    try {
+      const s = useSessionStore()
+      s.seed(
+        [{ id: 's1', title: 'S', updatedAt: '', loaded: true, workspace: '', workspaceName: '' }],
+        { s1: [{ id: 'u1', kind: 'user', content: 'hi' }] },
+      )
+      // A capped wake state without any backend round-trip.
+      useActivityStore().bySession['s1'] = {
+        snapshot: {
+          session_id: 's1',
+          server_time: new Date().toISOString(),
+          todos: { items: [], updated_at: null },
+          shells: [],
+          tasks: [],
+          crons: [],
+          wake: { enabled: true, capped: true, stalled: false, pending_notifications: 1 },
+        },
+        loading: false,
+        error: '',
+        unavailable: false,
+        stale: false,
+      }
+      s.activityPanelOpen = true
+      await wrapper.vm.$nextTick()
+      await wrapper.vm.$nextTick()
+      const pop = document.querySelector('.act-pop') as HTMLElement
+      expect(pop).toBeTruthy()
+      ;(pop.querySelector('[data-tab="scheduled"]') as HTMLElement).click()
+      await wrapper.vm.$nextTick()
+      ;(pop.querySelector('.act-wake-action') as HTMLElement).click()
+      await wrapper.vm.$nextTick()
+      // panel closed, composer focused
+      expect(document.querySelector('.act-pop')).toBeNull()
+      expect(document.activeElement).toBe(wrapper.get('textarea').element)
+    } finally {
+      wrapper.unmount()
+      document.body.innerHTML = ''
+    }
   })
 })

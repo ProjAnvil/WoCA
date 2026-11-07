@@ -156,7 +156,13 @@ function fillPrompt(text: string) {
   textarea.value?.focus()
 }
 
-defineExpose({ fillPrompt })
+/** Focuses the input without touching the draft (e.g. the activity panel's
+ * "send a message" action after closing the popover). */
+function focus() {
+  textarea.value?.focus()
+}
+
+defineExpose({ fillPrompt, focus })
 </script>
 
 <template>
