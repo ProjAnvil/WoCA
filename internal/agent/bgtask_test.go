@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -108,7 +110,9 @@ func TestBackgroundTaskStopCancels(t *testing.T) {
 	bt := &backgroundTask{status: TaskRunning, done: make(chan struct{})}
 	ctx, cancel := context.WithCancel(t.Context())
 	bt.setCancel(cancel)
-	bt.stop()
+	if !bt.stop(tools.StopByModel) {
+		t.Fatal("stop of a running task must report the transition")
+	}
 	select {
 	case <-ctx.Done():
 	default:
@@ -122,12 +126,21 @@ func TestBackgroundTaskStopCancels(t *testing.T) {
 	if st, _, _ := bt.snapshot(); st != TaskStopped {
 		t.Fatalf("status = %v", st)
 	}
+	info := bt.info()
+	if info.StoppedBy != tools.StopByModel || info.EndedAt.IsZero() {
+		t.Fatalf("stop facts = %+v, want StoppedBy=model and EndedAt set", info)
+	}
 	// Stopping twice keeps the stopped status without a second done close; a
-	// nil cancel is tolerated.
+	// nil cancel is tolerated, and the second stop reports no transition.
 	bt.setCancel(nil)
-	bt.stop()
+	if bt.stop(tools.StopByUser) {
+		t.Fatal("second stop must report already finished")
+	}
 	if st, _, _ := bt.snapshot(); st != TaskStopped {
 		t.Fatalf("status after double stop = %v", st)
+	}
+	if info := bt.info(); info.StoppedBy != tools.StopByModel {
+		t.Fatalf("double stop overwrote the attribution: %+v", info)
 	}
 }
 
@@ -145,7 +158,7 @@ func TestBackgroundTaskDoneClosedExactlyOnce(t *testing.T) {
 				if i%2 == 0 {
 					bt.setFinalIfRunning(TaskCompleted, "done")
 				} else {
-					bt.stop()
+					bt.stop(tools.StopByUser)
 				}
 			}()
 		}
@@ -163,14 +176,14 @@ func TestTaskManagerStartGetList(t *testing.T) {
 	if _, ok := m.get("task-1"); ok {
 		t.Fatal("empty manager should not find tasks")
 	}
-	if list := m.list(); len(list) != 0 {
+	if list := m.ListFor(""); len(list) != 0 {
 		t.Fatalf("list = %v", list)
 	}
-	first, err := m.start(t.Context(), "subject", "description")
+	first, err := m.start(t.Context(), "subject", "description", "general")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := m.start(t.Context(), "another", "d2")
+	second, err := m.start(t.Context(), "another", "d2", "general")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,13 +197,13 @@ func TestTaskManagerStartGetList(t *testing.T) {
 	if !ok || got != second {
 		t.Fatal("get(task-2) failed")
 	}
-	list := m.list()
+	list := m.ListFor("")
 	if len(list) != 2 || list[0].ID != "task-1" || list[1].ID != "task-2" {
-		t.Fatalf("list not sorted by ID: %+v", list)
+		t.Fatalf("list not in creation order: %+v", list)
 	}
 	// start captures the starting run's session from ctx; "" outside a run
 	// scope (completion notifications deliver there).
-	scoped, err := m.start(tracing.WithRun(t.Context(), "r1", "sess-a"), "s3", "d3")
+	scoped, err := m.start(tracing.WithRun(t.Context(), "r1", "sess-a"), "s3", "d3", "reader")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +215,18 @@ func TestTaskManagerStartGetList(t *testing.T) {
 	}
 	if scoped.done == nil {
 		t.Fatal("started task has no done channel")
+	}
+	// Lifecycle facts recorded at start: subagent name, StartedAt set,
+	// EndedAt zero while running.
+	info, err := m.InfoFor("sess-a", scoped.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Subagent != "reader" || info.Session != "sess-a" || info.Description != "d3" {
+		t.Fatalf("scoped info = %+v", info)
+	}
+	if info.StartedAt.IsZero() || !info.EndedAt.IsZero() || info.Status != TaskRunning {
+		t.Fatalf("running info timestamps/status = %+v", info)
 	}
 }
 
@@ -656,11 +681,11 @@ func TestRunTaskDescriptionFallsBackToPrompt(t *testing.T) {
 func TestTaskManagerCap(t *testing.T) {
 	m := newTaskManager()
 	for i := range maxBackgroundTasks {
-		if _, err := m.start(t.Context(), "s", "d"); err != nil {
+		if _, err := m.start(t.Context(), "s", "d", "general"); err != nil {
 			t.Fatalf("start %d: %v", i, err)
 		}
 	}
-	if _, err := m.start(t.Context(), "s", "d"); err == nil || !strings.Contains(err.Error(), "limit reached") {
+	if _, err := m.start(t.Context(), "s", "d", "general"); err == nil || !strings.Contains(err.Error(), "limit reached") {
 		t.Fatalf("err = %v, want cap error", err)
 	}
 	if n := m.RunningCount(); n != maxBackgroundTasks {
@@ -780,6 +805,335 @@ func TestTaskOutputWaitMS(t *testing.T) {
 	// that returned without blocking would still see "still running".
 	if out.Content != "slow report" {
 		t.Fatalf("blocking-wait output = %q", out.Content)
+	}
+}
+
+// entryGatedModel blocks every response until the test closes the gate, so a
+// background subagent stays observably mid-run while the test manipulates
+// contexts around it.
+type entryGatedModel struct {
+	*language.FakeChatModel
+	gate chan struct{}
+}
+
+func (e *entryGatedModel) await(ctx context.Context) error {
+	select {
+	case <-e.gate:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (e *entryGatedModel) Invoke(ctx context.Context, input []messages.Message, opts ...runnables.Option) (messages.Message, error) {
+	if err := e.await(ctx); err != nil {
+		return messages.Message{}, err
+	}
+	return e.FakeChatModel.Invoke(ctx, input, opts...)
+}
+
+func (e *entryGatedModel) Stream(ctx context.Context, input []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	if err := e.await(ctx); err != nil {
+		return nil, err
+	}
+	return e.FakeChatModel.Stream(ctx, input, opts...)
+}
+
+// notifyOnce captures the first completion notification.
+func notifyOnce(a *Agent) <-chan string {
+	ch := make(chan string, 1)
+	a.tasks.SetNotify(func(session, text string) { ch <- text })
+	return ch
+}
+
+// TestTaskToolsAreSessionScoped reproduces N1's task half: session B's
+// TaskOutput and TaskStop on session A's background task must fail exactly
+// like an unknown id, and A's task must survive B's attempts untouched.
+func TestTaskToolsAreSessionScoped(t *testing.T) {
+	gate := make(chan struct{})
+	sub := &entryGatedModel{FakeChatModel: language.NewFakeChatModel(), gate: gate}
+	a := newBackgroundTaskAgent(t, sub)
+
+	ctxA := tracing.WithRun(t.Context(), "run-A", "sess-A")
+	ctxB := tracing.WithRun(t.Context(), "run-B", "sess-B")
+	if _, err := a.runTask(ctxA, taskArgs{Description: "a's secret work", RunInBackground: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// B must not read A's task output.
+	if out, err := a.taskOutput(ctxB, taskOutputArgs{TaskID: "task-1"}); err == nil {
+		t.Fatalf("session B read session A's task output: %q", out.Content)
+	}
+	// B must not stop A's task.
+	if res, err := a.taskStop(ctxB, taskStopArgs{TaskID: "task-1"}); err == nil {
+		t.Fatalf("session B stopped session A's task: %q", res.Content)
+	}
+	// A's task survived B's access and is still running.
+	out, err := a.taskOutput(ctxA, taskOutputArgs{TaskID: "task-1"})
+	if err != nil || !strings.Contains(out.Content, "still running") {
+		t.Fatalf("A's task affected by B's foreign access: %q err=%v", out.Content, err)
+	}
+	if _, err := a.taskStop(ctxA, taskStopArgs{TaskID: "task-1"}); err != nil {
+		t.Fatal(err)
+	}
+	close(gate) // release the cancelled subagent so the test can end cleanly
+}
+
+// TestBackgroundTaskDetachedFromRunCancellation reproduces N4: cancelling the
+// launching run's ctx (run stop / approval timeout) must NOT cancel the
+// background subagent — only TaskStop / a user stop may end it.
+func TestBackgroundTaskDetachedFromRunCancellation(t *testing.T) {
+	gate := make(chan struct{})
+	sub := &entryGatedModel{FakeChatModel: language.NewFakeChatModel(), gate: gate}
+	a := newBackgroundTaskAgent(t, sub)
+
+	runCtx, cancelRun := context.WithCancel(tracing.WithRun(t.Context(), "run-x", "sess-x"))
+	if _, err := a.runTask(runCtx, taskArgs{Description: "outlives the run", RunInBackground: true}); err != nil {
+		t.Fatal(err)
+	}
+	cancelRun() // the launching run stops / times out mid-task
+
+	// Give the would-be cancellation ample time to propagate, then demand the
+	// task is still running with honest status.
+	time.Sleep(300 * time.Millisecond)
+	info, err := a.tasks.InfoFor("sess-x", "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Status != TaskRunning || !info.EndedAt.IsZero() {
+		t.Fatalf("run cancellation killed the background task: %+v", info)
+	}
+	// Only an explicit stop ends it — here a user stop, with attribution.
+	info, alreadyFinished, err := a.tasks.StopFor("sess-x", "task-1", tools.StopByUser)
+	if err != nil || alreadyFinished {
+		t.Fatalf("StopFor = %+v %v %v", info, alreadyFinished, err)
+	}
+	if info.Status != TaskStopped || info.StoppedBy != tools.StopByUser {
+		t.Fatalf("stop facts = %+v, want stopped/user", info)
+	}
+	if info.EndedAt.IsZero() || info.Subagent != "general" || info.StartedAt.IsZero() {
+		t.Fatalf("lifecycle facts = %+v", info)
+	}
+	close(gate) // release the cancelled subagent so the test can end cleanly
+}
+
+// TestBackgroundTaskSubagentErrorIsFailedStatus reproduces N4's status half:
+// a subagent error must record as failed, never as completed with an
+// "Error:" body.
+func TestBackgroundTaskSubagentErrorIsFailedStatus(t *testing.T) {
+	sub := erroringSubagentModel{language.NewFakeChatModel()}
+	a := newBackgroundTaskAgent(t, sub)
+	notif := notifyOnce(a)
+
+	ctx := tracing.WithRun(t.Context(), "run-e", "sess-e")
+	if _, err := a.runTask(ctx, taskArgs{Description: "boom", RunInBackground: true}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case text := <-notif:
+		if !strings.Contains(text, "failed") {
+			t.Fatalf("notification status for a failed subagent = %q, want failed", text)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("failed task never notified")
+	}
+	// The recorded status is failed, distinct from completed and stopped,
+	// with both timestamps set and no stop attribution.
+	info, err := a.tasks.InfoFor("sess-e", "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Status != TaskFailed || info.StoppedBy != "" || info.StartedAt.IsZero() || info.EndedAt.IsZero() {
+		t.Fatalf("failed task info = %+v", info)
+	}
+}
+
+// TestTaskManagerListNumericOrder reproduces N11: task ids order numerically
+// (task-2 before task-10), not as strings.
+func TestTaskManagerListNumericOrder(t *testing.T) {
+	m := newTaskManager()
+	for i := range 12 {
+		if _, err := m.start(t.Context(), "subject", "prompt", "general"); err != nil {
+			t.Fatalf("start %d: %v", i, err)
+		}
+	}
+	got := make([]string, 0, 12)
+	for _, info := range m.ListFor("") {
+		got = append(got, info.ID)
+	}
+	want := make([]string, 12)
+	for i := range want {
+		want[i] = fmt.Sprintf("task-%d", i+1)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("list order = %v, want %v", got, want)
+	}
+}
+
+// The PM §4.1 ownership table at the TaskManager level, mirroring the shells'
+// TestBackgroundShellVisibilityTable: owner A / viewer A visible; owner A /
+// viewer B not-found; owner "" / viewer B visible; viewer "" sees all. Every
+// scoped accessor enforces the same rule, and a foreign stop leaves the
+// owner's task untouched.
+func TestBackgroundTaskVisibilityTable(t *testing.T) {
+	m := newTaskManager()
+	taskA, err := m.start(tracing.WithRun(t.Context(), "run-A", "sess-A"), "a", "a's prompt", "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskB, err := m.start(tracing.WithRun(t.Context(), "run-B", "sess-B"), "b", "b's prompt", "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskU, err := m.start(t.Context(), "u", "unscoped prompt", "general") // owner ""
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// owner A / viewer A sees it.
+	if _, err := m.InfoFor("sess-A", taskA.ID); err != nil {
+		t.Fatalf("owner A / viewer A: %v", err)
+	}
+	// owner A / viewer B gets not-found, identical to an unknown id.
+	if _, err := m.InfoFor("sess-B", taskA.ID); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("owner A / viewer B err = %v, want ErrTaskNotFound", err)
+	}
+	if _, err := m.InfoFor("sess-B", "task-99"); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("unknown id err = %v, want ErrTaskNotFound", err)
+	}
+	// owner "" / viewer B sees it (unscoped items are everyone's).
+	if _, err := m.InfoFor("sess-B", taskU.ID); err != nil {
+		t.Fatalf("owner unscoped / viewer B: %v", err)
+	}
+	// viewer "" sees everything.
+	if all := m.ListFor(""); len(all) != 3 {
+		t.Fatalf("unscoped viewer sees %d tasks, want 3: %+v", len(all), all)
+	}
+	// viewer B sees exactly its own task plus the unscoped one.
+	got := map[string]bool{}
+	for _, info := range m.ListFor("sess-B") {
+		got[info.ID] = true
+	}
+	if len(got) != 2 || !got[taskB.ID] || !got[taskU.ID] || got[taskA.ID] {
+		t.Fatalf("viewer B list = %v, want exactly {%s, %s}", got, taskB.ID, taskU.ID)
+	}
+
+	// The same rule holds for every scoped accessor.
+	if _, _, err := m.StopFor("sess-B", taskA.ID, tools.StopByUser); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("StopFor foreign err = %v", err)
+	}
+	if _, _, _, _, err := m.TailFor("sess-B", taskA.ID, 16); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("TailFor foreign err = %v", err)
+	}
+	// None of that stopped A's task.
+	if info, err := m.InfoFor("sess-A", taskA.ID); err != nil || info.Status != TaskRunning {
+		t.Fatalf("A's task affected by B's foreign access: %+v err=%v", info, err)
+	}
+	// B stops its own task; attribution records the user origin.
+	if info, already, err := m.StopFor("sess-B", taskB.ID, tools.StopByUser); err != nil || already || info.Status != TaskStopped || info.StoppedBy != tools.StopByUser {
+		t.Fatalf("B stopping its own = %+v already=%v err=%v", info, already, err)
+	}
+}
+
+// TestTaskStopForAlreadyFinished: stopping a task that finished on its own
+// changes nothing — alreadyFinished=true with the unchanged status and no
+// stop attribution. Covers completed and failed terminal states.
+func TestTaskStopForAlreadyFinished(t *testing.T) {
+	m := newTaskManager()
+	done, err := m.start(t.Context(), "done", "prompt", "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done.setFinalIfRunning(TaskCompleted, "report")
+	failed, err := m.start(t.Context(), "failed", "prompt", "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed.setFinalIfRunning(TaskFailed, "Error: boom")
+
+	for _, tc := range []struct {
+		id     string
+		status TaskStatus
+	}{{done.ID, TaskCompleted}, {failed.ID, TaskFailed}} {
+		info, already, err := m.StopFor("", tc.id, tools.StopByUser)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !already || info.Status != tc.status || info.StoppedBy != "" {
+			t.Fatalf("stop of finished %s = %+v already=%v, want unchanged %s", tc.id, info, already, tc.status)
+		}
+	}
+}
+
+// TestTaskManagerTailFor covers the tailed output accessor: whole buffer for
+// maxBytes <= 0, byte-accurate tail with the truncated flag, rune-boundary
+// backing for multibyte text, and the info snapshot riding along.
+func TestTaskManagerTailFor(t *testing.T) {
+	m := newTaskManager()
+	tk, err := m.start(t.Context(), "subject", strings.Repeat("x", 300), "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk.appendOutput("héllo wörld") // 13 bytes, multibyte runes
+
+	out, truncated, total, info, err := m.TailFor("", tk.ID, 0)
+	if err != nil || out != "héllo wörld" || truncated || total != 13 || info.ID != tk.ID {
+		t.Fatalf("TailFor(0) = %q %v %d %+v %v", out, truncated, total, info, err)
+	}
+	out, truncated, total, info, err = m.TailFor("", tk.ID, 100)
+	if err != nil || out != "héllo wörld" || truncated || total != 13 {
+		t.Fatalf("TailFor(100) = %q %v %d %v", out, truncated, total, err)
+	}
+	// 4 bytes from the end would cut "ö" (2 bytes) in half: the tail backs
+	// off to the rune boundary ("rld", 3 bytes).
+	out, truncated, total, info, err = m.TailFor("", tk.ID, 4)
+	if err != nil || out != "rld" || !truncated || total != 13 || info.Status != TaskRunning {
+		t.Fatalf("TailFor(4) = %q %v %d %+v %v", out, truncated, total, info, err)
+	}
+}
+
+// TestTaskManagerSetOnChange pins the change-hook contract: it fires with
+// the owner session on task start and on the terminal transition —
+// completion, failure and stop alike — exactly once per transition, and a
+// late completion after a stop does not fire again.
+func TestTaskManagerSetOnChange(t *testing.T) {
+	m := newTaskManager()
+	var mu sync.Mutex
+	var fired []string
+	m.SetOnChange(func(session string) {
+		mu.Lock()
+		fired = append(fired, session)
+		mu.Unlock()
+	})
+
+	scoped, err := m.start(tracing.WithRun(t.Context(), "r1", "sess-c"), "s", "p", "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := m.start(tracing.WithRun(t.Context(), "r2", "sess-c"), "s", "p", "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	late, err := m.start(tracing.WithRun(t.Context(), "r3", "sess-c"), "s", "p", "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	startFired := slices.Clone(fired)
+	mu.Unlock()
+	if !slices.Equal(startFired, []string{"sess-c", "sess-c", "sess-c"}) {
+		t.Fatalf("start fired %v, want three sess-c", startFired)
+	}
+
+	scoped.setFinalIfRunning(TaskCompleted, "ok")     // terminal: completion
+	stopped.stop(tools.StopByModel)                   // terminal: stop
+	late.stop(tools.StopByUser)                       // terminal: stop wins
+	late.setFinalIfRunning(TaskCompleted, "too late") // no-op after stop
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(fired, []string{"sess-c", "sess-c", "sess-c", "sess-c", "sess-c", "sess-c"}) {
+		t.Fatalf("change hook fired %v, want exactly one terminal fire per task", fired)
 	}
 }
 

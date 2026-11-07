@@ -1,10 +1,8 @@
 package agent
 
 import (
-	"cmp"
 	"context"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,7 +29,17 @@ type cronEntry struct {
 	Prompt    string
 	Spec      string
 	matcher   cronMatcher
+	createdAt time.Time
 	lastFired time.Time // minute granularity, prevents double fire
+}
+
+// CronInfo is a snapshot of one scheduled entry: identity plus the three
+// timestamps. LastFiredAt is zero when the entry never fired; NextFireAt is
+// zero when no matching minute exists ahead (e.g. "0 0 31 2 *": February
+// 31st never exists).
+type CronInfo struct {
+	ID, Session, Name, Spec, Prompt    string
+	CreatedAt, LastFiredAt, NextFireAt time.Time
 }
 
 // notificationSink is the single capability the scheduler needs from its
@@ -43,11 +51,12 @@ type notificationSink func(session, tag, text string)
 // testable without an agent. The host injects the delivery sink at
 // construction; everything else is self-contained.
 type cronScheduler struct {
-	notify  notificationSink
-	mu      sync.Mutex
-	next    int
-	entries []*cronEntry
-	cancel  context.CancelFunc
+	notify   notificationSink
+	mu       sync.Mutex
+	next     int
+	entries  []*cronEntry
+	onChange func(session string)
+	cancel   context.CancelFunc
 }
 
 func newCronScheduler(notify notificationSink) *cronScheduler {
@@ -94,13 +103,27 @@ func (s *cronScheduler) Add(session, name, prompt, spec string) (string, error) 
 		return "", err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	onChange := s.onChange
 	s.next++
 	id := fmt.Sprintf("cron-%d", s.next)
 	s.entries = append(s.entries, &cronEntry{
 		ID: id, Session: session, Name: name, Prompt: prompt, Spec: spec, matcher: m,
+		createdAt: time.Now(),
 	})
+	s.mu.Unlock()
+	if onChange != nil {
+		onChange(session)
+	}
 	return id, nil
+}
+
+// SetOnChange installs the change callback the activity seam subscribes to.
+// It fires synchronously on Add, on Delete and on every fire, with the
+// owning session id; it must not block.
+func (s *cronScheduler) SetOnChange(fn func(session string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChange = fn
 }
 
 // Delete removes an entry by ID when the calling session may touch it:
@@ -110,23 +133,33 @@ func (s *cronScheduler) Add(session, name, prompt, spec string) (string, error) 
 // session is returned as not-found, never removed.
 func (s *cronScheduler) Delete(id, session string) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	onChange := s.onChange
+	removed := ""
 	for i, e := range s.entries {
 		if e.ID != id {
 			continue
 		}
 		if !tracing.VisibleTo(e.Session, session) {
+			s.mu.Unlock()
 			return false // exists, but another session owns it
 		}
+		removed = e.Session
 		s.entries = append(s.entries[:i], s.entries[i+1:]...)
+		s.mu.Unlock()
+		if onChange != nil {
+			onChange(removed)
+		}
 		return true
 	}
+	s.mu.Unlock()
 	return false
 }
 
 // List snapshots the entries a run in session sees: everything when
 // unscoped ("" — the single-session surfaces see the whole list),
-// otherwise the unscoped entries plus the session's own, in ID order.
+// otherwise the unscoped entries plus the session's own, in ID order. The
+// entries slice is append-only with monotonic cron-N ids, so its order IS
+// the numeric id order (cron-2 before cron-10).
 func (s *cronScheduler) List(session string) []cronEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,9 +170,41 @@ func (s *cronScheduler) List(session string) []cronEntry {
 		}
 		out = append(out, cronEntry{ID: e.ID, Session: e.Session, Name: e.Name, Prompt: e.Prompt, Spec: e.Spec})
 	}
-	slices.SortFunc(out, func(a, b cronEntry) int { return cmp.Compare(a.ID, b.ID) })
 	return out
 }
+
+// InfoFor snapshots the entries a run in session can see, in numeric id
+// order, with their timestamps and the next fire computed from now. The
+// snapshot copies every field under the scheduler lock (lastFired mutates on
+// fire); the pure next-fire scan then runs outside it.
+func (s *cronScheduler) InfoFor(session string, now time.Time) []CronInfo {
+	s.mu.Lock()
+	infos := make([]CronInfo, 0, len(s.entries))
+	matchers := make([]cronMatcher, 0, len(s.entries))
+	for _, e := range s.entries {
+		if !tracing.VisibleTo(e.Session, session) {
+			continue
+		}
+		infos = append(infos, CronInfo{
+			ID: e.ID, Session: e.Session, Name: e.Name, Spec: e.Spec, Prompt: e.Prompt,
+			CreatedAt: e.createdAt, LastFiredAt: e.lastFired,
+		})
+		matchers = append(matchers, e.matcher)
+	}
+	s.mu.Unlock()
+	for i := range infos {
+		if next, ok := matchers[i].next(now, cronNextHorizon); ok {
+			infos[i].NextFireAt = next
+		}
+	}
+	return infos
+}
+
+// cronNextHorizon bounds the next-fire minute scan. Ten years covers every
+// real-world gap between matching dates (the rarest sane spec, February
+// 29th, recurs at most eight years apart) while ordinary schedules match
+// within days and never approach the bound.
+const cronNextHorizon = 10 * 365 * 24 * time.Hour
 
 // fireDue fires every entry whose schedule matches now's minute. Split out
 // from the ticker loop so tests can drive it deterministically.
@@ -153,8 +218,12 @@ func (s *cronScheduler) fireDue(now time.Time) {
 			due = append(due, e)
 		}
 	}
+	onChange := s.onChange
 	s.mu.Unlock()
 	for _, e := range due {
+		if onChange != nil {
+			onChange(e.Session)
+		}
 		s.notify(e.Session, "scheduled-task",
 			fmt.Sprintf("Scheduled task %s (%s) is due now:\n%s", e.displayName(), e.Spec, e.Prompt))
 	}
@@ -271,6 +340,23 @@ func (m cronMatcher) matches(t time.Time) bool {
 		return m.fields[2][t.Day()] || m.fields[4][int(t.Weekday())]
 	}
 	return m.fields[2][t.Day()] && m.fields[4][int(t.Weekday())]
+}
+
+// next returns the first matching minute strictly after `after`, scanning
+// minute by minute in local time up to horizon; ok=false when no matching
+// minute exists within the horizon (e.g. "0 0 31 2 *": February 31st never
+// exists). The scan starts at the next whole minute so an entry firing at
+// `after`'s minute reports its following occurrence.
+func (m cronMatcher) next(after time.Time, horizon time.Duration) (time.Time, bool) {
+	t := after.Truncate(time.Minute).Add(time.Minute)
+	limit := after.Add(horizon)
+	for !t.After(limit) {
+		if m.matches(t) {
+			return t, true
+		}
+		t = t.Add(time.Minute)
+	}
+	return time.Time{}, false
 }
 
 const scheduleCronDescription = `Schedule a recurring or one-shot scheduled prompt using a cron expression (5 fields: minute hour day-of-month month day-of-week, local time). When an entry is due, its prompt is delivered to you as a <scheduled-task> notification — act on it like new user input. Entries live for the current session only and are scoped to the creating session: list and delete only see entries your session created (plus unscoped ones from single-session surfaces).

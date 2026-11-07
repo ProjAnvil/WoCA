@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -237,6 +238,228 @@ func TestCronSchedulerStandalone(t *testing.T) {
 	defer mu.Unlock()
 	if len(fired) != 2 {
 		t.Fatalf("fired %d notifications, want 2 (minute de-dup + post-delete silence): %v", len(fired), fired)
+	}
+}
+
+// TestCronMatcherNext pins the next-fire minute scan (AC7) against a fixed
+// clock: strictly-after semantics, local-time wall matching, and no-match
+// within the horizon for impossible dates.
+func TestCronMatcherNext(t *testing.T) {
+	// Anchors from TestCronVixieDayFieldRule: 2026-08-14 is a Friday,
+	// 2026-08-16 a Sunday, 2026-08-17 a Monday.
+	cases := []struct {
+		spec    string
+		after   time.Time
+		horizon time.Duration
+		want    time.Time
+		ok      bool
+	}{
+		// */15: the next quarter hour, also when `after` is mid-minute.
+		{"*/15 * * * *", time.Date(2026, 8, 14, 10, 7, 0, 0, time.Local), 24 * time.Hour, time.Date(2026, 8, 14, 10, 15, 0, 0, time.Local), true},
+		// Strictly after: 10:30:12 → 10:45, not 10:30.
+		{"*/15 * * * *", time.Date(2026, 8, 14, 10, 30, 12, 0, time.Local), 24 * time.Hour, time.Date(2026, 8, 14, 10, 45, 0, 0, time.Local), true},
+		// An exact matching minute counts only for later `after`s.
+		{"*/15 * * * *", time.Date(2026, 8, 14, 10, 30, 0, 0, time.Local), 24 * time.Hour, time.Date(2026, 8, 14, 10, 45, 0, 0, time.Local), true},
+		// Weekdays at 09:00: after Friday 10:00 the next match is Monday.
+		{"0 9 * * 1-5", time.Date(2026, 8, 14, 10, 0, 0, 0, time.Local), 7 * 24 * time.Hour, time.Date(2026, 8, 17, 9, 0, 0, 0, time.Local), true},
+		// Before the time on a weekday: same day.
+		{"0 9 * * 1-5", time.Date(2026, 8, 14, 8, 0, 0, 0, time.Local), 7 * 24 * time.Hour, time.Date(2026, 8, 14, 9, 0, 0, 0, time.Local), true},
+		// Sunday never matches a weekday spec.
+		{"0 9 * * 1-5", time.Date(2026, 8, 16, 10, 0, 0, 0, time.Local), 7 * 24 * time.Hour, time.Date(2026, 8, 17, 9, 0, 0, 0, time.Local), true},
+		// February 31st never exists: no next fire, whatever the horizon.
+		{"0 0 31 2 *", time.Date(2026, 8, 14, 10, 0, 0, 0, time.Local), 400 * 24 * time.Hour, time.Time{}, false},
+		// A real match beyond the horizon reports none.
+		{"0 9 * * 1-5", time.Date(2026, 8, 14, 10, 0, 0, 0, time.Local), 24 * time.Hour, time.Time{}, false},
+	}
+	for _, tc := range cases {
+		m, err := parseCron(tc.spec)
+		if err != nil {
+			t.Fatalf("parseCron(%q): %v", tc.spec, err)
+		}
+		got, ok := m.next(tc.after, tc.horizon)
+		if ok != tc.ok || (ok && !got.Equal(tc.want)) {
+			t.Errorf("next(%q, %v, %v) = %v,%v want %v,%v", tc.spec, tc.after, tc.horizon, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestCronInfoForSessionScopedTimestampsAndOrder covers InfoFor: the §4.1
+// visibility rule, numeric id order (cron-2 before cron-10), created_at /
+// last_fired_at facts and next_fire_at computed from the caller's now
+// (AC7: `0 0 31 2 *` renders a zero NextFireAt).
+func TestCronInfoForSessionScopedTimestampsAndOrder(t *testing.T) {
+	s := newCronScheduler(func(session, tag, text string) {})
+	if _, err := s.Add("sess-A", "a", "a's prompt", "*/10 * * * *"); err != nil {
+		t.Fatal(err)
+	}
+	// Ten more entries so numeric order shows: cron-2 must precede cron-10.
+	for i := range 10 {
+		if _, err := s.Add("sess-B", "b", "b's prompt", "* * * * *"); err != nil {
+			t.Fatal(i, err)
+		}
+	}
+	if _, err := s.Add("sess-A", "impossible", "never fires", "0 0 31 2 *"); err != nil {
+		t.Fatal(err)
+	}
+	uID, err := s.Add("", "shared", "unscoped prompt", "0 9 * * 1-5") // owner ""
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Fire the every-minute entries once at a fixed minute that the */10
+	// entry does not match (:31): last_fired_at records that minute, and
+	// cron-1 stays unfired → zero.
+	firedAt := time.Date(2026, 8, 14, 10, 31, 0, 0, time.Local)
+	s.fireDue(firedAt)
+
+	now := time.Date(2026, 8, 14, 10, 31, 30, 0, time.Local)
+	bInfos := s.InfoFor("sess-B", now)
+	if len(bInfos) != 11 {
+		t.Fatalf("viewer B sees %d entries, want 11 (own + unscoped)", len(bInfos))
+	}
+	if bInfos[0].ID != "cron-2" || bInfos[8].ID != "cron-10" || bInfos[9].ID != "cron-11" || bInfos[10].ID != uID {
+		t.Fatalf("viewer B order wrong: %s…%s/%s, %s", bInfos[0].ID, bInfos[8].ID, bInfos[9].ID, bInfos[10].ID)
+	}
+	first := bInfos[0]
+	if first.Session != "sess-B" || first.Prompt != "b's prompt" || first.Spec != "* * * * *" {
+		t.Fatalf("first info = %+v", first)
+	}
+	if first.CreatedAt.IsZero() {
+		t.Fatal("CreatedAt not recorded")
+	}
+	if !first.LastFiredAt.Equal(firedAt) {
+		t.Fatalf("LastFiredAt = %v, want %v", first.LastFiredAt, firedAt)
+	}
+	if want := time.Date(2026, 8, 14, 10, 32, 0, 0, time.Local); !first.NextFireAt.Equal(want) {
+		t.Fatalf("NextFireAt = %v, want %v", first.NextFireAt, want)
+	}
+
+	// Viewer A: its own two entries plus the unscoped one; the impossible
+	// spec renders a zero NextFireAt and cron-1 stays never-fired.
+	aInfos := s.InfoFor("sess-A", now)
+	if len(aInfos) != 3 {
+		t.Fatalf("viewer A sees %d entries, want 3", len(aInfos))
+	}
+	if aInfos[0].ID != "cron-1" || !aInfos[0].LastFiredAt.IsZero() {
+		t.Fatalf("cron-1 info = %+v, want never fired", aInfos[0])
+	}
+	if want := time.Date(2026, 8, 14, 10, 40, 0, 0, time.Local); !aInfos[0].NextFireAt.Equal(want) {
+		t.Fatalf("cron-1 NextFireAt = %v, want %v", aInfos[0].NextFireAt, want)
+	}
+	if aInfos[1].ID != "cron-12" || !aInfos[1].NextFireAt.IsZero() {
+		t.Fatalf("impossible spec info = %+v, want zero NextFireAt", aInfos[1])
+	}
+	// The unscoped entry: next Monday 09:00 after Friday 10:31.
+	if want := time.Date(2026, 8, 17, 9, 0, 0, 0, time.Local); !aInfos[2].NextFireAt.Equal(want) {
+		t.Fatalf("unscoped NextFireAt = %v, want %v", aInfos[2].NextFireAt, want)
+	}
+
+	// The unscoped viewer sees everything: 13 entries, numeric order.
+	if all := s.InfoFor("", now); len(all) != 13 || all[0].ID != "cron-1" || all[11].ID != "cron-12" {
+		t.Fatalf("unscoped viewer sees %d entries, first=%s", len(all), all[0].ID)
+	}
+}
+
+// TestCronInfoForConcurrentWithFire locks InfoFor's snapshot against the
+// mutating paths (fireDue writes lastFired, Add/Delete reshape the slice):
+// parallel readers and writers must race-detector-clean.
+func TestCronInfoForConcurrentWithFire(t *testing.T) {
+	s := newCronScheduler(func(session, tag, text string) {})
+	if _, err := s.Add("sess-A", "a", "p", "* * * * *"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Add("sess-B", "b", "p", "*/2 * * * *"); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 14, 10, 0, 0, 0, time.Local)
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		for i := range 25 {
+			s.fireDue(base.Add(time.Duration(i) * time.Minute))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 25 {
+			if infos := s.InfoFor("sess-A", base); len(infos) != 1 {
+				t.Errorf("sess-A sees %d entries, want 1", len(infos))
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := range 25 {
+			if i%2 == 0 {
+				if _, err := s.Add("sess-B", "extra", "p", "0 9 * * 1-5"); err != nil {
+					t.Error(err)
+					return
+				}
+			} else {
+				s.Delete(fmt.Sprintf("cron-%d", 3+i/2), "sess-B")
+			}
+		}
+	}()
+	wg.Wait()
+}
+
+// TestCronSetOnChange pins the change-hook contract: fires on Add, on an
+// actual Delete (never for a foreign id that reads as not-found), and on
+// every fire — always with the owning session id.
+func TestCronSetOnChange(t *testing.T) {
+	var mu sync.Mutex
+	var fired []string
+	s := newCronScheduler(func(session, tag, text string) {})
+	s.SetOnChange(func(session string) {
+		mu.Lock()
+		fired = append(fired, session)
+		mu.Unlock()
+	})
+
+	idA, err := s.Add("sess-A", "a", "a's prompt", "* * * * *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Add("sess-B", "b", "b's prompt", "* * * * *"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	addFired := strings.Join(fired, ",")
+	mu.Unlock()
+	if addFired != "sess-A,sess-B" {
+		t.Fatalf("Add fired %q, want sess-A,sess-B", addFired)
+	}
+
+	// A fire signals the fired entry's owner.
+	s.fireDue(time.Date(2026, 8, 14, 10, 30, 0, 0, time.Local))
+	mu.Lock()
+	afterFire := strings.Join(fired, ",")
+	mu.Unlock()
+	if afterFire != "sess-A,sess-B,sess-A,sess-B" {
+		t.Fatalf("fire fired %q", afterFire)
+	}
+
+	// A foreign delete reads as not-found and fires nothing.
+	if s.Delete(idA, "sess-B") {
+		t.Fatal("foreign delete succeeded")
+	}
+	mu.Lock()
+	afterForeign := strings.Join(fired, ",")
+	mu.Unlock()
+	if afterForeign != afterFire {
+		t.Fatalf("foreign delete fired a change: %q", afterForeign)
+	}
+
+	// The owner's delete fires once.
+	if !s.Delete(idA, "sess-A") {
+		t.Fatal("owner delete failed")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if got := strings.Join(fired, ","); got != afterFire+",sess-A" {
+		t.Fatalf("changes = %q, want one more sess-A", got)
 	}
 }
 

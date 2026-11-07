@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
@@ -23,6 +23,7 @@ import (
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/skills"
 	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // toolCallIDKey carries the executing tool call's identity through ctx so the
@@ -149,28 +150,61 @@ type TaskStatus string
 const (
 	TaskRunning   TaskStatus = "running"
 	TaskCompleted TaskStatus = "completed"
+	TaskFailed    TaskStatus = "failed"
 	TaskStopped   TaskStatus = "stopped"
 )
+
+// ErrTaskNotFound covers both unknown ids and tasks owned by another
+// session; the two cases are deliberately indistinguishable.
+var ErrTaskNotFound = errors.New("no such background task")
+
+// BackgroundTaskInfo is a snapshot of one background task: identity, honest
+// status, stop attribution and timestamps. EndedAt is zero while running;
+// StoppedBy is "" unless the task was stopped. Mirrors
+// tools.BackgroundShellStatus so the activity seam aggregates both shapes
+// uniformly.
+type BackgroundTaskInfo struct {
+	ID          string
+	Session     string
+	Description string
+	Subagent    string
+	Status      TaskStatus
+	StoppedBy   tools.StopOrigin
+	StartedAt   time.Time
+	EndedAt     time.Time // zero while running
+}
 
 // backgroundTask is a Task (subagent) running in the background.
 type backgroundTask struct {
 	ID          string
 	Subject     string
 	Description string
+	// subagent is the display name of the subagent definition running the
+	// task (subagentName).
+	subagent string
 
 	// session is the starting run's session id (sessionFromCtx); "" outside a
 	// run scope. The completion notification is delivered to it.
 	session string
+	// startedAt / endedAt bracket the task: set at start, endedAt on the
+	// terminal transition only.
+	startedAt time.Time
 	// done is closed exactly once, when the task first leaves the running
 	// state (completion or TaskStop), releasing TaskOutput waiters. Immutable
 	// after start, like the exported fields above.
 	done chan struct{}
+	// onChange, when set at start, fires with the owner session when the
+	// task leaves the running state (terminal transition). Immutable after
+	// start; nil on bare tasks (unit tests), like the nil cancel in stop.
+	onChange func()
 
-	mu     sync.Mutex
-	status TaskStatus
-	output []string
-	final  string
-	cancel context.CancelFunc
+	mu        sync.Mutex
+	status    TaskStatus
+	output    []string
+	final     string
+	cancel    context.CancelFunc
+	endedAt   time.Time
+	stoppedBy tools.StopOrigin
 }
 
 func (t *backgroundTask) appendOutput(line string) {
@@ -197,27 +231,40 @@ func (t *backgroundTask) snapshot() (TaskStatus, string, string) {
 
 func (t *backgroundTask) setFinal(status TaskStatus, final string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	wasRunning := t.status == TaskRunning
 	t.status = status
 	t.final = final
 	if wasRunning {
+		t.endedAt = time.Now()
 		t.signalDone()
 	}
+	t.mu.Unlock()
+	t.fireChange(wasRunning)
 }
 
 // setFinalIfRunning records a terminal state only while the task is still
 // running: a completion arriving after TaskStop must not flip the stopped
-// status back to completed.
-func (t *backgroundTask) setFinalIfRunning(status TaskStatus, final string) {
+// status back to completed. It reports whether this call performed the
+// terminal transition.
+func (t *backgroundTask) setFinalIfRunning(status TaskStatus, final string) bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	moved := t.finishIfRunningLocked(status, final)
+	t.mu.Unlock()
+	t.fireChange(moved)
+	return moved
+}
+
+// finishIfRunningLocked moves a running task to its terminal state; the
+// caller holds mu.
+func (t *backgroundTask) finishIfRunningLocked(status TaskStatus, final string) bool {
 	if t.status != TaskRunning {
-		return
+		return false
 	}
 	t.status = status
 	t.final = final
+	t.endedAt = time.Now()
 	t.signalDone()
+	return true
 }
 
 // signalDone closes the done channel, releasing TaskOutput waiters. The
@@ -240,18 +287,50 @@ func (t *backgroundTask) setCancel(cancel context.CancelFunc) {
 }
 
 // stop cancels the task and marks it stopped in one critical section, so a
-// concurrent completion cannot interleave.
-func (t *backgroundTask) stop() {
+// concurrent completion cannot interleave. It records who stopped the task
+// and reports whether this call performed the terminal transition (false
+// when the task had already finished on its own).
+func (t *backgroundTask) stop(by tools.StopOrigin) bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.cancel != nil {
 		t.cancel()
 	}
-	if t.status != TaskRunning {
-		return
+	if t.status == TaskRunning {
+		t.stoppedBy = by
 	}
-	t.status = TaskStopped
-	t.signalDone()
+	moved := t.finishIfRunningLocked(TaskStopped, "")
+	t.mu.Unlock()
+	t.fireChange(moved)
+	return moved
+}
+
+// fireChange invokes the change callback after a terminal transition, with
+// no lock held (the callback may read the manager and this task).
+func (t *backgroundTask) fireChange(moved bool) {
+	if moved && t.onChange != nil {
+		t.onChange()
+	}
+}
+
+// info snapshots the task's lifecycle facts.
+func (t *backgroundTask) info() BackgroundTaskInfo {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.infoLocked()
+}
+
+// infoLocked is info for callers already holding mu.
+func (t *backgroundTask) infoLocked() BackgroundTaskInfo {
+	return BackgroundTaskInfo{
+		ID:          t.ID,
+		Session:     t.session,
+		Description: t.Description,
+		Subagent:    t.subagent,
+		Status:      t.status,
+		StoppedBy:   t.stoppedBy,
+		StartedAt:   t.startedAt,
+		EndedAt:     t.endedAt,
+	}
 }
 
 // notification renders the completion body handed to the notify callback,
@@ -281,10 +360,11 @@ func (t *backgroundTask) notification() string {
 
 // TaskManager holds all background tasks for a session.
 type TaskManager struct {
-	mu     sync.Mutex
-	tasks  map[string]*backgroundTask
-	next   int
-	notify func(session, text string)
+	mu       sync.Mutex
+	tasks    map[string]*backgroundTask
+	next     int
+	notify   func(session, text string)
+	onChange func(session string)
 }
 
 func newTaskManager() *TaskManager {
@@ -294,9 +374,8 @@ func newTaskManager() *TaskManager {
 // maxBackgroundTasks caps concurrently running background tasks.
 const maxBackgroundTasks = 16
 
-func (m *TaskManager) start(ctx context.Context, subject, description string) (*backgroundTask, error) {
+func (m *TaskManager) start(ctx context.Context, subject, description, subagent string) (*backgroundTask, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	running := 0
 	for _, t := range m.tasks {
 		if st, _, _ := t.snapshot(); st == TaskRunning {
@@ -304,18 +383,30 @@ func (m *TaskManager) start(ctx context.Context, subject, description string) (*
 		}
 	}
 	if running >= maxBackgroundTasks {
+		m.mu.Unlock()
 		return nil, fmt.Errorf("background task limit reached (%d running): wait or stop some with TaskStop", maxBackgroundTasks)
 	}
 	m.next++
+	onChange := m.onChange
 	t := &backgroundTask{
 		ID:          fmt.Sprintf("task-%d", m.next),
 		Subject:     subject,
 		Description: description,
+		subagent:    subagent,
 		session:     sessionFromCtx(ctx),
+		startedAt:   time.Now(),
 		status:      TaskRunning,
 		done:        make(chan struct{}),
 	}
+	if onChange != nil {
+		session := t.session
+		t.onChange = func() { onChange(session) }
+	}
 	m.tasks[t.ID] = t
+	m.mu.Unlock()
+	if onChange != nil {
+		onChange(t.session)
+	}
 	return t, nil
 }
 
@@ -327,6 +418,17 @@ func (m *TaskManager) SetNotify(fn func(session, text string)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.notify = fn
+}
+
+// SetOnChange installs the change callback the activity seam subscribes to.
+// It fires synchronously on task start and on the terminal transition
+// (completion, failure or stop), with the owner session id; it must not
+// block. Tasks started before the call keep the callback that was installed
+// when they started.
+func (m *TaskManager) SetOnChange(fn func(session string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onChange = fn
 }
 
 // notifyDone delivers t's completion notification through the installed
@@ -362,15 +464,97 @@ func (m *TaskManager) get(id string) (*backgroundTask, bool) {
 	return t, ok
 }
 
-func (m *TaskManager) list() []*backgroundTask {
+// lookup returns the task with id when session may access it. A task owned
+// by another scoped session answers exactly like an unknown id
+// (tracing.VisibleTo), so callers cannot probe for foreign tasks' existence.
+func (m *TaskManager) lookup(session, id string) (*backgroundTask, error) {
+	m.mu.Lock()
+	t := m.tasks[id]
+	m.mu.Unlock()
+	if t == nil || !tracing.VisibleTo(t.session, session) {
+		return nil, ErrTaskNotFound
+	}
+	return t, nil
+}
+
+// visible returns the tasks a run in session can see, in numeric id order
+// (task-2 before task-10): everything for the unscoped session "" (the
+// TUI/REPL single-session case), otherwise the unscoped tasks plus the
+// session's own. Ids are minted from a monotonic counter and never reused,
+// so walking the sequence is the creation order.
+func (m *TaskManager) visible(session string) []*backgroundTask {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]*backgroundTask, 0, len(m.tasks))
-	for _, t := range m.tasks {
-		out = append(out, t)
+	for i := 1; i <= m.next; i++ {
+		if t, ok := m.tasks[fmt.Sprintf("task-%d", i)]; ok && tracing.VisibleTo(t.session, session) {
+			out = append(out, t)
+		}
 	}
-	slices.SortFunc(out, func(a, b *backgroundTask) int { return cmp.Compare(a.ID, b.ID) })
 	return out
+}
+
+// ListFor returns snapshots of the background tasks a run in session can
+// see, in numeric id order.
+func (m *TaskManager) ListFor(session string) []BackgroundTaskInfo {
+	tasks := m.visible(session)
+	out := make([]BackgroundTaskInfo, 0, len(tasks))
+	for _, t := range tasks {
+		out = append(out, t.info())
+	}
+	return out
+}
+
+// InfoFor returns a snapshot of one background task, when session may see
+// it. Unknown and foreign ids both return ErrTaskNotFound.
+func (m *TaskManager) InfoFor(session, id string) (BackgroundTaskInfo, error) {
+	t, err := m.lookup(session, id)
+	if err != nil {
+		return BackgroundTaskInfo{}, err
+	}
+	return t.info(), nil
+}
+
+// TailFor returns at most the last maxBytes bytes of the task's buffered
+// output plus the truncated flag and the full byte count, when session may
+// see the task. The cut point is backed off to a UTF-8 rune boundary so a
+// multibyte character is never split; maxBytes <= 0 returns the whole
+// buffer. Mirrors tools.BackgroundShells.TailFor.
+func (m *TaskManager) TailFor(session, id string, maxBytes int) (tail string, truncated bool, total int, info BackgroundTaskInfo, err error) {
+	t, err := m.lookup(session, id)
+	if err != nil {
+		return "", false, 0, BackgroundTaskInfo{}, err
+	}
+	t.mu.Lock()
+	out := strings.Join(t.output, "\n")
+	info = t.infoLocked()
+	t.mu.Unlock()
+	total = len(out)
+	if maxBytes <= 0 || total <= maxBytes {
+		return out, false, total, info, nil
+	}
+	tail = out[total-maxBytes:]
+	// A leading continuation byte means the first character straddles the
+	// cut; drop its partial bytes so the tail starts on a rune boundary.
+	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+		tail = tail[1:]
+	}
+	return tail, true, total, info, nil
+}
+
+// StopFor stops a running task on behalf of by (model or user), recording
+// the stop attribution, when session may see it. Stopping an
+// already-finished task changes nothing: it reports alreadyFinished=true
+// with the unchanged snapshot.
+func (m *TaskManager) StopFor(session, id string, by tools.StopOrigin) (info BackgroundTaskInfo, alreadyFinished bool, err error) {
+	t, err := m.lookup(session, id)
+	if err != nil {
+		return BackgroundTaskInfo{}, false, err
+	}
+	if !t.stop(by) {
+		return t.info(), true, nil
+	}
+	return t.info(), false, nil
 }
 
 const taskDescription = `Launch a subagent to handle a self-contained piece of work and return a concise report. Set run_in_background to run it asynchronously (poll with TaskOutput, stop with TaskStop). Set fork=true to copy the current conversation into the subagent first — it starts with your full context instead of a blank slate, which fits "continue this thread in parallel" tasks.`
@@ -439,28 +623,37 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 	}
 
 	if args.RunInBackground {
-		t, err := a.tasks.start(ctx, args.Description, prompt)
+		t, err := a.tasks.start(ctx, args.Description, prompt, name)
 		if err != nil {
 			return coretools.Result{}, err
 		}
-		runCtx, cancel := context.WithCancel(ctx)
+		// D3: the background subagent detaches from the tool call's
+		// cancellation — a run stop or approval timeout no longer kills it —
+		// while keeping the ctx values it was launched with (run workspace,
+		// run executor, run scope). The cancel handle belongs to TaskStop /
+		// the user stop alone, exactly like a background shell.
+		runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		t.setCancel(cancel)
 		go func() {
 			report, err := a.runSubagent(runCtx, history, func(text string) { t.appendOutput(text) }, def)
+			// Honest status per the shared vocabulary: a subagent error is a
+			// failed task, not a completed one with an "Error:" body.
+			status := TaskCompleted
 			if err != nil {
+				status = TaskFailed
 				report = "Error: " + err.Error()
 			}
 			// SubagentStop fires once the subagent run is over (report or
-			// error alike — both leave a final report; completed or stopped
-			// alike). It runs on a detached copy of runCtx — TaskStop's
-			// cancellation is exactly what ended the subagent run, and the
-			// command runner fails on a cancelled context, so a stopped task
-			// would otherwise skip the hook (same reasoning as recordTaskEvent
-			// below). It runs BEFORE the final state lands so the exit-2
-			// feedback reaches every report consumer: TaskOutput, the
-			// completion notification and the L1 episode.
+			// error alike — both leave a final report; completed, failed or
+			// stopped alike). It runs on a detached copy of runCtx —
+			// TaskStop's cancellation is exactly what ended the subagent
+			// run, and the command runner fails on a cancelled context, so a
+			// stopped task would otherwise skip the hook (same reasoning as
+			// recordTaskEvent below). It runs BEFORE the final state lands
+			// so the exit-2 feedback reaches every report consumer:
+			// TaskOutput, the completion notification and the L1 episode.
 			report = a.withSubagentStopFeedback(context.WithoutCancel(runCtx), name, report)
-			t.setFinalIfRunning(TaskCompleted, report)
+			t.setFinalIfRunning(status, report)
 			// Completion notification for the starting run's session. It
 			// fires for stopped tasks too — notification() then renders the
 			// stopped status line — so TaskStop never silently drops a task.
@@ -513,9 +706,13 @@ func forkTaskPrompt(prompt string) string {
 }
 
 func (a *Agent) taskOutput(ctx context.Context, args taskOutputArgs) (coretools.Result, error) {
-	t, ok := a.tasks.get(args.TaskID)
-	if !ok {
-		return coretools.Result{}, fmt.Errorf("no task with id %q", args.TaskID)
+	session := sessionFromCtx(ctx)
+	t, err := a.tasks.lookup(session, args.TaskID)
+	if err != nil {
+		// The listing carries only the tasks this session can see, and the
+		// message names no task id at all — a foreign id must stay
+		// indistinguishable from a nonexistent one.
+		return coretools.Result{}, fmt.Errorf("no background task (started tasks: %s)", formatTaskIDs(a.tasks.ListFor(session)))
 	}
 	if args.WaitMS > 0 {
 		// Block until the task reaches a terminal state, the (clamped) wait
@@ -546,12 +743,28 @@ func (a *Agent) taskOutput(ctx context.Context, args taskOutputArgs) (coretools.
 }
 
 func (a *Agent) taskStop(ctx context.Context, args taskStopArgs) (coretools.Result, error) {
-	t, ok := a.tasks.get(args.TaskID)
-	if !ok {
-		return coretools.Result{}, fmt.Errorf("no task with id %q", args.TaskID)
+	session := sessionFromCtx(ctx)
+	info, alreadyFinished, err := a.tasks.StopFor(session, args.TaskID, tools.StopByModel)
+	if err != nil {
+		return coretools.Result{}, fmt.Errorf("no background task (started tasks: %s)", formatTaskIDs(a.tasks.ListFor(session)))
 	}
-	t.stop()
-	return coretools.Result{Content: fmt.Sprintf("Stopped task %s.", t.ID)}, nil
+	if alreadyFinished {
+		return coretools.Result{Content: fmt.Sprintf("Task %s already finished (%s).", info.ID, info.Status)}, nil
+	}
+	return coretools.Result{Content: fmt.Sprintf("Stopped task %s.", info.ID)}, nil
+}
+
+// formatTaskIDs renders a task id listing for not-found errors, mirroring
+// formatShellIDs: only ids the caller can already see ever appear.
+func formatTaskIDs(list []BackgroundTaskInfo) string {
+	if len(list) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(list))
+	for _, info := range list {
+		ids = append(ids, info.ID)
+	}
+	return strings.Join(ids, ", ")
 }
 
 // runSubagent runs a subagent to completion from the given history. If onText
