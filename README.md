@@ -604,6 +604,27 @@ Important flags:
   `/redo` revert and re-apply the last change (repeatable). Changes made
   by `Bash` or outside woca are not tracked.
 
+### Session activity panel
+
+The web chat header carries a **task list button** (left of the memory
+toggle) with a live badge: the brand-colored count is what is running right
+now, a red count means something finished with a failure you have not seen
+yet. Opening it shows this session's activity in three tabs:
+
+- **Todo** — the model's current todo list with statuses and progress.
+- **Background** — background shells and subagent tasks, running items
+  first; expand a row for its output tail. **Stop** kills the item on the
+  spot (a confirm notes the consequence).
+- **Scheduled** — session cron entries with their spec, prompt and next
+  fire time, plus the auto-wake state (capped / stalled / disabled).
+
+Stop/kill semantics: **stopping an item yourself never wakes the agent** —
+the model learns "killed by the user" only with your next message, so you
+can prune runaway work without triggering a follow-up run. Items the model
+stops or that finish on their own keep the usual auto-wake behavior.
+**Deleting a session stops all of its background work** (shells killed,
+subagents stopped, cron entries and todos removed).
+
 ## Multi-agent
 
 ### Subagents
