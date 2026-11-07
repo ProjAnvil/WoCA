@@ -125,3 +125,24 @@ func TestMultiSinkEmptyIsSafe(t *testing.T) {
 	m := NewMultiSink()
 	m.Record(context.Background(), Span{Name: "x"}) // must not panic
 }
+
+// VisibleTo locks the single ownership rule shared by the shell, task, cron,
+// and queue scopes: an unscoped viewer sees everything, a scoped viewer sees
+// unscoped items plus its own, everything else is invisible.
+func TestVisibleTo(t *testing.T) {
+	cases := []struct {
+		owner, viewer string
+		want          bool
+	}{
+		{"sess-A", "sess-A", true},  // own item
+		{"sess-A", "sess-B", false}, // foreign item
+		{"", "sess-B", true},        // unscoped item, scoped viewer
+		{"sess-A", "", true},        // any item, unscoped viewer
+		{"", "", true},              // both unscoped
+	}
+	for _, c := range cases {
+		if got := VisibleTo(c.owner, c.viewer); got != c.want {
+			t.Fatalf("VisibleTo(owner=%q, viewer=%q) = %v, want %v", c.owner, c.viewer, got, c.want)
+		}
+	}
+}

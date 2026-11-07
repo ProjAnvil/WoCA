@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"regexp"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/projanvil/woca/internal/platform/executor"
 	"github.com/projanvil/woca/internal/runexec"
@@ -40,9 +42,9 @@ func TestBackgroundShellLifecycle(t *testing.T) {
 	var out string
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		var ok bool
-		out, _, ok = bg.Output("1")
-		if !ok {
+		var err error
+		out, _, err = bg.OutputFor("", "1")
+		if err != nil {
 			t.Fatal("shell 1 vanished")
 		}
 		if strings.Contains(out, "started") {
@@ -53,22 +55,22 @@ func TestBackgroundShellLifecycle(t *testing.T) {
 	if !strings.Contains(out, "started") {
 		t.Fatalf("interim output missing \"started\": %q", out)
 	}
-	if _, st, _ := bg.Output("1"); !st.Running {
+	if _, st, _ := bg.OutputFor("", "1"); !st.Running {
 		t.Fatalf("shell finished too early: %+v", st)
 	}
 
 	// KillShell terminates the running shell.
-	if _, err := bg.Kill("1"); err != nil {
+	if _, _, err := bg.KillFor("", "1", StopByModel); err != nil {
 		t.Fatal(err)
 	}
 	killDeadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(killDeadline) {
-		if _, st, _ := bg.Output("1"); !st.Running {
+		if _, st, _ := bg.OutputFor("", "1"); !st.Running {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if _, st, _ := bg.Output("1"); st.Running {
+	if _, st, _ := bg.OutputFor("", "1"); st.Running {
 		t.Fatal("shell still running after kill")
 	}
 }
@@ -103,7 +105,7 @@ func TestBackgroundShellCompletionNotification(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("no completion notification")
 	}
-	if _, st, _ := bg.Output(id); st.Running || st.ExitCode != 0 {
+	if _, st, _ := bg.OutputFor("", id); st.Running || st.ExitCode != 0 {
 		t.Fatalf("final status = %+v", st)
 	}
 }
@@ -183,9 +185,9 @@ func TestBackgroundShellWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	st, ok := bg.Wait(t.Context(), id, 5*time.Second)
-	if !ok {
-		t.Fatal("Wait: unknown shell")
+	st, err := bg.WaitFor(t.Context(), "", id, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if st.Running || st.ExitCode != 0 {
 		t.Fatalf("waited status = %+v", st)
@@ -199,11 +201,11 @@ func TestBackgroundShellWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = bg.Kill(id2) })
+	t.Cleanup(func() { _, _, _ = bg.KillFor("", id2, StopByModel) })
 	start = time.Now()
-	st, ok = bg.Wait(t.Context(), id2, 200*time.Millisecond)
-	if !ok {
-		t.Fatal("Wait: unknown shell")
+	st, err = bg.WaitFor(t.Context(), "", id2, 200*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if !st.Running {
 		t.Fatalf("status = %+v, want running", st)
@@ -216,9 +218,9 @@ func TestBackgroundShellWait(t *testing.T) {
 	cctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start = time.Now()
-	st, ok = bg.Wait(cctx, id2, 10*time.Second)
-	if !ok {
-		t.Fatal("Wait: unknown shell")
+	st, err = bg.WaitFor(cctx, "", id2, 10*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if !st.Running {
 		t.Fatalf("canceled status = %+v, want running", st)
@@ -227,9 +229,9 @@ func TestBackgroundShellWait(t *testing.T) {
 		t.Fatalf("Wait ignored ctx cancellation: %s", elapsed)
 	}
 
-	// Unknown IDs report ok=false instead of blocking.
-	if _, ok := bg.Wait(t.Context(), "99", time.Second); ok {
-		t.Fatal("Wait on unknown id returned ok=true")
+	// Unknown IDs report not-found instead of blocking.
+	if _, err := bg.WaitFor(t.Context(), "", "99", time.Second); !errors.Is(err, ErrShellNotFound) {
+		t.Fatalf("Wait on unknown id err = %v, want ErrShellNotFound", err)
 	}
 }
 
@@ -282,11 +284,11 @@ func TestBashInputToolFeedsStdin(t *testing.T) {
 	if strings.Contains(res.Content, "Error") {
 		t.Fatalf("BashInput close = %q", res.Content)
 	}
-	st, ok := bg.Wait(t.Context(), id, 5*time.Second)
-	if !ok || st.Running || st.ExitCode != 0 {
-		t.Fatalf("cat after close_stdin = %+v ok=%v", st, ok)
+	st, err := bg.WaitFor(t.Context(), "", id, 5*time.Second)
+	if err != nil || st.Running || st.ExitCode != 0 {
+		t.Fatalf("cat after close_stdin = %+v err=%v", st, err)
 	}
-	if out, _, _ := bg.Output(id); !strings.Contains(out, "hi") {
+	if out, _, _ := bg.OutputFor("", id); !strings.Contains(out, "hi") {
 		t.Fatalf("final output missing stdin echo: %q", out)
 	}
 
@@ -364,8 +366,8 @@ func TestBackgroundShellIDsIncrement(t *testing.T) {
 	// Both exit; statuses reflect exit codes.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		_, s1, _ := bg.Output("1")
-		_, s2, _ := bg.Output("2")
+		_, s1, _ := bg.OutputFor("", "1")
+		_, s2, _ := bg.OutputFor("", "2")
 		if !s1.Running && !s2.Running {
 			if s1.ExitCode != 0 || s2.ExitCode != 1 {
 				t.Fatalf("exit codes = %+v %+v", s1, s2)
@@ -395,7 +397,7 @@ func TestBackgroundShellCapturesRunExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = bg.Kill(id) })
+	t.Cleanup(func() { _, _, _ = bg.KillFor("", id, StopByModel) })
 
 	<-fake.started
 	if len(fake.reqs) != 1 || fake.reqs[0].Name != "bash" {
@@ -410,6 +412,348 @@ func TestBackgroundShellCapturesRunExecutor(t *testing.T) {
 	cancel()
 	if err := fake.startCtx.Err(); err != nil {
 		t.Fatalf("background ctx canceled by parent: %v", err)
+	}
+}
+
+// N1: the background tools must be session-scoped. A run in session B must
+// not read, write to, or kill a shell started by session A, and an unknown-id
+// error must list only the shells the calling session can see (not every
+// session's ids).
+func TestBackgroundShellToolsAreSessionScoped(t *testing.T) {
+	reg := NewRegistry(t.TempDir())
+	bg := reg.Background()
+	poll, ok := reg.Get("BashOutput")
+	if !ok {
+		t.Fatal("BashOutput tool missing")
+	}
+	kill, ok := reg.Get("KillShell")
+	if !ok {
+		t.Fatal("KillShell tool missing")
+	}
+	input, ok := reg.Get("BashInput")
+	if !ok {
+		t.Fatal("BashInput tool missing")
+	}
+
+	ctxA := tracing.WithRun(t.Context(), "run-A", "sess-A")
+	aID, err := bg.Start(ctxA, "echo leaky-secret; sleep 30", "", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _, _ = bg.KillFor("", aID, StopByModel) })
+	// A second A-owned shell the caller never names: its id must not leak
+	// through the unknown-id error listing either.
+	if _, err := bg.Start(ctxA, "sleep 30", "", "."); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _, _ = bg.KillFor("", "2", StopByModel) })
+
+	ctxB := tracing.WithRun(t.Context(), "run-B", "sess-B")
+
+	// BashOutput on A's shell must fail without echoing A's output or ids.
+	res, err := poll.Invoke(ctxB, map[string]any{"shell_id": aID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Content, "Error") {
+		t.Fatalf("session B read session A's shell: %q", res.Content)
+	}
+	if strings.Contains(res.Content, "leaky-secret") {
+		t.Fatalf("session B saw session A's output: %q", res.Content)
+	}
+	if strings.Contains(res.Content, aID) {
+		t.Fatalf("error text leaks session A's shell id %q: %q", aID, res.Content)
+	}
+
+	// KillShell on A's shell must fail and leave it running.
+	res, err = kill.Invoke(ctxB, map[string]any{"shell_id": aID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Content, "Error") {
+		t.Fatalf("session B killed session A's shell: %q", res.Content)
+	}
+	if strings.Contains(res.Content, aID) {
+		t.Fatalf("error text leaks session A's shell id %q: %q", aID, res.Content)
+	}
+	if _, st, _ := bg.OutputFor("sess-A", aID); !st.Running {
+		t.Fatal("session A's shell died from session B's kill")
+	}
+
+	// BashInput on A's shell must fail too.
+	res, err = input.Invoke(ctxB, map[string]any{"shell_id": aID, "input": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Content, "Error") {
+		t.Fatalf("session B wrote to session A's shell stdin: %q", res.Content)
+	}
+	if strings.Contains(res.Content, aID) {
+		t.Fatalf("error text leaks session A's shell id %q: %q", aID, res.Content)
+	}
+
+	// The unknown-id error lists only the calling session's visible shells —
+	// B sees none of A's ids.
+	res, err = poll.Invoke(ctxB, map[string]any{"shell_id": "99"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Content, "Error") {
+		t.Fatalf("unknown id = %q", res.Content)
+	}
+	if strings.Contains(res.Content, aID) || strings.Contains(res.Content, "2") {
+		t.Fatalf("unknown-id error leaks session A's shell ids: %q", res.Content)
+	}
+}
+
+// The PM §4.1 ownership table at the manager level: owner A / viewer A
+// visible; owner A / viewer B not-found; owner "" / viewer B visible;
+// viewer "" sees all. Every scoped accessor enforces the same rule.
+func TestBackgroundShellVisibilityTable(t *testing.T) {
+	reg := NewRegistry(t.TempDir())
+	bg := reg.Background()
+
+	ctxA := tracing.WithRun(t.Context(), "run-A", "sess-A")
+	aID, err := bg.Start(ctxA, "sleep 30", "", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctxB := tracing.WithRun(t.Context(), "run-B", "sess-B")
+	bID, err := bg.Start(ctxB, "sleep 30", "", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uID, err := bg.Start(t.Context(), "sleep 30", "", ".") // unscoped owner ""
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{aID, bID, uID} {
+		t.Cleanup(func() { _, _, _ = bg.KillFor("", id, StopByModel) })
+	}
+
+	// owner A / viewer A sees it.
+	if _, err := bg.StatusFor("sess-A", aID); err != nil {
+		t.Fatalf("owner A / viewer A: %v", err)
+	}
+	// owner A / viewer B gets not-found, identical to an unknown id.
+	if _, err := bg.StatusFor("sess-B", aID); !errors.Is(err, ErrShellNotFound) {
+		t.Fatalf("owner A / viewer B err = %v, want ErrShellNotFound", err)
+	}
+	// owner "" / viewer B sees it (unscoped items are everyone's).
+	if _, err := bg.StatusFor("sess-B", uID); err != nil {
+		t.Fatalf("owner unscoped / viewer B: %v", err)
+	}
+	// viewer "" sees everything.
+	if all := bg.ListFor(""); len(all) != 3 {
+		t.Fatalf("unscoped viewer sees %d shells, want 3: %+v", len(all), all)
+	}
+	// viewer B sees exactly its own shell plus the unscoped one.
+	got := map[string]bool{}
+	for _, st := range bg.ListFor("sess-B") {
+		got[st.ID] = true
+	}
+	if len(got) != 2 || !got[bID] || !got[uID] || got[aID] {
+		t.Fatalf("viewer B list = %v, want exactly {%s, %s}", got, bID, uID)
+	}
+
+	// The same rule holds for every scoped accessor.
+	if _, _, err := bg.OutputFor("sess-B", aID); !errors.Is(err, ErrShellNotFound) {
+		t.Fatalf("OutputFor foreign err = %v", err)
+	}
+	if _, err := bg.WaitFor(t.Context(), "sess-B", aID, time.Second); !errors.Is(err, ErrShellNotFound) {
+		t.Fatalf("WaitFor foreign err = %v", err)
+	}
+	if _, _, _, _, err := bg.TailFor("sess-B", aID, 16); !errors.Is(err, ErrShellNotFound) {
+		t.Fatalf("TailFor foreign err = %v", err)
+	}
+	if err := bg.WriteStdinFor("sess-B", aID, "x", false); !errors.Is(err, ErrShellNotFound) {
+		t.Fatalf("WriteStdinFor foreign err = %v", err)
+	}
+	if _, _, err := bg.KillFor("sess-B", aID, StopByUser); !errors.Is(err, ErrShellNotFound) {
+		t.Fatalf("KillFor foreign err = %v", err)
+	}
+	// None of that touched A's shell.
+	if st, err := bg.StatusFor("sess-A", aID); err != nil || !st.Running {
+		t.Fatalf("A's shell affected by B's foreign access: %+v err=%v", st, err)
+	}
+}
+
+// Lifecycle facts: StartedAt/EndedAt/ExitCode on natural exits, Killed/
+// StoppedBy after KillFor, and alreadyFinished with an unchanged status for
+// a shell that already ended.
+func TestBackgroundShellLifecycleFacts(t *testing.T) {
+	reg := NewRegistry(t.TempDir())
+	bg := reg.Background()
+	ctx := tracing.WithRun(t.Context(), "run-A", "sess-A")
+
+	// Natural success: exit 0, both timestamps set, no stop facts.
+	id, err := bg.Start(ctx, "true", "", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := bg.WaitFor(t.Context(), "sess-A", id, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Running || st.ExitCode != 0 || st.Killed || st.StoppedBy != "" {
+		t.Fatalf("natural exit status = %+v", st)
+	}
+	if st.Session != "sess-A" || st.Command != "true" {
+		t.Fatalf("identity fields = %+v", st)
+	}
+	if st.StartedAt.IsZero() || st.EndedAt.IsZero() || st.EndedAt.Before(st.StartedAt) {
+		t.Fatalf("timestamps = %+v", st)
+	}
+
+	// Natural failure keeps the concrete exit code.
+	id, err = bg.Start(ctx, "false", "", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err = bg.WaitFor(t.Context(), "sess-A", id, 5*time.Second); err != nil || st.ExitCode != 1 {
+		t.Fatalf("false status = %+v err=%v", st, err)
+	}
+
+	// A running shell: started recorded, no end yet, running exit code -1.
+	id, err = bg.Start(ctx, "sleep 30", "", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _, _ = bg.KillFor("", id, StopByModel) })
+	st, err = bg.StatusFor("sess-A", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Running || st.ExitCode != -1 || st.StartedAt.IsZero() || !st.EndedAt.IsZero() {
+		t.Fatalf("running status = %+v", st)
+	}
+
+	// KillFor records who stopped it; the shell dies with exit code -1.
+	st, alreadyFinished, err := bg.KillFor("sess-A", id, StopByUser)
+	if err != nil || alreadyFinished {
+		t.Fatalf("KillFor running shell = %+v already=%v err=%v", st, alreadyFinished, err)
+	}
+	if st, err = bg.WaitFor(t.Context(), "sess-A", id, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if st.Running || !st.Killed || st.StoppedBy != StopByUser || st.ExitCode != -1 || st.EndedAt.IsZero() {
+		t.Fatalf("killed status = %+v", st)
+	}
+
+	// Killing the finished shell again changes nothing.
+	again, alreadyFinished, err := bg.KillFor("sess-A", id, StopByModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !alreadyFinished {
+		t.Fatal("KillFor on finished shell: alreadyFinished=false")
+	}
+	if again.Killed != st.Killed || again.StoppedBy != st.StoppedBy || again.ExitCode != st.ExitCode ||
+		!again.EndedAt.Equal(st.EndedAt) || again.Running {
+		t.Fatalf("finished shell status changed by second kill: %+v vs %+v", again, st)
+	}
+}
+
+// TailFor returns a byte-bounded output tail: the truncated flag and full
+// byte count, with the cut point backed off to a UTF-8 rune boundary so
+// multibyte characters are never split.
+func TestBackgroundShellTailFor(t *testing.T) {
+	reg := NewRegistry(t.TempDir())
+	bg := reg.Background()
+	ctx := tracing.WithRun(t.Context(), "run-A", "sess-A")
+
+	// 6 ASCII bytes + 4 three-byte Han runes = 18 bytes.
+	const text = "abcdef你好世界"
+	id, err := bg.Start(ctx, "printf '"+text+"'", "", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bg.WaitFor(t.Context(), "sess-A", id, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	// maxBytes <= 0 returns the whole buffer, never truncated.
+	tail, truncated, total, st, err := bg.TailFor("sess-A", id, 0)
+	if err != nil || tail != text || truncated || total != len(text) {
+		t.Fatalf("full tail = %q truncated=%v total=%d err=%v", tail, truncated, total, err)
+	}
+	if st.OutputBytes != len(text) {
+		t.Fatalf("OutputBytes = %d, want %d", st.OutputBytes, len(text))
+	}
+
+	// Output within the bound is returned whole.
+	if tail, truncated, _, _, err = bg.TailFor("sess-A", id, len(text)); err != nil || tail != text || truncated {
+		t.Fatalf("exact-bound tail = %q truncated=%v err=%v", tail, truncated, err)
+	}
+
+	// A bound aligned with a rune boundary keeps the full last runes.
+	if tail, truncated, total, _, err = bg.TailFor("sess-A", id, 6); err != nil || !truncated || total != 18 || tail != "世界" {
+		t.Fatalf("rune-aligned tail = %q truncated=%v total=%d err=%v", tail, truncated, total, err)
+	}
+
+	// A bound slicing through a rune backs off to the rune boundary.
+	tail, truncated, total, _, err = bg.TailFor("sess-A", id, 8)
+	if err != nil || !truncated || total != 18 || tail != "世界" {
+		t.Fatalf("mid-rune tail = %q truncated=%v total=%d err=%v", tail, truncated, total, err)
+	}
+	if !utf8.ValidString(tail) || !strings.HasSuffix(text, tail) {
+		t.Fatalf("tail not a rune-boundary suffix: %q", tail)
+	}
+
+	// A bound too small for any whole rune yields an empty tail, still
+	// flagged truncated.
+	if tail, truncated, _, _, err = bg.TailFor("sess-A", id, 1); err != nil || !truncated || tail != "" {
+		t.Fatalf("1-byte tail = %q truncated=%v err=%v", tail, truncated, err)
+	}
+
+	// Foreign sessions get not-found like everywhere else.
+	if _, _, _, _, err := bg.TailFor("sess-B", id, 16); !errors.Is(err, ErrShellNotFound) {
+		t.Fatalf("TailFor foreign err = %v", err)
+	}
+}
+
+// SetOnChange fires once on start and once on exit, each carrying the owner
+// session, and nothing else.
+func TestBackgroundShellOnChange(t *testing.T) {
+	reg := NewRegistry(t.TempDir())
+	bg := reg.Background()
+
+	events := make(chan string, 4)
+	bg.SetOnChange(func(session string) { events <- session })
+
+	ctx := tracing.WithRun(t.Context(), "run-A", "sess-A")
+	if _, err := bg.Start(ctx, "true", "", "."); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"sess-A", "sess-A"} {
+		select {
+		case got := <-events:
+			if got != want {
+				t.Fatalf("change event session = %q, want %q", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no change event (wanted %q)", want)
+		}
+	}
+	select {
+	case got := <-events:
+		t.Fatalf("unexpected extra change event %q", got)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// An unscoped start fires with "".
+	if _, err := bg.Start(t.Context(), "true", "", "."); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"", ""} {
+		select {
+		case got := <-events:
+			if got != want {
+				t.Fatalf("unscoped change event session = %q, want %q", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("no unscoped change event (wanted %q)", want)
+		}
 	}
 }
 

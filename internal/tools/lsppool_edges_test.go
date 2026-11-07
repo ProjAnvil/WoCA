@@ -204,7 +204,7 @@ func TestNewBackgroundShellsDefault(t *testing.T) {
 	if bg == nil {
 		t.Fatal("NewBackgroundShells returned nil")
 	}
-	if got := bg.List(); len(got) != 0 {
+	if got := bg.ListFor(""); len(got) != 0 {
 		t.Fatalf("new manager has %d shells, want 0", len(got))
 	}
 }

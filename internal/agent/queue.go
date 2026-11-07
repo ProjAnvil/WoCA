@@ -109,7 +109,7 @@ func (q *queue) drain(session string) []QueuedInput {
 	var out []QueuedInput
 	keep := q.items[:0]
 	for _, it := range q.items {
-		if it.Session == "" || it.Session == session {
+		if tracing.VisibleTo(it.Session, session) {
 			out = append(out, it)
 		} else {
 			keep = append(keep, it)
@@ -129,7 +129,7 @@ func (q *queue) count(session string) int {
 	}
 	n := 0
 	for _, it := range q.items {
-		if it.Session == "" || it.Session == session {
+		if tracing.VisibleTo(it.Session, session) {
 			n++
 		}
 	}

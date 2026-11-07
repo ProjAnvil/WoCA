@@ -104,6 +104,16 @@ func RunFrom(ctx context.Context) (RunScope, bool) {
 	return sc, ok
 }
 
+// VisibleTo reports whether an item owned by session owner is visible to a
+// caller in session viewer — the single ownership rule shared by the shell,
+// task, cron, and queue scopes. An unscoped viewer ("") sees everything (the
+// TUI/REPL single-session case); a scoped viewer sees unscoped items ("")
+// plus its own. Anything else is invisible, and callers must render it
+// exactly like a nonexistent item.
+func VisibleTo(owner, viewer string) bool {
+	return viewer == "" || owner == "" || owner == viewer
+}
+
 // Start begins a span. The returned builder is finished by End; a nil
 // default sink makes the whole call chain a no-op.
 func Start(ctx context.Context, name, kind string) *Builder {

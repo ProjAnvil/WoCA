@@ -13,6 +13,7 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // ScheduleCron: the model can schedule prompts that fire on a cron schedule
@@ -114,7 +115,7 @@ func (s *cronScheduler) Delete(id, session string) bool {
 		if e.ID != id {
 			continue
 		}
-		if session != "" && e.Session != "" && e.Session != session {
+		if !tracing.VisibleTo(e.Session, session) {
 			return false // exists, but another session owns it
 		}
 		s.entries = append(s.entries[:i], s.entries[i+1:]...)
@@ -131,7 +132,7 @@ func (s *cronScheduler) List(session string) []cronEntry {
 	defer s.mu.Unlock()
 	out := make([]cronEntry, 0, len(s.entries))
 	for _, e := range s.entries {
-		if session != "" && e.Session != "" && e.Session != session {
+		if !tracing.VisibleTo(e.Session, session) {
 			continue
 		}
 		out = append(out, cronEntry{ID: e.ID, Session: e.Session, Name: e.Name, Prompt: e.Prompt, Spec: e.Spec})

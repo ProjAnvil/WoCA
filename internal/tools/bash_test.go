@@ -161,7 +161,7 @@ func TestBashOutputWaitMS(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = bg.Kill("2") })
+	t.Cleanup(func() { _, _, _ = bg.KillFor("", "2", StopByModel) })
 	start = time.Now()
 	res, err = poll.Invoke(t.Context(), map[string]any{"shell_id": "2", "wait_ms": 200})
 	if err != nil {

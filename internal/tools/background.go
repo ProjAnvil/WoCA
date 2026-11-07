@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
@@ -22,23 +23,47 @@ import (
 // accumulates in memory, and completion fires a notification that the agent
 // injects after the next tool round (the queued-attachment mechanism). Output
 // is polled with BashOutput and the shell terminated with KillShell.
+//
+// Every access is session-scoped (tracing.VisibleTo): the tools derive the
+// caller's session from the ctx run scope, HTTP callers pass it explicitly,
+// and a shell owned by another session answers exactly like an unknown id —
+// no existence leak.
+
+// StopOrigin records who terminated a background shell.
+type StopOrigin string
+
+const (
+	StopByModel StopOrigin = "model"
+	StopByUser  StopOrigin = "user"
+)
+
+// ErrShellNotFound covers both unknown ids and shells owned by another
+// session; the two cases are deliberately indistinguishable.
+var ErrShellNotFound = errors.New("no such background shell")
 
 // BackgroundShellStatus is a snapshot of one background shell.
 type BackgroundShellStatus struct {
-	ID       string
-	Command  string
-	Running  bool
-	ExitCode int // -1 while running or after a signal kill without a status
+	ID          string
+	Session     string
+	Command     string
+	Running     bool
+	ExitCode    int        // -1 while running or after a signal kill (unchanged tool semantics)
+	Killed      bool       // terminated through KillFor, any origin
+	StoppedBy   StopOrigin // "" unless Killed
+	StartedAt   time.Time
+	EndedAt     time.Time // zero while running
+	OutputBytes int
 }
 
 // notifyBackgroundDone, when set, is called once when a background shell
 // finishes, with the starting run's session id and the rendered completion
 // notification. The agent wires this to its session-scoped mid-turn queue.
 type BackgroundShells struct {
-	mu     sync.Mutex
-	next   int
-	shells map[string]*backgroundShell
-	onDone func(session, notification string)
+	mu       sync.Mutex
+	next     int
+	shells   map[string]*backgroundShell
+	onDone   func(session, notification string)
+	onChange func(session string)
 	// execFor resolves the execution backend per start, so a run executor
 	// injected into the invoking context (a per-run sandbox) serves the
 	// background shell too.
@@ -50,13 +75,17 @@ type backgroundShell struct {
 	command string
 	// session is the starting run's session id (tracing.RunFrom); "" when
 	// the shell started outside any run scope.
-	session string
-	proc    executor.Process
-	buf     strings.Builder
-	mu      sync.Mutex
-	done    chan struct{}
-	exited  bool
-	exit    int
+	session   string
+	proc      executor.Process
+	buf       strings.Builder
+	mu        sync.Mutex
+	done      chan struct{}
+	exited    bool
+	exit      int
+	started   time.Time
+	ended     time.Time
+	killed    bool
+	stoppedBy StopOrigin
 }
 
 // NewBackgroundShells builds an empty shell manager running on the local
@@ -96,6 +125,15 @@ func (b *BackgroundShells) SetNotify(fn func(session, notification string)) {
 	b.onDone = fn
 }
 
+// SetOnChange installs the change callback the activity seam subscribes to.
+// It fires synchronously on shell start and on shell exit, with the owner
+// session id; it must not block.
+func (b *BackgroundShells) SetOnChange(fn func(session string)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.onChange = fn
+}
+
 // Start launches a command in the background and returns its shell ID. The
 // working directory resolution matches the foreground Bash tool. ctx is the
 // invoking tool's context: its values (run executor resolution) carry into
@@ -120,9 +158,11 @@ func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWork
 		session: sessionFromCtx(ctx),
 		done:    make(chan struct{}),
 		exit:    -1,
+		started: time.Now(),
 	}
 	b.shells[id] = sh
 	onDone := b.onDone
+	onChange := b.onChange
 	execFor := b.execFor
 	b.mu.Unlock()
 
@@ -141,6 +181,9 @@ func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWork
 		return "", err
 	}
 	sh.proc = proc
+	if onChange != nil {
+		onChange(sh.session)
+	}
 	go func() {
 		code := 0
 		if err := proc.Wait(); err != nil {
@@ -152,8 +195,12 @@ func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWork
 		sh.mu.Lock()
 		sh.exited = true
 		sh.exit = code
+		sh.ended = time.Now()
 		sh.mu.Unlock()
 		close(sh.done)
+		if onChange != nil {
+			onChange(sh.session)
+		}
 		if onDone != nil {
 			onDone(sh.session, sh.notification())
 		}
@@ -170,6 +217,19 @@ func sessionFromCtx(ctx context.Context) string {
 	return ""
 }
 
+// lookup returns the shell with id when session may access it. A shell
+// owned by another scoped session answers exactly like an unknown id, so
+// callers cannot probe for foreign shells' existence.
+func (b *BackgroundShells) lookup(session, id string) (*backgroundShell, error) {
+	b.mu.Lock()
+	sh := b.shells[id]
+	b.mu.Unlock()
+	if sh == nil || !tracing.VisibleTo(sh.session, session) {
+		return nil, ErrShellNotFound
+	}
+	return sh, nil
+}
+
 // lineWriter appends to a background shell's buffer under its lock.
 type lineWriter struct{ sh *backgroundShell }
 
@@ -179,37 +239,47 @@ func (w lineWriter) Write(p []byte) (int, error) {
 	return w.sh.buf.Write(p)
 }
 
-// snapshot renders the shell's current state and buffered output (never races
-// with the writer goroutine).
+// snapshot renders the shell's current state (never races with the writer
+// goroutine).
 func (sh *backgroundShell) snapshot() BackgroundShellStatus {
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
+	return sh.snapshotLocked()
+}
+
+// snapshotLocked is snapshot for callers already holding sh.mu.
+func (sh *backgroundShell) snapshotLocked() BackgroundShellStatus {
+	st := BackgroundShellStatus{
+		ID:          sh.id,
+		Session:     sh.session,
+		Command:     sh.command,
+		Running:     true,
+		ExitCode:    -1,
+		Killed:      sh.killed,
+		StoppedBy:   sh.stoppedBy,
+		StartedAt:   sh.started,
+		OutputBytes: sh.buf.Len(),
+	}
 	select {
 	case <-sh.done:
-		return BackgroundShellStatus{ID: sh.id, Command: sh.command, Running: false, ExitCode: sh.exit}
+		st.Running = false
+		st.ExitCode = sh.exit
+		st.EndedAt = sh.ended
 	default:
-		return BackgroundShellStatus{ID: sh.id, Command: sh.command, Running: true, ExitCode: -1}
 	}
+	return st
 }
 
-// Status returns a snapshot of one shell.
-func (b *BackgroundShells) Status(id string) (BackgroundShellStatus, bool) {
-	b.mu.Lock()
-	sh := b.shells[id]
-	b.mu.Unlock()
-	if sh == nil {
-		return BackgroundShellStatus{}, false
-	}
-	return sh.snapshot(), true
-}
-
-// List returns snapshots of every shell this manager started, oldest first.
-func (b *BackgroundShells) List() []BackgroundShellStatus {
+// ListFor returns snapshots of the shells a run in session can see, in
+// creation order: everything for the unscoped session "" (the TUI/REPL
+// single-session case), otherwise the unscoped shells plus the session's
+// own.
+func (b *BackgroundShells) ListFor(session string) []BackgroundShellStatus {
 	b.mu.Lock()
 	shells := make([]*backgroundShell, 0, len(b.shells))
 	for i := 1; i <= b.next; i++ {
 		id := strconv.Itoa(i)
-		if sh, ok := b.shells[id]; ok {
+		if sh, ok := b.shells[id]; ok && tracing.VisibleTo(sh.session, session) {
 			shells = append(shells, sh)
 		}
 	}
@@ -221,29 +291,61 @@ func (b *BackgroundShells) List() []BackgroundShellStatus {
 	return out
 }
 
-// Output returns the accumulated output and status of one shell.
-func (b *BackgroundShells) Output(id string) (output string, status BackgroundShellStatus, ok bool) {
-	st, ok := b.Status(id)
-	if !ok {
-		return "", BackgroundShellStatus{}, false
+// StatusFor returns a snapshot of one shell, when session may see it.
+func (b *BackgroundShells) StatusFor(session, id string) (BackgroundShellStatus, error) {
+	sh, err := b.lookup(session, id)
+	if err != nil {
+		return BackgroundShellStatus{}, err
 	}
-	b.mu.Lock()
-	sh := b.shells[id]
-	b.mu.Unlock()
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	return sh.buf.String(), st, true
+	return sh.snapshot(), nil
 }
 
-// Wait blocks until the shell finishes, d elapses, or ctx is canceled, then
-// returns its snapshot: final status on completion, running status on timeout
-// or cancellation. ok=false reports an unknown id (without blocking).
-func (b *BackgroundShells) Wait(ctx context.Context, id string, d time.Duration) (BackgroundShellStatus, bool) {
-	b.mu.Lock()
-	sh := b.shells[id]
-	b.mu.Unlock()
-	if sh == nil {
-		return BackgroundShellStatus{}, false
+// OutputFor returns the accumulated output and status of one shell, when
+// session may see it.
+func (b *BackgroundShells) OutputFor(session, id string) (output string, status BackgroundShellStatus, err error) {
+	sh, err := b.lookup(session, id)
+	if err != nil {
+		return "", BackgroundShellStatus{}, err
+	}
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	return sh.buf.String(), sh.snapshotLocked(), nil
+}
+
+// TailFor returns at most the last maxBytes bytes of output plus the
+// truncated flag and the full byte count, when session may see the shell.
+// The cut point is backed off to a UTF-8 rune boundary so a multibyte
+// character is never split; maxBytes <= 0 returns the whole buffer.
+func (b *BackgroundShells) TailFor(session, id string, maxBytes int) (tail string, truncated bool, total int, st BackgroundShellStatus, err error) {
+	sh, err := b.lookup(session, id)
+	if err != nil {
+		return "", false, 0, BackgroundShellStatus{}, err
+	}
+	sh.mu.Lock()
+	out := sh.buf.String()
+	st = sh.snapshotLocked()
+	sh.mu.Unlock()
+	total = len(out)
+	if maxBytes <= 0 || total <= maxBytes {
+		return out, false, total, st, nil
+	}
+	tail = out[total-maxBytes:]
+	// A leading continuation byte means the first character straddles the
+	// cut; drop its partial bytes so the tail starts on a rune boundary.
+	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
+		tail = tail[1:]
+	}
+	return tail, true, total, st, nil
+}
+
+// WaitFor blocks until the shell finishes, d elapses, or ctx is canceled,
+// then returns its snapshot: final status on completion, running status on
+// timeout or cancellation. Unknown or foreign ids return ErrShellNotFound
+// without blocking.
+func (b *BackgroundShells) WaitFor(ctx context.Context, session, id string, d time.Duration) (BackgroundShellStatus, error) {
+	sh, err := b.lookup(session, id)
+	if err != nil {
+		return BackgroundShellStatus{}, err
 	}
 	// NewTimer over time.After so an early return stops the timer instead of
 	// letting it fire for the full wait (up to MaxWaitMS) after the caller
@@ -255,19 +357,17 @@ func (b *BackgroundShells) Wait(ctx context.Context, id string, d time.Duration)
 	case <-timer.C:
 	case <-ctx.Done():
 	}
-	return sh.snapshot(), true
+	return sh.snapshot(), nil
 }
 
-// WriteStdin writes input to a running shell's standard input and, when
+// WriteStdinFor writes input to a running shell's standard input and, when
 // closeStdin is set, closes the pipe to signal EOF — the standard way to
-// finish a stdin consumer such as cat. Writing to an unknown or already
-// finished shell is an error.
-func (b *BackgroundShells) WriteStdin(id, input string, closeStdin bool) error {
-	b.mu.Lock()
-	sh := b.shells[id]
-	b.mu.Unlock()
-	if sh == nil {
-		return fmt.Errorf("no background shell %q", id)
+// finish a stdin consumer such as cat. Writing to an unknown, foreign, or
+// already finished shell is an error.
+func (b *BackgroundShells) WriteStdinFor(session, id, input string, closeStdin bool) error {
+	sh, err := b.lookup(session, id)
+	if err != nil {
+		return err
 	}
 	sh.mu.Lock()
 	exited := sh.exited
@@ -296,24 +396,33 @@ func (b *BackgroundShells) WriteStdin(id, input string, closeStdin bool) error {
 	return nil
 }
 
-// Kill terminates a running shell. Killing an already-finished shell is a
-// no-op. Returns the (possibly new) status.
-func (b *BackgroundShells) Kill(id string) (BackgroundShellStatus, error) {
-	b.mu.Lock()
-	sh := b.shells[id]
-	b.mu.Unlock()
-	if sh == nil {
-		return BackgroundShellStatus{}, fmt.Errorf("no background shell %q", id)
+// KillFor terminates a running shell on behalf of by, recording the stop
+// facts. Killing an already-finished shell changes nothing: it reports
+// alreadyFinished=true with the unchanged status.
+func (b *BackgroundShells) KillFor(session, id string, by StopOrigin) (st BackgroundShellStatus, alreadyFinished bool, err error) {
+	sh, err := b.lookup(session, id)
+	if err != nil {
+		return BackgroundShellStatus{}, false, err
 	}
 	sh.mu.Lock()
-	running := !sh.exited
+	if sh.exited {
+		st = sh.snapshotLocked()
+		sh.mu.Unlock()
+		return st, true, nil
+	}
+	// Record the stop facts while holding sh.mu and before proc.Kill(), so
+	// the exit goroutine (which takes this lock to record the exit) can
+	// never publish an exited shell without its stop attribution. Kill
+	// itself runs after the release: a remote executor's Kill does I/O and
+	// must not block the shell's output writers on this lock.
+	sh.killed = true
+	sh.stoppedBy = by
 	proc := sh.proc
 	sh.mu.Unlock()
-	if running && proc != nil {
+	if proc != nil {
 		_ = proc.Kill()
 	}
-	st, _ := b.Status(id)
-	return st, nil
+	return sh.snapshot(), false, nil
 }
 
 // NotificationOutputCap bounds the output tail included in a completion
@@ -353,15 +462,20 @@ func bashOutputTool(bg *BackgroundShells) coretools.Tool {
 			ShellID string `json:"shell_id"`
 			WaitMS  int    `json:"wait_ms,omitempty"`
 		}) (coretools.Result, error) {
+			id := strings.TrimSpace(a.ShellID)
+			session := sessionFromCtx(ctx)
 			if a.WaitMS > 0 {
 				wait := time.Duration(min(a.WaitMS, MaxWaitMS)) * time.Millisecond
-				// Unknown ids return immediately from Wait; Output renders the
-				// error below.
-				_, _ = bg.Wait(ctx, strings.TrimSpace(a.ShellID), wait)
+				// Unknown and foreign ids return immediately from Wait;
+				// OutputFor renders the error below.
+				_, _ = bg.WaitFor(ctx, session, id, wait)
 			}
-			out, st, ok := bg.Output(strings.TrimSpace(a.ShellID))
-			if !ok {
-				return coretools.Result{Content: fmt.Sprintf("Error: no background shell %q (started shells: %s)", a.ShellID, formatShellIDs(bg.List()))}, nil
+			out, st, err := bg.OutputFor(session, id)
+			if err != nil {
+				// The listing carries only the shells this session can see,
+				// and the message names no shell id at all — a foreign id
+				// must stay indistinguishable from a nonexistent one.
+				return coretools.Result{Content: fmt.Sprintf("Error: no background shell (started shells: %s)", formatShellIDs(bg.ListFor(session)))}, nil
 			}
 			var b strings.Builder
 			state := "running"
@@ -389,9 +503,12 @@ func killShellTool(bg *BackgroundShells) coretools.Tool {
 		func(ctx context.Context, a struct {
 			ShellID string `json:"shell_id"`
 		}) (coretools.Result, error) {
-			st, err := bg.Kill(strings.TrimSpace(a.ShellID))
+			st, alreadyFinished, err := bg.KillFor(sessionFromCtx(ctx), strings.TrimSpace(a.ShellID), StopByModel)
 			if err != nil {
 				return coretools.Result{Content: "Error: " + err.Error()}, nil
+			}
+			if alreadyFinished {
+				return coretools.Result{Content: fmt.Sprintf("shell %s already finished (exit code %d)", st.ID, st.ExitCode)}, nil
 			}
 			if st.Running {
 				return coretools.Result{Content: fmt.Sprintf("kill signal sent to shell %s (%s)", st.ID, st.Command)}, nil
@@ -411,7 +528,7 @@ func bashInputTool(bg *BackgroundShells) coretools.Tool {
 			CloseStdin bool   `json:"close_stdin"`
 		}) (coretools.Result, error) {
 			id := strings.TrimSpace(a.ShellID)
-			if err := bg.WriteStdin(id, a.Input, a.CloseStdin); err != nil {
+			if err := bg.WriteStdinFor(sessionFromCtx(ctx), id, a.Input, a.CloseStdin); err != nil {
 				return coretools.Result{Content: "Error: " + err.Error()}, nil
 			}
 			action := fmt.Sprintf("wrote %d bytes to shell %s stdin", len(a.Input), id)
