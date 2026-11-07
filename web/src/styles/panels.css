@@ -600,32 +600,39 @@ html.dark .shiki-host span {
   text-align: center;
 }
 
-/* Danger ghost action, shared by BackgroundTab rows (stop shell / stop
- * task) and ScheduledTab rows (delete cron): a visible label — the
- * destructive step hides in the confirm dialog, not behind a cryptic
- * glyph. Lives here (not scoped) because both components render it. */
+/* Quiet ghost icon action, shared by BackgroundTab rows (stop shell / stop
+ * task) and ScheduledTab rows (delete cron): in a monochrome panel the
+ * destructive emphasis belongs to the confirm dialog, so the row control is
+ * a muted ghost that only turns danger on hover/focus. The accessible name
+ * (title/aria-label) carries the verb. Lives here (not scoped) because both
+ * components render it. */
 .act-stop-btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
   flex-shrink: 0;
-  padding: 2px var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--danger-text);
-  font: inherit;
-  font-size: var(--text-xs);
+  color: var(--muted);
   cursor: pointer;
 }
 .act-stop-btn:hover {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
   background: var(--danger-soft);
+  color: var(--danger-text);
 }
 .act-stop-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 .act-stop-btn:focus-visible {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: var(--danger-soft);
+  color: var(--danger-text);
   outline: 2px solid var(--focus);
   outline-offset: 1px;
 }
@@ -639,8 +646,8 @@ html.dark .shiki-host span {
     min-height: 44px;
   }
   .act-stop-btn {
+    min-width: 44px;
     min-height: 44px;
-    padding: var(--space-3) var(--space-4);
   }
   .act-wake-action {
     min-height: 44px;

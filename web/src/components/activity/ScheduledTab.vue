@@ -180,14 +180,13 @@ async function remove(entry: CronEntry): Promise<void> {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The schedule is data, not a control: plain monospace text — chip chrome
+ * (background pill) reads as a clickable tab. */
 .act-cron-spec {
   flex-shrink: 0;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-xs);
-  background: var(--surface-2);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--text-2);
+  color: var(--muted);
 }
 .act-cron-meta {
   margin: var(--space-2) 0 0;
@@ -211,7 +210,12 @@ async function remove(entry: CronEntry): Promise<void> {
   color: var(--text-2);
   min-width: 0;
 }
+/* Label/value must not read as one sentence: the 提示词 label stays a muted
+ * caption, the prompt itself is primary text and ellipsizes (title carries
+ * the full text). */
 .act-cron-prompt {
+  flex: 1;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

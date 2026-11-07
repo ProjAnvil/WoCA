@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Bot, ChevronDown, ChevronRight, OctagonX, Terminal } from 'lucide-vue-next'
+import { ChevronDown, ChevronRight, OctagonX, Terminal } from 'lucide-vue-next'
 import { useActivityStore, type OutputKind } from '../../stores/activity'
 import { useConfirmStore } from '../../stores/confirm'
 import { fmtDuration } from '../../lib/format'
@@ -210,19 +210,14 @@ function onListKeydown(e: KeyboardEvent): void {
         class="act-row"
         :class="`st-${r.status}`"
         :data-row-key="r.key"
+        :title="r.name"
         tabindex="-1"
       >
         <div class="act-row-main">
-          <component
-            :is="r.kind === 'shell' ? Terminal : Bot"
-            :size="13"
-            class="act-row-kind"
-            aria-hidden="true"
-          />
           <span class="sr-only">
             {{ (r.kind === 'shell' ? t('activity.kindShell') : t('activity.kindTask')) + ': ' }}
           </span>
-          <span class="act-row-name" :title="r.name">{{ r.name }}</span>
+          <span class="act-row-name">{{ r.name }}</span>
           <span class="act-row-status" :class="`st-${r.status}`">
             <span v-if="r.status === 'running'" class="act-breathe" aria-hidden="true" />
             {{ statusLabel(r) }}
@@ -233,11 +228,11 @@ function onListKeydown(e: KeyboardEvent): void {
             class="act-stop-btn"
             type="button"
             :title="t('activity.stop')"
+            :aria-label="t('activity.stop')"
             :disabled="stopping.has(r.key)"
             @click="stop(r)"
           >
             <OctagonX :size="13" aria-hidden="true" />
-            <span>{{ t('activity.stop') }}</span>
           </button>
           <button
             class="act-out-toggle"
@@ -306,10 +301,9 @@ function onListKeydown(e: KeyboardEvent): void {
   gap: var(--space-3);
   min-width: 0;
 }
-.act-row-kind {
-  flex-shrink: 0;
-  color: var(--muted);
-}
+/* The command owns the row: it takes all remaining space and ellipsizes
+ * last (the row title carries the full text); the status pill stays intact
+ * (it is the state signal) and only the elapsed time yields before it. */
 .act-row-name {
   flex: 1;
   min-width: 0;
@@ -349,12 +343,15 @@ function onListKeydown(e: KeyboardEvent): void {
   animation: task-pill-breathe 1.6s ease-in-out infinite;
 }
 .act-row-dur {
-  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--text-xs);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-/* The stop button's danger-ghost styling is shared with ScheduledTab's
+/* The stop button's quiet-ghost styling is shared with ScheduledTab's
  * delete — see .act-stop-btn in styles/panels.css (global, not scoped). */
 .act-out-toggle {
   flex-shrink: 0;

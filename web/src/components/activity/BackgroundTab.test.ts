@@ -158,6 +158,35 @@ describe('BackgroundTab status rendering', () => {
   })
 })
 
+describe('BackgroundTab row chrome', () => {
+  it('carries the full command/description in the row title; no kind glyph', async () => {
+    // The visible name ellipsizes (the command owns the row's space); the
+    // untruncated text must still be reachable — the row's title is the
+    // repo's tooltip mechanism. The left terminal-prompt glyph is dropped
+    // (status is conveyed by the pill); the kind stays as sr-only text.
+    const cmd = 'echo tree started; sleep 120 & sleep 120 & wait'
+    const w = await mountWith({
+      shells: [shell('r1', 'running', { command: cmd })],
+      tasks: [task('t1', 'running')],
+    })
+    const rows = w.findAll('.act-row')
+    expect(rows[0].attributes('title')).toBe(cmd)
+    expect(rows[1].attributes('title')).toBe('task-t1')
+    expect(w.find('.act-row-kind').exists()).toBe(false)
+    expect(w.text()).toContain(i18n.global.t('activity.kindShell'))
+    expect(w.text()).toContain(i18n.global.t('activity.kindTask'))
+  })
+
+  it('the stop control is an icon-only ghost whose accessible name carries the verb', async () => {
+    const w = await mountWith({ shells: [shell('r1', 'running')] })
+    const btn = w.get('.act-stop-btn')
+    expect(btn.attributes('aria-label')).toBe(i18n.global.t('activity.stop'))
+    expect(btn.attributes('title')).toBe(i18n.global.t('activity.stop'))
+    // no visible label — the destructive wording lives in the confirm dialog
+    expect(btn.text()).toBe('')
+  })
+})
+
 describe('BackgroundTab stop actions', () => {
   it('offers stop only for running rows (terminal rows have no action)', async () => {
     const w = await mountWith({

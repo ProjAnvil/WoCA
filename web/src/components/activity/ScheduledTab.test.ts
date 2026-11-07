@@ -92,6 +92,21 @@ describe('ScheduledTab cron entries', () => {
     const w = await mountWith([])
     expect(w.get('.act-empty').text()).toContain(i18n.global.t('activity.scheduledEmpty'))
   })
+
+  it('renders the spec as plain mono text and the prompt with a full-text title', async () => {
+    // The schedule is data (code-styled text), not chip chrome that reads as
+    // a clickable tab; the prompt value ellipsizes and its title keeps the
+    // full text reachable.
+    const w = await mountWith([cron('c1', { prompt: 'Summarize progress in one line.' })])
+    const spec = w.get('.act-cron-spec')
+    expect(spec.element.tagName).toBe('CODE')
+    expect(spec.text()).toBe('*/15 * * * *')
+    const prompt = w.get('.act-cron-prompt')
+    expect(prompt.text()).toBe('Summarize progress in one line.')
+    expect(prompt.attributes('title')).toBe('Summarize progress in one line.')
+    // the label is its own muted caption, not part of the value
+    expect(w.get('.act-cron-prompt-label').text()).toBe(i18n.global.t('activity.cronPrompt'))
+  })
 })
 
 describe('ScheduledTab wake explanations', () => {
