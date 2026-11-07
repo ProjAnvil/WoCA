@@ -337,29 +337,36 @@ func (t *backgroundTask) infoLocked() BackgroundTaskInfo {
 	}
 }
 
-// notification renders the completion body handed to the notify callback,
-// mirroring backgroundShell.notification() (internal/tools/background.go):
-// id, final status, description, and the report tail bounded by
-// tools.NotificationOutputCap so a chatty report cannot flood the context.
-// It carries no wrapper tags — the queue tag the agent wraps around this
-// text is the single <background-task-completed> wrapper the model sees.
-// The subject line (the model-facing description) names the task; the full
-// prompt deliberately stays out. A stopped task renders the stopped status
-// line and no report — stop leaves no final report behind.
-func (t *backgroundTask) notification() string {
+// completion renders the completion body handed to the notify callback and
+// reports who stopped the task ("" unless it was stopped), mirroring
+// backgroundShell.completion() (internal/tools/background.go): id, final
+// status, subject, and the report tail bounded by tools.NotificationOutputCap
+// so a chatty report cannot flood the context. The first line is
+// stop-attributed (PM §4.6): a user stop says who did it, everything else
+// keeps the honest status line. The body carries no wrapper tags — the queue
+// tag the agent wraps around this text is the single
+// <background-task-completed> wrapper the model sees. The subject line (the
+// model-facing description) names the task; the full prompt deliberately
+// stays out. A stopped task carries no report — stop leaves no final report
+// behind.
+func (t *backgroundTask) completion() (text string, stoppedBy tools.StopOrigin) {
 	t.mu.Lock()
-	status, final := t.status, t.final
+	status, final, stoppedBy := t.status, t.final, t.stoppedBy
 	t.mu.Unlock()
 	report := final
 	if len(report) > tools.NotificationOutputCap {
 		report = "…\n" + report[len(report)-tools.NotificationOutputCap:]
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Background task %s finished (%s): %s\n", t.ID, status, t.Subject)
+	if status == TaskStopped && stoppedBy == tools.StopByUser {
+		fmt.Fprintf(&b, "Background task %s was stopped by the user: %s\n", t.ID, t.Subject)
+	} else {
+		fmt.Fprintf(&b, "Background task %s finished (%s): %s\n", t.ID, status, t.Subject)
+	}
 	if report != "" {
 		fmt.Fprintf(&b, "Report (tail):\n%s\n", strings.TrimRight(report, "\n"))
 	}
-	return b.String()
+	return b.String(), stoppedBy
 }
 
 // TaskManager holds all background tasks for a session.
@@ -367,7 +374,7 @@ type TaskManager struct {
 	mu       sync.Mutex
 	tasks    map[string]*backgroundTask
 	next     int
-	notify   func(session, text string)
+	notify   func(session, text string, stoppedBy tools.StopOrigin)
 	onChange func(session string)
 }
 
@@ -415,11 +422,13 @@ func (m *TaskManager) start(ctx context.Context, subject, description, subagent 
 	return t, nil
 }
 
-// SetNotify installs the completion callback. It fires once per finished task
-// as fn(session, text), where session is the starting run's session id (""
-// outside a run scope) and text is the rendered completion notification. It
-// is called in the task's run goroutine; it must not block.
-func (m *TaskManager) SetNotify(fn func(session, text string)) {
+// SetNotify installs the completion callback. It fires once per finished
+// task as fn(session, text, stoppedBy), where session is the starting run's
+// session id ("" outside a run scope), text is the rendered completion
+// notification and stoppedBy names who stopped the task ("" unless it was
+// stopped — the quiet/attribution signal, D1). It is called in the task's
+// run goroutine; it must not block.
+func (m *TaskManager) SetNotify(fn func(session, text string, stoppedBy tools.StopOrigin)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.notify = fn
@@ -439,13 +448,15 @@ func (m *TaskManager) SetOnChange(fn func(session string)) {
 // notifyDone delivers t's completion notification through the installed
 // callback (a no-op without one). Called from the task's run goroutine once
 // the task has reached its terminal state — completed or stopped alike, so a
-// stopped task is never silently dropped.
+// stopped task is never silently dropped — with the stop attribution so the
+// queueing side can keep user stops Quiet (D1).
 func (m *TaskManager) notifyDone(t *backgroundTask) {
 	m.mu.Lock()
 	fn := m.notify
 	m.mu.Unlock()
 	if fn != nil {
-		fn(t.session, t.notification())
+		text, stoppedBy := t.completion()
+		fn(t.session, text, stoppedBy)
 	}
 }
 
@@ -711,8 +722,9 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 			report = a.withSubagentStopFeedback(context.WithoutCancel(runCtx), name, report)
 			t.setFinalIfRunning(status, report)
 			// Completion notification for the starting run's session. It
-			// fires for stopped tasks too — notification() then renders the
-			// stopped status line — so TaskStop never silently drops a task.
+			// fires for stopped tasks too — completion() then renders the
+			// stopped status line, attributed when the user stopped it — so
+			// TaskStop never silently drops a task.
 			a.tasks.notifyDone(t)
 			// L1 episode for the completed subagent task. runCtx may already
 			// be cancelled by TaskStop, but its values (run workspace) are

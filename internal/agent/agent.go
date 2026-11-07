@@ -608,14 +608,15 @@ func New(cfg Config) (*Agent, error) {
 	a.graph = cg
 	// Background-shell completions (Bash run_in_background) are delivered as
 	// tagged queue notifications after the next tool round, scoped to the
-	// session whose run started the shell.
-	a.registry.Background().SetNotify(func(session, text string) {
-		a.QueueNotificationFor(session, "background-task-completed", strings.TrimSpace(text))
+	// session whose run started the shell. A user-initiated stop queues Quiet
+	// (D1): attributed, delivered with the next run, never starting one.
+	a.registry.Background().SetNotify(func(c tools.ShellCompletion) {
+		a.queueBackgroundCompletion(c.Session, c.Text, c.StoppedBy)
 	})
 	// Background-task completions (Task run_in_background) ride the same
-	// session-scoped queue and tag as background shells.
-	a.tasks.SetNotify(func(session, text string) {
-		a.QueueNotificationFor(session, "background-task-completed", strings.TrimSpace(text))
+	// session-scoped queue, tag and stop semantics as background shells.
+	a.tasks.SetNotify(func(session, text string, stoppedBy tools.StopOrigin) {
+		a.queueBackgroundCompletion(session, text, stoppedBy)
 	})
 	return a, nil
 }

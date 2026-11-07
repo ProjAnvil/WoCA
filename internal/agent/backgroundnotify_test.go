@@ -209,6 +209,82 @@ func TestNotificationObserverQueuedBeforeRun(t *testing.T) {
 	}
 }
 
+// TestQuietNotificationNeverWakeableDeliveredNextRun pins D1's queue
+// semantics: a Quiet item (a user-initiated stop) fires the observer with
+// Quiet set, stays invisible to the wake-worthy count, yet still counts as a
+// pending notification and is delivered at the next run's start
+// (prependQueued) — attributed, ahead of the fresh user turn, exactly like a
+// wake-worthy item.
+func TestQuietNotificationNeverWakeableDeliveredNextRun(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir())
+	model := language.NewFakeChatModel(language.WithResponses(messages.AI("plain answer")))
+	a, err := New(Config{Model: model, Registry: reg, SystemPrompt: "t", PermissionMode: config.ModeBypass})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var observed []QueuedInput
+	a.SetNotificationObserver(func(q QueuedInput) { observed = append(observed, q) })
+
+	const body = "Background shell 1 was killed by the user: npm run dev"
+	a.QueueQuietNotificationFor("sess-q", "background-task-completed", body)
+	if len(observed) != 1 || !observed[0].Quiet {
+		t.Fatalf("observer items = %+v, want exactly the quiet item", observed)
+	}
+	if n := a.WakeableCountFor("sess-q"); n != 0 {
+		t.Fatalf("WakeableCountFor = %d, want 0 (a quiet item never wakes)", n)
+	}
+	if n := a.QueuedInputCountFor("sess-q"); n != 1 {
+		t.Fatalf("QueuedInputCountFor = %d, want 1 (quiet items stay queued)", n)
+	}
+	if n := a.QueuedNotificationCountFor("sess-q"); n != 1 {
+		t.Fatalf("QueuedNotificationCountFor = %d, want 1 (pending notifications include quiet)", n)
+	}
+
+	// A typed (untagged) item counts as input but not as a notification.
+	a.QueueInput("typed while away")
+	if n := a.QueuedNotificationCountFor("sess-q"); n != 1 {
+		t.Fatalf("QueuedNotificationCountFor = %d, want 1 (tagged items only)", n)
+	}
+
+	// A wake-worthy peer makes the queue wakeable again — quiet alone never
+	// does. The typed item counts as wake-worthy too (user input has always
+	// driven the continuation paths); the quiet item still does not.
+	a.QueueNotificationFor("sess-q", "background-task-completed", "Background shell 2 finished (exit code 0): echo late")
+	if n := a.WakeableCountFor("sess-q"); n != 2 {
+		t.Fatalf("WakeableCountFor = %d, want 2 (typed + notification, quiet excluded)", n)
+	}
+
+	ctx := tracing.WithRun(t.Context(), "run-q", "sess-q")
+	out, err := a.Invoke(ctx, []messages.Message{messages.Human("next turn")}, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	quietIdx, wakeIdx, human := -1, -1, -1
+	for i, m := range out {
+		if m.Role != messages.RoleHuman {
+			continue
+		}
+		switch {
+		case strings.Contains(m.Content, "killed by the user"):
+			quietIdx = i
+		case strings.Contains(m.Content, "echo late"):
+			wakeIdx = i
+		case m.Content == "next turn":
+			human = i
+		}
+	}
+	if quietIdx == -1 || wakeIdx == -1 || human == -1 {
+		t.Fatalf("transcript missing pieces: quiet=%d wake=%d human=%d", quietIdx, wakeIdx, human)
+	}
+	if quietIdx > human || wakeIdx > human {
+		t.Fatalf("notifications (%d, %d) delivered after the fresh user turn (%d), want run-start prepend ahead of it", quietIdx, wakeIdx, human)
+	}
+	if n := a.QueuedInputCountFor("sess-q"); n != 0 {
+		t.Fatalf("queue not drained by the run: %d left", n)
+	}
+}
+
 // TestCoalesceQueuedInputs verifies the pure coalescing helper: several
 // queued items collapse into ONE Human message of per-item tagged blocks —
 // the same rendering formatQueuedInput uses — joined by a blank line, with

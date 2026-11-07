@@ -42,10 +42,15 @@ func (m *Model) armNotifications() tea.Cmd {
 
 // maybeWake starts a run for the notifications that piled up while no run
 // could deliver them. A run in flight owns the queue (its tool rounds drain
-// it in-turn) and an empty queue is nothing to wake on; otherwise the
+// it in-turn) and an empty queue is nothing to wake on; a queue holding only
+// Quiet items (a user stop, D1) is treated as empty — they ride the next
+// user turn instead of restarting the agent against the user. Otherwise the
 // drained items become one coalesced wake turn.
 func (m *Model) maybeWake() tea.Cmd {
 	if m.running || m.agent == nil {
+		return nil
+	}
+	if m.agent.WakeableCountFor("") == 0 {
 		return nil
 	}
 	items := m.agent.DrainQueuedInputsFor("")

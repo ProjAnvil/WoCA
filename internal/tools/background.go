@@ -55,14 +55,25 @@ type BackgroundShellStatus struct {
 	OutputBytes int
 }
 
+// ShellCompletion is one finished background shell handed to the notify
+// callback: the starting run's session id, the rendered notification text
+// and who killed the shell ("" when it exited on its own). StoppedBy is the
+// quiet/attribution signal — the agent queues user stops as Quiet
+// notifications that never wake the session (D1).
+type ShellCompletion struct {
+	Session   string
+	Text      string
+	StoppedBy StopOrigin
+}
+
 // notifyBackgroundDone, when set, is called once when a background shell
-// finishes, with the starting run's session id and the rendered completion
-// notification. The agent wires this to its session-scoped mid-turn queue.
+// finishes, with the completion facts. The agent wires this to its
+// session-scoped mid-turn queue.
 type BackgroundShells struct {
 	mu       sync.Mutex
 	next     int
 	shells   map[string]*backgroundShell
-	onDone   func(session, notification string)
+	onDone   func(ShellCompletion)
 	onChange func(session string)
 	// execFor resolves the execution backend per start, so a run executor
 	// injected into the invoking context (a per-run sandbox) serves the
@@ -116,10 +127,10 @@ func NewBackgroundShellsWithExecFor(execFor func(context.Context) executor.Execu
 }
 
 // SetNotify installs the completion callback. It fires once per finished
-// shell as fn(session, notification), where session is the starting run's
-// session id ("" outside a run scope). It is called in the shell's run
-// goroutine; it must not block.
-func (b *BackgroundShells) SetNotify(fn func(session, notification string)) {
+// shell as fn(completion), carrying the starting run's session id (""
+// outside a run scope), the rendered notification text and the stop
+// attribution. It is called in the shell's run goroutine; it must not block.
+func (b *BackgroundShells) SetNotify(fn func(ShellCompletion)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.onDone = fn
@@ -208,7 +219,8 @@ func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWork
 			onChange(sh.session)
 		}
 		if onDone != nil {
-			onDone(sh.session, sh.notification())
+			text, stoppedBy := sh.completion()
+			onDone(ShellCompletion{Session: sh.session, Text: text, StoppedBy: stoppedBy})
 		}
 	}()
 	return id, nil
@@ -501,24 +513,33 @@ const NotificationOutputCap = 2000
 // are clamped so a typo cannot pin a tool round for hours.
 const MaxWaitMS = 600000
 
-// notification renders the completion body handed to the notify callback:
-// exit status plus a bounded output tail. It carries no wrapper tags — the
-// queue tag the agent wraps around this text is the single
-// <background-task-completed> wrapper the model sees.
-func (sh *backgroundShell) notification() string {
+// completion renders the completion body handed to the notify callback and
+// reports who killed the shell ("" for a natural exit). The first line is
+// stop-attributed (PM §4.6): a user kill says who did it, a model kill names
+// the tool, a natural exit keeps the exit-code line. The body carries no
+// wrapper tags — the queue tag the agent wraps around this text is the
+// single <background-task-completed> wrapper the model sees.
+func (sh *backgroundShell) completion() (text string, stoppedBy StopOrigin) {
 	sh.mu.Lock()
-	st := BackgroundShellStatus{ID: sh.id, Command: sh.command, ExitCode: sh.exit}
+	st := BackgroundShellStatus{ID: sh.id, Command: sh.command, ExitCode: sh.exit, StoppedBy: sh.stoppedBy}
 	out := sh.buf.String()
 	sh.mu.Unlock()
 	var b strings.Builder
-	fmt.Fprintf(&b, "Background shell %s finished (exit code %d): %s\n", st.ID, st.ExitCode, st.Command)
+	switch st.StoppedBy {
+	case StopByUser:
+		fmt.Fprintf(&b, "Background shell %s was killed by the user: %s\n", st.ID, st.Command)
+	case StopByModel:
+		fmt.Fprintf(&b, "Background shell %s was killed (KillShell): %s\n", st.ID, st.Command)
+	default:
+		fmt.Fprintf(&b, "Background shell %s finished (exit code %d): %s\n", st.ID, st.ExitCode, st.Command)
+	}
 	if out != "" {
 		if len(out) > NotificationOutputCap {
 			out = "…\n" + out[len(out)-NotificationOutputCap:]
 		}
 		fmt.Fprintf(&b, "Output (tail):\n%s\n", strings.TrimRight(out, "\n"))
 	}
-	return b.String()
+	return b.String(), st.StoppedBy
 }
 
 // bashOutputTool polls a background shell's output, optionally blocking

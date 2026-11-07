@@ -17,13 +17,15 @@ import (
 // their run_started event carries auto/trigger annotations.
 
 // onQueuedNotification is the agent's notification-observer hook (installed
-// in New): q was just queued. Unscoped items (Session "") have no session to
-// wake — the single-session surfaces (TUI, REPL) own that case — and a busy
-// session needs no wake: the running run's tool rounds drain the queue
-// in-turn. An idle session hands off to maybeWake on a fresh goroutine
+// in New): q was just queued. Quiet items never start runs (D1): a
+// user-initiated stop is delivered with the next user run instead of waking
+// the agent over what the user just stopped. Unscoped items (Session "") have
+// no session to wake — the single-session surfaces (TUI, REPL) own that case
+// — and a busy session needs no wake: the running run's tool rounds drain the
+// queue in-turn. An idle session hands off to maybeWake on a fresh goroutine
 // because the observer contract is synchronous and must not block.
 func (s *Server) onQueuedNotification(q agent.QueuedInput) {
-	if q.Session == "" || s.admission.busy(q.Session) {
+	if q.Quiet || q.Session == "" || s.admission.busy(q.Session) {
 		return
 	}
 	go s.maybeWake(q.Session)
@@ -64,10 +66,11 @@ func (s *Server) wakeLocked(sid string) {
 	if s.wakeStalled[sid] {
 		return // last wake start failed; a user run must clear the stall
 	}
-	// Nothing queued means nothing to do — checked before the policy and cap
-	// reads so a finishing run with an empty queue (the common case) neither
-	// loads settings nor announces a cap it did not hit.
-	queued := s.agent.QueuedInputCountFor(sid)
+	// Nothing wake-worthy means nothing to do — checked before the policy and
+	// cap reads so a finishing run with an empty (or Quiet-only) queue (the
+	// common case) neither loads settings nor announces a cap it did not hit.
+	// Quiet items alone never start a run (D1); they ride the next user run.
+	queued := s.agent.WakeableCountFor(sid)
 	if queued == 0 {
 		return
 	}
@@ -109,8 +112,14 @@ func (s *Server) wakeLocked(sid string) {
 		s.wakeStalled[sid] = true
 		s.log.Warn().Err(err).Str("session", sid).Str("trigger", trigger).Int("items", len(items)).
 			Msg("wake run failed to start; notifications requeued")
+		// Requeue each item with its Quiet flag intact: a user stop must stay
+		// quiet even on the recovery path.
 		for _, q := range items {
-			s.agent.QueueNotificationFor(q.Session, q.Tag, q.Text)
+			if q.Quiet {
+				s.agent.QueueQuietNotificationFor(q.Session, q.Tag, q.Text)
+			} else {
+				s.agent.QueueNotificationFor(q.Session, q.Tag, q.Text)
+			}
 		}
 		return
 	}

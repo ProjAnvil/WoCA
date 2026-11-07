@@ -80,11 +80,11 @@ func TestBackgroundShellCompletionNotification(t *testing.T) {
 	bg := reg.Background()
 
 	notifications := make(chan string, 4)
-	bg.SetNotify(func(session, text string) {
-		if session != "" {
-			t.Errorf("session = %q, want empty for an unscoped ctx", session)
+	bg.SetNotify(func(c ShellCompletion) {
+		if c.Session != "" {
+			t.Errorf("session = %q, want empty for an unscoped ctx", c.Session)
 		}
-		notifications <- text
+		notifications <- c.Text
 	})
 
 	id, err := bg.Start(t.Context(), "echo hello-bg", "", reg.dir.Base())
@@ -118,7 +118,7 @@ func TestBackgroundShellNotificationCarriesSession(t *testing.T) {
 
 	type sessionNote struct{ session, text string }
 	got := make(chan sessionNote, 2)
-	bg.SetNotify(func(session, text string) { got <- sessionNote{session, text} })
+	bg.SetNotify(func(c ShellCompletion) { got <- sessionNote{c.Session, c.Text} })
 
 	ctx := tracing.WithRun(t.Context(), "run-1", "sess-1")
 	if _, err := bg.Start(ctx, "echo scoped", "", "."); err != nil {
@@ -155,7 +155,7 @@ func TestBackgroundShellNotificationOutputCap(t *testing.T) {
 	bg := reg.Background()
 
 	done := make(chan string, 1)
-	bg.SetNotify(func(session, text string) { done <- text })
+	bg.SetNotify(func(c ShellCompletion) { done <- c.Text })
 	if _, err := bg.Start(t.Context(), "head -c 9000 /dev/zero | tr '\\0' 'x'", "", "."); err != nil {
 		t.Fatal(err)
 	}
@@ -805,4 +805,100 @@ func (p *fakeProcess) Wait() error           { <-p.done; return nil }
 func (p *fakeProcess) Kill() error {
 	p.killOne.Do(func() { close(p.done) })
 	return nil
+}
+
+// TestBackgroundShellKilledNotificationAttribution pins the PM §4.6 first
+// lines and the stop attribution on the notify callback: a user kill says who
+// did it, a model kill names the tool, and a natural completion keeps the
+// exit-code line. The output tail still rides along whenever the shell
+// produced output.
+func TestBackgroundShellKilledNotificationAttribution(t *testing.T) {
+	reg := NewRegistry(t.TempDir())
+	bg := reg.Background()
+
+	type note struct {
+		text string
+		by   StopOrigin
+	}
+	got := make(chan note, 4)
+	bg.SetNotify(func(c ShellCompletion) { got <- note{text: c.Text, by: c.StoppedBy} })
+
+	firstLine := func(body string) string {
+		line, _, _ := strings.Cut(body, "\n")
+		return line
+	}
+	start := func(t *testing.T, command string) string {
+		t.Helper()
+		id, err := bg.Start(t.Context(), command, "", reg.dir.Base())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	t.Run("user kill", func(t *testing.T) {
+		id := start(t, "echo user-killed-output && sleep 30")
+		// Wait for the echo to land in the buffer before killing, so the
+		// output tail is guaranteed to be part of the notification.
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if out, _, err := bg.OutputFor("", id); err == nil && strings.Contains(out, "user-killed-output") {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if _, already, err := bg.KillFor("", id, StopByUser); err != nil || already {
+			t.Fatalf("KillFor(user) = err %v already %v", err, already)
+		}
+		select {
+		case n := <-got:
+			if n.by != StopByUser {
+				t.Fatalf("StoppedBy = %q, want %q", n.by, StopByUser)
+			}
+			want := "Background shell " + id + " was killed by the user: echo user-killed-output && sleep 30"
+			if line := firstLine(n.text); line != want {
+				t.Fatalf("first line = %q, want %q", line, want)
+			}
+			if !strings.Contains(n.text, "Output (tail):\nuser-killed-output") {
+				t.Fatalf("notification missing output tail: %q", n.text)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no kill notification")
+		}
+	})
+
+	t.Run("model kill", func(t *testing.T) {
+		id := start(t, "sleep 30")
+		if _, already, err := bg.KillFor("", id, StopByModel); err != nil || already {
+			t.Fatalf("KillFor(model) = err %v already %v", err, already)
+		}
+		select {
+		case n := <-got:
+			if n.by != StopByModel {
+				t.Fatalf("StoppedBy = %q, want %q", n.by, StopByModel)
+			}
+			want := "Background shell " + id + " was killed (KillShell): sleep 30"
+			if line := firstLine(n.text); line != want {
+				t.Fatalf("first line = %q, want %q", line, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no kill notification")
+		}
+	})
+
+	t.Run("natural completion", func(t *testing.T) {
+		id := start(t, "true")
+		select {
+		case n := <-got:
+			if n.by != "" {
+				t.Fatalf("StoppedBy = %q, want empty for a natural exit", n.by)
+			}
+			want := "Background shell " + id + " finished (exit code 0): true"
+			if line := firstLine(n.text); line != want {
+				t.Fatalf("first line = %q, want %q", line, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no completion notification")
+		}
+	})
 }

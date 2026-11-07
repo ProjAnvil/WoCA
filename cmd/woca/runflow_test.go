@@ -10,13 +10,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+
+	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/agentbuild"
+	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/runner"
 	"github.com/projanvil/woca/internal/session"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 func TestRunOneShotSuccess(t *testing.T) {
@@ -335,6 +342,63 @@ func TestRunREPLBackgroundWakeContinuation(t *testing.T) {
 	// one continuation call — no extra prompts consumed.
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("model calls = %d, want 3", got)
+	}
+}
+
+// replDelayLimiter pauses before each model call and signals entered once
+// the first call is in flight, so a test can queue a notification strictly
+// after the run-start prepend and strictly before the run ends.
+type replDelayLimiter struct {
+	d       time.Duration
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (l *replDelayLimiter) Acquire(ctx context.Context, _ bool) (bool, error) {
+	l.once.Do(func() { close(l.entered) })
+	select {
+	case <-time.After(l.d):
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+// TestREPLContinuationIgnoresQuietNotifications pins D1 on the line REPL: a
+// Quiet item (a user stop) landing mid-turn must not start a continuation
+// turn — no wake banner, nothing drained — it waits for the next typed
+// prompt.
+func TestREPLContinuationIgnoresQuietNotifications(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir())
+	limiter := &replDelayLimiter{d: 300 * time.Millisecond, entered: make(chan struct{})}
+	a, err := agent.New(agent.Config{
+		Model:          language.NewFakeChatModel(language.WithResponses(messages.AI("ok")), language.WithRateLimiter(limiter)),
+		Registry:       reg,
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errBuf bytes.Buffer
+	loop := newREPLLoop(runner.New(a, nil, nil), nil, strings.NewReader(""), &out, &errBuf, a, nil, true, 0)
+	go func() {
+		// Mid-turn, inside the held model call (the run-start prepend has
+		// already run): a user stop completes while the REPL turn is busy.
+		<-limiter.entered
+		a.QueueQuietNotificationFor("", "background-task-completed",
+			"Background shell 1 was killed by the user: npm run dev")
+	}()
+	loop.submit(t.Context(), "hello")
+	if strings.Contains(out.String(), "background notification") {
+		t.Fatalf("quiet notification started a continuation turn: %q", out.String())
+	}
+	if got := a.QueuedInputCountFor(""); got != 1 {
+		t.Fatalf("queued items after submit = %d, want 1 (kept for the next typed prompt)", got)
+	}
+	if got := a.WakeableCountFor(""); got != 0 {
+		t.Fatalf("wakeable items = %d, want 0", got)
 	}
 }
 

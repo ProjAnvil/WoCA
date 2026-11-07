@@ -654,3 +654,144 @@ func TestWakeRunUsesSessionWorkspace(t *testing.T) {
 		}
 	}
 }
+
+// newWakeAgentReg is newWakeAgent over a caller-held tool registry, so a
+// scenario can drive the shell manager directly — KillFor with a StopOrigin
+// is the seam the panel/REST user stop calls. perCallDelay (see newWakeAgent)
+// holds a run open across a completion when the busy-session path needs it.
+func newWakeAgentReg(t *testing.T, perCallDelay time.Duration, reg *tools.Registry, responses ...messages.Message) *agent.Agent {
+	t.Helper()
+	opts := []language.FakeChatModelOption{
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(responses...),
+	}
+	if perCallDelay > 0 {
+		opts = append(opts, language.WithRateLimiter(delayLimiter{d: perCallDelay}))
+	}
+	a, err := agent.New(agent.Config{
+		Model:          language.NewFakeChatModel(opts...),
+		Registry:       reg,
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+		RecursionLimit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// Scenario D1: a user-initiated stop never wakes the session. The shell is
+// killed through the manager with StopByUser (the panel/REST origin); the
+// completion notification is attributed ("killed by the user") and queued
+// Quiet, so no wake run starts within the settle window, and the next USER
+// run delivers it at its start.
+func TestUserStoppedShellIsQuietUntilNextUserRun(t *testing.T) {
+	// Cycle: the user run arms a long shell and finishes; the follow-up user
+	// run receives the quiet notification at its start (no wake turn between).
+	reg := tools.NewRegistry(t.TempDir())
+	a := newWakeAgentReg(t, 0, reg,
+		bgShellCall("echo pre-kill-output && sleep 30"),
+		messages.AI("armed"),
+		messages.AI("noted"),
+	)
+	s, ts := newWakeServer(t, a, nil)
+
+	runID, sid, _ := postRun(t, ts.URL, "s1", "start the shell")
+	waitRunDoneInProc(t, s, runID)
+
+	bg := reg.Background()
+	shellID := ""
+	for _, st := range bg.ListFor("s1") {
+		if st.Running {
+			shellID = st.ID
+		}
+	}
+	if shellID == "" {
+		t.Fatal("no running shell after the user run")
+	}
+	if _, already, err := bg.KillFor("s1", shellID, tools.StopByUser); err != nil || already {
+		t.Fatalf("KillFor(user) = err %v already %v", err, already)
+	}
+
+	// The completion queued Quiet: present as a pending notification, never
+	// wake-worthy.
+	waitForQueueCount(t, a, "s1", 1)
+	if n := a.WakeableCountFor("s1"); n != 0 {
+		t.Fatalf("wakeable count = %d, want 0 (a user stop must not wake)", n)
+	}
+
+	// D1: no wake run appears.
+	time.Sleep(500 * time.Millisecond)
+	if ids := registeredRuns(t, s); len(ids) != 1 {
+		t.Fatalf("%d runs after the user stop, want 1 (no wake run)", len(ids))
+	}
+
+	// The next USER run delivers the attributed notification at its start.
+	nextID, _, _ := postRun(t, ts.URL, "s1", "what happened to my shell")
+	waitRunDoneInProc(t, s, nextID)
+	waitForTranscript(t, ts.URL, sid, "user-stop notification", func(msgs []messages.Message) bool {
+		for _, m := range msgs {
+			if m.Role == messages.RoleHuman &&
+				strings.Contains(m.Content, "background-task-completed") &&
+				strings.Contains(m.Content, "was killed by the user") {
+				return true
+			}
+		}
+		return false
+	})
+	if ids := registeredRuns(t, s); len(ids) != 2 {
+		t.Fatalf("%d runs total, want exactly 2 (user + user, no wake)", len(ids))
+	}
+}
+
+// Scenario D1 counterpart: a model-initiated KillShell keeps today's
+// behaviour — the attributed notification is queued wake-worthy and the
+// driver starts exactly one auto run that carries it. The final model call
+// is held open (perCallDelay) so the kill's completion queues while the run
+// is still busy — before its last queue drain has passed — and the clean
+// finish wakes, mirroring the coalescing scenario's timing.
+func TestModelKilledShellStillWakes(t *testing.T) {
+	reg := tools.NewRegistry(t.TempDir())
+	kill := messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+		ID:   fmt.Sprintf("kill-%d", wakeToolSeq.Add(1)),
+		Name: "KillShell",
+		Args: map[string]any{"shell_id": "1"},
+	}}}
+	// Cycle: arm the shell, kill it via the tool, ack, then the wake reply.
+	a := newWakeAgentReg(t, 300*time.Millisecond, reg,
+		bgShellCall("sleep 30"),
+		kill,
+		messages.AI("killed it"),
+		messages.AI("noted"),
+	)
+	s, ts := newWakeServer(t, a, nil)
+
+	runID, sid, _ := postRun(t, ts.URL, "s1", "start and kill the shell")
+	waitRunDoneInProc(t, s, runID)
+
+	ids := waitForRuns(t, s, 2)
+	wakeID := ids[len(ids)-1]
+	if wakeID == runID {
+		t.Fatalf("second registered run is the user run itself (%s)", wakeID)
+	}
+	waitRunDoneInProc(t, s, wakeID)
+	wakeData := runStartedData(t, replayRunEvents(t, ts.URL, wakeID))
+	if auto, _ := wakeData["auto"].(bool); !auto {
+		t.Fatalf("wake run run_started data = %v, want auto:true", wakeData)
+	}
+	waitForTranscript(t, ts.URL, sid, "model-kill notification", func(msgs []messages.Message) bool {
+		for _, m := range msgs {
+			if m.Role == messages.RoleHuman &&
+				strings.Contains(m.Content, "background-task-completed") &&
+				strings.Contains(m.Content, "was killed (KillShell)") {
+				return true
+			}
+		}
+		return false
+	})
+	time.Sleep(250 * time.Millisecond)
+	if n := len(registeredRuns(t, s)); n != 2 {
+		t.Fatalf("%d runs after settle, want exactly 2", n)
+	}
+}

@@ -903,7 +903,9 @@ func (r *replLoop) submit(ctx context.Context, text string) {
 		return
 	}
 	for i := 0; r.wakeLimit <= 0 || i < r.wakeLimit; i++ {
-		if r.agent.QueuedInputCountFor("") == 0 {
+		// Wake-worthy items only: a Quiet notification (a user stop, D1)
+		// waits for the next typed prompt instead of continuing the turn.
+		if r.agent.WakeableCountFor("") == 0 {
 			break
 		}
 		fmt.Fprintln(r.stdout, "\x1b[2m⏵ background notification\x1b[0m")

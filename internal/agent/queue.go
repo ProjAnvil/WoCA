@@ -7,6 +7,7 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
+	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/tracing"
 )
 
@@ -24,11 +25,15 @@ import (
 // QueuedInput is one unit of mid-turn input. A non-empty Tag wraps the text
 // in a differently-named element (e.g. background-task completions) so the
 // model can tell machine notifications apart from typed user input. A
-// non-empty Session scopes delivery to runs in that session.
+// non-empty Session scopes delivery to runs in that session. Quiet marks a
+// notification that must never start a wake run (D1: a user-initiated stop):
+// it is delivered with the next run — at its start (prependQueued) or in a
+// busy run's tool rounds — but the wake drivers treat it as absent.
 type QueuedInput struct {
 	Text    string
 	Tag     string
 	Session string
+	Quiet   bool
 }
 
 // queuedInputTag wraps queued text so the model can tell it apart from the
@@ -81,16 +86,16 @@ func (q *queue) add(text string) {
 	q.items = append(q.items, QueuedInput{Text: text})
 }
 
-// addTagged buffers a tagged notification (machine-generated input) scoped
-// to session; "" is unscoped. It reports whether an item was queued — blank
-// text is dropped, nothing queues.
-func (q *queue) addTagged(session, tag, text string) bool {
-	if strings.TrimSpace(text) == "" {
+// addTagged buffers one tagged notification item (machine-generated input),
+// Quiet flag included; it reports whether an item was queued — blank text is
+// dropped, nothing queues.
+func (q *queue) addTagged(item QueuedInput) bool {
+	if strings.TrimSpace(item.Text) == "" {
 		return false
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.items = append(q.items, QueuedInput{Text: text, Tag: tag, Session: session})
+	q.items = append(q.items, item)
 	return true
 }
 
@@ -136,6 +141,35 @@ func (q *queue) count(session string) int {
 	return n
 }
 
+// wakeableCount is count over the non-Quiet items: what a wake driver may
+// start a run for. Quiet items are delivered like any other, they just never
+// trigger the run (D1).
+func (q *queue) wakeableCount(session string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	n := 0
+	for _, it := range q.items {
+		if !it.Quiet && tracing.VisibleTo(it.Session, session) {
+			n++
+		}
+	}
+	return n
+}
+
+// taggedCount is count over the tagged notification items (Quiet included):
+// the pending-notification count surfaces report.
+func (q *queue) taggedCount(session string) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	n := 0
+	for _, it := range q.items {
+		if it.Tag != "" && tracing.VisibleTo(it.Session, session) {
+			n++
+		}
+	}
+	return n
+}
+
 // QueueInput buffers user input submitted while a run is in flight. The
 // next completed tool round attaches it after its results (see toolsNode);
 // input queued after the final tool round is delivered at the start of the
@@ -158,12 +192,36 @@ func (a *Agent) QueueNotificationFor(session, tag, text string) {
 	a.queueNotification(QueuedInput{Text: text, Tag: tag, Session: session})
 }
 
+// QueueQuietNotificationFor is the Quiet QueueNotificationFor (D1): the item
+// is delivered with the next run in that session but never starts one — the
+// wake drivers ignore it. User-initiated stops queue here so the agent does
+// not restart over what the user just stopped.
+func (a *Agent) QueueQuietNotificationFor(session, tag, text string) {
+	a.queueNotification(QueuedInput{Text: text, Tag: tag, Session: session, Quiet: true})
+}
+
+// queueBackgroundCompletion routes one background shell/task completion into
+// the session-scoped notification queue. A user-initiated stop queues Quiet:
+// the notification is attributed ("... by the user") and delivered with the
+// next run, but never wakes the session (D1). Every other origin — natural
+// completion, failure, a model KillShell/TaskStop — keeps the wake
+// behaviour.
+func (a *Agent) queueBackgroundCompletion(session, text string, stoppedBy tools.StopOrigin) {
+	const tag = "background-task-completed"
+	if stoppedBy == tools.StopByUser {
+		a.QueueQuietNotificationFor(session, tag, strings.TrimSpace(text))
+		return
+	}
+	a.QueueNotificationFor(session, tag, strings.TrimSpace(text))
+}
+
 // queueNotification queues one notification item and fires the observer
-// (if installed) after the item is queued. Blank text queues nothing and
-// fires nothing — the observer contract is "the item you just saw is in the
-// queue".
+// (if installed) after the item is queued, Quiet items included (with Quiet
+// set, so surfaces can show them without waking). Blank text queues nothing
+// and fires nothing — the observer contract is "the item you just saw is in
+// the queue".
 func (a *Agent) queueNotification(q QueuedInput) {
-	if !a.inputs.addTagged(q.Session, q.Tag, q.Text) {
+	if !a.inputs.addTagged(q) {
 		return
 	}
 	a.mu.Lock()
@@ -175,11 +233,13 @@ func (a *Agent) queueNotification(q QueuedInput) {
 }
 
 // SetNotificationObserver installs fn as the callback fired whenever a
-// notification is queued (QueueNotification/QueueNotificationFor). fn runs
-// synchronously on the producer's goroutine — background shells, tasks and
-// cron completions — so it must not block; hand off to a channel and return.
-// nil uninstalls the observer. This is the seam UI surfaces (web server,
-// TUI, REPL) use to surface completions without polling the queue.
+// notification is queued (QueueNotification/QueueNotificationFor/
+// QueueQuietNotificationFor — Quiet items arrive with Quiet set and must not
+// start runs). fn runs synchronously on the producer's goroutine —
+// background shells, tasks and cron completions — so it must not block;
+// hand off to a channel and return. nil uninstalls the observer. This is
+// the seam UI surfaces (web server, TUI, REPL) use to surface completions
+// without polling the queue.
 func (a *Agent) SetNotificationObserver(fn func(QueuedInput)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -205,6 +265,20 @@ func (a *Agent) QueuedInputCount() int {
 // QueuedInputCountFor reports how many inputs a run in session would drain.
 func (a *Agent) QueuedInputCountFor(session string) int {
 	return a.inputs.count(session)
+}
+
+// WakeableCountFor reports how many wake-worthy inputs a run in session
+// would drain: everything except Quiet items. Wake drivers gate on this, not
+// QueuedInputCountFor, so a Quiet notification never starts a run (D1).
+func (a *Agent) WakeableCountFor(session string) int {
+	return a.inputs.wakeableCount(session)
+}
+
+// QueuedNotificationCountFor reports how many tagged notification items
+// (Quiet included) a run in session would drain — the pending-notification
+// count surfaces show.
+func (a *Agent) QueuedNotificationCountFor(session string) int {
+	return a.inputs.taggedCount(session)
 }
 
 // prependQueued delivers run-start queued input: it drains the items scoped

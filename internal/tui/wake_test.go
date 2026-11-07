@@ -161,3 +161,44 @@ func TestWakeArmNotificationsYieldsQueuedSignal(t *testing.T) {
 		t.Fatal("armNotifications did not yield the queued notification")
 	}
 }
+
+// TestQuietNotificationDoesNotWakeIdleSession pins D1 on the TUI surface: a
+// Quiet item (a user stop) still signals the Update loop, but neither the
+// signal nor the clean-finish re-check may start a run for it — the item
+// stays queued for the next user turn.
+func TestQuietNotificationDoesNotWakeIdleSession(t *testing.T) {
+	a := newFakeAgent(t, messages.AI("ok"))
+	m := New(a, nil, config.Config{})
+
+	a.QueueQuietNotificationFor("", "background-task-completed",
+		"Background shell 1 was killed by the user: npm run dev")
+	select {
+	case q := <-m.notifyCh:
+		if !q.Quiet {
+			t.Fatalf("signaled item = %+v, want Quiet", q)
+		}
+		mm, _ := m.Update(notificationQueued{item: q})
+		m = mm.(*Model)
+	case <-time.After(2 * time.Second):
+		t.Fatal("observer did not deliver the quiet notification to notifyCh")
+	}
+	if m.running {
+		t.Fatal("a quiet notification must not wake an idle session")
+	}
+	if got := a.QueuedInputCountFor(""); got != 1 {
+		t.Fatalf("queued items = %d, want 1 (kept for the next user run)", got)
+	}
+	if got := a.WakeableCountFor(""); got != 0 {
+		t.Fatalf("wakeable items = %d, want 0", got)
+	}
+
+	// The clean-finish re-check wakes on leftover wake-worthy items only.
+	mm, _ := m.Update(runDone{result: m.history})
+	m = mm.(*Model)
+	if m.running {
+		t.Fatal("runDone must not wake the session on a quiet-only queue")
+	}
+	if got := a.QueuedInputCountFor(""); got != 1 {
+		t.Fatalf("queued items after runDone = %d, want 1", got)
+	}
+}

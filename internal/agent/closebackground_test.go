@@ -90,7 +90,7 @@ func TestAgentCloseStopsDetachedBackgroundTasks(t *testing.T) {
 	a := newBackgroundTaskAgent(t, sub)
 
 	notif := make(chan string, 1)
-	a.tasks.SetNotify(func(session, text string) { notif <- text })
+	a.tasks.SetNotify(func(session, text string, stoppedBy tools.StopOrigin) { notif <- text })
 
 	// The launching run ends (ctx cancelled) while the task is mid-run; the
 	// D3 detach keeps the task alive, so only Close can stop it now.

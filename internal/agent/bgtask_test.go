@@ -722,7 +722,7 @@ func TestBackgroundTaskCompletionNotification(t *testing.T) {
 
 	type notification struct{ session, text string }
 	got := make(chan notification, 1)
-	a.tasks.SetNotify(func(session, text string) { got <- notification{session, text} })
+	a.tasks.SetNotify(func(session, text string, stoppedBy tools.StopOrigin) { got <- notification{session, text} })
 
 	ctx := tracing.WithRun(t.Context(), "run-1", "s1")
 	if _, err := a.runTask(ctx, taskArgs{Description: "notify work", RunInBackground: true}); err != nil {
@@ -842,7 +842,7 @@ func (e *entryGatedModel) Stream(ctx context.Context, input []messages.Message, 
 // notifyOnce captures the first completion notification.
 func notifyOnce(a *Agent) <-chan string {
 	ch := make(chan string, 1)
-	a.tasks.SetNotify(func(session, text string) { ch <- text })
+	a.tasks.SetNotify(func(session, text string, stoppedBy tools.StopOrigin) { ch <- text })
 	return ch
 }
 
@@ -1147,7 +1147,7 @@ func TestTaskStopWakesTaskOutputWaiterAndNotifies(t *testing.T) {
 	a := newBackgroundTaskAgent(t, sub)
 
 	notify := make(chan string, 1)
-	a.tasks.SetNotify(func(session, text string) { notify <- text })
+	a.tasks.SetNotify(func(session, text string, stoppedBy tools.StopOrigin) { notify <- text })
 
 	if _, err := a.runTask(t.Context(), taskArgs{Description: "stoppable", RunInBackground: true}); err != nil {
 		t.Fatal(err)
@@ -1182,4 +1182,87 @@ func TestTaskStopWakesTaskOutputWaiterAndNotifies(t *testing.T) {
 		t.Fatal("stopped task never notified")
 	}
 	close(gate) // release the cancelled subagent so the test can end cleanly
+}
+
+// TestTaskNotificationFirstLines pins the PM §4.6 first lines for background
+// tasks: honest status wording for failures and model stops, and an explicit
+// user attribution when the user stopped the task (D1) — the stopped-by-user
+// line carries no report, stop leaves none behind.
+func TestTaskNotificationFirstLines(t *testing.T) {
+	m := newTaskManager()
+	type note struct {
+		session, text string
+		stoppedBy     tools.StopOrigin
+	}
+	got := make(chan note, 4)
+	m.SetNotify(func(session, text string, stoppedBy tools.StopOrigin) {
+		got <- note{session, text, stoppedBy}
+	})
+
+	newTask := func(t *testing.T, subject string) *backgroundTask {
+		t.Helper()
+		task, err := m.start(tracing.WithRun(t.Context(), "r-n", "sess-nl"), subject, subject, "general")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task
+	}
+	firstLine := func(body string) string {
+		line, _, _ := strings.Cut(body, "\n")
+		return line
+	}
+
+	t.Run("failed", func(t *testing.T) {
+		task := newTask(t, "fix the flaky test")
+		task.setFinal(TaskFailed, "Error: boom")
+		m.notifyDone(task)
+		select {
+		case n := <-got:
+			if want := "Background task task-1 finished (failed): fix the flaky test"; firstLine(n.text) != want {
+				t.Fatalf("first line = %q, want %q", firstLine(n.text), want)
+			}
+			if !strings.Contains(n.text, "Report (tail):\nError: boom") {
+				t.Fatalf("notification missing report tail: %q", n.text)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("failed task never notified")
+		}
+	})
+
+	t.Run("user stop", func(t *testing.T) {
+		task := newTask(t, "summarize the logs")
+		task.stop(tools.StopByUser)
+		m.notifyDone(task)
+		select {
+		case n := <-got:
+			if n.stoppedBy != tools.StopByUser {
+				t.Fatalf("StoppedBy = %q, want %q", n.stoppedBy, tools.StopByUser)
+			}
+			if want := "Background task task-2 was stopped by the user: summarize the logs"; firstLine(n.text) != want {
+				t.Fatalf("first line = %q, want %q", firstLine(n.text), want)
+			}
+			if strings.Contains(n.text, "Report") {
+				t.Fatalf("user stop must carry no report: %q", n.text)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("user-stopped task never notified")
+		}
+	})
+
+	t.Run("model stop", func(t *testing.T) {
+		task := newTask(t, "tidy the docs")
+		task.stop(tools.StopByModel)
+		m.notifyDone(task)
+		select {
+		case n := <-got:
+			if n.stoppedBy != tools.StopByModel {
+				t.Fatalf("StoppedBy = %q, want %q", n.stoppedBy, tools.StopByModel)
+			}
+			if want := "Background task task-3 finished (stopped): tidy the docs"; firstLine(n.text) != want {
+				t.Fatalf("first line = %q, want %q", firstLine(n.text), want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("model-stopped task never notified")
+		}
+	})
 }
