@@ -18,7 +18,7 @@ func newProcessGroup(cmd *exec.Cmd) {
 }
 
 // terminate signals the process group led by this process with SIGTERM and,
-// unless Wait reports the process gone within killGrace, escalates to
+// unless Wait reports the process gone within KillGrace, escalates to
 // SIGKILL on the group. It returns without waiting; the escalation is
 // driven by the timer goroutine, which stands down when Wait returns.
 func (p *localProcess) terminate() error {
@@ -28,7 +28,7 @@ func (p *localProcess) terminate() error {
 	p.termOnce.Do(func() {
 		pid := p.cmd.Process.Pid
 		go func() {
-			t := time.NewTimer(killGrace)
+			t := time.NewTimer(KillGrace)
 			defer t.Stop()
 			select {
 			case <-p.exited:

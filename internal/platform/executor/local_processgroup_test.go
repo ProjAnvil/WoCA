@@ -146,11 +146,11 @@ func TestStartKillEscalatesToSIGKILLWhenTermIgnored(t *testing.T) {
 	if err := p.Kill(); err != nil {
 		t.Fatal(err)
 	}
-	if err := waitBounded(t, p, killGrace+2*time.Second); err == nil {
+	if err := waitBounded(t, p, KillGrace+2*time.Second); err == nil {
 		t.Fatal("killed process must report a non-nil wait error")
 	}
 	for _, pid := range pids {
-		waitUntil(t, killGrace+time.Second, "TERM-ignoring process survived Kill", func() bool { return pidGone(pid) })
+		waitUntil(t, KillGrace+time.Second, "TERM-ignoring process survived Kill", func() bool { return pidGone(pid) })
 	}
 }
 

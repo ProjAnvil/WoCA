@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-// startTreeShell starts a background shell whose command echoes its
-// children's pids to stdout, and returns once those pids are visible in the
-// accumulated output. Cleanup kills the children directly so a failing test
-// never leaks sleepers.
-func startTreeShell(t *testing.T, command string) (bg *BackgroundShells, id string, pids []int) {
+// startTreeShell starts a background shell whose command echoes pids to
+// stdout, and returns once at least minPids of them are visible in the
+// accumulated output. Cleanup kills the reported pids directly so a failing
+// test never leaks sleepers.
+func startTreeShell(t *testing.T, minPids int, command string) (bg *BackgroundShells, id string, pids []int) {
 	t.Helper()
 	bg = NewBackgroundShells()
 	id, err := bg.Start(context.Background(), command, "", "")
@@ -28,7 +28,7 @@ func startTreeShell(t *testing.T, command string) (bg *BackgroundShells, id stri
 		if err != nil {
 			t.Fatal(err)
 		}
-		if pids = parsePids(out); len(pids) > 0 {
+		if pids = parsePids(out); len(pids) >= minPids {
 			t.Cleanup(func() {
 				for _, pid := range pids {
 					_ = syscall.Kill(pid, syscall.SIGKILL)
@@ -38,7 +38,7 @@ func startTreeShell(t *testing.T, command string) (bg *BackgroundShells, id stri
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("shell %q never reported child pids", command)
+	t.Fatalf("shell %q never reported %d pids", command, minPids)
 	return nil, "", nil
 }
 
@@ -64,7 +64,7 @@ func pidGone(pid int) bool {
 // while the children kept the output pipe open, so the shell stayed
 // "running" forever.
 func TestKillForTerminatesProcessTree(t *testing.T) {
-	bg, id, pids := startTreeShell(t, "sleep 300 & a=$!; sleep 300 & echo $a $!; wait")
+	bg, id, pids := startTreeShell(t, 2, "sleep 300 & a=$!; sleep 300 & echo $a $!; wait")
 	if len(pids) != 2 {
 		t.Fatalf("want 2 child pids, got %v", pids)
 	}
@@ -135,5 +135,44 @@ func TestKillAllStopsEveryRunningShell(t *testing.T) {
 	}
 	if st.Killed || st.StoppedBy != "" || st.ExitCode != 0 {
 		t.Fatalf("finished shell must keep its state: %+v", st)
+	}
+}
+
+// TestKillAllWaitsForTermIgnoringTree pins the shutdown contract of KillAll:
+// the SIGKILL escalation runs on a timer goroutine inside this process, so a
+// KillAll that returns before the timer fires loses the escalation as soon
+// as the caller exits (graceful shutdown exits right after Agent.Close) and
+// a TERM-ignoring tree survives as an orphan. KillAll must wait out the
+// escalation: when it returns, the tree is gone — and it must stay bounded.
+func TestKillAllWaitsForTermIgnoringTree(t *testing.T) {
+	// The trap is set before the fork so the sleep inherits the ignored
+	// disposition: the group SIGTERM is a no-op for the whole tree.
+	bg, id, pids := startTreeShell(t, 2, "trap '' TERM; echo $$; sleep 300 & echo $!; wait")
+
+	start := time.Now()
+	bg.KillAll(StopByUser)
+	if elapsed := time.Since(start); elapsed > killSettleBound {
+		t.Fatalf("KillAll blocked %s, beyond the settle bound %s", elapsed, killSettleBound)
+	}
+	st, err := bg.StatusFor("", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Running {
+		t.Fatal("KillAll returned while a TERM-ignoring shell was still running: the SIGKILL escalation was lost")
+	}
+	if !st.Killed || st.StoppedBy != StopByUser {
+		t.Fatalf("stop facts = killed %v by %q", st.Killed, st.StoppedBy)
+	}
+	// pids[0] is the shell itself (reaped before the shell settles); the
+	// orphaned child may lag a moment in the reaper's queue.
+	for i, pid := range pids {
+		deadline := time.Now().Add(2 * time.Second)
+		for !pidGone(pid) {
+			if time.Now().After(deadline) {
+				t.Fatalf("pid %d (%s) alive after KillAll returned", pid, map[bool]string{true: "shell", false: "child"}[i == 0])
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 }

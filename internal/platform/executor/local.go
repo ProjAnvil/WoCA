@@ -19,16 +19,20 @@ import (
 // grepScanBuffer is the maximum line size Grep can scan.
 const grepScanBuffer = 1 << 20 // 1 MiB
 
-// killGrace is the time a terminated process group gets to react to SIGTERM
-// before terminate escalates to SIGKILL.
-const killGrace = 2 * time.Second
+// KillGrace is the time the local executor's Kill gives a terminated
+// process group to react to SIGTERM before escalating to SIGKILL. It is
+// exported because the escalation runs on a timer inside this process:
+// shutdown callers that terminate background trees must outlive the timer
+// (BackgroundShells.KillAll waits it out) or the escalation is lost the
+// moment they exit.
+const KillGrace = 2 * time.Second
 
 // pipeWaitDelay bounds how long Wait stays blocked after the process itself
 // has exited (or been killed) while a surviving grandchild still holds the
 // output pipes: os/exec then closes the pipes and Wait returns instead of
-// hanging forever. It must exceed killGrace so a process that ignores
+// hanging forever. It must exceed KillGrace so a process that ignores
 // SIGTERM is ended by the SIGKILL escalation, not by the pipe deadline.
-const pipeWaitDelay = killGrace + time.Second
+const pipeWaitDelay = KillGrace + time.Second
 
 // Local is the single-machine Executor implementation backed by os/exec
 // and the local filesystem. It holds no state and is safe for concurrent use.

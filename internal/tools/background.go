@@ -416,12 +416,26 @@ func (b *BackgroundShells) KillFor(session, id string, by StopOrigin) (st Backgr
 	return sh.snapshot(), false, nil
 }
 
+// killSettleBound is how long KillAll waits, after signalling, for killed
+// shells to leave the running state: the local executor escalates a group
+// SIGTERM to SIGKILL after executor.KillGrace on an in-process timer, and
+// the settle margin covers the teardown and pipe close that follow. Bounded
+// so shutdown — and tests — can never hang on an unkillable process.
+const killSettleBound = executor.KillGrace + time.Second
+
 // KillAll terminates every running shell in the manager on behalf of by —
 // shutdown cleanup (Agent.Close), where session scoping no longer matters
 // because the whole manager is going away. Finished shells keep their
 // recorded state. It also backs the Ctrl+C story: the local executor runs
 // each shell in its own process group, so terminal signals reach none of
 // the children and explicit termination is the only path that stops them.
+//
+// After signalling, KillAll waits up to killSettleBound for the killed
+// shells to settle: the SIGKILL escalation runs on a timer inside this
+// process, so a KillAll that returned earlier would lose it as soon as the
+// caller exits (graceful shutdown exits right after Agent.Close) and a
+// TERM-ignoring tree would survive as an orphan. It returns early once
+// every killed shell has settled.
 func (b *BackgroundShells) KillAll(by StopOrigin) {
 	b.mu.Lock()
 	shells := make([]*backgroundShell, 0, len(b.shells))
@@ -429,8 +443,29 @@ func (b *BackgroundShells) KillAll(by StopOrigin) {
 		shells = append(shells, sh)
 	}
 	b.mu.Unlock()
+	var killed []*backgroundShell
 	for _, sh := range shells {
-		_ = b.killShell(sh, by)
+		if !b.killShell(sh, by) {
+			killed = append(killed, sh)
+		}
+	}
+	// Wait out the escalation window: once a shell's done channel closes,
+	// its process — and, for the local executor, its whole group, SIGKILL
+	// included — is gone, so no in-process timer for it is pending anymore.
+	deadline := time.Now().Add(killSettleBound)
+	for _, sh := range killed {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-sh.done:
+			timer.Stop()
+		case <-timer.C:
+			// Settle bound elapsed; stay bounded rather than block shutdown.
+			return
+		}
 	}
 }
 
