@@ -61,7 +61,7 @@ func TestTodoWrite(t *testing.T) {
 	if !strings.Contains(res.Content, "do it") {
 		t.Fatalf("TodoWrite = %q", res.Content)
 	}
-	if got := len(reg.TodoStore().Get()); got != 1 {
-		t.Fatalf("store has %d todos, want 1", got)
+	if got, _, _ := reg.TodoStore().Get(""); len(got) != 1 {
+		t.Fatalf("store has %d todos, want 1: %+v", len(got), got)
 	}
 }

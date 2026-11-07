@@ -328,6 +328,39 @@ func TestStateAccessorsAndMode(t *testing.T) {
 	}
 }
 
+// TestTodosPerSession pins the agent todo accessors: Todos/SetTodos keep the
+// "" (TUI/REPL) semantics, while TodosFor/SetTodosFor address a web
+// session's bucket — including the never-written vs cleared distinction the
+// sidecar restore needs.
+func TestTodosPerSession(t *testing.T) {
+	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
+
+	if _, _, ok := a.TodosFor("sess-A"); ok {
+		t.Fatal("TodosFor on never-written session = ok, want ok=false")
+	}
+	a.SetTodosFor("sess-A", []tools.Todo{{Content: "A1", Status: "pending"}})
+	todos, updated, ok := a.TodosFor("sess-A")
+	if !ok || len(todos) != 1 || todos[0].Content != "A1" {
+		t.Fatalf("TodosFor(sess-A) = (%+v, %v), want A1", todos, ok)
+	}
+	if updated.IsZero() {
+		t.Fatal("TodosFor returned zero updatedAt after a write")
+	}
+	a.SetTodosFor("sess-A", nil) // cleared, not forgotten
+	if todos, _, ok := a.TodosFor("sess-A"); !ok || len(todos) != 0 {
+		t.Fatalf("TodosFor after clear = (%+v, ok=%v), want empty with ok=true", todos, ok)
+	}
+
+	// The "" accessors stay single-session and separate from scoped ones.
+	a.SetTodos([]tools.Todo{{Content: "tui", Status: "pending"}})
+	if got := a.Todos(); len(got) != 1 || got[0].Content != "tui" {
+		t.Fatalf("Todos() = %+v, want the \"\" list", got)
+	}
+	if got, _, _ := a.TodosFor("sess-A"); len(got) != 0 {
+		t.Fatalf("\"\" write leaked into sess-A: %+v", got)
+	}
+}
+
 func TestCheckPermissionModes(t *testing.T) {
 	newAgent := func(mode config.PermissionMode) *Agent {
 		a := &Agent{mode: mode}

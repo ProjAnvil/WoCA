@@ -227,7 +227,10 @@ func (r *Registry) All() []coretools.Tool {
 	return out
 }
 
-// TodoStore returns the shared todo store used by TodoWrite.
+// TodoStore returns the todo store used by this registry's TodoWrite. Lists
+// are keyed by the invoking run's session id ("" for TUI/REPL/CLI callers
+// without a run scope); subagents own a separate registry and store, so
+// their todos stay out of other sessions' panels.
 func (r *Registry) TodoStore() *TodoStore { return r.todos }
 
 // Execute runs a single tool invocation. Tool-level errors are converted into

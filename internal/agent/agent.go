@@ -757,14 +757,32 @@ func (a *Agent) setPlanMode(v bool) {
 // SetPlanMode sets the plan-mode state (used to restore a resumed session).
 func (a *Agent) SetPlanMode(v bool) { a.setPlanMode(v) }
 
-// SetTodos restores the todo list from a persisted snapshot.
-func (a *Agent) SetTodos(todos []tools.Todo) { a.registry.TodoStore().Set(todos) }
+// SetTodos restores the unscoped ("") todo list from a persisted snapshot —
+// the single-session list TUI/REPL/CLI have always used.
+func (a *Agent) SetTodos(todos []tools.Todo) { a.SetTodosFor("", todos) }
+
+// SetTodosFor replaces the todo list of the given run-scope session (used to
+// restore a web session's persisted todos).
+func (a *Agent) SetTodosFor(session string, todos []tools.Todo) {
+	a.registry.TodoStore().Set(session, todos)
+}
+
+// TodosFor returns the todo list of the given run-scope session plus its
+// last-update time. ok=false means the session has never written a list,
+// distinguishing it from a list cleared to empty.
+func (a *Agent) TodosFor(session string) ([]tools.Todo, time.Time, bool) {
+	return a.registry.TodoStore().Get(session)
+}
 
 // SetTasks restores the task list from a persisted snapshot.
 func (a *Agent) SetTasks(tasks []TaskRecord) { a.currentTaskList().Restore(tasks) }
 
-// Todos returns the current todo list.
-func (a *Agent) Todos() []tools.Todo { return a.registry.TodoStore().Get() }
+// Todos returns the current unscoped ("") todo list — the single-session
+// list TUI/REPL/CLI have always read.
+func (a *Agent) Todos() []tools.Todo {
+	todos, _, _ := a.TodosFor("")
+	return todos
+}
 
 // Tasks returns the current task list.
 func (a *Agent) Tasks() []TaskRecord { return a.currentTaskList().List() }
