@@ -198,6 +198,11 @@ export const useSessionStore = defineStore('sessions', () => {
   }
 
   async function init() {
+    // The global events stream must live on EVERY boot path: a fresh
+    // install (empty list) and a failed listing still need activity_changed
+    // / wake / session-state signals — otherwise the first session's
+    // activity badge and run state never update until a reload.
+    connectGlobalEvents()
     try {
       const list = await api.listSessions()
       if (list.length === 0) {
@@ -214,7 +219,6 @@ export const useSessionStore = defineStore('sessions', () => {
       }))
       activeId.value = sessions.value[0].id
       seedRunState(list)
-      connectGlobalEvents()
       await loadSession(sessions.value[0].id)
       // A run still in flight from before the refresh: stream it again.
       maybeReattach(activeId.value)
