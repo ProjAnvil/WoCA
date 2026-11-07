@@ -263,10 +263,10 @@ func TestSessionStoreTodosSidecar(t *testing.T) {
 // user input into A's transcript and starving B's run of it.
 func TestSteerScopedToItsSessionRun(t *testing.T) {
 	a := newWakeAgent(t, 0,
-		steerCall(t, "sleep 1"),  // B round 1: hold B inside its tool round
-		steerCall(t, "echo a"),   // A round 1: fast tool, so A's drain runs early
-		messages.AI("a done"),    // A round 2
-		messages.AI("b done"),    // B round 2
+		steerCall(t, "sleep 1"), // B round 1: hold B inside its tool round
+		steerCall(t, "echo a"),  // A round 1: fast tool, so A's drain runs early
+		messages.AI("a done"),   // A round 2
+		messages.AI("b done"),   // B round 2
 	)
 	s, ts := newWakeServer(t, a, nil)
 
@@ -325,10 +325,10 @@ func TestSteerScopedToItsSessionRun(t *testing.T) {
 // to B's run — not to A's, not dropped.
 func TestDeleteSessionKeepsOtherSessionsQueuedInput(t *testing.T) {
 	a := newWakeAgent(t, 0,
-		steerCall(t, "sleep 2"),    // B round 1: hold B inside its tool round
-		steerCall(t, "sleep 0.4"),  // A round 1: hold A in flight across the delete
-		messages.AI("a done"),      // A round 2
-		messages.AI("b done"),      // B round 2
+		steerCall(t, "sleep 2"),   // B round 1: hold B inside its tool round
+		steerCall(t, "sleep 0.4"), // A round 1: hold A in flight across the delete
+		messages.AI("a done"),     // A round 2
+		messages.AI("b done"),     // B round 2
 	)
 	s, ts := newWakeServer(t, a, nil)
 

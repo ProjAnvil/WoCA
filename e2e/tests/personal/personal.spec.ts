@@ -43,8 +43,11 @@ test.describe('个人内嵌 web（woca serve）', () => {
     );
     await expect(page.locator('.greeting-chip')).toHaveCount(3);
 
-    // chip 点击 → 填入 composer（fillPrompt 契约）。
-    await page.locator('.greeting-chip').first().click();
+    // chip 点击 → 填入 composer（fillPrompt 契约）。Force-click: the
+    // greeting view re-renders when other personal specs create sessions on
+    // the shared server mid-test, which detaches the chip between Playwright's
+    // stability checks.
+    await page.locator('.greeting-chip').first().click({ force: true });
     await expect(page.locator('.chat-input textarea')).not.toHaveValue('');
 
     // 发送 → 离开问候态；FLIP 落定（含 400ms 兜底路径）后无残留 transform。
