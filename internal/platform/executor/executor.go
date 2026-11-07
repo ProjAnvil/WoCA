@@ -97,10 +97,17 @@ type Process interface {
 	Stdout() io.Reader
 	// Wait blocks until the process exits: nil on exit status 0,
 	// *ExitError on a non-zero status. Wait must not run concurrently from
-	// multiple goroutines. Redirected output writes finish before Wait returns.
+	// multiple goroutines. Redirected output writes finish before Wait
+	// returns — except when a grandchild keeps the pipes open past a
+	// backend-defined deadline after the process exited, in which case the
+	// backend closes the pipes and Wait returns instead of blocking forever.
 	Wait() error
-	// Kill terminates the process. Killing an already-exited process
-	// returns an error the caller may ignore.
+	// Kill terminates the process. Backends scope the termination as widely
+	// as their platform allows: the local backend signals the process's
+	// whole group (SIGTERM, escalating to SIGKILL after a short grace) so
+	// children cannot survive on inherited pipes, while the sandbox and
+	// cfbridge backends terminate the remote session. Killing an
+	// already-exited process returns an error the caller may ignore.
 	Kill() error
 }
 

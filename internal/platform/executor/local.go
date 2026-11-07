@@ -12,10 +12,23 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 )
 
 // grepScanBuffer is the maximum line size Grep can scan.
 const grepScanBuffer = 1 << 20 // 1 MiB
+
+// killGrace is the time a terminated process group gets to react to SIGTERM
+// before terminate escalates to SIGKILL.
+const killGrace = 2 * time.Second
+
+// pipeWaitDelay bounds how long Wait stays blocked after the process itself
+// has exited (or been killed) while a surviving grandchild still holds the
+// output pipes: os/exec then closes the pipes and Wait returns instead of
+// hanging forever. It must exceed killGrace so a process that ignores
+// SIGTERM is ended by the SIGKILL escalation, not by the pipe deadline.
+const pipeWaitDelay = killGrace + time.Second
 
 // Local is the single-machine Executor implementation backed by os/exec
 // and the local filesystem. It holds no state and is safe for concurrent use.
@@ -55,25 +68,40 @@ type localProcess struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.Reader // nil when redirected via StartOptions.Stdout
+
+	// exited is closed once Wait has returned, letting a pending SIGTERM
+	// escalation (see terminate) stand down because the process is gone.
+	exited     chan struct{}
+	exitedOnce sync.Once
+	termOnce   sync.Once
 }
 
 func (p *localProcess) Stdin() io.WriteCloser { return p.stdin }
 func (p *localProcess) Stdout() io.Reader     { return p.stdout }
 
 func (p *localProcess) Wait() error {
-	if err := p.cmd.Wait(); err != nil {
-		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
-			return &ExitError{Code: exitErr.ExitCode()}
-		}
-		return err
+	err := p.cmd.Wait()
+	p.exitedOnce.Do(func() { close(p.exited) })
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+		return &ExitError{Code: exitErr.ExitCode()}
 	}
-	return nil
+	// nil, exec.ErrWaitDelay (pipes force-closed while a grandchild held
+	// them open), or a startup/cancellation error.
+	return err
 }
 
-func (p *localProcess) Kill() error { return p.cmd.Process.Kill() }
+// Kill terminates the process and, where the platform allows it, its whole
+// process group: background commands spawn children that inherit the output
+// pipes, and killing only the leader would leave them running — holding
+// ports and the pipe, so Wait would never return. The group first gets
+// SIGTERM; a timer escalates to SIGKILL after killGrace, so Kill itself
+// never blocks. Killing an already-exited process returns an error the
+// caller may ignore.
+func (p *localProcess) Kill() error { return p.terminate() }
 
 // Start launches req as a long-running process on the local machine. Like
-// Exec, the process is killed when ctx is canceled; callers that need a
+// Exec, the process is killed when ctx is canceled — with the same
+// group-scoped, grace-then-escalate semantics as Kill; callers that need a
 // process to outlive a request (servers, background shells) pass
 // context.Background() and terminate it with an explicit Kill.
 func (l *Local) Start(ctx context.Context, req ExecRequest, opts StartOptions) (Process, error) {
@@ -82,6 +110,9 @@ func (l *Local) Start(ctx context.Context, req ExecRequest, opts StartOptions) (
 	if req.Env != nil {
 		cmd.Env = req.Env
 	}
+	// A grandchild holding the output pipe must not be able to pin Wait
+	// open after the process itself is gone.
+	cmd.WaitDelay = pipeWaitDelay
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -93,10 +124,20 @@ func (l *Local) Start(ctx context.Context, req ExecRequest, opts StartOptions) (
 		return nil, err
 	}
 	cmd.Stderr = opts.Stderr // nil connects the child's stderr to the null device
+	// The child runs in its own process group so Kill (and context
+	// cancellation) can terminate the whole tree, not just the leader.
+	newProcessGroup(cmd)
+	p := &localProcess{cmd: cmd, stdin: stdin, stdout: stdout, exited: make(chan struct{})}
+	// Replace exec's default Cancel (a lone Process.Kill) with the
+	// group-scoped termination so a canceled context cannot leave
+	// grandchildren behind either. Signal errors are swallowed: a group
+	// that already exited is expected, and surfacing the error would turn
+	// clean exits into Wait failures.
+	cmd.Cancel = func() error { _ = p.terminate(); return nil }
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	return &localProcess{cmd: cmd, stdin: stdin, stdout: stdout}, nil
+	return p, nil
 }
 
 // ReadFile reads the whole file at path.

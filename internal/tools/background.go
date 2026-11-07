@@ -160,7 +160,6 @@ func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWork
 		exit:    -1,
 		started: time.Now(),
 	}
-	b.shells[id] = sh
 	onDone := b.onDone
 	onChange := b.onChange
 	execFor := b.execFor
@@ -175,12 +174,19 @@ func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWork
 		executor.ExecRequest{Name: "bash", Args: []string{"-c", command}, Dir: wd},
 		executor.StartOptions{Stdout: lineWriter{sh}, Stderr: lineWriter{sh}})
 	if err != nil {
-		b.mu.Lock()
-		delete(b.shells, id)
-		b.mu.Unlock()
+		// The id was never published, so there is nothing to unregister.
 		return "", err
 	}
+	// proc is stored under sh.mu — KillFor and WriteStdinFor read it there —
+	// and the shell joins the map only now that its process exists, so a
+	// kill racing the start can never mark a never-signalled process as
+	// killed: before the process is visible, it is not killable either.
+	sh.mu.Lock()
 	sh.proc = proc
+	sh.mu.Unlock()
+	b.mu.Lock()
+	b.shells[id] = sh
+	b.mu.Unlock()
 	if onChange != nil {
 		onChange(sh.session)
 	}
@@ -404,11 +410,38 @@ func (b *BackgroundShells) KillFor(session, id string, by StopOrigin) (st Backgr
 	if err != nil {
 		return BackgroundShellStatus{}, false, err
 	}
+	if b.killShell(sh, by) {
+		return sh.snapshot(), true, nil
+	}
+	return sh.snapshot(), false, nil
+}
+
+// KillAll terminates every running shell in the manager on behalf of by —
+// shutdown cleanup (Agent.Close), where session scoping no longer matters
+// because the whole manager is going away. Finished shells keep their
+// recorded state. It also backs the Ctrl+C story: the local executor runs
+// each shell in its own process group, so terminal signals reach none of
+// the children and explicit termination is the only path that stops them.
+func (b *BackgroundShells) KillAll(by StopOrigin) {
+	b.mu.Lock()
+	shells := make([]*backgroundShell, 0, len(b.shells))
+	for _, sh := range b.shells {
+		shells = append(shells, sh)
+	}
+	b.mu.Unlock()
+	for _, sh := range shells {
+		_ = b.killShell(sh, by)
+	}
+}
+
+// killShell records the stop facts on a running shell and signals its
+// process. It reports whether the shell had already exited on its own, in
+// which case nothing is changed.
+func (b *BackgroundShells) killShell(sh *backgroundShell, by StopOrigin) (alreadyFinished bool) {
 	sh.mu.Lock()
 	if sh.exited {
-		st = sh.snapshotLocked()
 		sh.mu.Unlock()
-		return st, true, nil
+		return true
 	}
 	// Record the stop facts while holding sh.mu and before proc.Kill(), so
 	// the exit goroutine (which takes this lock to record the exit) can
@@ -422,7 +455,7 @@ func (b *BackgroundShells) KillFor(session, id string, by StopOrigin) (st Backgr
 	if proc != nil {
 		_ = proc.Kill()
 	}
-	return sh.snapshot(), false, nil
+	return false
 }
 
 // NotificationOutputCap bounds the output tail included in a completion
