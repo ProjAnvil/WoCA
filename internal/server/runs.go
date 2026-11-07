@@ -411,28 +411,40 @@ func (s *Server) registerRun(id string, run *Run) {
 	}
 }
 
-// newRegisteredRun creates a Run, registers it on the server, and resolves
-// the session id, workspace default and loaded history shared by the normal
-// and command-run paths. The run context carries the run-scoped workspace
-// (a values-only ctx decoration, so the system prompt environment, the
-// file/shell tools, memory prefetch/tools and auto-retain all resolve the
-// session workspace while concurrent runs share the agent safely; see
-// agent.WithRunWorkspace and internal/runws).
-func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, string, []messages.Message) {
-	id := newRunID()
-	if workspace == "" {
-		workspace = s.workdir
-	}
+// newRunContext assembles the context every server-started run executes
+// under (plain, goal, wake and command runs): cancelable, scoped to the run
+// workspace (a values-only ctx decoration, so the system prompt environment,
+// the file/shell tools, memory prefetch/tools and auto-retain all resolve
+// the session workspace while concurrent runs share the agent safely; see
+// agent.WithRunWorkspace and internal/runws), and tagged with the final
+// run/session identity so every span, tool call and background notification
+// inside the run correlates to the session that owns it (N2 invariant).
+// sid must be the FINAL session id — generate it first (see
+// newRegisteredRun), never pass an unresolved input id.
+func (s *Server) newRunContext(id, sid, workspace string) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(agent.WithRunWorkspace(context.Background(), workspace))
-	run := newRun(id, s.agent, ctx, cancel)
 	// Telemetry correlation: every span inside this run (tools, LLM calls,
 	// skill loads) carries the run/session identity.
-	run.ctx = tracing.WithRun(run.ctx, id, sessionID)
-	s.registerRun(id, run)
+	return tracing.WithRun(ctx, id, sid), cancel
+}
+
+// newRegisteredRun creates a Run, registers it on the server, and resolves
+// the session id, workspace default and loaded history shared by the normal
+// and command-run paths. The session id is resolved BEFORE the run context
+// is built so even a session-less run executes scoped to its generated
+// session id (N2: the ctx must carry the final identity, not the input).
+func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, string, []messages.Message) {
+	id := newRunID()
 	sid := sessionID
 	if sid == "" {
 		sid = newSessionID()
 	}
+	if workspace == "" {
+		workspace = s.workdir
+	}
+	ctx, cancel := s.newRunContext(id, sid, workspace)
+	run := newRun(id, s.agent, ctx, cancel)
+	s.registerRun(id, run)
 	history := s.sessions.load(run.ctx, sid)
 	return run, sid, workspace, history
 }

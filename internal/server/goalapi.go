@@ -179,9 +179,11 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 		workspace = s.workdir
 	}
 	id := newRunID()
-	// Same run-scoped memory workspace as startRun: the ctx value feeds
-	// RetainGoal (WithoutCancel preserves it) and the goal graph's prefetch.
-	ctx, cancel := context.WithCancel(agent.WithRunWorkspace(context.Background(), workspace))
+	// Same run-scoped memory workspace and run/session identity as startRun
+	// (newRunContext): the ctx values feed RetainGoal (WithoutCancel
+	// preserves them) and the goal graph's prefetch, and tools/spans inside
+	// the loop correlate to the goal's session (N2).
+	ctx, cancel := s.newRunContext(id, sessionID, workspace)
 	run := newRun(id, a, ctx, cancel)
 	s.registerRun(id, run)
 
