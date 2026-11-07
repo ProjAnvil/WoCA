@@ -152,33 +152,8 @@ test.afterAll(async () => {
   }
 });
 
-/** The chat transcript auto-scrolls while it renders, and the anchored
- * popover closes on any scroll by design: wait until the page has been
- * scroll-quiet for a full window before interacting with the popover. */
-async function waitForScrollQuiet(page: Page) {
-  await page.evaluate(() => {
-    (window as unknown as { __scrolls: number }).__scrolls = 0;
-    window.addEventListener(
-      'scroll',
-      () => {
-        (window as unknown as { __scrolls: number }).__scrolls++;
-      },
-      true,
-    );
-  });
-  const deadline = Date.now() + 15_000;
-  let last = -1;
-  while (Date.now() < deadline) {
-    await page.waitForTimeout(700);
-    const n = (await page.evaluate(() => (window as unknown as { __scrolls: number }).__scrolls)) as number;
-    if (n === last) return;
-    last = n;
-  }
-}
-
 /** Opens the panel (it always opens on the Background tab) and returns the card. */
 async function openPanel(page: Page) {
-  await waitForScrollQuiet(page);
   await page.locator('.act-toggle').click();
   const card = page.locator('.act-pop-card');
   await expect(card).toBeVisible();
@@ -190,9 +165,7 @@ async function openPanel(page: Page) {
   return card;
 }
 
-/** Screenshots the popover card by clipping the page at its box. Element
- * screenshots scroll the element into view first, and the anchored popover
- * closes on scroll by design — the clip avoids that side effect. The card
+/** Screenshots the popover card by clipping the page at its box. The card
  * is position:fixed (viewport box), while page-screenshot clips are
  * document-relative, so the window's scroll offset is added back. */
 async function shootCard(page: Page, card: ReturnType<Page['locator']>, path: string) {
@@ -297,28 +270,26 @@ test('activity panel: badge, tabs, kill (quiet), scheduled, narrow, dark', async
   await expect(card.locator('.act-row', { hasText: LONG_CMD }).locator('.act-row-status')).toHaveText(/运行中/);
   await shootCard(page, card, `${SHOTS}/02-panel-background-running.png`);
 
-  // Kill the tree shell behind the confirm dialog (D1 wording). The anchored
-  // popover closes on any scroll by design, and under parallel-suite load the
-  // modal's focus handling can emit one between the stop click and the
-  // confirmation — so the step reopens the popover and retries when that
-  // happens. Force-clicks ride out the elapsed-time tick's 1s re-renders.
+  // Kill the tree shell behind the confirm dialog (D1 wording). The popover
+  // no longer closes on scroll (that listener is gone), so no re-opening
+  // here — the only retry guard left is the 1s elapsed-time tick re-rendering
+  // the row under the stop click, which can swallow it and leave the confirm
+  // undialoged. Every assertion that can fail on that path sits inside the
+  // retry's catch.
   const confirm = page.locator('.w-confirm');
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (!(await page.locator('.act-pop-card').isVisible().catch(() => false))) {
-      card = await openPanel(page);
-    }
-    const row = card.locator('.act-row', { hasText: TREE_CMD });
-    if (/由你停止/.test((await row.locator('.act-row-status').textContent().catch(() => '')) ?? '')) break;
-    await row.locator('.act-stop-btn').click({ force: true, timeout: 5000 }).catch(() => {});
-    await expect(confirm).toBeVisible({ timeout: 5000 });
-    await expect(confirm.locator('.w-confirm-body')).toContainText(TREE_CMD);
-    await confirm.locator('.w-confirm-actions button').nth(1).click(); // 终止
+  const row = card.locator('.act-row', { hasText: TREE_CMD });
+  for (let attempt = 0; ; attempt++) {
+    await row.locator('.act-stop-btn').click({ force: true, timeout: 5000 });
     try {
-      await expect(row.locator('.act-row-status')).toHaveText(/由你停止/, { timeout: 10_000 });
-      break;
+      await expect(confirm).toBeVisible({ timeout: 5000 });
     } catch (e) {
       if (attempt === 2) throw e;
+      continue;
     }
+    await expect(confirm.locator('.w-confirm-body')).toContainText(TREE_CMD);
+    await confirm.locator('.w-confirm-actions button').nth(1).click(); // 终止
+    await expect(row.locator('.act-row-status')).toHaveText(/由你停止/, { timeout: 10_000 });
+    break;
   }
 
   // (c) After the kill: stopped by the user; the long runner keeps running.
@@ -360,16 +331,14 @@ test('activity panel: badge, tabs, kill (quiet), scheduled, narrow, dark', async
 
   // (g) Dark theme variant of (b): the long runner is still alive. The
   // theme is the html.dark class (tokens.css; index.html applies the same
-  // class from the persisted preference), so toggle it live instead of
-  // reloading — the post-reload settle churn closes the anchored popover.
+  // class from the persisted preference), so toggle it live — a reload
+  // round-trip would churn the transcript and lose the open popover's state.
   await page.evaluate(() => {
     localStorage.setItem('woca-theme', 'dark');
     document.documentElement.classList.add('dark');
   });
   await page.waitForTimeout(700); // let the theme cross-fade settle
-  if (!(await page.locator('.act-pop-card').isVisible().catch(() => false))) {
-    card = await openPanel(page);
-  }
+  card = await openPanel(page); // the resize back to 1280 closed it; reopen
   await expect(card.locator('.act-row', { hasText: LONG_CMD }).locator('.act-row-status')).toHaveText(/运行中/);
   await page.screenshot({ path: `${SHOTS}/07-panel-background-dark.png` });
 });

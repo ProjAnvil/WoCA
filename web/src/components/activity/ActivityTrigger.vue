@@ -119,6 +119,15 @@ function onDocPointerdown(e: PointerEvent): void {
   sessions.activityPanelOpen = false
 }
 
+// Resize (not scroll) closes: a reflow can move or overflow the anchor, and
+// re-placing a mid-transition popover flashes. Scroll deliberately does NOT
+// close — the capture-phase listener this used to have caught every internal
+// scroller (the chat transcript's stick-to-bottom ticks during streaming, the
+// panel's own tab body), closing the popover out from under the user. The
+// app is a full-viewport layout (html/body/#app height 100%, overflow
+// hidden): the document itself never scrolls, so a fixed-position popover
+// can never detach from its header anchor, and UIUX §4.1's close set is
+// exactly Esc / outside pointerdown / trigger toggle / Tab-out.
 function closeExternal(): void {
   sessions.activityPanelOpen = false
 }
@@ -224,18 +233,15 @@ watch(open, async (on) => {
     // Focus lands on the first tab (UIUX §4.2: entrance focuses the tablist).
     panelEl.value?.querySelector<HTMLElement>('[role="tab"]')?.focus()
     document.addEventListener('pointerdown', onDocPointerdown)
-    window.addEventListener('scroll', closeExternal, true)
     window.addEventListener('resize', closeExternal)
   } else {
     document.removeEventListener('pointerdown', onDocPointerdown)
-    window.removeEventListener('scroll', closeExternal, true)
     window.removeEventListener('resize', closeExternal)
   }
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocPointerdown)
-  window.removeEventListener('scroll', closeExternal, true)
   window.removeEventListener('resize', closeExternal)
   window.clearTimeout(pulseTimer)
   if (sessions.activityPanelOpen) sessions.activityPanelOpen = false

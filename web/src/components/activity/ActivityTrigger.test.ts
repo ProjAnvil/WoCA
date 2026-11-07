@@ -143,6 +143,37 @@ describe('ActivityTrigger open/close', () => {
     w.unmount()
   })
 
+  it('stays open on scroll events (regression: capture-phase close)', async () => {
+    // The chat transcript is an internal scroller that stick-to-bottom
+    // re-pins on every streaming render tick, and the panel's own tab body
+    // scrolls too — none of those may close the popover. The document
+    // itself never scrolls (full-viewport layout), so no scroll can detach
+    // the anchor either.
+    const w = mountAttached()
+    await w.get('button').trigger('click')
+    await flush()
+    expect(popover()).toBeTruthy()
+    // a window scroll, as the old capture listener would have seen it
+    window.dispatchEvent(new Event('scroll'))
+    await flush()
+    expect(popover()).toBeTruthy()
+    // a scroll inside the popover's own list
+    popover()!.querySelector('.act-tab-body')?.dispatchEvent(new Event('scroll'))
+    await flush()
+    expect(popover()).toBeTruthy()
+    w.unmount()
+  })
+
+  it('still closes on window resize (a reflow can detach the anchor)', async () => {
+    const w = mountAttached()
+    await w.get('button').trigger('click')
+    await flush()
+    window.dispatchEvent(new Event('resize'))
+    await flush()
+    expect(popover()).toBeNull()
+    w.unmount()
+  })
+
   it('a pointerdown inside a teleported modal (the stop/delete confirms) keeps the panel open', async () => {
     const w = mountAttached()
     await w.get('button').trigger('click')
