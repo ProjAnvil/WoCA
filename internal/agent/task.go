@@ -193,6 +193,10 @@ type backgroundTask struct {
 	// state (completion or TaskStop), releasing TaskOutput waiters. Immutable
 	// after start, like the exported fields above.
 	done chan struct{}
+	// exited is closed by the run goroutine when it returns, so StopAll can
+	// settle stopped tasks before shutdown continues. Nil on bare tasks
+	// (unit tests without a goroutine).
+	exited chan struct{}
 	// onChange, when set at start, fires with the owner session when the
 	// task leaves the running state (terminal transition). Immutable after
 	// start; nil on bare tasks (unit tests), like the nil cancel in stop.
@@ -397,6 +401,7 @@ func (m *TaskManager) start(ctx context.Context, subject, description, subagent 
 		startedAt:   time.Now(),
 		status:      TaskRunning,
 		done:        make(chan struct{}),
+		exited:      make(chan struct{}),
 	}
 	if onChange != nil {
 		session := t.session
@@ -557,6 +562,54 @@ func (m *TaskManager) StopFor(session, id string, by tools.StopOrigin) (info Bac
 	return t.info(), false, nil
 }
 
+// taskStopSettleBound is how long StopAll waits, after stopping, for the
+// stopped subagents' goroutines to return. A cancelled subagent ends on its
+// ctx (no signal escalation is involved, unlike the shells' KillAll), so the
+// bound only covers a model round-trip or tool teardown already in flight.
+// Bounded so shutdown — and tests — can never hang on an unresponsive run.
+const taskStopSettleBound = 5 * time.Second
+
+// StopAll stops every running task on behalf of by — shutdown cleanup
+// (Agent.Close), where session scoping no longer matters because the whole
+// manager is going away. Finished tasks keep their recorded state. Like
+// BackgroundShells.KillAll it then waits up to taskStopSettleBound for the
+// stopped tasks' run goroutines to settle: background subagents are detached
+// from every context (D3), so without this a host that keeps living past
+// Close — the SDK — would carry orphaned runs still spending model calls.
+func (m *TaskManager) StopAll(by tools.StopOrigin) {
+	m.mu.Lock()
+	running := make([]*backgroundTask, 0, len(m.tasks))
+	for _, t := range m.tasks {
+		if st, _, _ := t.snapshot(); st == TaskRunning {
+			running = append(running, t)
+		}
+	}
+	m.mu.Unlock()
+	for _, t := range running {
+		t.stop(by)
+	}
+	// Wait out the settle window: once a task's exited channel closes, its
+	// goroutine — and any work it still had in flight — is done.
+	deadline := time.Now().Add(taskStopSettleBound)
+	for _, t := range running {
+		if t.exited == nil {
+			continue // bare task without a goroutine (unit tests)
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-t.exited:
+			timer.Stop()
+		case <-timer.C:
+			// Settle bound elapsed; stay bounded rather than block shutdown.
+			return
+		}
+	}
+}
+
 const taskDescription = `Launch a subagent to handle a self-contained piece of work and return a concise report. Set run_in_background to run it asynchronously (poll with TaskOutput, stop with TaskStop). Set fork=true to copy the current conversation into the subagent first — it starts with your full context instead of a blank slate, which fits "continue this thread in parallel" tasks.`
 
 type taskArgs struct {
@@ -635,6 +688,9 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 		runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		t.setCancel(cancel)
 		go func() {
+			// exited releases StopAll's settle once this goroutine — and the
+			// subagent run it drives — has fully returned.
+			defer close(t.exited)
 			report, err := a.runSubagent(runCtx, history, func(text string) { t.appendOutput(text) }, def)
 			// Honest status per the shared vocabulary: a subagent error is a
 			// failed task, not a completed one with an "Error:" body.

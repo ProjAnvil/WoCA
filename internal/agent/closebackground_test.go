@@ -14,6 +14,7 @@ import (
 
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 // TestAgentCloseKillsBackgroundShells reproduces defect N6: background
@@ -75,4 +76,48 @@ func TestAgentCloseKillsBackgroundShells(t *testing.T) {
 	if syscall.Kill(pid, 0) != syscall.ESRCH {
 		t.Fatalf("background child %d survived Agent.Close", pid)
 	}
+}
+
+// TestAgentCloseStopsDetachedBackgroundTasks pins the Close contract for
+// detached background subagents (D3): they no longer die with the launching
+// run's ctx, so Agent.Close must stop them explicitly — like the shells'
+// KillAll — with user attribution, and their run goroutines must wind down
+// within a bounded settle instead of surviving the session as orphans that
+// keep spending model calls (the SDK calls Close inside long-lived hosts).
+func TestAgentCloseStopsDetachedBackgroundTasks(t *testing.T) {
+	gate := make(chan struct{})
+	sub := &entryGatedModel{FakeChatModel: language.NewFakeChatModel(), gate: gate}
+	a := newBackgroundTaskAgent(t, sub)
+
+	notif := make(chan string, 1)
+	a.tasks.SetNotify(func(session, text string) { notif <- text })
+
+	// The launching run ends (ctx cancelled) while the task is mid-run; the
+	// D3 detach keeps the task alive, so only Close can stop it now.
+	runCtx, cancelRun := context.WithCancel(tracing.WithRun(context.Background(), "run-c", "sess-c"))
+	if _, err := a.runTask(runCtx, taskArgs{Description: "orphan risk", RunInBackground: true}); err != nil {
+		t.Fatal(err)
+	}
+	cancelRun()
+
+	a.Close()
+
+	info, err := a.tasks.InfoFor("sess-c", "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Status != TaskStopped || info.StoppedBy != tools.StopByUser {
+		t.Fatalf("stop facts after Close = %+v, want stopped/user", info)
+	}
+	// The run goroutine wound down within StopAll's bounded settle: the
+	// completion notification (fired by the goroutine itself) has landed.
+	select {
+	case text := <-notif:
+		if !strings.Contains(text, "stopped") {
+			t.Fatalf("post-Close notification = %q, want the stopped status line", text)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("background task goroutine still alive 8s after Agent.Close")
+	}
+	close(gate) // release the subagent if the stop never reached it
 }

@@ -89,9 +89,9 @@ func (a *Agent) FileChangesSince(ctx context.Context, watermark int) []tools.Fil
 }
 
 // Close releases the agent's session-scoped background resources: teammates,
-// the cron scheduler loop, background shells, and pooled LSP servers. Call
-// once when the session ends (main's defers); after Close the agent must not
-// start new runs.
+// the cron scheduler loop, background shells, background tasks, and pooled
+// LSP servers. Call once when the session ends (main's defers); after Close
+// the agent must not start new runs.
 func (a *Agent) Close() {
 	a.CloseTeams()
 	a.stopCron()
@@ -102,6 +102,13 @@ func (a *Agent) Close() {
 		if bg := a.registry.Background(); bg != nil {
 			bg.KillAll(tools.StopByUser)
 		}
+	}
+	// Background subagent tasks are detached from every context too (D3);
+	// StopAll stops them with user attribution and waits a bounded time for
+	// their goroutines to settle, so a long-lived host (the SDK) is not left
+	// with orphaned runs still spending model calls.
+	a.tasks.StopAll(tools.StopByUser)
+	if a.registry != nil {
 		a.registry.Close()
 	}
 }
