@@ -795,3 +795,65 @@ func TestModelKilledShellStillWakes(t *testing.T) {
 		t.Fatalf("%d runs after settle, want exactly 2", n)
 	}
 }
+
+// Scenario R4 (carried fix): the lost-wakeup window between wakeAfterRun's
+// check and the admission release. run.onFinish fires BEFORE onDone releases
+// the gate, so a notification queued in between — here via the store's
+// release-timing test hook, which runs inside the completion callback after
+// the save but before the release — saw admission.busy and returned without
+// waking, and nothing re-checked: the item waited for the next user run.
+// The completion path re-checks once the gate is open, keeping the usual
+// chain/stall/cap/tombstone rules.
+func TestWakeRechecksAfterAdmissionRelease(t *testing.T) {
+	a := newWakeAgent(t, 0,
+		messages.AI("ok"),
+		messages.AI("noted"),
+	)
+	s, ts := newWakeServer(t, a, nil)
+
+	// testAfterSave fires at the exact point of the window: onFinish (and
+	// with it wakeAfterRun, which found an empty queue) has already run, the
+	// gate is still held. One-shot: the wake run's own save must not re-arm.
+	var armed atomic.Bool
+	s.sessions.testAfterSave = func(id string) {
+		if armed.CompareAndSwap(false, true) {
+			a.QueueNotificationFor(id, "background-task-completed",
+				"Background shell 9 finished (exit code 0): echo r4\nOutput (tail):\nr4")
+		}
+	}
+
+	runID, sid, _ := postRun(t, ts.URL, "s1", "go")
+	waitRunDoneInProc(t, s, runID)
+
+	// Without the re-check the notification stays queued and no second run
+	// ever appears; with it the release wakes the session exactly once.
+	ids := waitForRuns(t, s, 2)
+	wakeID := ids[len(ids)-1]
+	if wakeID == runID {
+		t.Fatalf("second registered run is the user run itself (%s)", wakeID)
+	}
+	waitRunDoneInProc(t, s, wakeID)
+	if d := runStartedData(t, replayRunEvents(t, ts.URL, wakeID)); func() bool {
+		b, _ := d["auto"].(bool)
+		return !b
+	}() {
+		t.Fatalf("wake run run_started = %v, want auto:true", d)
+	}
+	waitForTranscript(t, ts.URL, sid, "late notification delivered", func(msgs []messages.Message) bool {
+		for _, m := range msgs {
+			if m.Role == messages.RoleHuman &&
+				strings.Contains(m.Content, "<background-task-completed>") &&
+				strings.Contains(m.Content, "r4") {
+				return true
+			}
+		}
+		return false
+	})
+	time.Sleep(250 * time.Millisecond)
+	if n := len(registeredRuns(t, s)); n != 2 {
+		t.Fatalf("%d runs after settle, want exactly 2", n)
+	}
+	if n := a.QueuedInputCountFor(sid); n != 0 {
+		t.Fatalf("queued count = %d, want 0 (the notification was delivered)", n)
+	}
+}

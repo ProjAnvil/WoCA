@@ -577,6 +577,17 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 			// queued run is promoted the previous reply is guaranteed to
 			// be persisted.
 			s.admission.release(sid)
+			// Lost-wakeup re-check (R4): onFinish — and with it
+			// wakeAfterRun — fires BEFORE this release, so a notification
+			// queued in between saw admission.busy and returned without
+			// waking. Re-check now that the gate is open; maybeWake's busy
+			// re-check collapses the case where wakeAfterRun already
+			// queued a wake run behind this one, and the ranClean gate
+			// keeps the cancelled/errored rule (never restart over what
+			// the user just stopped).
+			if run.ranClean() {
+				s.maybeWake(sid)
+			}
 		})
 	}()
 	return run, sid, pos, nil
