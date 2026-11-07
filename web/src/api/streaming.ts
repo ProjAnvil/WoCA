@@ -6,6 +6,7 @@ import i18n from '../i18n'
 import { getNativeBridge } from '../native/bridge'
 import { nativeRequestCancellation } from '../native/requestCancellation'
 import type {
+  ActivityChangedPayload,
   AuthRevokedPayload,
   DonePayload,
   ErrorPayload,
@@ -13,12 +14,15 @@ import type {
   InterruptPayload,
   QueuePositionPayload,
   ResyncPayload,
+  RunStartedPayload,
   SSEEventType,
   SessionStatePayload,
   TextPayload,
   ToolCallPayload,
   ToolResultPayload,
+  WakeCappedPayload,
 } from './events'
+import { ACTIVITY_KINDS, type ActivityKind } from '../types'
 import { streamTarget } from './transport'
 
 export interface StreamHandlers {
@@ -34,7 +38,8 @@ export interface StreamHandlers {
   onGoal?: (ev: GoalPayload) => void
   onRunQueued?: (position: number) => void
   onQueuePosition?: (position: number) => void
-  onRunStarted?: () => void
+  /** run_started — auto/trigger are present only on wake-driver runs. */
+  onRunStarted?: (ev: RunStartedPayload) => void
   /** Replay gap (server retention window or client-detected seq jump). */
   onResync?: (reason: string) => void
   onDone: (cancelled: boolean) => void
@@ -143,7 +148,7 @@ export function streamRun(
             break
           }
           case 'run_started':
-            handlers.onRunStarted?.()
+            handlers.onRunStarted?.(data as RunStartedPayload)
             break
           case 'resync':
             handlers.onResync?.((data as ResyncPayload).reason ?? 'unknown')
@@ -221,29 +226,80 @@ function streamAbortError(): DOMException {
 }
 
 /*
- * Global event stream (GET /api/events, SSE): server-level session state
- * changes — {session_id, status: 'running' | 'awaiting' | '', run_id}. Every
- * connection is seeded with the current snapshot, so (re)connecting is itself
- * a resync; the browser EventSource reconnects automatically.
+ * Global event stream (GET /api/events, SSE): server-level signals —
+ * session_state ({session_id, status, run_id}), wake_capped (the session hit
+ * its auto-wake chain budget) and activity_changed (signal-only: which
+ * session's activity changed and which slice; clients refetch the snapshot
+ * through the authorized REST route). Every connection is seeded with the
+ * current session_state snapshot, so (re)connecting is itself a resync; the
+ * browser EventSource reconnects automatically.
  */
 export interface EventStream {
   close(): void
 }
 
-export function streamEvents(
-  onSessionState: (ev: SessionStatePayload) => void,
-): EventStream {
-  const handleMessage = (data: string) => {
-    try {
-      onSessionState(JSON.parse(data))
-    } catch {
-      /* malformed frame — the next one re-syncs */
+/** Consumer hook for the global stream; the activity store (F2) subscribes
+ * to the activity/wake signals, onOpen re-pulls the current session. */
+export interface GlobalEventHandlers {
+  onSessionState: (ev: SessionStatePayload) => void
+  /** Auto-wake chain budget hit — queued items wait for the next user run. */
+  onWakeCapped?: (ev: WakeCappedPayload) => void
+  /** A session's activity changed (todos | shells | tasks | crons | wake). */
+  onActivityChanged?: (ev: ActivityChangedPayload) => void
+  /** Fires on every (re)connection — the seeded snapshot is itself a resync,
+   * so consumers refetch their current-session state (PM §4.4). */
+  onOpen?: () => void
+}
+
+function isActivityKind(kind: unknown): kind is ActivityKind {
+  return typeof kind === 'string' && (ACTIVITY_KINDS as readonly string[]).includes(kind)
+}
+
+/**
+ * Dispatches one global-stream frame (event name + raw data). Malformed JSON
+ * and payloads outside the contract are dropped — the next frame (or the
+ * reconnect's seeded snapshot) re-syncs; consumer handler errors are not
+ * caught here. Unknown activity_changed kinds are dropped too: the kind
+ * union is closed at the type level, so a kind this client doesn't know
+ * cannot be delivered as ActivityChangedPayload.
+ */
+function dispatchGlobalEvent(handlers: GlobalEventHandlers, name: string, data: string): void {
+  let payload: unknown
+  try {
+    payload = JSON.parse(data)
+  } catch {
+    return // malformed frame — the next one re-syncs
+  }
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return
+  switch (name) {
+    case 'session_state':
+      handlers.onSessionState(payload as SessionStatePayload)
+      break
+    case 'wake_capped':
+      handlers.onWakeCapped?.(payload as WakeCappedPayload)
+      break
+    case 'activity_changed': {
+      const ev = payload as ActivityChangedPayload
+      if (!isActivityKind(ev.kind)) return
+      handlers.onActivityChanged?.(ev)
+      break
     }
   }
+}
+
+const GLOBAL_EVENT_NAMES = ['session_state', 'wake_capped', 'activity_changed'] as const
+
+export function streamEvents(handlers: GlobalEventHandlers): EventStream {
+  const onFrame = (name: string, data: string) => dispatchGlobalEvent(handlers, name, data)
 
   if (!getNativeBridge()) {
     const es = new EventSource('/api/events')
-    es.addEventListener('session_state', (ev) => handleMessage((ev as MessageEvent).data))
+    for (const name of GLOBAL_EVENT_NAMES) {
+      es.addEventListener(name, (ev) => onFrame(name, (ev as MessageEvent).data as string))
+    }
+    // EventSource fires 'open' on every (re)connection — the reconnect's
+    // seeded snapshot is the resync trigger for consumers.
+    es.addEventListener('open', () => handlers.onOpen?.())
     return es
   }
 
@@ -258,9 +314,10 @@ export function streamEvents(
       if (!response.ok || !contentType.includes('text/event-stream')) {
         throw new Error(i18n.global.t('api.streamConnectFailed', { status: response.status }))
       }
+      handlers.onOpen?.()
     },
     onmessage(event) {
-      if (event.event === 'session_state' && event.data) handleMessage(event.data)
+      if (event.data) onFrame(event.event, event.data)
     },
     onclose() {
       if (!controller.signal.aborted) throw new Error('global event stream closed')

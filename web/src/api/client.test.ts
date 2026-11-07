@@ -133,7 +133,7 @@ describe('cancellable SSE transport', () => {
     }
     vi.stubGlobal('EventSource', BrowserEventSource)
 
-    const stream = streamEvents(vi.fn())
+    const stream = streamEvents({ onSessionState: vi.fn() })
 
     expect(BrowserEventSource.instances).toHaveLength(1)
     expect(BrowserEventSource.instances[0].url).toBe('/api/events')
@@ -149,7 +149,7 @@ describe('cancellable SSE transport', () => {
       new Promise<void>((resolve) => options.signal?.addEventListener('abort', () => resolve(), { once: true })),
     )
 
-    const stream = streamEvents(vi.fn())
+    const stream = streamEvents({ onSessionState: vi.fn() })
     const options = fetchEventSource.mock.calls[0][1]
     const id = options.headers[nativeRequestIDHeader]
     expect(() => options.onclose()).toThrow('global event stream closed')
@@ -167,7 +167,7 @@ describe('cancellable SSE transport', () => {
     })
     fetchEventSource.mockRejectedValue(new Error('connection failed'))
 
-    const stream = streamEvents(vi.fn())
+    const stream = streamEvents({ onSessionState: vi.fn() })
     await Promise.resolve()
     await Promise.resolve()
     stream.close()

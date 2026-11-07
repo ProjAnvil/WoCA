@@ -95,23 +95,27 @@ export function createRunStreams(deps: StreamDeps) {
 
   // connectGlobalEvents subscribes to /api/events. Native EventSource
   // reconnects on its own; every (re)connection is seeded with the current
-  // snapshot server-side, which keeps the map fresh without polling.
+  // snapshot server-side, which keeps the map fresh without polling. The
+  // activity/wake signals are left unwired here — the activity store (F2)
+  // owns those consumers.
   function connectGlobalEvents() {
     if (demo.value || eventsSource) return
-    eventsSource = api.streamEvents((ev) => {
-      if (ev.status === 'running' || ev.status === 'awaiting') {
-        serverRunState.value = {
-          ...serverRunState.value,
-          [ev.session_id]: { status: ev.status, runId: ev.run_id ?? '' },
+    eventsSource = api.streamEvents({
+      onSessionState: (ev) => {
+        if (ev.status === 'running' || ev.status === 'awaiting') {
+          serverRunState.value = {
+            ...serverRunState.value,
+            [ev.session_id]: { status: ev.status, runId: ev.run_id ?? '' },
+          }
+          // A run started elsewhere (or before a refresh) in the visible
+          // session: reattach its stream so the chat streams live again.
+          if (ev.session_id === activeId.value) maybeReattach(ev.session_id)
+        } else if (serverRunState.value[ev.session_id]) {
+          const next = { ...serverRunState.value }
+          delete next[ev.session_id]
+          serverRunState.value = next
         }
-        // A run started elsewhere (or before a refresh) in the visible
-        // session: reattach its stream so the chat streams live again.
-        if (ev.session_id === activeId.value) maybeReattach(ev.session_id)
-      } else if (serverRunState.value[ev.session_id]) {
-        const next = { ...serverRunState.value }
-        delete next[ev.session_id]
-        serverRunState.value = next
-      }
+      },
     })
   }
 

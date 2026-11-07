@@ -5,6 +5,7 @@ import type {
   CompletionEntry,
   ContextInfo,
   Goal,
+  SessionDeleteReport,
   SessionSummary,
   TranscriptMessage,
   WorkspaceFile,
@@ -27,7 +28,8 @@ export function getSession(id: string): Promise<{ id: string; messages: Transcri
   return request(`/api/sessions/${id}`, undefined, i18n.global.t('api.loadSessionsFailed'))
 }
 
-export function deleteSession(id: string): Promise<void> {
+/** Delete a session; the report lists the background work torn down (D2). */
+export function deleteSession(id: string): Promise<SessionDeleteReport> {
   return request(`/api/sessions/${id}`, { method: 'DELETE' }, i18n.global.t('api.deleteSessionFailed'))
 }
 

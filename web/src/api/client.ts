@@ -6,6 +6,7 @@
 // app keeps one stable import path (`../api/client`).
 export * from './transport'
 export * from './streaming'
+export * from './activity'
 export * from './workspace'
 export * from './chat'
 export * from './settings'

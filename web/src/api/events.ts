@@ -2,7 +2,7 @@
 // internal/server/ssevents.go. ci/check-sse-contract.sh fails CI when the
 // two drift apart, so keep the name list below in exact sync and quote only
 // event names with single quotes in this file.
-import type { Goal } from '../types'
+import type { ActivityKind, Goal } from '../types'
 
 export const SSE_EVENT_TYPES = [
   'delta',
@@ -108,10 +108,11 @@ export interface WakeCappedPayload {
 }
 
 /** Global stream: signal-only — which session's activity changed and which
- * slice (todos | shells | tasks | crons | wake). Carries no content:
- * clients refetch the snapshot through the authorized REST route. */
+ * slice (ActivityKind). Carries no content: clients refetch the snapshot
+ * through the authorized REST route. The kind union lives in ../types so
+ * this file keeps only event names in single quotes (CI drift check). */
 export interface ActivityChangedPayload {
-  kind: string
+  kind: ActivityKind
   session_id: string
 }
 

@@ -547,3 +547,118 @@ export interface WebSearchTestResult {
   sample?: string
   error?: string
 }
+
+// --- session activity panel (mirror /api/sessions/{id}/activity, PM §4.3) ---
+// The literal unions live here — not in api/events.ts — because the SSE
+// contract check treats every single-quoted lowercase literal in that file
+// as an event name.
+
+/**
+ * Which slice of a session's activity an `activity_changed` signal refers
+ * to (agent.ActivityKind plus the server's own "wake" driver signal).
+ */
+export const ACTIVITY_KINDS = ['todos', 'shells', 'tasks', 'crons', 'wake'] as const
+
+export type ActivityKind = (typeof ACTIVITY_KINDS)[number]
+
+/** Who terminated a background item ('' when it ended on its own). */
+export type StoppedBy = '' | 'model' | 'user'
+
+/**
+ * Lifecycle status of a panel item. Shells: running | completed | failed |
+ * stopped; tasks: running | completed | failed | stopped (the two
+ * vocabularies coincide, so one union covers both).
+ */
+export type ItemStatus = 'running' | 'completed' | 'failed' | 'stopped'
+
+/** One TodoWrite item (tools.Todo). */
+export interface TodoItem {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled'
+  /** Present-tense label shown while the item is in progress. */
+  active_form?: string
+}
+
+/** The snapshot's todo block; updated_at null = never written this session. */
+export interface ActivityTodos {
+  items: TodoItem[]
+  updated_at: string | null
+}
+
+/** One background shell (Bash run_in_background). */
+export interface BackgroundShell {
+  id: string
+  command: string
+  status: ItemStatus
+  /** Null while running and after a signal kill. */
+  exit_code: number | null
+  stopped_by: StoppedBy
+  started_at: string
+  ended_at: string | null
+  output_bytes: number
+}
+
+/** One background subagent task (Task run_in_background). */
+export interface BackgroundTask {
+  id: string
+  description: string
+  subagent: string
+  status: ItemStatus
+  stopped_by: StoppedBy
+  started_at: string
+  ended_at: string | null
+}
+
+/** One scheduled prompt (ScheduleCron). */
+export interface CronEntry {
+  id: string
+  name: string
+  spec: string
+  prompt: string
+  created_at: string
+  last_fired_at: string | null
+  /** Null: no fire within the next 366 days. */
+  next_fire_at: string | null
+}
+
+/** Auto-wake state for the session (snapshot wake block). */
+export interface WakeState {
+  enabled: boolean
+  capped: boolean
+  stalled: boolean
+  pending_notifications: number
+}
+
+/** GET /api/sessions/{id}/activity — the panel's full-state snapshot. */
+export interface ActivitySnapshot {
+  session_id: string
+  /** RFC3339 UTC clock hint for remote/relay elapsed-time math. */
+  server_time: string
+  todos: ActivityTodos
+  shells: BackgroundShell[]
+  tasks: BackgroundTask[]
+  crons: CronEntry[]
+  wake: WakeState
+}
+
+/** GET …/output?tail_bytes=N — an item's output tail (never in the snapshot). */
+export interface OutputTail {
+  id: string
+  status: ItemStatus
+  output: string
+  truncated: boolean
+  total_bytes: number
+}
+
+/**
+ * DELETE /api/sessions/{id} response (D2): what the release actually tore
+ * down. The before-delete warning comes from the activity snapshot; this
+ * reports the confirmed delete's effect.
+ */
+export interface SessionDeleteReport {
+  deleted: boolean
+  shells_killed: number
+  tasks_stopped: number
+  crons_deleted: number
+  todos_dropped: boolean
+}

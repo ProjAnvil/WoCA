@@ -1,13 +1,16 @@
 // The run-events dispatch switch: every SSE event name → handler routing,
 // seq-gap detection, and the terminal/retry state machine.
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { fetchEventSource } = vi.hoisted(() => ({ fetchEventSource: vi.fn() }))
+const { fetchEventSource, getNativeBridge } = vi.hoisted(() => ({
+  fetchEventSource: vi.fn(),
+  getNativeBridge: vi.fn<() => unknown>(),
+}))
 vi.mock('@microsoft/fetch-event-source', () => ({ fetchEventSource }))
-vi.mock('../native/bridge', () => ({ getNativeBridge: () => null }))
+vi.mock('../native/bridge', () => ({ getNativeBridge }))
 
-import { streamRun, type StreamHandlers } from './streaming'
+import { streamEvents, streamRun, type GlobalEventHandlers, type StreamHandlers } from './streaming'
 import { setStreamAuth, setStreamBase, setStreamBridge } from './transport'
 import { useAuthStore } from '../stores/auth'
 import i18n from '../i18n'
@@ -55,6 +58,7 @@ describe('run-events dispatch', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     fetchEventSource.mockReset().mockResolvedValue(undefined)
+    getNativeBridge.mockReturnValue(null)
     setStreamBase('')
     setStreamBridge('')
     setStreamAuth('', '')
@@ -90,6 +94,14 @@ describe('run-events dispatch', () => {
     expect(h.onQueuePosition).toHaveBeenCalledWith(1)
     expect(h.onRunStarted).toHaveBeenCalled()
     expect(h.onResync).toHaveBeenCalledWith('retention')
+  })
+
+  it('run_started carries the payload: auto/trigger on wake-driver runs', () => {
+    const { h, options } = startRun()
+    msg(options, 'run_started', { auto: true, trigger: 'notification' })
+    msg(options, 'run_started', {})
+    expect(h.onRunStarted).toHaveBeenNthCalledWith(1, { auto: true, trigger: 'notification' })
+    expect(h.onRunStarted).toHaveBeenNthCalledWith(2, {})
   })
 
   it('treats timeout as renderless and ignores empty or malformed frames', () => {
@@ -157,5 +169,139 @@ describe('run-events dispatch', () => {
     expect(url).toBe('https://edge.example.com/api/runs/run-2/events')
     expect(options.headers['X-Woca-Bridge']).toBe('br-77')
     expect(options.headers.Authorization).toBe('Bearer tok-1')
+  })
+})
+
+// --- global stream (GET /api/events): multi-event dispatch ---
+
+/** Captures the listeners a browser EventSource registered. */
+class FakeEventSource {
+  static instances: FakeEventSource[] = []
+  readonly url: string
+  readonly listeners: Record<string, EventListener[]> = {}
+  closed = false
+
+  constructor(url: string) {
+    this.url = url
+    FakeEventSource.instances.push(this)
+  }
+
+  addEventListener(type: string, listener: EventListener) {
+    ;(this.listeners[type] ??= []).push(listener)
+  }
+
+  close() {
+    this.closed = true
+  }
+}
+
+function emit(es: FakeEventSource, type: string, data: string) {
+  for (const listener of es.listeners[type] ?? []) listener({ data } as MessageEvent)
+}
+
+describe('global event dispatch', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    FakeEventSource.instances.length = 0
+    fetchEventSource.mockReset().mockResolvedValue(undefined)
+    getNativeBridge.mockReturnValue(null)
+    setStreamBase('')
+    setStreamBridge('')
+    setStreamAuth('', '')
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function globalHandlers() {
+    return {
+      onSessionState: vi.fn(),
+      onWakeCapped: vi.fn(),
+      onActivityChanged: vi.fn(),
+      onOpen: vi.fn(),
+    }
+  }
+
+  it('browser transport subscribes by name and routes each event to its handler', () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const h = globalHandlers()
+    streamEvents(h)
+    const es = FakeEventSource.instances.at(-1)!
+    expect(es.url).toBe('/api/events')
+    expect(Object.keys(es.listeners).sort()).toEqual(['activity_changed', 'open', 'session_state', 'wake_capped'])
+
+    emit(es, 'session_state', JSON.stringify({ session_id: 's1', status: 'running', run_id: 'r1' }))
+    emit(es, 'wake_capped', JSON.stringify({ session: 's1', queued: 2 }))
+    emit(es, 'activity_changed', JSON.stringify({ kind: 'shells', session_id: 's1' }))
+
+    expect(h.onSessionState).toHaveBeenCalledWith({ session_id: 's1', status: 'running', run_id: 'r1' })
+    expect(h.onWakeCapped).toHaveBeenCalledWith({ session: 's1', queued: 2 })
+    expect(h.onActivityChanged).toHaveBeenCalledWith({ kind: 'shells', session_id: 's1' })
+  })
+
+  it('native transport dispatches the same events through fetchEventSource', () => {
+    getNativeBridge.mockReturnValue({ id: 'native' })
+    const h = globalHandlers()
+    streamEvents(h)
+    const options = fetchEventSource.mock.calls.at(-1)![1] as CapturedOptions
+
+    options.onmessage({ event: 'session_state', data: JSON.stringify({ session_id: 's2', status: 'awaiting' }) })
+    options.onmessage({ event: 'wake_capped', data: JSON.stringify({ session: 's2', queued: 5 }) })
+    options.onmessage({ event: 'activity_changed', data: JSON.stringify({ kind: 'crons', session_id: 's2' }) })
+
+    expect(h.onSessionState).toHaveBeenCalledWith({ session_id: 's2', status: 'awaiting' })
+    expect(h.onWakeCapped).toHaveBeenCalledWith({ session: 's2', queued: 5 })
+    expect(h.onActivityChanged).toHaveBeenCalledWith({ kind: 'crons', session_id: 's2' })
+  })
+
+  it('onOpen fires on every (re)open on both transports', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const browserHandlers = globalHandlers()
+    streamEvents(browserHandlers)
+    const es = FakeEventSource.instances.at(-1)!
+    es.listeners.open[0](new Event('open'))
+    es.listeners.open[0](new Event('open'))
+    expect(browserHandlers.onOpen).toHaveBeenCalledTimes(2)
+
+    getNativeBridge.mockReturnValue({ id: 'native' })
+    const nativeHandlers = globalHandlers()
+    streamEvents(nativeHandlers)
+    const options = fetchEventSource.mock.calls.at(-1)![1] as CapturedOptions
+    const opened = new Response('', { headers: { 'Content-Type': 'text/event-stream' } })
+    await options.onopen(opened)
+    await options.onopen(opened) // a reconnect is a fresh open
+    expect(nativeHandlers.onOpen).toHaveBeenCalledTimes(2)
+  })
+
+  it('drops malformed frames and activity_changed kinds outside the typed union', () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const h = globalHandlers()
+    streamEvents(h)
+    const es = FakeEventSource.instances.at(-1)!
+
+    emit(es, 'session_state', '{not json')
+    emit(es, 'session_state', 'null')
+    emit(es, 'session_state', '5')
+    emit(es, 'wake_capped', '[]')
+    emit(es, 'activity_changed', JSON.stringify({ kind: 'subagents', session_id: 's1' })) // a server kind this client doesn't know
+    emit(es, 'activity_changed', JSON.stringify({ session_id: 's1' })) // kind missing
+
+    expect(h.onSessionState).not.toHaveBeenCalled()
+    expect(h.onWakeCapped).not.toHaveBeenCalled()
+    expect(h.onActivityChanged).not.toHaveBeenCalled()
+  })
+
+  it('delivers every documented activity_changed kind', () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const h = globalHandlers()
+    streamEvents(h)
+    const es = FakeEventSource.instances.at(-1)!
+
+    for (const kind of ['todos', 'shells', 'tasks', 'crons', 'wake']) {
+      emit(es, 'activity_changed', JSON.stringify({ kind, session_id: 's1' }))
+    }
+
+    expect(h.onActivityChanged).toHaveBeenCalledTimes(5)
+    expect(h.onActivityChanged).toHaveBeenLastCalledWith({ kind: 'wake', session_id: 's1' })
   })
 })

@@ -6,6 +6,8 @@ export default {
     'S-B-0001': 'Sign-in required.',
     'S-B-0002': 'Your credentials were revoked — sign in again.',
     'S-B-0003': 'You do not have permission for this action.',
+    'S-B-0004': 'No such item in this session.',
+    'S-B-0501': 'This feature is not available in this deployment.',
     'S-E-0002': 'Your credentials were revoked — sign in again.',
     'S-C-0001': 'Invalid console credentials.',
   },
