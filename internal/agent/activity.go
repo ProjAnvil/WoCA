@@ -68,9 +68,11 @@ func clampTailBytes(maxBytes int) int {
 // exit code stays factual: report the recorded value when >= 0; null only
 // for the running and signal-killed (-1) cases.
 type Activity struct {
-	// Todos is the session's live list. TodosKnown distinguishes "never
-	// written" (false — the caller may consult persistence) from "written,
-	// possibly cleared to empty" (true, Todos then a non-nil empty slice).
+	// Todos is the session's live list, non-nil in every snapshot (empty
+	// when unknown). TodosKnown distinguishes "never written" (false — the
+	// caller may consult persistence) from "written, possibly cleared to
+	// empty" (true): every slice in Activity is non-nil so the server can
+	// render [] instead of null without per-field nil checks.
 	Todos          []tools.Todo
 	TodosUpdatedAt time.Time
 	TodosKnown     bool
@@ -109,8 +111,8 @@ type activityState struct {
 // slices included.
 func (a *Agent) ActivityFor(session string, now time.Time) Activity {
 	todos, updatedAt, known := a.TodosFor(session)
-	if known && todos == nil {
-		todos = []tools.Todo{} // cleared reads as an empty list, not null
+	if todos == nil {
+		todos = []tools.Todo{} // unknown or cleared reads as [], never null
 	}
 	return Activity{
 		Todos:                todos,
@@ -282,7 +284,11 @@ func (a *Agent) emitActivity(session string, kind ActivityKind) {
 }
 
 // sessionReleased reports whether session was released (ReleaseSession) and
-// must no longer receive notifications.
+// must no longer receive notifications. Safe to call while holding the
+// queue lock: it only takes activity.mu, and nothing anywhere holds
+// activity.mu and then acquires the queue lock — ReleaseSession marks under
+// activity.mu, releases it, and only then drops under the queue lock — so
+// q.mu → activity.mu is the one nesting order and no cycle exists.
 func (a *Agent) sessionReleased(session string) bool {
 	a.activity.mu.Lock()
 	defer a.activity.mu.Unlock()

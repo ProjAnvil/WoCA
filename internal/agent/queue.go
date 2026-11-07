@@ -88,14 +88,22 @@ func (q *queue) add(text string) {
 }
 
 // addTagged buffers one tagged notification item (machine-generated input),
-// Quiet flag included; it reports whether an item was queued — blank text is
-// dropped, nothing queues.
-func (q *queue) addTagged(item QueuedInput) bool {
+// Quiet flag included. released, when non-nil, is consulted INSIDE the
+// queue's critical section: an item scoped to a session the predicate
+// reports as released is refused (D2) — deciding under q.mu makes
+// check-and-append atomic against ReleaseSession's dropScope, so a
+// completion racing the release can never land after the drop. It reports
+// whether an item was queued — blank text is dropped and a released
+// session is refused, nothing queues.
+func (q *queue) addTagged(item QueuedInput, released func(session string) bool) bool {
 	if strings.TrimSpace(item.Text) == "" {
 		return false
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if item.Session != "" && released != nil && released(item.Session) {
+		return false
+	}
 	q.items = append(q.items, item)
 	return true
 }
@@ -241,15 +249,16 @@ func (a *Agent) queueBackgroundCompletion(session, text string, stoppedBy tools.
 // set, so surfaces can show them without waking). Blank text queues nothing
 // and fires nothing — the observer contract is "the item you just saw is in
 // the queue". Notifications scoped to a released session (ReleaseSession,
-// D2) are dropped here: the session is gone, so nothing may deliver to it
-// or wake it — not even its own background work finishing late.
+// D2) are refused inside addTagged's critical section — atomic with
+// ReleaseSession's mark-then-dropScope — so a completion racing the release
+// can never leave a queued item, a wake, or an observer fire for a session
+// that was deleted.
 func (a *Agent) queueNotification(q QueuedInput) {
-	if q.Session != "" && a.sessionReleased(q.Session) {
-		slog.Debug("agent: dropped notification for released session",
-			"session", q.Session, "tag", q.Tag)
-		return
-	}
-	if !a.inputs.addTagged(q) {
+	if !a.inputs.addTagged(q, a.sessionReleased) {
+		if strings.TrimSpace(q.Text) != "" && q.Session != "" {
+			slog.Debug("agent: dropped notification for released session",
+				"session", q.Session, "tag", q.Tag)
+		}
 		return
 	}
 	a.mu.Lock()

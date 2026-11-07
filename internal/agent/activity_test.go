@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -148,13 +149,14 @@ func TestActivitySnapshotAggregatesAllManagers(t *testing.T) {
 		t.Fatalf("unscoped snapshot = %+v", all)
 	}
 
-	// An unknown session yields the empty snapshot (non-nil slices; the
-	// server renders it as 200 with empty arrays, PM §4.3).
+	// An unknown session yields the empty snapshot (every slice non-nil —
+	// including Todos; TodosKnown alone carries the "never written" fact —
+	// so the server renders 200 with empty arrays, PM §4.3).
 	empty := a.ActivityFor("no-such-session", now)
-	if empty.Shells == nil || empty.Tasks == nil || empty.Crons == nil {
+	if empty.Shells == nil || empty.Tasks == nil || empty.Crons == nil || empty.Todos == nil {
 		t.Fatalf("unknown-session snapshot has nil slices: %+v", empty)
 	}
-	if len(empty.Shells) != 0 || len(empty.Tasks) != 0 || len(empty.Crons) != 0 || empty.TodosKnown {
+	if len(empty.Shells) != 0 || len(empty.Tasks) != 0 || len(empty.Crons) != 0 || len(empty.Todos) != 0 || empty.TodosKnown {
 		t.Fatalf("unknown-session snapshot not empty: %+v", empty)
 	}
 	// A known-but-cleared todo list renders as an empty, non-nil slice.
@@ -578,4 +580,87 @@ func (r *activityRecorder) countForSession(session string) int {
 		}
 	}
 	return n
+}
+
+// TestQueueAddTaggedRejectsReleasedUnderLock pins the primitive's atomicity
+// contract (round-1 review fix): the released decision is made INSIDE the
+// queue's critical section, so both serial orderings around a mark+drop
+// leave nothing behind — an item appended before the drop is removed by it,
+// and an item arriving after the drop is refused outright. The genuinely
+// concurrent interleaving is covered by TestReleasedDropAtomicWithQueueing.
+func TestQueueAddTaggedRejectsReleasedUnderLock(t *testing.T) {
+	q := &queue{}
+	marked := false
+	pred := func(string) bool { return marked }
+
+	// Ordering 1: append lands before the mark; dropScope then removes it.
+	if !q.addTagged(QueuedInput{Text: "a", Tag: "t", Session: "s"}, pred) {
+		t.Fatal("pre-mark item refused")
+	}
+	marked = true
+	if dropped := q.dropScope("s"); dropped != 1 {
+		t.Fatalf("dropScope removed %d, want 1", dropped)
+	}
+	if n := q.count("s"); n != 0 {
+		t.Fatalf("%d items survived dropScope", n)
+	}
+
+	// Ordering 2: append attempts after the mark are refused under the lock.
+	if q.addTagged(QueuedInput{Text: "b", Tag: "t", Session: "s"}, pred) {
+		t.Fatal("item queued for a released session")
+	}
+	if n := q.count("s"); n != 0 {
+		t.Fatalf("released session holds %d items", n)
+	}
+	// Blank text is still dropped, predicate or not.
+	if q.addTagged(QueuedInput{Text: "  ", Tag: "t", Session: "s"}, pred) {
+		t.Fatal("blank text queued")
+	}
+	// Unscoped items never consult the predicate.
+	if !q.addTagged(QueuedInput{Text: "u", Tag: "t"}, pred) {
+		t.Fatal("unscoped item refused")
+	}
+}
+
+// TestReleasedDropAtomicWithQueueing is the end-to-end regression for the
+// TOCTOU the round-1 review found: queueNotification's released check and
+// its addTagged append were two critical sections, so a completion passing
+// the check just before ReleaseSession's mark could append after
+// dropScope — leaving a queued item (and a notifyObserver fire) for a
+// deleted session, which D2 forbids.
+//
+// Approach: hammer, not a barrier. The fix removes the check-then-queue
+// window entirely (the decision moved inside addTagged's critical
+// section), so a barrier between check and queue cannot be written against
+// the fixed shape — there is nothing left to pause between. The hammer
+// races several completions against one release per iteration, under the
+// race detector; it was verified to fail on the pre-fix code before the
+// fix was applied.
+func TestReleasedDropAtomicWithQueueing(t *testing.T) {
+	a, _ := newActivityAgent(t)
+	const iterations = 200
+	const adders = 4
+	for i := 0; i < iterations; i++ {
+		session := fmt.Sprintf("sess-race-%d", i)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(1 + adders)
+		for j := 0; j < adders; j++ {
+			go func() {
+				defer wg.Done()
+				<-start
+				a.queueNotification(QueuedInput{Text: "late completion", Tag: "background-task-completed", Session: session})
+			}()
+		}
+		go func() {
+			defer wg.Done()
+			<-start
+			a.ReleaseSession(session)
+		}()
+		close(start)
+		wg.Wait()
+		if n := a.QueuedInputCountFor(session); n != 0 {
+			t.Fatalf("iteration %d: %d queued items survived release (TOCTOU regression)", i, n)
+		}
+	}
 }
