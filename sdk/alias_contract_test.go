@@ -1,0 +1,255 @@
+package sdk
+
+// F5 alias contract guard (docs/superpowers/specs/2026-11-08-arch-cleanup-design.md,
+// decision F5; audit woca-internal-docs/arch-review-2026-11-08.md, section F5).
+//
+// The sdk package is the official projection of internal/agent: every
+// `X = agent.X` re-export below is public Go API (and carries the semantics
+// the python/typescript bindings build on). This test pins the exact set so
+// the external contract cannot drift silently:
+//
+//   - removing or renaming a binding fails the source diff,
+//   - adding a new agent binding fails the source diff,
+//   - repointing a binding at a different agent target, or changing its
+//     declaration kind (type alias / const / var), fails the source diff,
+//   - replacing a type alias with a distinct type of the same name fails
+//     the reflect identity check,
+//   - deleting a binding outright also breaks compilation of the anchors
+//     at the bottom of this file.
+//
+// If this test fails because you deliberately changed the sdk surface:
+// update expectedAgentBindings (and agentTypeAliasIdentities plus the
+// anchors below) in the SAME change, and call out the API change in
+// sdk/README.md and the release notes. Do not "fix" the test by deleting
+// it or by widening the contract without review.
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"maps"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/projanvil/woca/internal/agent"
+)
+
+// agentImportPath is the package every guarded binding must point at.
+const agentImportPath = "github.com/projanvil/woca/internal/agent"
+
+// Declaration kinds, matching token.TYPE/CONST/VAR String() forms.
+const (
+	kindType  = "type"
+	kindConst = "const"
+	kindVar   = "var"
+)
+
+// bindingSpec describes one pinned `X = agent.Y` re-export.
+type bindingSpec struct {
+	kind   string // "type" (alias), "const", or "var"
+	target string // identifier inside package agent
+}
+
+// expectedAgentBindings is the pinned sdk->agent contract: sdk name ->
+// agent target. All bindings currently live in sdk/plugin.go.
+var expectedAgentBindings = map[string]bindingSpec{
+	// Plugin gating/transformation surface (type aliases).
+	"ToolGuard":         {kindType, "ToolGuard"},
+	"ToolAction":        {kindType, "ToolAction"},
+	"ToolDecision":      {kindType, "ToolDecision"},
+	"ToolCallInfo":      {kindType, "ToolCallInfo"},
+	"ToolResultInfo":    {kindType, "ToolResultInfo"},
+	"ToolPostDecision":  {kindType, "ToolPostDecision"},
+	"ModelHook":         {kindType, "ModelHook"},
+	"ModelTurn":         {kindType, "ModelTurn"},
+	"ModelReply":        {kindType, "ModelReply"},
+	"BeforeModelResult": {kindType, "BeforeModelResult"},
+	"ModelWrapper":      {kindType, "ModelWrapper"},
+
+	// Guard decision constants (values of ToolAction).
+	"ToolAllow": {kindConst, "ToolAllow"},
+	"ToolDeny":  {kindConst, "ToolDeny"},
+	"ToolAsk":   {kindConst, "ToolAsk"},
+
+	// Decision/feedback constructors (function values).
+	"AllowTool":    {kindVar, "AllowTool"},
+	"DenyTool":     {kindVar, "DenyTool"},
+	"AskTool":      {kindVar, "AskTool"},
+	"ToolFeedback": {kindVar, "ToolFeedback"},
+}
+
+// agentTypeAliasIdentities anchors each pinned type alias at compile time
+// and pins its runtime identity: an alias and its target must be the exact
+// same reflect.Type. Instantiating typeOf[ToolGuard] here also makes alias
+// removal/rename a build break in this file (the intended failure mode).
+var agentTypeAliasIdentities = []struct {
+	name string
+	got  reflect.Type // the sdk-side name
+	want reflect.Type // the agent-package target
+}{
+	{"ToolGuard", typeOf[ToolGuard](), typeOf[agent.ToolGuard]()},
+	{"ToolAction", typeOf[ToolAction](), typeOf[agent.ToolAction]()},
+	{"ToolDecision", typeOf[ToolDecision](), typeOf[agent.ToolDecision]()},
+	{"ToolCallInfo", typeOf[ToolCallInfo](), typeOf[agent.ToolCallInfo]()},
+	{"ToolResultInfo", typeOf[ToolResultInfo](), typeOf[agent.ToolResultInfo]()},
+	{"ToolPostDecision", typeOf[ToolPostDecision](), typeOf[agent.ToolPostDecision]()},
+	{"ModelHook", typeOf[ModelHook](), typeOf[agent.ModelHook]()},
+	{"ModelTurn", typeOf[ModelTurn](), typeOf[agent.ModelTurn]()},
+	{"ModelReply", typeOf[ModelReply](), typeOf[agent.ModelReply]()},
+	{"BeforeModelResult", typeOf[BeforeModelResult](), typeOf[agent.BeforeModelResult]()},
+	{"ModelWrapper", typeOf[ModelWrapper](), typeOf[agent.ModelWrapper]()},
+}
+
+// typeOf returns the reflect.Type of T without constructing a value; it
+// works uniformly for interfaces, structs, and named basic types.
+func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }
+
+// Compile-time anchors for the const/var re-exports: removing or renaming
+// any of them breaks the build of this guard, pointing here.
+var _ = []any{ToolAllow, ToolDeny, ToolAsk, AllowTool, DenyTool, AskTool, ToolFeedback}
+
+func TestAgentAliasContract(t *testing.T) {
+	t.Run("pinned list matches sdk source", func(t *testing.T) {
+		got := agentBindingsInSource(t)
+		if len(got) == 0 {
+			t.Fatal("no agent bindings found in sdk sources; the extraction in this test is broken, not the contract")
+		}
+
+		var problems []string
+		for _, name := range slices.Sorted(maps.Keys(expectedAgentBindings)) {
+			want := expectedAgentBindings[name]
+			actual, ok := got[name]
+			if !ok {
+				problems = append(problems, fmt.Sprintf(
+					"- sdk.%s: binding removed or renamed; contract pins %s sdk.%s = agent.%s. "+
+						"If the removal is intentional, delete its entry from expectedAgentBindings "+
+						"in sdk/alias_contract_test.go in the same change and call out the API break "+
+						"in sdk/README.md and the release notes.",
+					name, want.kind, name, want.target))
+				continue
+			}
+			if actual != want {
+				problems = append(problems, fmt.Sprintf(
+					"- sdk.%s: repointed or rekinded; source now declares %s sdk.%s = agent.%s, "+
+						"contract pins %s = agent.%s. Repointing an alias (or turning a type alias "+
+						"into a const/var or vice versa) silently changes the public sdk API; "+
+						"restore the pinned binding or update expectedAgentBindings deliberately.",
+					name, actual.kind, name, actual.target, want.kind, want.target))
+			}
+		}
+		for _, name := range slices.Sorted(maps.Keys(got)) {
+			if _, ok := expectedAgentBindings[name]; !ok {
+				problems = append(problems, fmt.Sprintf(
+					"- sdk.%s: new agent binding %s sdk.%s = agent.%s is not in the pinned contract. "+
+						"If consciously extending the public sdk surface, add the entry to "+
+						"expectedAgentBindings in sdk/alias_contract_test.go; otherwise drop the binding.",
+					name, got[name].kind, name, got[name].target))
+			}
+		}
+
+		if len(problems) > 0 {
+			t.Fatalf("sdk agent alias contract drift (arch-cleanup spec F5).\n"+
+				"The `X = agent.X` re-exports in this package are pinned public API; "+
+				"resolve each item before committing:\n%s",
+				strings.Join(problems, "\n"))
+		}
+	})
+
+	t.Run("type aliases are identical runtime types", func(t *testing.T) {
+		for _, id := range agentTypeAliasIdentities {
+			if id.got != id.want {
+				t.Errorf("sdk.%s is not the same runtime type as agent.%s (sdk: %v, agent: %v); "+
+					"it must stay a pure alias (`type %s = agent.%s`). A distinct type with the "+
+					"same name is a silent breaking change: restore the alias, or update this "+
+					"guard AND sdk/README.md deliberately as a contract change.",
+					id.name, id.name, id.got, id.want, id.name, id.name)
+			}
+		}
+	})
+}
+
+// agentBindingsInSource parses this package's non-test .go files and
+// returns every top-level `X = agent.Y` binding: type aliases, consts,
+// and vars. It is a pure source scan (std-only, no network).
+func agentBindingsInSource(t *testing.T) map[string]bindingSpec {
+	t.Helper()
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed: cannot locate the sdk package sources")
+	}
+	dir := filepath.Dir(thisFile)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("cannot read sdk package dir %s: %v", dir, err)
+	}
+
+	fset := token.NewFileSet()
+	got := map[string]bindingSpec{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("sdk source %s no longer parses: %v", name, err)
+		}
+
+		// Identifiers in this file that qualify the agent package
+		// (handles renamed imports; default qualifier is the path base).
+		agentQualifiers := map[string]bool{}
+		for _, imp := range f.Imports {
+			path := strings.Trim(imp.Path.Value, `"`)
+			if path != agentImportPath {
+				continue
+			}
+			qualifier := filepath.Base(path)
+			if imp.Name != nil {
+				qualifier = imp.Name.Name
+			}
+			agentQualifiers[qualifier] = true
+		}
+
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				switch s := spec.(type) {
+				case *ast.TypeSpec:
+					if !s.Assign.IsValid() {
+						continue // regular type declaration, not an alias
+					}
+					if sel, ok := s.Type.(*ast.SelectorExpr); ok {
+						if id, ok := sel.X.(*ast.Ident); ok && agentQualifiers[id.Name] {
+							got[s.Name.Name] = bindingSpec{kind: kindType, target: sel.Sel.Name}
+						}
+					}
+				case *ast.ValueSpec:
+					if len(s.Names) != len(s.Values) {
+						continue
+					}
+					for i, name := range s.Names {
+						sel, ok := s.Values[i].(*ast.SelectorExpr)
+						if !ok {
+							continue
+						}
+						if id, ok := sel.X.(*ast.Ident); ok && agentQualifiers[id.Name] {
+							got[name.Name] = bindingSpec{kind: gd.Tok.String(), target: sel.Sel.Name}
+						}
+					}
+				}
+			}
+		}
+	}
+	return got
+}
