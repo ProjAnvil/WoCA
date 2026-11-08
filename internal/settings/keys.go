@@ -7,8 +7,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-
-	"github.com/projanvil/woca/internal/websearch"
 )
 
 // Setting keys shared by `woca config`, the TUI /settings command, and the
@@ -75,9 +73,11 @@ const (
 	// wake chain (a user-initiated run resets it).
 	KeyAutoWake      = "auto-wake"
 	KeyAutoWakeLimit = "auto-wake-limit"
-	// Web search (internal/websearch). The provider list carries the
-	// enable/disable state: a backend is on when its id is present, so an
-	// enterprise overlay can pin the exact allowed set by listing it.
+	// Web search. The provider list carries the enable/disable state: a
+	// backend is on when its id is present, so an enterprise overlay can
+	// pin the exact allowed set by listing it. The id vocabulary lives in
+	// searchproviders.go (arch-cleanup F6: settings must not import the
+	// websearch capability package).
 	KeySearchProviders       = "search-providers"
 	KeySearchSearXNGEndpoint = "search-searxng-endpoint"
 	KeySearchCustomEndpoint  = "search-custom-endpoint"
@@ -546,14 +546,14 @@ func Apply(cfg *Settings, key, value string) error {
 		// Unknown ids are rejected so a typo cannot silently disable the
 		// whole chain — the same rule the plugin API applies.
 		known := map[string]bool{}
-		for _, id := range websearch.KnownProviderIDs() {
+		for _, id := range KnownSearchProviderIDs() {
 			known[id] = true
 		}
 		seen := map[string]bool{}
 		for _, id := range list {
 			if !known[id] {
 				return fmt.Errorf("unknown web-search provider %q; known: %s",
-					id, strings.Join(websearch.KnownProviderIDs(), ", "))
+					id, strings.Join(KnownSearchProviderIDs(), ", "))
 			}
 			if seen[id] {
 				return fmt.Errorf("web-search provider %q listed twice", id)

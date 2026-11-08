@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/projanvil/woca/internal/settings"
 )
 
 // Config is a resolved web-search configuration.
@@ -11,7 +13,8 @@ import (
 // It is deliberately a plain value with no ambient state. It used to be
 // populated from environment variables, which made the chain unconfigurable
 // from the product UI and left two competing sources of truth. The settings
-// layer (internal/settings) is now the single source and builds one of these.
+// layer (internal/settings) is now the single source; ConfigFromSettings
+// builds one of these from a snapshot.
 type Config struct {
 	// Order is the failover order, by provider id. Empty means the built-in
 	// default: DuckDuckGo's two endpoints, then whichever opt-in backends are
@@ -97,9 +100,12 @@ func (c Config) Validate() error {
 		strings.Join(unknown, ", "), strings.Join(KnownProviderIDs(), ", "))
 }
 
-// KnownProviderIDs lists the ids accepted in Order.
+// KnownProviderIDs lists the ids accepted in Order. The vocabulary is owned
+// by the settings package (arch-cleanup F6: the storage layer validates
+// storable ids without importing this package, and both sides share one
+// source for the strings).
 func KnownProviderIDs() []string {
-	return []string{ddgHTMLID, ddgLiteID, searxngID, tavilyID, genericID}
+	return settings.KnownSearchProviderIDs()
 }
 
 // ProviderCustom is the id of the user-supplied JSON search API backend. It is

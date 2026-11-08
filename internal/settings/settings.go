@@ -167,9 +167,9 @@ type Settings struct {
 	// (design §10.3 m-7). Zero means the DefaultSandboxArchiveMaxBytes.
 	SandboxArchiveMaxBytes int64 `json:"sandbox_archive_max_bytes"`
 	// SearchProviders is the ordered list of enabled web-search backends
-	// (internal/websearch provider ids, for example "ddg-html",
-	// "ddg-lite", "searxng", "tavily", "custom"). Order is the failover
-	// order. Empty means the built-in default chain.
+	// (the provider id vocabulary in searchproviders.go, for example
+	// "ddg-html", "ddg-lite", "searxng", "tavily", "generic"). Order is
+	// the failover order. Empty means the built-in default chain.
 	//
 	// Enabling is expressed by presence in this list rather than by a
 	// per-backend bool: a managed overlay cannot lock a false or an empty

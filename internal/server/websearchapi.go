@@ -104,7 +104,7 @@ func (s *Server) handleGetWebSearch(w http.ResponseWriter, _ *http.Request) {
 	// Effective order, not the raw setting: an unset setting still means the
 	// two DuckDuckGo endpoints, and the UI has to be able to show and reorder
 	// them.
-	enabled := cfg.SearchConfig("").EffectiveOrder()
+	enabled := websearch.ConfigFromSettings(cfg, "").EffectiveOrder()
 	rank := map[string]int{}
 	for i, id := range enabled {
 		rank[id] = i + 1
@@ -194,7 +194,7 @@ func (s *Server) handlePutWebSearch(w http.ResponseWriter, r *http.Request) {
 	if s.agent != nil {
 		s.agent.RefreshToolsNow(r.Context())
 	} else {
-		tools.SetWebSearchConfig(cfg.SearchConfig(s.settings.GetSecret(settings.SecretSearchCustomKey)))
+		tools.SetWebSearchConfig(websearch.ConfigFromSettings(cfg, s.settings.GetSecret(settings.SecretSearchCustomKey)))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -231,7 +231,7 @@ func (s *Server) handleTestWebSearch(w http.ResponseWriter, r *http.Request) {
 	// live cooldown table, and it needs its own event sink to report which
 	// backend served the query.
 	var served string
-	opts := cfg.SearchConfig(key).RouterOptions()
+	opts := websearch.ConfigFromSettings(cfg, key).RouterOptions()
 	opts.OnEvent = func(e websearch.Event) {
 		if e.Kind == websearch.EventSuccess {
 			served = e.Provider

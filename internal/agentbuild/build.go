@@ -228,8 +228,8 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		if st != nil {
 			loaded = st.Load()
 		}
-		cfgSearch := loaded.SearchConfig(secretOrEmpty(settings.SecretSearchCustomKey))
-		cfgSearch = settings.SearchConfigWithOverride(cfgSearch, opts.SearchAPI, opts.SearchAPIKey)
+		cfgSearch := websearch.ConfigFromSettings(loaded, secretOrEmpty(settings.SecretSearchCustomKey))
+		cfgSearch = websearch.WithSearchAPIOverride(cfgSearch, opts.SearchAPI, opts.SearchAPIKey)
 		tools.SetWebSearchConfig(cfgSearch)
 	}
 	applySearchConfig()

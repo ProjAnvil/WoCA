@@ -6,10 +6,12 @@ import (
 	"net/http"
 
 	"github.com/projanvil/woca/internal/searchapi"
+	"github.com/projanvil/woca/internal/settings"
 )
 
 // genericID identifies the user-supplied JSON endpoint in stats and logs.
-const genericID = "generic"
+// The string is owned by the settings vocabulary (arch-cleanup F6).
+const genericID = settings.SearchProviderGeneric
 
 // GenericProvider adapts a user-supplied JSON search API (--search-api) to the
 // Provider interface, so a configured endpoint gets the same formatting,

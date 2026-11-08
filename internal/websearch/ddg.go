@@ -9,13 +9,17 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+
+	"github.com/projanvil/woca/internal/settings"
 )
 
 // Provider identifiers, stable across releases because they appear in config,
-// logs and stats.
+// logs and stats. The strings are owned by the settings vocabulary
+// (arch-cleanup F6) so write-path validation and the provider switch can
+// never drift apart.
 const (
-	ddgHTMLID = "ddg-html"
-	ddgLiteID = "ddg-lite"
+	ddgHTMLID = settings.SearchProviderDDGHTML
+	ddgLiteID = settings.SearchProviderDDGLite
 )
 
 const (

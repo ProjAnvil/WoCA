@@ -216,3 +216,20 @@ func TestSearchKeysAreListed(t *testing.T) {
 		}
 	}
 }
+
+// TestKnownSearchProviderIDsPinned guards the provider id vocabulary
+// (searchproviders.go, arch-cleanup F6): websearch derives its provider ids
+// from these constants, so an accidental edit here silently changes what
+// counts as a valid SearchProviders entry.
+func TestKnownSearchProviderIDsPinned(t *testing.T) {
+	want := []string{"ddg-html", "ddg-lite", "searxng", "tavily", "generic"}
+	got := KnownSearchProviderIDs()
+	if len(got) != len(want) {
+		t.Fatalf("KnownSearchProviderIDs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("KnownSearchProviderIDs[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}

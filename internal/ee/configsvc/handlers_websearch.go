@@ -45,7 +45,7 @@ func (s *Service) handleTestWebSearch(w http.ResponseWriter, r *http.Request) {
 	// service's own cooldown table (there is none, but keeping the probe
 	// isolated means it also works before any settings are published).
 	var served string
-	opts := cfg.SearchConfig(s.settings.GetSecret(settings.SecretSearchCustomKey)).RouterOptions()
+	opts := websearch.ConfigFromSettings(cfg, s.settings.GetSecret(settings.SecretSearchCustomKey)).RouterOptions()
 	opts.OnEvent = func(e websearch.Event) {
 		if e.Kind == websearch.EventSuccess {
 			served = e.Provider

@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+
+	"github.com/projanvil/woca/internal/settings"
 )
 
-// tavilyID identifies the provider in config, logs and stats.
-const tavilyID = "tavily"
+// tavilyID identifies the provider in config, logs and stats. The string is
+// owned by the settings vocabulary (arch-cleanup F6).
+const tavilyID = settings.SearchProviderTavily
 
 const tavilyEndpoint = "https://api.tavily.com/search"
 

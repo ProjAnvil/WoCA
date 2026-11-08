@@ -9,10 +9,13 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/projanvil/woca/internal/settings"
 )
 
-// searxngID identifies the provider in config, logs and stats.
-const searxngID = "searxng"
+// searxngID identifies the provider in config, logs and stats. The string is
+// owned by the settings vocabulary (arch-cleanup F6).
+const searxngID = settings.SearchProviderSearXNG
 
 // SearXNGProvider queries a SearXNG instance's JSON API.
 //
