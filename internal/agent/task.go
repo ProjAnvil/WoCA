@@ -947,8 +947,14 @@ func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Messag
 	}
 	// The child runs detached from the parent stream's emitter so its chunks
 	// (above all its raw pause interrupts) never reach the harness; the relay
-	// surfaces pauses itself, wrapped as SubagentInterrupt.
-	subCtx := detachStreamCtx{ctx}
+	// surfaces pauses itself, wrapped as SubagentInterrupt. The ctx is also
+	// re-based onto the PARENT'S RUN ctx, not this per-superstep tool-call
+	// ctx: the child captures whatever it is handed as its own run ctx
+	// (beginRunCtx via Invoke/Resume), and its speculative siblings must
+	// follow the run's lifetime — survive the relay's pause (which suspends
+	// the parent graph and tears down its stream, cancelling the derived ctx
+	// tree) and die only with the parent run (spec decision F1).
+	subCtx := detachStreamCtx{a.runCtxFor(specRunID(ctx), ctx)}
 	started := a.subagentStarted(ctx, sub, thread)
 	pending := SubagentInterrupt{Subagent: name, ToolCallID: toolCallIDFrom(ctx), ThreadID: thread}
 	seq := 0

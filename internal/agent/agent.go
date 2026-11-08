@@ -349,8 +349,12 @@ type Agent struct {
 	runCtxs  map[string]context.Context
 	// batchMemo holds completed tool results of the in-flight call batch so
 	// an interrupt re-execution does not re-run tools that already executed
-	// (side effects). Keys are tool call IDs; entries are deleted when the
-	// tools node returns normally.
+	// (side effects). Keys are (run id, tool call id) — call ids are unique
+	// only per conversation, so a bare-id key would let a concurrent run
+	// consume a parked run's memoized result (and replay its resume
+	// consumption) for a same-id call; entries are deleted when the tools
+	// node returns normally, and dropped by EndRun (a run cancelled while
+	// parked never returns from its tools node).
 	//
 	// The memo is process-local: a cross-process resume (new process over a
 	// durable saver) loses it, so the interrupted batch's already-completed
@@ -361,7 +365,7 @@ type Agent struct {
 	// follow-up. The foreground Task relay is unaffected for the child
 	// itself (its checkpoint thread is durable) but shares this gap for any
 	// sibling calls in the Task's batch.
-	batchMemo sync.Map // map[string]batchMemoEntry
+	batchMemo sync.Map // map[batchMemoKey]batchMemoEntry
 	// escalate rebuilds the model at the escalated output cap (optional).
 	escalate func() (language.ChatModel, error)
 	// toolBudget is the per-round tool-result character budget (0 disables).
@@ -1023,6 +1027,11 @@ func (a *Agent) LastThreadID() string {
 // final response is then recovered per RecoverOutputLimit. threadID keys the
 // run's checkpoints (resume via Resume with the same threadID); an interrupt
 // surfaces as a *lgtypes.GraphInterrupt error carrying the pending request.
+//
+// EndRun contract: every driver that finishes a run (done, error, or cancel —
+// including a parked run that is abandoned) should call EndRun with the run's
+// ctx so its speculative bookkeeping is released; a scoped ctx
+// (tracing.WithRun) whose run never ends leaks one runCtxs entry per run id.
 func (a *Agent) Invoke(ctx context.Context, history []messages.Message, threadID string) ([]messages.Message, error) {
 	a.ResetTurnCounter() // one Invoke = one turn for MaxTurns accounting
 	out, err := a.runTurn(ctx, history, threadID)
@@ -1086,6 +1095,7 @@ func (a *Agent) runTurn(ctx context.Context, history []messages.Message, threadI
 // completion, returning the transcript. It is also the cross-process resume
 // path: with a durable Saver configured, a process restart can resume the
 // thread's latest paused checkpoint (the old ResumeCheckpoint semantics).
+// See Invoke for the EndRun contract on run termination.
 func (a *Agent) Resume(ctx context.Context, threadID string, resumeValue any) ([]messages.Message, error) {
 	// See runTurn: capture the driver's ctx as the run context.
 	a.beginRunCtx(specRunID(ctx), ctx)
@@ -1133,12 +1143,14 @@ func (a *Agent) CurrentModelName() string {
 var streamModes = []lggraph.StreamMode{lggraph.StreamUpdates, lggraph.StreamCustom, lggraph.StreamValues}
 
 // Stream runs the agent on threadID and streams graph progress chunks.
+// See Invoke for the EndRun contract on run termination.
 func (a *Agent) Stream(ctx context.Context, history []messages.Message, threadID string) iter.Seq2[lggraph.StreamChunk, error] {
 	return a.streamWithBudget(ctx, history, threadID, 0)
 }
 
 // ResumeStream answers a pending interrupt on threadID and continues the run
-// as a chunk stream (the streaming counterpart of Resume).
+// as a chunk stream (the streaming counterpart of Resume). See Invoke for
+// the EndRun contract on run termination.
 func (a *Agent) ResumeStream(ctx context.Context, threadID string, resumeValue any) iter.Seq2[lggraph.StreamChunk, error] {
 	return a.resumeStreamWithBudget(ctx, threadID, resumeValue, 0)
 }
@@ -1509,6 +1521,16 @@ type batchMemoEntry struct {
 	consumed int
 }
 
+// batchMemoKey scopes a memoized result to the run that produced it: tool
+// call ids are unique only per provider conversation, so concurrent runs on
+// one agent legally reuse them, and a bare-id key would let one run consume
+// (or delete) another run's parked memo (spec decision F1's isolation rule,
+// applied to the batch memo).
+type batchMemoKey struct {
+	run  string
+	call string
+}
+
 // toolsNode executes pending tool calls, applying the interaction gate and
 // Pre/Post tool-use hooks.
 func (a *Agent) toolsNode() lggraph.NodeFunc {
@@ -1555,7 +1577,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				futures[i] = f
 				continue
 			}
-			if m, ok := a.batchMemo.Load(call.ID); ok {
+			if m, ok := a.batchMemo.Load(batchMemoKey{run: specRun, call: call.ID}); ok {
 				entry := m.(batchMemoEntry)
 				results[i] = entry.msg
 				memoHits[i] = true
@@ -1686,7 +1708,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				// the attribution is approximate when two calls interrupt at
 				// the same time — already an order-ambiguous case.
 				total := consumed[i] + lggraph.InterruptConsumeCount(tctx) - execBase
-				a.batchMemo.Store(call.ID, batchMemoEntry{msg: results[i], consumed: total})
+				a.batchMemo.Store(batchMemoKey{run: specRun, call: call.ID}, batchMemoEntry{msg: results[i], consumed: total})
 			})
 		}
 		wg.Wait()
@@ -1700,8 +1722,10 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		}
 		// The batch finished without an interrupt: drop its memo entries
 		// (both return paths below — the MaxTurns cap and the normal return).
+		// Only this run's entries: a parked sibling run's memo must survive
+		// its own resume.
 		for _, call := range calls {
-			a.batchMemo.Delete(call.ID)
+			a.batchMemo.Delete(batchMemoKey{run: specRun, call: call.ID})
 		}
 		// Results are merged into state: retire the consumed futures. On the
 		// interrupt path above they remain for a same-process resume (their

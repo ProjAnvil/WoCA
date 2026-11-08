@@ -279,17 +279,26 @@ func (a *Agent) runCtxFor(runID string, fallback context.Context) context.Contex
 
 // EndRun releases a run's speculative-execution bookkeeping: remaining
 // futures are cancelled (the run is over — done, errored or cancelled — so
-// stragglers like a tail -f speculated sibling must not outlive it) and the
-// captured run context is dropped. Every driver calls it on every exit
-// path (runner.Run and RunGoal defers; the ee worker). Idempotent and a
-// no-op for runs that never speculated. Runs without a tracing scope
-// release the "" bucket (see specRunID).
+// stragglers like a tail -f speculated sibling must not outlive it), the
+// captured run context is dropped, and the run's batch-memo entries are
+// removed (a run cancelled while parked never returns from its tools node,
+// so its memoized results would otherwise leak — and, on the "" bucket,
+// outlive their run). Every driver calls it on every exit path (runner.Run
+// and RunGoal defers; the ee worker). Idempotent and a no-op for runs that
+// never speculated. Runs without a tracing scope release the "" bucket (see
+// specRunID).
 func (a *Agent) EndRun(ctx context.Context) {
 	runID := specRunID(ctx)
 	a.spec.endRun(runID)
 	a.runCtxMu.Lock()
 	delete(a.runCtxs, runID)
 	a.runCtxMu.Unlock()
+	a.batchMemo.Range(func(k, _ any) bool {
+		if key, ok := k.(batchMemoKey); ok && key.run == runID {
+			a.batchMemo.Delete(k)
+		}
+		return true
+	})
 }
 
 // speculativeAllowed reports whether call may be pre-started during model

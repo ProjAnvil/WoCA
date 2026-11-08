@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,7 +25,9 @@ import (
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/cpserde"
 	"github.com/projanvil/woca/internal/permissions"
+	"github.com/projanvil/woca/internal/platform/executor"
 	"github.com/projanvil/woca/internal/tools"
+	"github.com/projanvil/woca/internal/tracing"
 )
 
 func TestDeriveSubagentThreadDeterministic(t *testing.T) {
@@ -811,4 +815,334 @@ func TestParentThreadForPrefersCtxCarrier(t *testing.T) {
 	if got := a.parentThreadFor(withToolCallID(t.Context(), "call_2")); got != "global-thread" {
 		t.Fatalf("id-only carrier: parentThreadFor = %q, want global-thread fallback", got)
 	}
+}
+
+// --- Fix round: per-run isolation of the relay ctx and the batch memo -------
+
+// relaySiblingMarker is the output marker of the relay test's speculated
+// read-only sibling command.
+const relaySiblingMarker = "RELAY-SIBLING-RESULT"
+
+// relayProbeExec wraps the local executor for the relay-isolation test:
+// executions of the sibling probe command are delayed so the speculated
+// sibling is still in flight when the parent graph suspends, and every probe
+// execution records whether its context was cancelled (killed) or ran to
+// completion. The subagent inherits the parent's executor (newSubagent), so
+// the child's Bash calls are observable here without custom child tools.
+type relayProbeExec struct {
+	executor.Executor
+	delay  time.Duration
+	mu     sync.Mutex
+	done   int // probe executions that ran to completion
+	killed int // probe executions whose ctx was cancelled first
+}
+
+func (e *relayProbeExec) Exec(ctx context.Context, req executor.ExecRequest) (executor.ExecResult, error) {
+	if req.Name != "bash" || len(req.Args) != 2 || !strings.Contains(req.Args[1], relaySiblingMarker) {
+		return e.Executor.Exec(ctx, req)
+	}
+	select {
+	case <-time.After(e.delay):
+	case <-ctx.Done():
+		e.mu.Lock()
+		e.killed++
+		e.mu.Unlock()
+		return executor.ExecResult{}, ctx.Err()
+	}
+	res, err := e.Executor.Exec(ctx, req)
+	e.mu.Lock()
+	if err != nil && ctx.Err() != nil {
+		e.killed++
+	} else {
+		e.done++
+	}
+	e.mu.Unlock()
+	return res, err
+}
+
+func (e *relayProbeExec) stats() (done, killed int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.done, e.killed
+}
+
+// waitProbeDone polls until n probe executions completed (bounded).
+func waitProbeDone(t *testing.T, e *relayProbeExec, n int) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if done, _ := e.stats(); done >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			done, killed := e.stats()
+			t.Fatalf("probe completions = %d (killed %d), want >= %d", done, killed, n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// subReportModel is the relay isolation test's subagent model: the first
+// round returns the scripted tool-call batch; every later round reports every
+// tool result the child's tools node produced, so the test can assert exactly
+// what the child consumed for its speculated sibling.
+type subReportModel struct {
+	batch messages.Message
+}
+
+func (m *subReportModel) pick(input []messages.Message) messages.Message {
+	toolResults := 0
+	for _, msg := range input {
+		if msg.Role == messages.RoleTool {
+			toolResults++
+		}
+	}
+	if toolResults == 0 {
+		return m.batch
+	}
+	var b strings.Builder
+	b.WriteString("sub report")
+	for _, msg := range input {
+		if msg.Role == messages.RoleTool {
+			b.WriteString("\n[" + msg.ToolCallID + "] " + msg.Content)
+		}
+	}
+	return messages.AI(b.String())
+}
+
+func (m *subReportModel) Invoke(_ context.Context, input []messages.Message, _ ...runnables.Option) (messages.Message, error) {
+	return m.pick(input), nil
+}
+
+func (m *subReportModel) Batch(_ context.Context, inputs [][]messages.Message, opts ...runnables.Option) ([]messages.Message, error) {
+	out := make([]messages.Message, len(inputs))
+	for i, in := range inputs {
+		resp, err := m.Invoke(context.Background(), in, opts...)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = resp
+	}
+	return out, nil
+}
+
+func (m *subReportModel) Stream(_ context.Context, input []messages.Message, _ ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	return runnables.NewSliceStream([]messages.Message{m.pick(input)}), nil
+}
+
+func (m *subReportModel) InputSchema() schema.Schema {
+	return schema.Schema{"type": "array", "description": "chat messages"}
+}
+func (m *subReportModel) OutputSchema() schema.Schema { return schema.Schema{"type": "object"} }
+
+// BindTools returns the model itself (transcript-driven; see transcriptModel).
+func (m *subReportModel) BindTools([]coretools.Tool) (language.ChatModel, error) { return m, nil }
+
+func (m *subReportModel) Capabilities() language.ChatModelCapabilities {
+	return language.ChatModelCapabilities{ToolCalling: true, Streaming: true}
+}
+
+// TestForegroundSubagentRelayKeepsSpecSiblingAlive: F1's lifetime invariant at
+// the subagent-relay surface. The child's batch is [speculated read-only
+// sibling, permission-gated Write]: the sibling starts during the child's
+// model streaming; the Write's pause relays as a SubagentInterrupt and
+// suspends the PARENT graph, whose stream teardown cancels its derived ctx
+// tree — including the ctx the child captured as its run ctx. The sibling
+// must survive that suspension (it may only die with the parent run) and the
+// relay-resumed child must see the sibling's real result, never the
+// cancellation artifact ("Exit code -1") — the self-loss scenario of
+// internal/server/runisolation_test.go, relocated onto the relay.
+func TestForegroundSubagentRelayKeepsSpecSiblingAlive(t *testing.T) {
+	workdir := t.TempDir()
+	exec := &relayProbeExec{Executor: executor.NewLocal(), delay: 600 * time.Millisecond}
+	parentModel := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+				{ID: "t1", Name: "Task", Args: map[string]any{
+					"description": "probe",
+					"prompt":      "run the probe",
+				}},
+			}},
+			messages.AI("parent done"),
+		),
+	)
+	a, err := New(Config{
+		Model: parentModel,
+		SubagentModel: &subReportModel{batch: messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+			{ID: "s1", Name: "Bash", Args: map[string]any{"command": "echo " + relaySiblingMarker}},
+			{ID: "w1", Name: "Write", Args: map[string]any{"file_path": "gated.txt", "content": "x"}},
+		}}},
+		Registry:       tools.NewRegistry(workdir),
+		Exec:           exec,
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeDefault,
+		WorkDir:        workdir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := tracing.WithRun(t.Context(), "run-relay", "sess-relay")
+	thread := "thread-relay-spec-sibling"
+
+	intrs, _ := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread))
+	if len(intrs) != 1 {
+		t.Fatalf("pauses = %d, want 1", len(intrs))
+	}
+	si, ok := DecodeInterruptValue(intrs[0].Value).(SubagentInterrupt)
+	if !ok {
+		t.Fatalf("interrupt payload = %T, want SubagentInterrupt", DecodeInterruptValue(intrs[0].Value))
+	}
+	if si.Inner.ToolName != "Write" {
+		t.Fatalf("Inner.ToolName = %q, want Write", si.Inner.ToolName)
+	}
+
+	// Approve: the parent resumes, the relay resumes the child, and the
+	// child's report surfaces whatever its tools node produced for the
+	// speculated sibling.
+	_, final := pumpStream(t, a.ResumeStream(ctx, thread, "y"))
+	if !toolContentContains(final, relaySiblingMarker) {
+		t.Errorf("child report lacks the sibling's real result; final transcript: %v", final)
+	}
+	if toolContentContains(final, "Exit code -1") {
+		t.Errorf("child consumed the sibling's cancellation artifact; final transcript: %v", final)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "gated.txt")); err != nil {
+		t.Errorf("child Write did not execute after approval: %v", err)
+	}
+
+	// The lifetime invariant itself: by now the parent has suspended and
+	// resumed once, so a sibling derived from the parent's per-superstep ctx
+	// would have been killed by the suspension's stream teardown.
+	waitProbeDone(t, exec, 1)
+	_, killed := exec.stats()
+	if killed != 0 {
+		t.Errorf("the child's speculated sibling was killed by the parent's suspension %d time(s); the relay ctx must derive from the parent's run ctx so the sibling dies with the run, not with the superstep", killed)
+	}
+}
+
+// memoProbeTool builds the batch-memo test's non-speculative probe: an
+// unknown-category tool (never speculated; allow-ruled so its gate never
+// interrupts) whose result names its own execution ordinal.
+func memoProbeTool(n *atomic.Int32) coretools.Tool {
+	t, err := coretools.FromFunc("memo_probe", "test memo probe tool",
+		func(ctx context.Context, args struct{}) (coretools.Result, error) {
+			return coretools.Result{Content: fmt.Sprintf("own-%d", n.Add(1))}, nil
+		})
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+// memoProbeAgent builds the shared agent for the batch-memo isolation tests:
+// default mode with allow rules for both extra tools, so gates pass without
+// interrupts and only the pausing tool's execution-phase interrupt parks a
+// run. responses scripts the SHARED model in global model-call order.
+func memoProbeAgent(t *testing.T, responses ...messages.Message) (*Agent, *atomic.Int32, *atomic.Int32) {
+	t.Helper()
+	var n, completions atomic.Int32
+	a, err := New(Config{
+		Model: language.NewFakeChatModel(
+			language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+			language.WithResponses(responses...),
+		),
+		Registry:       tools.NewRegistry(t.TempDir()),
+		ExtraTools:     []coretools.Tool{memoProbeTool(&n), pausingTestTool(&completions)},
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeDefault,
+		Permissions:    &permissions.Rules{Allow: []string{"memo_probe", "pausing_tool"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a, &n, &completions
+}
+
+func memoBatch(id1, id2 string) messages.Message {
+	calls := []messages.ToolCall{{ID: id1, Name: "memo_probe", Args: map[string]any{}}}
+	if id2 != "" {
+		calls = append(calls, messages.ToolCall{ID: id2, Name: "pausing_tool", Args: map[string]any{}})
+	}
+	return messages.Message{Role: messages.RoleAI, ToolCalls: calls}
+}
+
+// TestBatchMemoScopedPerRun: a run parked on an interrupt keeps its completed
+// calls memoized for its own resume; the memo must be scoped to the run, so a
+// concurrent run making the same-id call (ids are unique only per
+// conversation) resolves its OWN execution instead of silently consuming the
+// parked run's memoized result plus its ReplayInterruptConsumption count —
+// and must not delete the parked run's memo on its own normal return.
+func TestBatchMemoScopedPerRun(t *testing.T) {
+	a, n, _ := memoProbeAgent(t,
+		memoBatch("call_1", "call_2"), // A's batch: memo_probe executes, pausing_tool parks A
+		memoBatch("call_1", ""),       // B reuses A's call id on its own non-speculative call
+		messages.AI("b done"),
+		messages.AI("a done"),
+	)
+	ctxA := tracing.WithRun(t.Context(), "memo-run-a", "sess-a")
+	ctxB := tracing.WithRun(t.Context(), "memo-run-b", "sess-b")
+
+	// A parks on the pausing tool's execution interrupt, with call_1's
+	// completed result memoized for A's resume.
+	intrs, _ := pumpStream(t, a.Stream(ctxA, []messages.Message{messages.Human("a")}, "thread-memo-a"))
+	if len(intrs) != 1 || decodeInterruptPayload(intrs[0].Value) != "pause-here" {
+		t.Fatalf("A paused on %v, want the pausing tool's execution interrupt", intrs)
+	}
+
+	// B's same-id call must get B's OWN result, not A's parked memo.
+	_, bFinal := pumpStream(t, a.Stream(ctxB, []messages.Message{messages.Human("b")}, "thread-memo-b"))
+	if !toolContentContains(bFinal, "own-2") {
+		t.Errorf("run B did not get its own result for the same-id call (want own-2); B's transcript: %v", bFinal)
+	}
+	if got := n.Load(); got != 2 {
+		t.Errorf("memo_probe executed %d times after B, want 2 (A once, B once) — B skipped its own execution", got)
+	}
+
+	// A's resume must still replay A's OWN memo (exactly one execution for
+	// A's call) and hand the pausing tool its own resume value.
+	_, aFinal := pumpStream(t, a.ResumeStream(ctxA, "thread-memo-a", "answer"))
+	if !toolContentContains(aFinal, "own-1") {
+		t.Errorf("A's resume lost its own memoized result (want own-1); A's transcript: %v", aFinal)
+	}
+	if !toolContentContains(aFinal, "resumed:answer") {
+		t.Errorf("A's pausing tool consumed the wrong resume value; A's transcript: %v", aFinal)
+	}
+	if got := n.Load(); got != 2 {
+		t.Errorf("memo_probe executed %d times after A's resume, want still 2 (A's memo replayed)", got)
+	}
+
+	// Both runs ended: no memo entry may survive them.
+	a.EndRun(ctxA)
+	a.EndRun(ctxB)
+	if count := batchMemoLen(a); count != 0 {
+		t.Errorf("%d batchMemo entries survived both runs' EndRun", count)
+	}
+}
+
+// TestBatchMemoEndRunDropsParkedEntries: a run cancelled while parked never
+// returns from its tools node, so its memo entries would leak forever;
+// EndRun must drop them (the memo is per-run bookkeeping, like the
+// speculative registry).
+func TestBatchMemoEndRunDropsParkedEntries(t *testing.T) {
+	a, _, _ := memoProbeAgent(t, memoBatch("call_1", "call_2"))
+	ctx := tracing.WithRun(t.Context(), "memo-run-parked", "sess-p")
+	intrs, _ := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("go")}, "thread-memo-parked"))
+	if len(intrs) != 1 {
+		t.Fatalf("pauses = %d, want 1", len(intrs))
+	}
+	if count := batchMemoLen(a); count != 1 {
+		t.Fatalf("parked batch memo entries = %d, want 1 (the completed call)", count)
+	}
+	a.EndRun(ctx)
+	if count := batchMemoLen(a); count != 0 {
+		t.Errorf("EndRun left %d memo entries of the cancelled parked run", count)
+	}
+}
+
+// batchMemoLen counts the agent's memo entries (white-box).
+func batchMemoLen(a *Agent) int {
+	count := 0
+	a.batchMemo.Range(func(_, _ any) bool { count++; return true })
+	return count
 }
