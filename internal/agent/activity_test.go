@@ -775,3 +775,47 @@ func TestReleaseSessionRemovesRecords(t *testing.T) {
 		t.Fatalf("queued after release = %d, want 0", n)
 	}
 }
+
+// TestActivitySeamQueueSharesAgentInputsBuffer pins the single-live-buffer
+// wiring (queue-extraction follow-up): New must hand the activity seam's
+// Queue dep the one buffer the agent's queue delegates use — &a.inputs — so
+// the seam's Snapshot/Release observe exactly what QueueNotificationFor and
+// friends queue. The seam stores its Deps privately behind no accessor, so
+// pointer identity is not reachable from this package without unsafe
+// reflection; the pin is therefore behavioral, probing both directions of
+// the seam's Queue interface differentially against the delegates. If New
+// ever wires a second Buffer into the seam, the two sides disagree and this
+// test fails.
+func TestActivitySeamQueueSharesAgentInputsBuffer(t *testing.T) {
+	a, _ := newActivityAgent(t)
+	const session = "pin-buffer-session"
+
+	// Nothing queued anywhere: both sides read zero.
+	if got := a.QueuedNotificationCountFor(session); got != 0 {
+		t.Fatalf("delegate QueuedNotificationCountFor before queueing = %d, want 0", got)
+	}
+	if got := a.ActivityFor(session).PendingNotifications; got != 0 {
+		t.Fatalf("seam PendingNotifications before queueing = %d, want 0", got)
+	}
+
+	// Read direction (Queue.TaggedCount): queue through the delegate (lands
+	// in a.inputs), then read through the seam (reads the seam's own Queue
+	// dep). A second buffer handed to the seam reads 0 here.
+	a.QueueNotificationFor(session, "pin-tag", "queued via the delegate")
+	if got := a.QueuedNotificationCountFor(session); got != 1 {
+		t.Fatalf("delegate QueuedNotificationCountFor after queueing = %d, want 1", got)
+	}
+	if got := a.ActivityFor(session).PendingNotifications; got != 1 {
+		t.Fatalf("seam PendingNotifications after queueing = %d, want 1: "+
+			"the seam's Queue dep is not the delegates' buffer", got)
+	}
+
+	// Drop direction (Queue.DropScope): releasing through the seam must empty
+	// the buffer the delegates read. A second buffer handed to the seam drops
+	// only itself and the delegate count stays 1 here.
+	a.ReleaseSession(session)
+	if got := a.QueuedNotificationCountFor(session); got != 0 {
+		t.Fatalf("delegate QueuedNotificationCountFor after seam release = %d, "+
+			"want 0: the seam's Queue dep is not the delegates' buffer", got)
+	}
+}

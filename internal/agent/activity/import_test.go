@@ -8,27 +8,45 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 )
 
-// agentImportPath is the parent package this subpackage was extracted from
-// (arch-cleanup spec F1). Importing it from here — production file or test
-// file — would create an import cycle (internal/agent imports this package),
-// or worse, quietly re-couple the extracted seam to the god package. The
-// compiler rejects the cycle in same-package files, but an external
-// activity_test file importing internal/agent would compile and rot the
-// architecture; this guard makes both impossible to miss.
-const agentImportPath = "github.com/projanvil/woca/internal/agent"
+// moduleInternalPrefix is the module's internal/ tree: every woca-internal
+// package lives under it. This subpackage was extracted from the god package
+// (arch-cleanup spec F1) as the seam over manager interfaces; its internal/*
+// dependencies are deliberately near-zero, and this guard keeps them that
+// way. Importing internal/agent — production file or test file — would create
+// an import cycle (internal/agent imports this package), or worse, quietly
+// re-couple the extracted seam to the god package; the compiler rejects the
+// cycle in same-package files, but an external activity_test file importing
+// internal/agent would compile and rot the architecture. Any other internal/*
+// import would quietly grow the extraction's dependency footprint. This guard
+// makes all of it impossible to miss.
+const moduleInternalPrefix = "github.com/projanvil/woca/internal/"
 
-// pkgImportPath is this package's own import path, used to relocate the
-// sources on disk when -trimpath has rewritten runtime.Caller paths (see
-// pkgSourceDir).
+// allowedInternalImports are the only woca-internal packages this package may
+// import: internal/tools (the todo/shell types and StopOrigin the seam's
+// interfaces speak) and internal/tracing (test-only visibility scoping).
+// Adding an entry is an architecture decision, not a fix for a failing
+// build — widen the extraction's spec first.
+var allowedInternalImports = map[string]bool{
+	"github.com/projanvil/woca/internal/tracing": true,
+	"github.com/projanvil/woca/internal/tools":   true,
+}
+
+// pkgImportPath is this package's own import path: excluded from the scan
+// below (an external activity_test file legitimately imports the package
+// under test) and used to relocate the sources on disk when -trimpath has
+// rewritten runtime.Caller paths (see pkgSourceDir).
 const pkgImportPath = "github.com/projanvil/woca/internal/agent/activity"
 
-// TestPackageNeverImportsAgent fails if any .go file in this package —
-// production or test, internal or external — imports internal/agent.
-func TestPackageNeverImportsAgent(t *testing.T) {
+// TestPackageInternalImportsWhitelisted fails if any .go file in this
+// package — production or test, internal or external — imports a
+// github.com/projanvil/woca/internal/* package that is not whitelisted in
+// allowedInternalImports.
+func TestPackageInternalImportsWhitelisted(t *testing.T) {
 	dir := pkgSourceDir(t, pkgImportPath)
 
 	entries, err := os.ReadDir(dir)
@@ -48,17 +66,34 @@ func TestPackageNeverImportsAgent(t *testing.T) {
 		}
 		for _, imp := range f.Imports {
 			path := strings.Trim(imp.Path.Value, `"`)
-			if path == agentImportPath {
+			if path == pkgImportPath {
+				continue // the package itself, via an external test file
+			}
+			if strings.HasPrefix(path, moduleInternalPrefix) && !allowedInternalImports[path] {
 				offenders = append(offenders, fmt.Sprintf("%s imports %s", name, path))
 			}
 		}
 	}
 	if len(offenders) > 0 {
-		t.Fatalf("activity package must not import internal/agent (spec F1, dependency "+
-			"inversion): the seam's manager surfaces arrive as interfaces injected by "+
-			"the agent package. Offending files:\n%s",
+		t.Fatalf("activity package may import no woca-internal packages but "+
+			"%s (spec F1, dependency inversion): the seam's manager surfaces "+
+			"arrive as interfaces injected by the agent package, and any new "+
+			"internal dependency must be added to allowedInternalImports "+
+			"deliberately. Offending files:\n%s",
+			strings.Join(keysOf(allowedInternalImports), ", "),
 			strings.Join(offenders, "\n"))
 	}
+}
+
+// keysOf returns the map's keys in sorted order, for deterministic failure
+// messages.
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // pkgSourceDir resolves this package's source directory on disk, given the

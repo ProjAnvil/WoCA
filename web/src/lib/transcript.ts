@@ -13,6 +13,7 @@ export const nid = () => `i${Date.now().toString(36)}${(seq++).toString(36)}`
 // prefixes stop at the tag name (no closing >) so wrappers carrying
 // attributes match too — the same tolerance the Go retain filter
 // (runQuestion) applies to these tags.
+// Canonical producer of the <tag> wrappers: Format in internal/agent/queue (Go).
 const NOTICE_TAGS = ['<background-task-completed', '<scheduled-task', '<queued-user-input']
 
 // isNoticeContent reports whether a Human message's content is one of the
