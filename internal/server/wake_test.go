@@ -842,7 +842,7 @@ func TestWakeRechecksAfterAdmissionRelease(t *testing.T) {
 	waitForTranscript(t, ts.URL, sid, "late notification delivered", func(msgs []messages.Message) bool {
 		for _, m := range msgs {
 			if m.Role == messages.RoleHuman &&
-				strings.Contains(m.Content, "<background-task-completed>") &&
+				strings.Contains(m.Content, "background-task-completed") &&
 				strings.Contains(m.Content, "r4") {
 				return true
 			}
@@ -855,5 +855,125 @@ func TestWakeRechecksAfterAdmissionRelease(t *testing.T) {
 	}
 	if n := a.QueuedInputCountFor(sid); n != 0 {
 		t.Fatalf("queued count = %d, want 0 (the notification was delivered)", n)
+	}
+}
+
+// Scenario stall (deferred from the wake-driver review, spec §1 item 3): a
+// wake run whose START fails requeues its drained items with their Quiet
+// flags intact and stalls the session's driver — one attempt, no retry
+// ladder — so neither the requeued wakeable item nor a late completion can
+// wake while stalled. A user run is the design's reset point
+// (resetWakeChain, runs.go's POST path): after it, the next wake
+// opportunity delivers everything — the requeued wakeable item wakes the
+// session, the requeued Quiet item only rides along (D1).
+//
+// The failed start is produced without racing: the session's admission gate
+// is filled directly through the admission seam (one holder plus a full
+// FIFO of waiters), so startRunWith fails at admission with errQueueFull —
+// the same error a runaway client earns. wakeAfterRun is driven
+// synchronously: it is exactly the seam a genuinely full session exercises
+// (a finishing run's wake attempt while its queued successors hold every
+// slot), and its wakeMu serialization means the stall is settled when it
+// returns.
+func TestWakeFailedStartRequeuesQuietAndStallsUntilUserRun(t *testing.T) {
+	a := newWakeAgent(t, 0, messages.AI("noted"))
+	s, ts := newWakeServer(t, a, nil)
+	const sid = "s1"
+
+	// Fill the gate: one holder plus maxQueuedPerSession waiters — the next
+	// admission.enter (the wake run's) fails.
+	if w, pos, ok := s.admission.enter(sid, nil); w != nil || pos != 0 || !ok {
+		t.Fatalf("holder enter = waiter %v pos %d ok %v", w != nil, pos, ok)
+	}
+	for i := 0; i < maxQueuedPerSession; i++ {
+		if _, _, ok := s.admission.enter(sid, nil); !ok {
+			t.Fatalf("waiter %d could not queue behind the holder", i)
+		}
+	}
+
+	// One wakeable and one Quiet completion, queued through the agent seam
+	// (the observer's busy check leaves them queued — the session is full).
+	a.QueueNotificationFor(sid, "background-task-completed",
+		"Background shell 9 finished (exit code 0): echo stalled\nOutput (tail):\nstalled")
+	a.QueueQuietNotificationFor(sid, "background-task-completed",
+		"Background shell 7 was killed by the user: sleep 30")
+	waitForQueueCount(t, a, sid, 2)
+	if n := a.WakeableCountFor(sid); n != 1 {
+		t.Fatalf("wakeable = %d, want 1 before the wake attempt", n)
+	}
+
+	// The failed start: the run-finish seam tries to wake the full session.
+	s.wakeAfterRun(sid)
+
+	// Requeue with Quiet preserved: both items are back, and only the
+	// wakeable one counts — a requeue that lost the Quiet flag would show 2.
+	s.wakeMu.Lock()
+	stalled := s.wakeStalled[sid]
+	s.wakeMu.Unlock()
+	if !stalled {
+		t.Fatal("session not stalled after the failed wake start")
+	}
+	if n := a.QueuedInputCountFor(sid); n != 2 {
+		t.Fatalf("requeued items = %d, want 2", n)
+	}
+	if n := a.WakeableCountFor(sid); n != 1 {
+		t.Fatalf("wakeable after requeue = %d, want 1 (Quiet flag must survive the requeue)", n)
+	}
+
+	// While stalled nothing wakes — not even the run-finish seam again (the
+	// strongest re-entry a late completion gets). The failed attempt is the
+	// only registered run.
+	s.wakeAfterRun(sid)
+	time.Sleep(100 * time.Millisecond) // observer goroutines from the queues settle
+	if n := a.QueuedInputCountFor(sid); n != 2 {
+		t.Fatalf("stalled driver disturbed the queue: %d items, want 2", n)
+	}
+	if ids := registeredRuns(t, s); len(ids) != 1 {
+		t.Fatalf("%d runs while stalled, want 1 (the failed attempt only)", len(ids))
+	}
+
+	// The user-run reset: free the gate (the queued successors drain) and
+	// clear the stall — what POST /api/runs does around startRun.
+	for i := 0; i < 1+maxQueuedPerSession; i++ {
+		s.admission.release(sid)
+	}
+	s.resetWakeChain(sid)
+	if n := a.QueuedInputCountFor(sid); n != 2 {
+		t.Fatalf("reset disturbed the requeued items: %d, want 2", n)
+	}
+
+	// The next opportunity: a new wakeable completion on the now-idle
+	// session. The driver wakes and delivers everything in one coalesced
+	// message — the requeued wakeable item included, the Quiet one riding
+	// along without ever having triggered a run.
+	a.QueueNotificationFor(sid, "background-task-completed",
+		"Background shell 8 finished (exit code 0): echo recovered\nOutput (tail):\nrecovered")
+	ids := waitForRuns(t, s, 2)
+	wakeID := ids[len(ids)-1]
+	waitRunDoneInProc(t, s, wakeID)
+	wakeData := runStartedData(t, replayRunEvents(t, ts.URL, wakeID))
+	if auto, _ := wakeData["auto"].(bool); !auto {
+		t.Fatalf("wake run run_started = %v, want auto:true", wakeData)
+	}
+	waitForTranscript(t, ts.URL, sid, "coalesced delivery of requeued and new items", func(msgs []messages.Message) bool {
+		for _, m := range msgs {
+			if m.Role != messages.RoleHuman {
+				continue
+			}
+			if strings.Count(m.Content, "<background-task-completed>") == 3 &&
+				strings.Contains(m.Content, "stalled") &&
+				strings.Contains(m.Content, "was killed by the user") &&
+				strings.Contains(m.Content, "recovered") {
+				return true
+			}
+		}
+		return false
+	})
+	if n := a.QueuedInputCountFor(sid); n != 0 {
+		t.Fatalf("queued after the wake run = %d, want 0 (all three delivered)", n)
+	}
+	time.Sleep(250 * time.Millisecond)
+	if n := len(registeredRuns(t, s)); n != 2 {
+		t.Fatalf("%d runs after settle, want 2 (failed attempt + one wake)", n)
 	}
 }

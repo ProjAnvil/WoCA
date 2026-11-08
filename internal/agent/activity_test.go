@@ -666,6 +666,93 @@ func TestReleasedDropAtomicWithQueueing(t *testing.T) {
 	}
 }
 
+// TestEmitActivityReleaseRaceCannotQueueOrWake pins the documented
+// best-effort contract of a manager change racing ReleaseSession (D2, spec
+// §1 item 3). A real completion drives two seams at once: the notification
+// queues (queueNotification) and the observer fan-out fires (emitActivity).
+// The QUEUE half is atomic against the release — the released decision
+// lives inside addTagged's critical section, and dropScope removes anything
+// that appended before the mark — so the race can never leave a queued or
+// wakeable item behind. The OBSERVER half is deliberately best-effort: a
+// call that read observer+silenced just before the mark may still fire
+// once after the release (that window cannot be closed without calling
+// user code under a lock), which is harmless exactly because the wake
+// drivers gate on the queue (WakeableCountFor), never on the observer.
+// This test hammers the race under the detector and asserts what IS
+// guaranteed: no queued item, no wakeable count — during the race by the
+// atomicity above, and after it because the mark silences both seams
+// absolutely. Spurious in-race observer fires are permitted and therefore
+// not asserted to be zero.
+func TestEmitActivityReleaseRaceCannotQueueOrWake(t *testing.T) {
+	a, _ := newActivityAgent(t)
+	rec := &activityRecorder{}
+	a.SetActivityObserver(rec.observe)
+	notifyFired := make(map[string]int)
+	var notifyMu sync.Mutex
+	a.SetNotificationObserver(func(q QueuedInput) {
+		notifyMu.Lock()
+		notifyFired[q.Session]++
+		notifyMu.Unlock()
+	})
+	const iterations = 200
+	const producers = 4
+	for i := 0; i < iterations; i++ {
+		session := fmt.Sprintf("sess-obs-race-%d", i)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(1 + producers)
+		for j := 0; j < producers; j++ {
+			go func() {
+				defer wg.Done()
+				<-start
+				// One completion-shaped unit: queue the notification, then
+				// fire the manager-change observer — the same two steps a
+				// background shell's exit performs.
+				a.queueNotification(QueuedInput{
+					Text: "racing completion", Tag: "background-task-completed", Session: session,
+				})
+				a.emitActivity(session, ActivityShells)
+			}()
+		}
+		go func() {
+			defer wg.Done()
+			<-start
+			a.ReleaseSession(session)
+		}()
+		close(start)
+		wg.Wait()
+
+		// Guaranteed invariants, checked immediately after the join.
+		if n := a.QueuedInputCountFor(session); n != 0 {
+			t.Fatalf("iteration %d: %d queued items survived the release race", i, n)
+		}
+		if n := a.WakeableCountFor(session); n != 0 {
+			t.Fatalf("iteration %d: %d wakeable items survived the release race", i, n)
+		}
+		// From the mark on, both seams are silent absolutely: neither the
+		// activity observer nor the notification observer fires again, and
+		// a late completion queues nothing.
+		obsBefore := rec.countForSession(session)
+		notifyMu.Lock()
+		notifBefore := notifyFired[session]
+		notifyMu.Unlock()
+		a.emitActivity(session, ActivityShells)
+		a.queueNotification(QueuedInput{Text: "late", Tag: "background-task-completed", Session: session})
+		if got := rec.countForSession(session); got != obsBefore {
+			t.Fatalf("iteration %d: activity observer fired %d time(s) after the release mark", i, got-obsBefore)
+		}
+		notifyMu.Lock()
+		notifAfter := notifyFired[session]
+		notifyMu.Unlock()
+		if notifAfter != notifBefore {
+			t.Fatalf("iteration %d: notification observer fired %d time(s) for a refused late item", i, notifAfter-notifBefore)
+		}
+		if n := a.QueuedInputCountFor(session); n != 0 {
+			t.Fatalf("iteration %d: %d late completions queued for a released session", i, n)
+		}
+	}
+}
+
 // F4: ReleaseSession removes the session's records entirely — finished or
 // running, shells and tasks alike — while unscoped ("") records and the
 // released mark itself (R2) survive.
