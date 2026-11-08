@@ -258,14 +258,22 @@ func TestActivitySnapshotShape(t *testing.T) {
 	waitRunDoneInProc(t, env.s, runID)
 
 	// The quick shell and the task complete on their own; both queue a
-	// notification (auto-wake off keeps them queued).
-	snap := waitForActivity(t, env, sid, "task completed and two queued notifications", func(m map[string]any) bool {
+	// notification (auto-wake off keeps them queued). Whether a completion
+	// STAYS pending or is consumed by the arming run's own mid-turn drain
+	// (delivered into the transcript before the run ends) is timing — the
+	// fast echo shell regularly beats the drain — so the deterministic
+	// contract is total accounting: both completions landed somewhere, none
+	// lost. The wait is terminal-stable: the run is done, auto-wake is off
+	// (nothing drains the queue afterwards) and the sleeper never finishes,
+	// so once the sum reaches 2 it stays 2.
+	snap := waitForActivity(t, env, sid, "task completed and both completions accounted for", func(m map[string]any) bool {
 		tasks := taskEntries(t, m)
 		if len(tasks) != 1 || tasks[0]["status"] != "completed" {
 			return false
 		}
 		wake, _ := m["wake"].(map[string]any)
-		return wake != nil && wake["pending_notifications"] == float64(2)
+		pending, _ := wake["pending_notifications"].(float64)
+		return int(pending)+taggedBlocks(sessionMessages(t, env.ts.URL, sid)) == 2
 	})
 
 	// Identity and server_time.
@@ -366,10 +374,20 @@ func TestActivitySnapshotShape(t *testing.T) {
 	}
 
 	// Wake: disabled by settings here (the default-on posture is asserted in
-	// the unknown-session test), nothing capped or stalled.
+	// the unknown-session test), nothing capped or stalled. The pending count
+	// is whatever the mid-turn-drain split left (1 or 2), but it must be the
+	// queue's own count and account, with the delivered blocks, for both
+	// completions.
 	wake, _ := snap["wake"].(map[string]any)
 	if wake["enabled"] != false || wake["capped"] != false || wake["stalled"] != false {
 		t.Fatalf("wake = %v, want enabled=false capped=false stalled=false", wake)
+	}
+	pending := int(wake["pending_notifications"].(float64))
+	if q := env.a.QueuedNotificationCountFor(sid); q != pending {
+		t.Fatalf("snapshot pending_notifications = %d, agent queue holds %d (must agree)", pending, q)
+	}
+	if sum := pending + taggedBlocks(sessionMessages(t, env.ts.URL, sid)); sum != 2 {
+		t.Fatalf("pending (%d) + delivered completions = %d, want 2 total", pending, sum)
 	}
 }
 
