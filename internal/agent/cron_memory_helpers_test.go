@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -860,6 +861,64 @@ func TestSpeculativeRegistryBounds(t *testing.T) {
 	}
 	if r.get("gate", "gate") != nil {
 		t.Fatal("cancelled future not removed")
+	}
+}
+
+// Eviction only forgets entries — it must never cancel a future the tools
+// node already holds via get(): an evicted-but-awaited future runs to
+// completion and returns its real result, while run-end (endRun) still
+// cancels everything the registry keeps for the run.
+func TestSpeculativeEvictionKeepsHeldFutureAlive(t *testing.T) {
+	var r speculativeRegistry
+	// The oldest dispatch, already get()-held by a simulated tools node.
+	heldCtx, heldCancel := context.WithCancel(t.Context())
+	defer heldCancel()
+	held := newToolFuture(heldCancel)
+	if !r.add("run", messages.ToolCall{ID: "c0", Name: "Read"}, held) {
+		t.Fatal("held dispatch must be new")
+	}
+	if r.get("run", "c0") != held {
+		t.Fatal("get must hand the tools node the registered future")
+	}
+	// The same run floods past the cap with real cancellable futures.
+	type floodEntry struct {
+		ctx    context.Context
+		cancel context.CancelFunc
+	}
+	flood := make([]floodEntry, maxSpeculativeFutures)
+	for i := range flood {
+		flood[i].ctx, flood[i].cancel = context.WithCancel(t.Context())
+		call := messages.ToolCall{ID: fmt.Sprintf("c%d", i+1), Name: "Read"}
+		if !r.add("run", call, newToolFuture(flood[i].cancel)) {
+			t.Fatalf("flood dispatch %d must be new", i+1)
+		}
+	}
+	if r.get("run", "c0") != nil {
+		t.Fatal("the oldest entry must be evicted past the cap")
+	}
+	if heldCtx.Err() != nil {
+		t.Fatal("eviction cancelled the held future's context")
+	}
+	// The held execution finishes after the eviction: the tools node's
+	// await resolves with the real result, not a cancellation error.
+	held.msg = messages.Tool("c0", "real result")
+	close(held.done)
+	if msg := held.wait(); msg.Content != "real result" {
+		t.Fatalf("held future resolved to %q, want its real result", msg.Content)
+	}
+	// Run-end still bounds every future the registry kept: the whole
+	// flood dies with the run and the registry empties.
+	r.endRun("run")
+	for i := range flood {
+		if flood[i].ctx.Err() == nil {
+			t.Fatalf("run-end did not cancel flood future %d", i+1)
+		}
+	}
+	r.mu.Lock()
+	size := len(r.futures)
+	r.mu.Unlock()
+	if size != 0 {
+		t.Fatalf("run-end left %d futures behind", size)
 	}
 }
 

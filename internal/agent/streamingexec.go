@@ -96,7 +96,11 @@ type speculativeRegistry struct {
 // the new dispatch is rejected loudly — the entry is replaced by an
 // already-resolved error result naming both calls, and the first execution
 // is cancelled — never silently absorbed. The oldest entries are evicted
-// past the cap (their calls then simply re-run in the tools node).
+// past the cap: eviction only forgets them (bounding the memory abandoned
+// futures occupy) — it never cancels, so a future the tools node already
+// holds via get still runs to completion and returns its real result; the
+// cancel handle stays with the run's own lifecycle (cancel/endRun), which
+// still bounds every future of the run.
 func (r *speculativeRegistry) add(runID string, call messages.ToolCall, f *toolFuture) bool {
 	key := specKey{run: runID, call: call.ID}
 	f.call = call
@@ -127,12 +131,13 @@ func (r *speculativeRegistry) add(runID string, call messages.ToolCall, f *toolF
 	for len(r.order) > 0 && len(r.futures) > maxSpeculativeFutures {
 		evict := r.order[0]
 		r.order = r.order[1:]
-		if ev, ok := r.futures[evict]; ok {
-			if ev.cancel != nil {
-				ev.cancel()
-			}
-			delete(r.futures, evict)
-		}
+		// Forget the entry without cancelling it: the tools node may
+		// already hold this future via get and be awaiting its result —
+		// an evicted-but-awaited future must still run to completion and
+		// deliver its real result. Eviction bounds the memory of
+		// abandoned futures only; the cancel handle stays with the
+		// run's lifecycle (cancel/endRun), which still bounds it.
+		delete(r.futures, evict)
 	}
 	return true
 }

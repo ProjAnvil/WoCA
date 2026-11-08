@@ -670,6 +670,7 @@ func (sh *backgroundShell) completion() (text string, stoppedBy StopOrigin) {
 	sh.mu.Lock()
 	st := BackgroundShellStatus{ID: sh.id, Command: sh.command, ExitCode: sh.exit, StoppedBy: sh.stoppedBy}
 	out := string(sh.buf)
+	dropped := sh.dropped
 	sh.mu.Unlock()
 	var b strings.Builder
 	switch st.StoppedBy {
@@ -683,6 +684,13 @@ func (sh *backgroundShell) completion() (text string, stoppedBy StopOrigin) {
 	if out != "" {
 		if len(out) > NotificationOutputCap {
 			out = "…\n" + out[len(out)-NotificationOutputCap:]
+		}
+		// The buffer cap's dropped prefix leads the tail (F3): the
+		// notification must never silently lose the older bytes the
+		// 1 MiB cap discarded. The notification clamp above is
+		// independent and stays as-is.
+		if dropped > 0 {
+			out = truncationMarker(dropped) + out
 		}
 		fmt.Fprintf(&b, "Output (tail):\n%s\n", strings.TrimRight(out, "\n"))
 	}

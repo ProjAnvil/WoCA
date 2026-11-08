@@ -173,6 +173,40 @@ func TestBackgroundShellNotificationOutputCap(t *testing.T) {
 	}
 }
 
+// A shell that overflowed the 1 MiB buffer cap says so in its completion
+// notification: the "Output (tail)" section leads with the exact
+// "[N older bytes truncated]" marker (F3) — no silent loss on the notify
+// path. The 2000-byte notification clamp still applies after the marker.
+func TestBackgroundShellCompletionCarriesTruncationMarker(t *testing.T) {
+	reg := NewRegistry(t.TempDir())
+	bg := reg.Background()
+
+	done := make(chan string, 1)
+	bg.SetNotify(func(c ShellCompletion) { done <- c.Text })
+
+	// 200000 numbered lines of 7 bytes each: 1 400 000 bytes total —
+	// comfortably past the 1 MiB buffer cap, fast, no sleeping.
+	const lines = 200000
+	const lineLen = 7 // "%06d\n"
+	cmd := fmt.Sprintf("awk 'BEGIN{for(i=1;i<=%d;i++)printf \"%%06d\\n\",i}'", lines)
+	if _, err := bg.Start(t.Context(), cmd, "", "."); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case text := <-done:
+		dropped := lines*lineLen - MaxBufferedOutputBytes
+		marker := fmt.Sprintf("[%d older bytes truncated]", dropped)
+		if !strings.Contains(text, "Output (tail):\n"+marker+"\n") {
+			t.Fatalf("notification tail missing dropped-bytes marker %q: %q", marker, text[:120])
+		}
+		if len(text) > len(marker)+NotificationOutputCap+500 {
+			t.Fatalf("notification too long despite clamp: %d", len(text))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no completion notification")
+	}
+}
+
 // Wait blocks until the shell finishes, the duration elapses, or ctx is
 // canceled; every branch returns promptly (bounded waits, no hang).
 func TestBackgroundShellWait(t *testing.T) {
