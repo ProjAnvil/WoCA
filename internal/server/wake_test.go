@@ -842,7 +842,7 @@ func TestWakeRechecksAfterAdmissionRelease(t *testing.T) {
 	waitForTranscript(t, ts.URL, sid, "late notification delivered", func(msgs []messages.Message) bool {
 		for _, m := range msgs {
 			if m.Role == messages.RoleHuman &&
-				strings.Contains(m.Content, "background-task-completed") &&
+				strings.Contains(m.Content, "<background-task-completed>") &&
 				strings.Contains(m.Content, "r4") {
 				return true
 			}
