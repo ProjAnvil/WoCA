@@ -4,10 +4,42 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
 )
+
+// TestDirectAssemblyServesOpsPaths pins the direct assembly's ops-path
+// behavior end to end (the console API chain over a fresh database): the
+// health route, an open-gate tenant route, and the skill-asset mount —
+// the exact wiring the shared assembly (F4) must keep identical.
+func TestDirectAssemblyServesOpsPaths(t *testing.T) {
+	dsn := "sqlite:" + filepath.Join(t.TempDir(), "ops.db")
+	h := directAssembly(zerolog.Nop(), dsn)
+	get := func(path string) (*http.Response, string) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec.Result(), rec.Body.String()
+	}
+	for _, tc := range []struct {
+		path string
+		body string
+	}{
+		{"/api/health", `{"ok":true,"service":"woca-ops-console"}`},
+		{"/api/tenant/users", `{"items":[],"total":0}`},
+		{"/api/skills", `[]`},
+	} {
+		resp, body := get(tc.path)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s = %d, want 200", tc.path, resp.StatusCode)
+		}
+		if got := strings.TrimSpace(body); got != tc.body {
+			t.Errorf("%s body = %q, want %q", tc.path, got, tc.body)
+		}
+	}
+}
 
 func TestProxyAssemblyForwardsManagementRequest(t *testing.T) {
 	type forwardedRequest struct {

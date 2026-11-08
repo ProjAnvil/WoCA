@@ -34,7 +34,6 @@ import (
 	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/ee/opsconsole"
 	"github.com/projanvil/woca/internal/ee/schedulerloop"
-	"github.com/projanvil/woca/internal/ee/skillsvc"
 	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/servefront"
 	"github.com/projanvil/woca/internal/settings"
@@ -152,53 +151,38 @@ func main() {
 			if addr == "" || st == nil {
 				return
 			}
-			gwStore, err := entrygw.NewStore(st.DB())
+			// The console authority is the shared opsconsole.Assemble —
+			// the same chain woca-ops's direct assembly builds; this
+			// listener only adds its own machine channel and publisher.
+			asm, err := opsconsole.Assemble(st, log)
 			if err != nil {
-				log.Error().Err(err).Msg("woca-scheduler: gateway registry store failed")
+				log.Error().Err(err).Msg("woca-scheduler: console assembly failed")
 				return
 			}
 			// The user-identity authority (v1.8 §2.1): woca_ key login,
 			// opaque session issuance/introspection/revocation. The edge
 			// calls it home as the auth enforcement point; direct-connect
 			// bridges reach it through the edge's /gw forwarding.
-			tenantStore, err := tenant.NewStore(st.DB())
-			if err != nil {
-				log.Error().Err(err).Msg("woca-scheduler: tenant store failed")
-				return
-			}
-			auth, err := authcore.New(tenantStore, st.DB(), log)
-			if err != nil {
-				log.Error().Err(err).Msg("woca-scheduler: core auth service failed")
-				return
-			}
-			audit := func(event, subject, detail string) { gwStore.AuditEvent(context.Background(), event, subject, detail) }
+			audit := func(event, subject, detail string) { asm.GW.AuditEvent(context.Background(), event, subject, detail) }
 			// entrygw's route registrar is mux-typed, so the machine
 			// channel mounts on a stdlib mux delegated as a subtree
 			// (paths stay absolute); everything else is webfx.
 			gwMux := http.NewServeMux()
-			entrygw.NewRegistryHandler(gwStore).RegisterRoutes(gwMux)
-			gwMux.Handle("/gw/auth/", authcore.Handler(auth, audit))
+			entrygw.NewRegistryHandler(asm.GW).RegisterRoutes(gwMux)
+			gwMux.Handle("/gw/auth/", authcore.Handler(asm.Auth, audit))
 			// The native-client credential surface's machine channel: the
 			// edge fronts public native clients (activation proxy, DPoP
 			// proof checks at its own origin) and calls home here — the
 			// same tenant tables the public /api/native/* surface uses.
-			gwMux.Handle("/gw/native/", nativeauth.MachineHandler(nativeauth.New(tenantStore, tenant.NewAPIKeyProvider(tenantStore))))
-			console := opsconsole.New(st, gwStore, auth, tenantStore, log)
-			// The skill-asset platform (design §6.4): its API rides the
-			// console gate alongside the other management routes; its
-			// console SPA is served by the woca-ops facade (skillsvcui),
-			// keeping this listener pageless.
-			skillStore, err := skillsvc.NewStore(st.DB())
-			if err != nil {
-				log.Error().Err(err).Msg("woca-scheduler: skill asset store failed")
-				return
-			}
-			console.AttachSkills(skillStore)
+			gwMux.Handle("/gw/native/", nativeauth.MachineHandler(nativeauth.New(asm.Keys, tenant.NewAPIKeyProvider(asm.Keys))))
+			// The skill-asset platform (design §6.4) rides the console
+			// gate via the shared assembly (its console SPA is served by
+			// the woca-ops facade, keeping this listener pageless).
 			// Gateway-policy writes ride the config pack in the
 			// full-stack posture (nil = the direct dev console, which
 			// shares the database with its servers).
 			if base := nacosrt.ServerFromEnv(); base != "" {
-				console.AttachPublisher(nacosrt.NewClient(base))
+				asm.Console.AttachPublisher(nacosrt.NewClient(base))
 			}
 			router := webfx.New(webfx.Options{Logger: log, Grace: 3 * time.Second})
 			router.UseDefaults()
@@ -214,7 +198,7 @@ func main() {
 				router.SetWrap(obsserve.Wrap)
 			}
 			router.Handle("/gw/", gwMux)
-			router.Handle("/", console.Handler())
+			router.Handle("/", asm.Console.Handler())
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
 				log.Error().Err(err).Str("addr", addr).Msg("woca-scheduler: gateway listener failed")

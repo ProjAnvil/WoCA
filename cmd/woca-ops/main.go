@@ -32,15 +32,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/projanvil/woca/internal/ee/authcore"
 	"github.com/projanvil/woca/internal/ee/discovery"
-	"github.com/projanvil/woca/internal/ee/entrygw"
 	"github.com/projanvil/woca/internal/ee/obs"
 	"github.com/projanvil/woca/internal/ee/opsconsole"
 	"github.com/projanvil/woca/internal/ee/opsui"
-	"github.com/projanvil/woca/internal/ee/skillsvc"
 	"github.com/projanvil/woca/internal/ee/skillsvcui"
-	"github.com/projanvil/woca/internal/ee/tenant"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/webfx"
@@ -138,31 +134,20 @@ func skillsSPA() http.Handler {
 
 // directAssembly is the single-box dev form: the authoritative opsconsole
 // API over the shared database plus the SPA, one process, no server hop.
+// The console authority itself is the shared opsconsole.Assemble — the
+// same chain woca-scheduler's management listener builds; this assembly
+// only adds the facade's own mounts (console API subtree + the two SPAs).
 func directAssembly(log zerolog.Logger, dsn string) http.Handler {
 	st, err := settings.Open(dsn)
 	if err != nil {
 		log.Fatal().Err(err).Msg("woca-ops: settings store open failed")
 	}
-	gwStore, err := entrygw.NewStore(st.DB())
+	asm, err := opsconsole.Assemble(st, log)
 	if err != nil {
-		log.Fatal().Err(err).Msg("woca-ops: gateway registry store failed")
+		log.Fatal().Err(err).Msg("woca-ops: console assembly failed")
 	}
-	tenantStore, err := tenant.NewStore(st.DB())
-	if err != nil {
-		log.Fatal().Err(err).Msg("woca-ops: tenant store failed")
-	}
-	auth, err := authcore.New(tenantStore, st.DB(), log)
-	if err != nil {
-		log.Fatal().Err(err).Msg("woca-ops: core auth service failed")
-	}
-	skillStore, err := skillsvc.NewStore(st.DB())
-	if err != nil {
-		log.Fatal().Err(err).Msg("woca-ops: skill asset store failed")
-	}
-	console := opsconsole.New(st, gwStore, auth, tenantStore, log)
-	console.AttachSkills(skillStore)
 	mux := http.NewServeMux()
-	mux.Handle("/api/", console.Handler())
+	mux.Handle("/api/", asm.Console.Handler())
 	mux.Handle("/skillsvc/", skillsSPA())
 	mux.Handle("/", opsui.Handler())
 	log.Info().Msg("woca-ops: console up (direct over the shared database; no woca-scheduler hop)")
