@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/projanvil/woca/internal/agent/activity"
+	"github.com/projanvil/woca/internal/agent/queue"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -22,7 +23,7 @@ var (
 	_ activity.Shells = (*tools.BackgroundShells)(nil)
 	_ activity.Tasks  = (*TaskManager)(nil)
 	_ activity.Crons  = (*cronScheduler)(nil)
-	_ activity.Queue  = (*queue)(nil)
+	_ activity.Queue  = (*queue.Buffer)(nil)
 )
 
 // Re-exported seam vocabulary, historical names preserved.

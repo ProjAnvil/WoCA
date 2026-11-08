@@ -2,7 +2,6 @@ package agent
 
 import (
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +12,12 @@ import (
 	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/tracing"
 )
+
+// The buffer-mechanics pins (add/drain/count semantics, session scoping,
+// concurrent add, the addTagged-under-lock atomicity) moved to the queue
+// subpackage when it was extracted (queue-extract spec); what remains here
+// is the agent wiring: run-start prepend, the toolsNode attach, session
+// delivery end to end, and the released-session interplay.
 
 // newQueueTestAgent builds an agent whose model requests one Sleep call then
 // finishes, using the shared recorder-based Sleep tool.
@@ -141,97 +146,6 @@ func TestNoQueuedInputNoExtraMessages(t *testing.T) {
 	// system, human, AI(toolcall), tool, AI = 5.
 	if len(out) != 5 {
 		t.Fatalf("transcript length = %d: %+v", len(out), out)
-	}
-}
-
-func TestQueueDrainSemantics(t *testing.T) {
-	a := newQueueTestAgent(t, &recorder{}, 1)
-	a.QueueInput("first")
-	a.QueueInput("  ") // whitespace-only: ignored
-	a.QueueInput("second")
-	if got := a.QueuedInputCount(); got != 2 {
-		t.Fatalf("queued count = %d, want 2", got)
-	}
-	items := a.DrainQueuedInputs()
-	if len(items) != 2 || items[0].Text != "first" || items[1].Text != "second" {
-		t.Fatalf("drain = %+v", items)
-	}
-	if got := a.QueuedInputCount(); got != 0 {
-		t.Fatalf("queue not cleared: %d", got)
-	}
-	if again := a.DrainQueuedInputs(); len(again) != 0 {
-		t.Fatalf("second drain = %+v", again)
-	}
-}
-
-func TestQueueInputConcurrent(t *testing.T) {
-	a := newQueueTestAgent(t, &recorder{}, 1)
-	var wg sync.WaitGroup
-	for i := range 32 {
-		wg.Go(func() {
-			a.QueueInput(strings.Repeat("x", i+1))
-		})
-	}
-	wg.Wait()
-	if got := a.QueuedInputCount(); got != 32 {
-		t.Fatalf("queued count = %d, want 32", got)
-	}
-}
-
-// TestQueueSessionDrainSemantics pins the session-scoped drain contract:
-// draining for session "a" returns the unscoped items plus "a"'s own and
-// leaves other sessions' items queued; the count for a session mirrors what
-// a run in that session would drain.
-func TestQueueSessionDrainSemantics(t *testing.T) {
-	a := newQueueTestAgent(t, &recorder{}, 1)
-	a.QueueInput("unscoped")                      // Session ""
-	a.QueueNotificationFor("a", "tag-a", "for-a") // Session "a"
-	a.QueueNotificationFor("b", "tag-b", "for-b") // Session "b"
-
-	if got := a.QueuedInputCount(); got != 3 {
-		t.Fatalf("unscoped count = %d, want 3 (counts every session)", got)
-	}
-	if got := a.QueuedInputCountFor("a"); got != 2 {
-		t.Fatalf("count for a = %d, want 2 (unscoped + a)", got)
-	}
-	if got := a.QueuedInputCountFor("b"); got != 2 {
-		t.Fatalf("count for b = %d, want 2 (unscoped + b)", got)
-	}
-
-	items := a.DrainQueuedInputsFor("a")
-	if len(items) != 2 ||
-		items[0].Text != "unscoped" || items[0].Session != "" ||
-		items[1].Text != "for-a" || items[1].Session != "a" {
-		t.Fatalf("drain for a = %+v", items)
-	}
-	if got := a.QueuedInputCountFor("a"); got != 0 {
-		t.Fatalf("after drain for a: count for a = %d, want 0", got)
-	}
-	if got := a.QueuedInputCount(); got != 1 {
-		t.Fatalf("after drain for a: total = %d, want 1 (b still queued)", got)
-	}
-
-	// The unscoped drain takes everything that is left, across sessions.
-	rest := a.DrainQueuedInputs()
-	if len(rest) != 1 || rest[0].Text != "for-b" || rest[0].Session != "b" {
-		t.Fatalf("unscoped drain = %+v", rest)
-	}
-}
-
-// TestQueueDrainUnscopedReturnsEverything verifies drain("") — an unscoped
-// run such as the TUI — takes every queued item regardless of session.
-func TestQueueDrainUnscopedReturnsEverything(t *testing.T) {
-	a := newQueueTestAgent(t, &recorder{}, 1)
-	a.QueueInput("unscoped")
-	a.QueueNotificationFor("a", "tag-a", "for-a")
-	a.QueueNotificationFor("b", "tag-b", "for-b")
-
-	items := a.inputs.drain("")
-	if len(items) != 3 {
-		t.Fatalf("drain(\"\") = %+v, want all 3 items", items)
-	}
-	if got := a.QueuedInputCount(); got != 0 {
-		t.Fatalf("queue not cleared: %d", got)
 	}
 }
 

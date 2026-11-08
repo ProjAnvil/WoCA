@@ -4,201 +4,49 @@ import (
 	"context"
 	"log/slog"
 	"strings"
-	"sync"
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
+	"github.com/projanvil/woca/internal/agent/queue"
 	"github.com/projanvil/woca/internal/tools"
-	"github.com/projanvil/woca/internal/tracing"
 )
 
-// Mid-turn input queue: input submitted while a run is in flight is buffered
-// and, once the current tool round completes, appended AFTER the tool
-// results so the model can address it within the same turn — the API forbids
-// interleaving tool results with user messages, so the attachment must come
-// after the whole result batch. Each Agent owns its queue, so subagents
-// (separate Agent instances) never receive the parent's queued input — the
-// drain scope is per-agent. Items also carry a session scope: the web server
-// runs many sessions through one Agent, and a notification queued for one
-// session must not leak into another's run. Session "" is unscoped and is
-// delivered to any run (the TUI/REPL single-session case).
+// The mid-turn queue's buffer mechanics live in internal/agent/queue
+// (queue-extract spec, same recipe as the activity extraction): that
+// subpackage owns QueuedInput, the thread-safe Buffer (Add/AddTagged/Drain/
+// Count/WakeableCount/TaggedCount/DropScope), the tagged rendering
+// (Format/Coalesce) and the run-scope read (SessionFrom) — and imports
+// nothing from this package. This file is the policy and delegation surface:
+// the Agent keeps every public signature unchanged (thin one-line
+// delegations to its Buffer) and owns exactly the decisions the mechanics
+// must not make — the released-session predicate (handed to AddTagged so the
+// decision stays inside the buffer's critical section, R1), the Quiet
+// decision (queueBackgroundCompletion), the notification observer firing
+// (outside every lock, only after an item actually queued), and the
+// run-start prepend composition (prependQueued). QueuedInput keeps its
+// historical agent-package name via the alias below, so no caller's imports
+// or types change.
 
-// QueuedInput is one unit of mid-turn input. A non-empty Tag wraps the text
-// in a differently-named element (e.g. background-task completions) so the
-// model can tell machine notifications apart from typed user input. A
-// non-empty Session scopes delivery to runs in that session. Quiet marks a
-// notification that must never start a wake run (D1: a user-initiated stop):
-// it is delivered with the next run — at its start (prependQueued) or in a
-// busy run's tool rounds — but the wake drivers treat it as absent.
-type QueuedInput struct {
-	Text    string
-	Tag     string
-	Session string
-	Quiet   bool
-}
-
-// queuedInputTag wraps queued text so the model can tell it apart from the
-// original prompt.
-const queuedInputTag = "queued-user-input"
-
-// formatQueuedInput renders one queued input as a message.
-func formatQueuedInput(q QueuedInput) messages.Message {
-	tag := q.Tag
-	if tag == "" {
-		tag = queuedInputTag
-	}
-	return messages.Human("<" + tag + ">\n" + strings.TrimSpace(q.Text) + "\n</" + tag + ">")
-}
+// QueuedInput is one unit of mid-turn input; aliased at the queue
+// subpackage since the extraction. See queue.QueuedInput for the field
+// semantics.
+type QueuedInput = queue.QueuedInput
 
 // CoalesceQueuedInputs renders several queued inputs as ONE Human message:
-// each item's tagged block (exactly what formatQueuedInput produces) joined
-// by a blank line. Surfaces use it to fold everything that accumulated
-// while the agent was busy into a single message. A nil/empty slice yields
-// an empty Human message; callers with nothing queued skip the call.
+// each item's tagged block (exactly what queue.Format produces) joined by a
+// blank line. Surfaces use it to fold everything that accumulated while the
+// agent was busy into a single message. A nil/empty slice yields an empty
+// Human message; callers with nothing queued skip the call. Thin delegate
+// to queue.Coalesce since the extraction.
 func CoalesceQueuedInputs(items []QueuedInput) messages.Message {
-	blocks := make([]string, len(items))
-	for i, q := range items {
-		blocks[i] = formatQueuedInput(q).Content
-	}
-	return messages.Human(strings.Join(blocks, "\n\n"))
+	return queue.Coalesce(items)
 }
 
-// sessionFromCtx returns the session id the ctx's run is scoped to. TUI/REPL
-// runs carry no run scope; "" means unscoped delivery (the whole queue).
+// sessionFromCtx returns the session id the ctx's run is scoped to; a thin
+// delegate to the queue subpackage's SessionFrom (cron, task and the run
+// paths below share it). "" means unscoped delivery (the whole buffer).
 func sessionFromCtx(ctx context.Context) string {
-	if sc, ok := tracing.RunFrom(ctx); ok {
-		return sc.SessionID
-	}
-	return ""
-}
-
-// queue is the thread-safe mid-turn input buffer.
-type queue struct {
-	mu    sync.Mutex
-	items []QueuedInput
-}
-
-func (q *queue) add(text string) {
-	if strings.TrimSpace(text) == "" {
-		return
-	}
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.items = append(q.items, QueuedInput{Text: text})
-}
-
-// addTagged buffers one tagged notification item (machine-generated input),
-// Quiet flag included. released, when non-nil, is consulted INSIDE the
-// queue's critical section: an item scoped to a session the predicate
-// reports as released is refused (D2) — deciding under q.mu makes
-// check-and-append atomic against the activity seam's DropScope, so a
-// completion racing the release can never land after the drop. It reports
-// whether an item was queued — blank text is dropped and a released
-// session is refused, nothing queues.
-func (q *queue) addTagged(item QueuedInput, released func(session string) bool) bool {
-	if strings.TrimSpace(item.Text) == "" {
-		return false
-	}
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if item.Session != "" && released != nil && released(item.Session) {
-		return false
-	}
-	q.items = append(q.items, item)
-	return true
-}
-
-// drain removes and returns the items a run in session receives: everything
-// when unscoped ("" — the single-session callers see the whole queue),
-// otherwise the unscoped items plus the session's own. Items scoped to other
-// sessions stay queued, in arrival order.
-func (q *queue) drain(session string) []QueuedInput {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if session == "" {
-		items := q.items
-		q.items = nil
-		return items
-	}
-	var out []QueuedInput
-	keep := q.items[:0]
-	for _, it := range q.items {
-		if tracing.VisibleTo(it.Session, session) {
-			out = append(out, it)
-		} else {
-			keep = append(keep, it)
-		}
-	}
-	q.items = keep
-	return out
-}
-
-// count reports how many items a run in session would drain (len for the
-// unscoped "" case).
-func (q *queue) count(session string) int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if session == "" {
-		return len(q.items)
-	}
-	n := 0
-	for _, it := range q.items {
-		if tracing.VisibleTo(it.Session, session) {
-			n++
-		}
-	}
-	return n
-}
-
-// wakeableCount is count over the non-Quiet items: what a wake driver may
-// start a run for. Quiet items are delivered like any other, they just never
-// trigger the run (D1).
-func (q *queue) wakeableCount(session string) int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	n := 0
-	for _, it := range q.items {
-		if !it.Quiet && tracing.VisibleTo(it.Session, session) {
-			n++
-		}
-	}
-	return n
-}
-
-// TaggedCount is count over the tagged notification items (Quiet included):
-// the pending-notification count surfaces report. (Exported to satisfy
-// activity.Queue; the type itself stays package-internal.)
-func (q *queue) TaggedCount(session string) int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	n := 0
-	for _, it := range q.items {
-		if it.Tag != "" && tracing.VisibleTo(it.Session, session) {
-			n++
-		}
-	}
-	return n
-}
-
-// DropScope removes every item scoped exactly to session and reports how
-// many went; unscoped items and other sessions' items stay queued, in
-// order. Session release (D2): a deleted session's pending input dies with
-// it instead of lingering where nothing will ever drain it. (Exported to
-// satisfy activity.Queue; the type itself stays package-internal.)
-func (q *queue) DropScope(session string) int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	keep := q.items[:0]
-	dropped := 0
-	for _, it := range q.items {
-		if it.Session == session {
-			dropped++
-			continue
-		}
-		keep = append(keep, it)
-	}
-	q.items = keep
-	return dropped
+	return queue.SessionFrom(ctx)
 }
 
 // QueueInput buffers user input submitted while a run is in flight. The
@@ -206,7 +54,7 @@ func (q *queue) DropScope(session string) int {
 // input queued after the final tool round is delivered at the start of the
 // next run (see prependQueued). Safe for concurrent use.
 func (a *Agent) QueueInput(text string) {
-	a.inputs.add(text)
+	a.inputs.Add(text)
 }
 
 // QueueInputFor is the session-scoped QueueInput: the input is delivered to
@@ -221,7 +69,7 @@ func (a *Agent) QueueInput(text string) {
 // Steers do not fire the notification observer: the user typed the input
 // for a run they can see, not to wake a session.
 func (a *Agent) QueueInputFor(session, text string) {
-	a.inputs.addTagged(QueuedInput{Text: text, Session: session}, a.released)
+	a.inputs.AddTagged(a.released, QueuedInput{Text: text, Session: session})
 }
 
 // released is the queue's released-session predicate (D2), answering from
@@ -277,12 +125,12 @@ func (a *Agent) queueBackgroundCompletion(session, text string, stoppedBy tools.
 // set, so surfaces can show them without waking). Blank text queues nothing
 // and fires nothing — the observer contract is "the item you just saw is in
 // the queue". Notifications scoped to a released session (ReleaseSession,
-// D2) are refused inside addTagged's critical section — atomic with
+// D2) are refused inside AddTagged's critical section — atomic with
 // the release's mark-then-DropScope — so a completion racing the release
 // can never leave a queued item, a wake, or an observer fire for a session
 // that was deleted.
 func (a *Agent) queueNotification(q QueuedInput) {
-	if !a.inputs.addTagged(q, a.released) {
+	if !a.inputs.AddTagged(a.released, q) {
 		if strings.TrimSpace(q.Text) != "" && q.Session != "" {
 			slog.Debug("agent: dropped notification for released session",
 				"session", q.Session, "tag", q.Tag)
@@ -313,30 +161,30 @@ func (a *Agent) SetNotificationObserver(fn func(QueuedInput)) {
 
 // DrainQueuedInputs returns and clears the queued mid-turn inputs.
 func (a *Agent) DrainQueuedInputs() []QueuedInput {
-	return a.inputs.drain("")
+	return a.inputs.Drain("")
 }
 
 // DrainQueuedInputsFor returns and clears the queued inputs a run in session
 // would receive: that session's own items plus the unscoped ones.
 func (a *Agent) DrainQueuedInputsFor(session string) []QueuedInput {
-	return a.inputs.drain(session)
+	return a.inputs.Drain(session)
 }
 
 // QueuedInputCount reports how many inputs are currently queued.
 func (a *Agent) QueuedInputCount() int {
-	return a.inputs.count("")
+	return a.inputs.Count("")
 }
 
 // QueuedInputCountFor reports how many inputs a run in session would drain.
 func (a *Agent) QueuedInputCountFor(session string) int {
-	return a.inputs.count(session)
+	return a.inputs.Count(session)
 }
 
 // WakeableCountFor reports how many wake-worthy inputs a run in session
 // would drain: everything except Quiet items. Wake drivers gate on this, not
 // QueuedInputCountFor, so a Quiet notification never starts a run (D1).
 func (a *Agent) WakeableCountFor(session string) int {
-	return a.inputs.wakeableCount(session)
+	return a.inputs.WakeableCount(session)
 }
 
 // DropScopedInputsFor removes every queued item scoped exactly to session
@@ -364,13 +212,13 @@ func (a *Agent) QueuedNotificationCountFor(session string) int {
 // never come. History not ending in Human (fork/compaction edge shapes)
 // appends at the end; an empty queue returns history as-is.
 func (a *Agent) prependQueued(ctx context.Context, history []messages.Message) []messages.Message {
-	items := a.inputs.drain(sessionFromCtx(ctx))
+	items := a.inputs.Drain(sessionFromCtx(ctx))
 	if len(items) == 0 {
 		return history
 	}
 	rendered := make([]messages.Message, len(items))
 	for i, q := range items {
-		rendered[i] = formatQueuedInput(q)
+		rendered[i] = queue.Format(q)
 	}
 	at := len(history)
 	if at > 0 && history[at-1].Role == messages.RoleHuman {

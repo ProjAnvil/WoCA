@@ -31,6 +31,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/projanvil/woca/internal/agent/activity"
+	"github.com/projanvil/woca/internal/agent/queue"
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/bus"
 	"github.com/projanvil/woca/internal/compact"
@@ -371,8 +372,10 @@ type Agent struct {
 	escalate func() (language.ChatModel, error)
 	// toolBudget is the per-round tool-result character budget (0 disables).
 	toolBudget int
-	// inputs buffers mid-turn user input (queued commands).
-	inputs queue
+	// inputs buffers mid-turn user input (queued commands); the mechanics
+	// live in internal/agent/queue (queue-extract), the policy in
+	// queue_delegate.go.
+	inputs queue.Buffer
 	// activity is the per-session activity seam (F1): the extracted
 	// internal/agent/activity package aggregating the todo/shell/task/cron
 	// manager surfaces and the notification queue into the snapshot/action/
@@ -1758,8 +1761,8 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		// re-execution drains an already-emptied queue and adds nothing. The
 		// drain is scoped to the run's session; other sessions' items stay
 		// queued ("" drains everything — the single-session callers).
-		for _, q := range a.inputs.drain(sessionFromCtx(ctx)) {
-			results = append(results, formatQueuedInput(q))
+		for _, q := range a.inputs.Drain(sessionFromCtx(ctx)) {
+			results = append(results, queue.Format(q))
 		}
 		// Kick off the async tool-use summary: UI-only, generated
 		// in the background with the summarizer while the next model round
