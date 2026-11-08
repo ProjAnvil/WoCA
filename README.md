@@ -102,7 +102,9 @@ every conversation is persisted as a resumable transcript.
 
 - **20+ built-in tools**: `Bash`, `BashOutput`/`BashInput`/`KillShell`
   (background shells: poll output — `wait_ms` blocks until the shell
-  finishes — write stdin), `Read`, `Write`, `Edit`, `NotebookEdit`,
+  finishes — write stdin; a shell's output keeps the newest 1 MiB, and when
+  older bytes were dropped `BashOutput` starts with an
+  `[N older bytes truncated]` marker), `Read`, `Write`, `Edit`, `NotebookEdit`,
   `Glob`, `Grep`, `ListDir`, `TodoWrite`, `WebFetch`, `WebSearch`,
   `AskUserQuestion`, `EnterPlanMode`/`ExitPlanMode`, `Task`/`TaskOutput`/
   `TaskStop`, `TaskCreate`/`TaskGet`/`TaskUpdate`/`TaskList`, `Skill`,
@@ -614,7 +616,8 @@ yet. Opening it shows this session's activity in three tabs:
 - **Todo** — the model's current todo list with statuses and progress.
 - **Background** — background shells and subagent tasks, running items
   first; expand a row for its output tail. **Stop** kills the item on the
-  spot (a confirm notes the consequence).
+  spot (a confirm notes the consequence). Finished items are capped at the
+  newest 20 per session; running ones are always kept.
 - **Scheduled** — session cron entries with their spec, prompt and next
   fire time, plus the auto-wake state (capped / stalled / disabled).
 

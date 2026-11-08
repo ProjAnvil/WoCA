@@ -90,7 +90,9 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
 **工具与安全**
 
 - **20+ 内置工具**：`Bash`、`BashOutput`/`BashInput`/`KillShell`
-  （后台 shell：轮询输出 —— `wait_ms` 阻塞至命令结束 —— 写入 stdin）、
+  （后台 shell：轮询输出 —— `wait_ms` 阻塞至命令结束 —— 写入 stdin；
+  shell 输出只保留最新的 1 MiB，更早的字节被丢弃时 `BashOutput` 开头会带
+  `[N older bytes truncated]` 标记）、
   `Read`、`Write`、`Edit`、`NotebookEdit`、
   `Glob`、`Grep`、`ListDir`、`TodoWrite`、`WebFetch`、`WebSearch`、
   `AskUserQuestion`、`EnterPlanMode`/`ExitPlanMode`、`Task`/`TaskOutput`/
@@ -556,7 +558,8 @@ Web 聊天头部有一个**任务列表按钮**（记忆开关左侧），带实
 
 - **待办** —— 模型当前的待办列表、各项状态与进度。
 - **后台** —— 后台 shell 与子代理任务，运行中的排在最前；展开一行可看
-  输出尾部。**终止**立即停止该任务（确认框会说明后果）。
+  输出尾部。**终止**立即停止该任务（确认框会说明后果）。已结束的记录每个
+  会话最多保留最新的 20 条；运行中的始终保留。
 - **定时** —— 本会话的 cron 条目（spec、提示词、下次触发时间），以及
   自动唤醒状态（已达上限 / 停滞 / 已关闭）。
 
