@@ -23,14 +23,22 @@ import (
 
 // cronEntry is one scheduled prompt, scoped to the session that created it.
 type cronEntry struct {
-	ID        string
-	Session   string
-	Name      string
-	Prompt    string
-	Spec      string
-	matcher   cronMatcher
-	createdAt time.Time
-	lastFired time.Time // minute granularity, prevents double fire
+	ID      string
+	Session string
+	Name    string
+	Prompt  string
+	Spec    string
+	matcher cronMatcher
+	created time.Time
+	// lastFired is the last matching minute that fired (prevents double
+	// fire). nextFire/nextFireOK cache the entry's next matching minute
+	// (F5): computed once at Add and recomputed after each fire; ok=false
+	// (no matching minute within the horizon, e.g. February 31st) is cached
+	// permanently — snapshots never rescan. All guarded by the scheduler's
+	// mutex.
+	lastFired  time.Time
+	nextFire   time.Time
+	nextFireOK bool
 }
 
 // CronInfo is a snapshot of one scheduled entry: identity plus the three
@@ -96,7 +104,9 @@ func (s *cronScheduler) Stop() {
 	}
 }
 
-// Add registers a scheduled prompt owned by session and returns its ID.
+// Add registers a scheduled prompt owned by session and returns its ID. The
+// entry's next fire is computed and cached here (F5) — the one place an
+// impossible spec pays its full-horizon scan.
 func (s *cronScheduler) Add(session, name, prompt, spec string) (string, error) {
 	m, err := parseCron(spec)
 	if err != nil {
@@ -104,11 +114,13 @@ func (s *cronScheduler) Add(session, name, prompt, spec string) (string, error) 
 	}
 	s.mu.Lock()
 	onChange := s.onChange
+	now := time.Now()
+	next, ok := m.next(now, cronNextHorizon)
 	s.next++
 	id := fmt.Sprintf("cron-%d", s.next)
 	s.entries = append(s.entries, &cronEntry{
 		ID: id, Session: session, Name: name, Prompt: prompt, Spec: spec, matcher: m,
-		createdAt: time.Now(),
+		created: now, nextFire: next, nextFireOK: ok,
 	})
 	s.mu.Unlock()
 	if onChange != nil {
@@ -174,28 +186,26 @@ func (s *cronScheduler) List(session string) []cronEntry {
 }
 
 // InfoFor snapshots the entries a run in session can see, in numeric id
-// order, with their timestamps and the next fire computed from now. The
-// snapshot copies every field under the scheduler lock (lastFired mutates on
-// fire); the pure next-fire scan then runs outside it.
-func (s *cronScheduler) InfoFor(session string, now time.Time) []CronInfo {
+// order, with their timestamps and each entry's CACHED next fire (F5) —
+// computed at Add and recomputed on fire, never rescanned here, so a
+// snapshot with an impossible spec costs nothing. Every field is copied
+// under the scheduler lock (lastFired and the cache mutate on fire).
+func (s *cronScheduler) InfoFor(session string) []CronInfo {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	infos := make([]CronInfo, 0, len(s.entries))
-	matchers := make([]cronMatcher, 0, len(s.entries))
 	for _, e := range s.entries {
 		if !tracing.VisibleTo(e.Session, session) {
 			continue
 		}
-		infos = append(infos, CronInfo{
+		info := CronInfo{
 			ID: e.ID, Session: e.Session, Name: e.Name, Spec: e.Spec, Prompt: e.Prompt,
-			CreatedAt: e.createdAt, LastFiredAt: e.lastFired,
-		})
-		matchers = append(matchers, e.matcher)
-	}
-	s.mu.Unlock()
-	for i := range infos {
-		if next, ok := matchers[i].next(now, cronNextHorizon); ok {
-			infos[i].NextFireAt = next
+			CreatedAt: e.created, LastFiredAt: e.lastFired,
 		}
+		if e.nextFireOK {
+			info.NextFireAt = e.nextFire
+		}
+		infos = append(infos, info)
 	}
 	return infos
 }
@@ -207,14 +217,16 @@ func (s *cronScheduler) InfoFor(session string, now time.Time) []CronInfo {
 const cronNextHorizon = 10 * 365 * 24 * time.Hour
 
 // fireDue fires every entry whose schedule matches now's minute. Split out
-// from the ticker loop so tests can drive it deterministically.
+// from the ticker loop so tests can drive it deterministically. Each fired
+// entry recomputes its cached next fire from the fired minute (F5).
 func (s *cronScheduler) fireDue(now time.Time) {
 	s.mu.Lock()
 	due := make([]*cronEntry, 0, len(s.entries))
+	minute := now.Truncate(time.Minute)
 	for _, e := range s.entries {
-		minute := now.Truncate(time.Minute)
 		if e.matcher.matches(now) && !e.lastFired.Equal(minute) {
 			e.lastFired = minute
+			e.nextFire, e.nextFireOK = e.matcher.next(minute, cronNextHorizon)
 			due = append(due, e)
 		}
 	}

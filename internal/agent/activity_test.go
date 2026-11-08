@@ -111,8 +111,7 @@ func TestActivitySnapshotAggregatesAllManagers(t *testing.T) {
 	}
 	a.QueueNotificationFor("sess-1", "tag", "hello")
 
-	now := time.Date(2026, 11, 7, 10, 30, 0, 0, time.Local)
-	snap := a.ActivityFor("sess-1", now)
+	snap := a.ActivityFor("sess-1")
 
 	if !snap.TodosKnown || len(snap.Todos) != 1 || snap.Todos[0].Content != "write tests" {
 		t.Fatalf("todos = %+v (known=%v)", snap.Todos, snap.TodosKnown)
@@ -137,14 +136,14 @@ func TestActivitySnapshotAggregatesAllManagers(t *testing.T) {
 	}
 
 	// A foreign session sees none of it (ownership lives in the managers).
-	other := a.ActivityFor("sess-2", now)
+	other := a.ActivityFor("sess-2")
 	if other.TodosKnown || len(other.Todos) != 0 || len(other.Shells) != 0 ||
 		len(other.Tasks) != 0 || len(other.Crons) != 0 || other.PendingNotifications != 0 {
 		t.Fatalf("foreign snapshot = %+v", other)
 	}
 
 	// The unscoped session ("" — TUI/REPL semantics) sees everything.
-	all := a.ActivityFor("", now)
+	all := a.ActivityFor("")
 	if len(all.Shells) != 1 || len(all.Tasks) != 1 || len(all.Crons) != 1 {
 		t.Fatalf("unscoped snapshot = %+v", all)
 	}
@@ -152,7 +151,7 @@ func TestActivitySnapshotAggregatesAllManagers(t *testing.T) {
 	// An unknown session yields the empty snapshot (every slice non-nil —
 	// including Todos; TodosKnown alone carries the "never written" fact —
 	// so the server renders 200 with empty arrays, PM §4.3).
-	empty := a.ActivityFor("no-such-session", now)
+	empty := a.ActivityFor("no-such-session")
 	if empty.Shells == nil || empty.Tasks == nil || empty.Crons == nil || empty.Todos == nil {
 		t.Fatalf("unknown-session snapshot has nil slices: %+v", empty)
 	}
@@ -161,7 +160,7 @@ func TestActivitySnapshotAggregatesAllManagers(t *testing.T) {
 	}
 	// A known-but-cleared todo list renders as an empty, non-nil slice.
 	a.SetTodosFor("sess-empty", nil)
-	known := a.ActivityFor("sess-empty", now)
+	known := a.ActivityFor("sess-empty")
 	if !known.TodosKnown || known.Todos == nil || len(known.Todos) != 0 {
 		t.Fatalf("cleared todos = %+v (known=%v)", known.Todos, known.TodosKnown)
 	}
@@ -353,7 +352,7 @@ func TestActivityForeignAndUnknownIDsAreNotFound(t *testing.T) {
 	}
 
 	// The foreign lookups must not have touched the items.
-	snap := a.ActivityFor("sess-own", time.Now())
+	snap := a.ActivityFor("sess-own")
 	if len(snap.Shells) != 1 || !snap.Shells[0].Running || len(snap.Tasks) != 1 || snap.Tasks[0].Status != TaskRunning || len(snap.Crons) != 1 {
 		t.Fatalf("items disturbed by foreign access: %+v", snap)
 	}
@@ -454,7 +453,7 @@ func TestActivityObserverFiresOutsideManagerLocks(t *testing.T) {
 	// The observer re-enters every manager (a full snapshot): if any hook
 	// fired while its manager lock was held, this would deadlock.
 	a.SetActivityObserver(func(session string, kind ActivityKind) {
-		_ = a.ActivityFor(session, time.Now())
+		_ = a.ActivityFor(session)
 	})
 	so := tracing.WithRun(t.Context(), "run-l", "sess-l")
 
@@ -528,14 +527,11 @@ func TestReleaseSessionStopsWorkAndSilencesTheSession(t *testing.T) {
 		t.Fatalf("release report = %+v", rep)
 	}
 
-	// The killed shell settles promptly; its late completion must be
-	// dropped at the queue (D2), not delivered.
-	st, err := reg.Background().WaitFor(t.Context(), "sess-rel", shellID, 10*time.Second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !st.Killed || st.StoppedBy != tools.StopByUser {
-		t.Fatalf("released shell final status = %+v", st)
+	// The killed shell's record is gone with the session (F4), so it settles
+	// invisibly; its late completion must be dropped at the queue (D2), not
+	// delivered.
+	if _, _, err := reg.Background().OutputFor("sess-rel", shellID); !errors.Is(err, tools.ErrShellNotFound) {
+		t.Fatalf("released shell record still resolvable: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond) // let the exit goroutine run its completion path
 	if n := a.QueuedInputCountFor("sess-rel"); n != 0 {
@@ -545,15 +541,20 @@ func TestReleaseSessionStopsWorkAndSilencesTheSession(t *testing.T) {
 		t.Fatalf("post-release events = %d, want 4 (released session stays silent)", got)
 	}
 
-	snap := a.ActivityFor("sess-rel", time.Now())
+	snap := a.ActivityFor("sess-rel")
 	if len(snap.Crons) != 0 || snap.TodosKnown {
 		t.Fatalf("crons/todos after release = %+v %+v", snap.Crons, snap.Todos)
 	}
-	if len(snap.Tasks) != 1 || snap.Tasks[0].Status != TaskStopped || snap.Tasks[0].ID != task.ID {
+	// F4: the session's records were removed entirely — shells and tasks
+	// alike, stopped or not.
+	if len(snap.Tasks) != 0 {
 		t.Fatalf("tasks after release = %+v", snap.Tasks)
 	}
-	if len(snap.Shells) != 1 || !snap.Shells[0].Killed || snap.Shells[0].StoppedBy != tools.StopByUser {
+	if len(snap.Shells) != 0 {
 		t.Fatalf("shells after release = %+v", snap.Shells)
+	}
+	if _, err := a.tasks.InfoFor("sess-rel", task.ID); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("released task record still resolvable: %v", err)
 	}
 
 	// Releasing again, an unknown session and the unscoped session are all
@@ -662,5 +663,77 @@ func TestReleasedDropAtomicWithQueueing(t *testing.T) {
 		if n := a.QueuedInputCountFor(session); n != 0 {
 			t.Fatalf("iteration %d: %d queued items survived release (TOCTOU regression)", i, n)
 		}
+	}
+}
+
+// F4: ReleaseSession removes the session's records entirely — finished or
+// running, shells and tasks alike — while unscoped ("") records and the
+// released mark itself (R2) survive.
+func TestReleaseSessionRemovesRecords(t *testing.T) {
+	a, reg := newActivityAgent(t)
+	rel := tracing.WithRun(t.Context(), "run-rec", "sess-rec")
+
+	shellID, err := reg.Background().Start(rel, "true", "", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, st, _ := reg.Background().OutputFor("sess-rec", shellID); !st.Running {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	task, err := a.tasks.start(rel, "subject", "prompt", "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.setFinalIfRunning(TaskCompleted, "done")
+	a.tasks.notifyDone(task)
+	if _, err := a.cron.Add("sess-rec", "n", "p", "* * * * *"); err != nil {
+		t.Fatal(err)
+	}
+	// An unscoped shell must survive the release untouched.
+	unscopedID, err := reg.Background().Start(t.Context(), "true", "", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rep := a.ReleaseSession("sess-rec")
+	if rep.ShellsKilled != 0 || rep.TasksStopped != 0 || rep.CronsDeleted != 1 || rep.TodosDropped {
+		t.Fatalf("release report = %+v", rep)
+	}
+
+	if _, _, err := reg.Background().OutputFor("sess-rec", shellID); !errors.Is(err, tools.ErrShellNotFound) {
+		t.Fatalf("released shell record still resolvable: %v", err)
+	}
+	if _, err := a.tasks.InfoFor("sess-rec", task.ID); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("released task record still resolvable: %v", err)
+	}
+	snap := a.ActivityFor("sess-rec")
+	// The snapshot still shows unscoped items (visibility rule), but nothing
+	// the session owns.
+	for _, st := range snap.Shells {
+		if st.Session == "sess-rec" {
+			t.Fatalf("released shell in snapshot: %+v", st)
+		}
+	}
+	for _, info := range snap.Tasks {
+		if info.Session == "sess-rec" {
+			t.Fatalf("released task in snapshot: %+v", info)
+		}
+	}
+	if len(snap.Crons) != 0 {
+		t.Fatalf("released session crons in snapshot: %+v", snap.Crons)
+	}
+	if st, err := reg.Background().StatusFor("", unscopedID); err != nil || st.Session != "" {
+		t.Fatalf("unscoped shell affected by release: err=%v status=%+v", err, st)
+	}
+
+	// R2: the tombstone stays — a late completion for the released session is
+	// refused, never queued.
+	a.QueueNotificationFor("sess-rec", "tag", "late")
+	if n := a.QueuedInputCountFor("sess-rec"); n != 0 {
+		t.Fatalf("queued after release = %d, want 0", n)
 	}
 }

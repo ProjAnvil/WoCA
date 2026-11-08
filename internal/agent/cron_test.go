@@ -285,10 +285,13 @@ func TestCronMatcherNext(t *testing.T) {
 
 // TestCronInfoForSessionScopedTimestampsAndOrder covers InfoFor: the §4.1
 // visibility rule, numeric id order (cron-2 before cron-10), created_at /
-// last_fired_at facts and next_fire_at computed from the caller's now
-// (AC7: `0 0 31 2 *` renders a zero NextFireAt).
+// last_fired_at facts and next_fire_at read from the per-entry cache (F5:
+// computed at Add — unfired entries report a value near the test's real
+// start time, independent of the caller's clock — recomputed on fire;
+// `0 0 31 2 *` caches and renders a zero NextFireAt).
 func TestCronInfoForSessionScopedTimestampsAndOrder(t *testing.T) {
 	s := newCronScheduler(func(session, tag, text string) {})
+	t0 := time.Now()
 	if _, err := s.Add("sess-A", "a", "a's prompt", "*/10 * * * *"); err != nil {
 		t.Fatal(err)
 	}
@@ -312,8 +315,7 @@ func TestCronInfoForSessionScopedTimestampsAndOrder(t *testing.T) {
 	firedAt := time.Date(2026, 8, 14, 10, 31, 0, 0, time.Local)
 	s.fireDue(firedAt)
 
-	now := time.Date(2026, 8, 14, 10, 31, 30, 0, time.Local)
-	bInfos := s.InfoFor("sess-B", now)
+	bInfos := s.InfoFor("sess-B")
 	if len(bInfos) != 11 {
 		t.Fatalf("viewer B sees %d entries, want 11 (own + unscoped)", len(bInfos))
 	}
@@ -330,39 +332,44 @@ func TestCronInfoForSessionScopedTimestampsAndOrder(t *testing.T) {
 	if !first.LastFiredAt.Equal(firedAt) {
 		t.Fatalf("LastFiredAt = %v, want %v", first.LastFiredAt, firedAt)
 	}
+	// Recomputed on fire (F5): the minute after the fired one.
 	if want := time.Date(2026, 8, 14, 10, 32, 0, 0, time.Local); !first.NextFireAt.Equal(want) {
 		t.Fatalf("NextFireAt = %v, want %v", first.NextFireAt, want)
 	}
 
 	// Viewer A: its own two entries plus the unscoped one; the impossible
 	// spec renders a zero NextFireAt and cron-1 stays never-fired.
-	aInfos := s.InfoFor("sess-A", now)
+	aInfos := s.InfoFor("sess-A")
 	if len(aInfos) != 3 {
 		t.Fatalf("viewer A sees %d entries, want 3", len(aInfos))
 	}
 	if aInfos[0].ID != "cron-1" || !aInfos[0].LastFiredAt.IsZero() {
 		t.Fatalf("cron-1 info = %+v, want never fired", aInfos[0])
 	}
-	if want := time.Date(2026, 8, 14, 10, 40, 0, 0, time.Local); !aInfos[0].NextFireAt.Equal(want) {
-		t.Fatalf("cron-1 NextFireAt = %v, want %v", aInfos[0].NextFireAt, want)
+	// Computed at Add (F5): a */10 boundary within the ten minutes after the
+	// test started.
+	if nf := aInfos[0].NextFireAt; nf.Before(t0) || !nf.Before(t0.Add(11*time.Minute)) || nf.Minute()%10 != 0 {
+		t.Fatalf("cron-1 cached NextFireAt = %v, want a */10 boundary within (Add, Add+10min]", nf)
 	}
 	if aInfos[1].ID != "cron-12" || !aInfos[1].NextFireAt.IsZero() {
 		t.Fatalf("impossible spec info = %+v, want zero NextFireAt", aInfos[1])
 	}
-	// The unscoped entry: next Monday 09:00 after Friday 10:31.
-	if want := time.Date(2026, 8, 17, 9, 0, 0, 0, time.Local); !aInfos[2].NextFireAt.Equal(want) {
-		t.Fatalf("unscoped NextFireAt = %v, want %v", aInfos[2].NextFireAt, want)
+	// The unscoped entry, likewise cached at Add: a 09:00 weekday minute
+	// within days of the test start.
+	if nf := aInfos[2].NextFireAt; nf.IsZero() || nf.Hour() != 9 || nf.Minute() != 0 || nf.Weekday() == time.Saturday || nf.Weekday() == time.Sunday || nf.Before(t0) || !nf.Before(t0.Add(8*24*time.Hour)) {
+		t.Fatalf("unscoped cached NextFireAt = %v, want a 09:00 weekday within (Add, Add+8d]", nf)
 	}
 
 	// The unscoped viewer sees everything: 13 entries, numeric order.
-	if all := s.InfoFor("", now); len(all) != 13 || all[0].ID != "cron-1" || all[11].ID != "cron-12" {
+	if all := s.InfoFor(""); len(all) != 13 || all[0].ID != "cron-1" || all[11].ID != "cron-12" {
 		t.Fatalf("unscoped viewer sees %d entries, first=%s", len(all), all[0].ID)
 	}
 }
 
 // TestCronInfoForConcurrentWithFire locks InfoFor's snapshot against the
-// mutating paths (fireDue writes lastFired, Add/Delete reshape the slice):
-// parallel readers and writers must race-detector-clean.
+// mutating paths (fireDue writes lastFired and the next-fire cache,
+// Add/Delete reshape the slice): parallel readers and writers must stay
+// race-detector-clean.
 func TestCronInfoForConcurrentWithFire(t *testing.T) {
 	s := newCronScheduler(func(session, tag, text string) {})
 	if _, err := s.Add("sess-A", "a", "p", "* * * * *"); err != nil {
@@ -383,7 +390,7 @@ func TestCronInfoForConcurrentWithFire(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for range 25 {
-			if infos := s.InfoFor("sess-A", base); len(infos) != 1 {
+			if infos := s.InfoFor("sess-A"); len(infos) != 1 {
 				t.Errorf("sess-A sees %d entries, want 1", len(infos))
 				return
 			}
@@ -536,5 +543,66 @@ func TestScheduleCronListDeleteSessionScoped(t *testing.T) {
 	}
 	if entries := a.cron.List(""); len(entries) != 0 {
 		t.Fatalf("%d entries at the end, want 0", len(entries))
+	}
+}
+
+// TestCronNextFireAtCached pins F5: next_fire_at is computed once per entry
+// (at Add), recomputed after each fire, and read from the cache by
+// snapshots — the caller's clock is irrelevant — and an impossible spec pays
+// its single full-horizon scan at Add, then caches the zero forever.
+func TestCronNextFireAtCached(t *testing.T) {
+	s := newCronScheduler(func(session, tag, text string) {})
+
+	// Computed at Add: a */10 entry's cached next fire lies within the ten
+	// minutes after the Add, no matter when the snapshot is taken.
+	pre := time.Now()
+	if _, err := s.Add("sess-A", "a", "p", "*/10 * * * *"); err != nil {
+		t.Fatal(err)
+	}
+	infos := s.InfoFor("sess-A")
+	nf := infos[0].NextFireAt
+	if nf.IsZero() || nf.Before(pre) || !nf.Before(pre.Add(11*time.Minute)) {
+		t.Fatalf("cached next fire = %v, want within (Add, Add+10min]", nf)
+	}
+	if nf.Minute()%10 != 0 {
+		t.Fatalf("cached next fire %v is not a */10 boundary", nf)
+	}
+
+	// Recomputed after each fire: firing at a fixed matching minute pins the
+	// cache to the following minute.
+	s.fireDue(time.Date(2026, 8, 14, 10, 40, 0, 0, time.Local))
+	infos = s.InfoFor("sess-A")
+	if want := time.Date(2026, 8, 14, 10, 50, 0, 0, time.Local); !infos[0].NextFireAt.Equal(want) {
+		t.Fatalf("post-fire cached next = %v, want %v", infos[0].NextFireAt, want)
+	}
+	if !infos[0].LastFiredAt.Equal(time.Date(2026, 8, 14, 10, 40, 0, 0, time.Local)) {
+		t.Fatalf("last fired = %v", infos[0].LastFiredAt)
+	}
+
+	// An impossible spec scans its full horizon once (at Add) and caches the
+	// zero: hundreds of snapshots stay cheap instead of rescanning ~45ms
+	// each (300 uncached scans would take well over ten seconds).
+	if _, err := s.Add("sess-A", "imp", "p", "0 0 31 2 *"); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	for range 300 {
+		if infos = s.InfoFor("sess-A"); len(infos) != 2 {
+			t.Fatalf("sess-A sees %d entries, want 2", len(infos))
+		}
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("300 snapshots took %v — next-fire is not cached (an uncached full-horizon rescan per snapshot would take ~13s)", d)
+	}
+	if !infos[1].NextFireAt.IsZero() {
+		t.Fatalf("impossible spec cached next = %v, want zero", infos[1].NextFireAt)
+	}
+
+	// Delete drops the cache with the entry; a re-added entry recomputes.
+	if !s.Delete(infos[1].ID, "sess-A") {
+		t.Fatal("delete failed")
+	}
+	if got := s.InfoFor("sess-A"); len(got) != 1 {
+		t.Fatalf("post-delete entries = %d, want 1", len(got))
 	}
 }

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"regexp"
@@ -901,4 +902,146 @@ func TestBackgroundShellKilledNotificationAttribution(t *testing.T) {
 			t.Fatal("no completion notification")
 		}
 	})
+}
+
+// waitShellDone blocks (bounded) until the shell leaves the running state.
+func waitShellDone(t *testing.T, bg *BackgroundShells, session, id string) {
+	t.Helper()
+	if _, err := bg.WaitFor(t.Context(), session, id, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	st, err := bg.StatusFor(session, id)
+	if err != nil || st.Running {
+		t.Fatalf("shell %s did not finish: err=%v status=%+v", id, err, st)
+	}
+}
+
+// F3: the combined output a background shell buffers is capped at
+// MaxBufferedOutputBytes (keep-tail). The dropped prefix is counted, the
+// counter is surfaced loudly — one "[N older bytes truncated]" marker per
+// read, never per poll batch — and the honest total byte count survives.
+func TestBackgroundShellOutputCapKeepsTailWithMarker(t *testing.T) {
+	reg := NewRegistry(t.TempDir())
+	bg := reg.Background()
+
+	// 200000 numbered lines of 7 bytes each: a fast generator producing
+	// 1 400 000 bytes, comfortably past the 1 MiB cap, no sleeping.
+	const lines = 200000
+	const lineLen = 7 // "%06d\n"
+	cmd := fmt.Sprintf("awk 'BEGIN{for(i=1;i<=%d;i++)printf \"%%06d\\n\",i}'", lines)
+	id, err := bg.Start(t.Context(), cmd, "", ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitShellDone(t, bg, "", id)
+
+	total := lines * lineLen
+	dropped := total - MaxBufferedOutputBytes
+	marker := fmt.Sprintf("[%d older bytes truncated]\n", dropped)
+
+	out, st, err := bg.OutputFor("", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.OutputBytes != total {
+		t.Fatalf("OutputBytes = %d, want the honest total %d", st.OutputBytes, total)
+	}
+	if !strings.HasPrefix(out, marker) {
+		t.Fatalf("output missing dropped-bytes marker, prefix = %q", out[:min(80, len(out))])
+	}
+	if strings.Count(out, "older bytes truncated") != 1 {
+		t.Fatalf("marker must appear exactly once per read, got %d", strings.Count(out, "older bytes truncated"))
+	}
+	body := out[len(marker):]
+	if len(body) != MaxBufferedOutputBytes {
+		t.Fatalf("kept tail = %d bytes, want exactly the cap %d", len(body), MaxBufferedOutputBytes)
+	}
+	if !strings.HasSuffix(body, fmt.Sprintf("%06d\n", lines)) {
+		t.Fatalf("tail does not end with the newest line: %q", body[len(body)-40:])
+	}
+	if strings.Contains(body, "000001\n") {
+		t.Fatal("the oldest output line survived the cap")
+	}
+
+	// TailFor carries the same facts: the marker plus a bounded tail, the
+	// truncated flag set, and the full logical byte count.
+	tail, truncated, tailTotal, _, err := bg.TailFor("", id, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !truncated || tailTotal != total {
+		t.Fatalf("tail truncated=%v total=%d, want true/%d", truncated, tailTotal, total)
+	}
+	if !strings.HasPrefix(tail, marker) {
+		t.Fatalf("tail missing dropped-bytes marker: %q", tail[:min(80, len(tail))])
+	}
+	if len(tail) != len(marker)+100 {
+		t.Fatalf("tail length = %d, want marker + 100 bytes", len(tail))
+	}
+	if !strings.HasSuffix(tail, fmt.Sprintf("%06d\n", lines)) {
+		t.Fatalf("tail does not end with the newest line: %q", tail[len(tail)-40:])
+	}
+}
+
+// F4: finished shell records are capped per session — the newest
+// MaxFinishedRecordsPerSession finished records stay, running records are
+// always kept, and the unscoped ("") bucket follows the same rule.
+func TestBackgroundShellFinishedRecordsCappedPerSession(t *testing.T) {
+	reg := NewRegistry(t.TempDir())
+	bg := reg.Background()
+	t.Cleanup(func() { bg.KillAll(StopByUser) })
+	sess := tracing.WithRun(t.Context(), "run-cap", "sess-cap")
+
+	// A running shell is retained no matter how much finishes after it.
+	if _, err := bg.Start(sess, "sleep 60", "", "."); err != nil {
+		t.Fatal(err)
+	}
+	// Sequential quick shells: the finish order equals the id order, so the
+	// newest finished set is exactly the highest ids.
+	for range MaxFinishedRecordsPerSession + 6 {
+		id, err := bg.Start(sess, "true", "", ".")
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitShellDone(t, bg, "sess-cap", id)
+	}
+
+	list := bg.ListFor("sess-cap")
+	if len(list) != MaxFinishedRecordsPerSession+1 {
+		t.Fatalf("sess-cap keeps %d records, want running + %d newest finished", len(list), MaxFinishedRecordsPerSession)
+	}
+	if list[0].ID != "1" || !list[0].Running {
+		t.Fatalf("the running shell must be kept, got %+v", list[0])
+	}
+	if list[1].ID != "8" || list[len(list)-1].ID != "27" {
+		t.Fatalf("kept finished set = %s…%s, want 8…27", list[1].ID, list[len(list)-1].ID)
+	}
+	for _, id := range []string{"2", "3", "4", "5", "6", "7"} {
+		if _, err := bg.StatusFor("sess-cap", id); !errors.Is(err, ErrShellNotFound) {
+			t.Fatalf("pruned shell %s still resolvable: %v", id, err)
+		}
+	}
+
+	// The unscoped ("") bucket follows the same rule; other sessions are
+	// untouched by it.
+	for range MaxFinishedRecordsPerSession + 2 {
+		id, err := bg.Start(t.Context(), "true", "", ".")
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitShellDone(t, bg, "", id)
+	}
+	if _, err := bg.StatusFor("", "28"); !errors.Is(err, ErrShellNotFound) {
+		t.Fatalf("pruned unscoped shell 28 still resolvable: %v", err)
+	}
+	// The scoped viewer also sees unscoped shells, so count only its own.
+	own := 0
+	for _, st := range bg.ListFor("sess-cap") {
+		if st.Session == "sess-cap" {
+			own++
+		}
+	}
+	if own != MaxFinishedRecordsPerSession+1 {
+		t.Fatalf("unscoped churn pruned another session's records: %d own records survive, want %d", own, MaxFinishedRecordsPerSession+1)
+	}
 }

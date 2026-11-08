@@ -8,6 +8,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -124,23 +125,17 @@ func TestDeleteSessionStopsBackgroundWorkAndNeverWakes(t *testing.T) {
 		t.Fatalf("DELETE report = %+v, want deleted, 1 shell, 0 tasks, 0 crons, todos dropped", rep)
 	}
 
-	// The shell was stopped by the user (kill attribution records before the
-	// signal lands; the exit settles asynchronously).
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		var st tools.BackgroundShellStatus
-		for _, s := range env.reg.Background().ListFor(sid) {
-			if s.ID == shellID {
-				st = s
-			}
+	// The killed shell's record went with the session (F4: ReleaseSession
+	// removes the session's records entirely): it killed with user
+	// attribution — the report above counted it — then became unobservable,
+	// settling invisibly like the kill endpoint's async teardown.
+	for _, s := range env.reg.Background().ListFor(sid) {
+		if s.ID == shellID {
+			t.Fatalf("deleted session's shell record survived: %+v", s)
 		}
-		if st.Killed && st.StoppedBy == tools.StopByUser && !st.Running {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("shell never settled as user-stopped: %+v", st)
-		}
-		time.Sleep(10 * time.Millisecond)
+	}
+	if _, _, err := env.reg.Background().OutputFor(sid, shellID); !errors.Is(err, tools.ErrShellNotFound) {
+		t.Fatalf("deleted session's shell still resolvable: %v", err)
 	}
 
 	// The todo sidecar and the live list died with the session.

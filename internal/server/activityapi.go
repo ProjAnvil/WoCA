@@ -112,7 +112,7 @@ type activityCron struct {
 	ID          string  `json:"id"`
 	LastFiredAt *string `json:"last_fired_at"`
 	Name        string  `json:"name"`
-	NextFireAt  *string `json:"next_fire_at"` // null: no fire within 366 days
+	NextFireAt  *string `json:"next_fire_at"` // null: no fire within the scheduler's horizon (cached per entry, F5)
 	Prompt      string  `json:"prompt"`
 	Spec        string  `json:"spec"`
 }
@@ -247,7 +247,7 @@ func (s *Server) handleActivitySnapshot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	sid := r.PathValue("id")
-	act := s.agent.ActivityFor(sid, time.Now())
+	act := s.agent.ActivityFor(sid)
 	// Todos: live wins, else sidecar (PM §4.5, the goalForSession pattern).
 	// A process that has not written todos for the session (TodosKnown=false,
 	// the post-restart state) displays the persisted list with the sidecar's

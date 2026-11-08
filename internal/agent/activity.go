@@ -103,13 +103,13 @@ type activityState struct {
 	released map[string]bool
 }
 
-// ActivityFor snapshots everything a run in session can see, as of now
-// (now only feeds the crons' next-fire computation). The unscoped session
-// "" keeps the TUI/REPL semantics — everything; the server never passes it.
-// Managers enforce ownership themselves (tracing.VisibleTo); this seam does
-// not re-filter. An unknown session yields the empty snapshot, non-nil
-// slices included.
-func (a *Agent) ActivityFor(session string, now time.Time) Activity {
+// ActivityFor snapshots everything a run in session can see, as of now.
+// The unscoped session "" keeps the TUI/REPL semantics — everything; the
+// server never passes it. Managers enforce ownership themselves
+// (tracing.VisibleTo); this seam does not re-filter. An unknown session
+// yields the empty snapshot, non-nil slices included. (Cron next-fire times
+// are per-entry caches since F5, so the snapshot takes no clock.)
+func (a *Agent) ActivityFor(session string) Activity {
 	todos, updatedAt, known := a.TodosFor(session)
 	if todos == nil {
 		todos = []tools.Todo{} // unknown or cleared reads as [], never null
@@ -120,7 +120,7 @@ func (a *Agent) ActivityFor(session string, now time.Time) Activity {
 		TodosKnown:           known,
 		Shells:               a.registry.Background().ListFor(session),
 		Tasks:                a.tasks.ListFor(session),
-		Crons:                a.cron.InfoFor(session, now),
+		Crons:                a.cron.InfoFor(session),
 		PendingNotifications: a.QueuedNotificationCountFor(session),
 	}
 }
@@ -186,17 +186,19 @@ func (a *Agent) DeleteCronFor(session, id string) error {
 // ReleaseSession tears a server session down (session deletion, D2): it
 // kills the session's running shells, stops its running tasks (both with
 // user attribution), deletes its scheduled prompts, drops its todo list and
-// its queued items, and marks the session released. From that mark on, the
-// session is silent forever: late completions are dropped in
-// queueNotification instead of waking or delivering, and no activity
-// observer callback fires for it again.
+// its queued items, removes the session's shell and task records entirely
+// (F4), and marks the session released. From that mark on, the session is
+// silent forever: late completions are dropped in queueNotification instead
+// of waking or delivering, and no activity observer callback fires for it
+// again.
 //
 // Only items the session owns are touched — unscoped ("") ones belong to
 // the local single-session surface, not to this session. Termination is
 // asynchronous, like the kill endpoint: the signals are sent, the processes
-// settle on their own. Releasing an unknown (or already released) session
-// and the unscoped "" session are no-ops with a zero report. Process-wide
-// teardown is Close's job, not this one.
+// settle on their own (invisibly — their records are already gone).
+// Releasing an unknown (or already released) session and the unscoped ""
+// session are no-ops with a zero report. Process-wide teardown is Close's
+// job, not this one.
 func (a *Agent) ReleaseSession(session string) ReleaseReport {
 	var rep ReleaseReport
 	if session == "" {
@@ -250,6 +252,12 @@ func (a *Agent) ReleaseSession(session string) ReleaseReport {
 		a.registry.TodoStore().Drop(session)
 		rep.TodosDropped = true
 	}
+	// The session's records go with it entirely (F4): the shells killed and
+	// tasks stopped above are unobservable afterwards — late completions were
+	// already silenced — so keeping their records would be pure retention
+	// cost. The released mark itself stays (R2).
+	a.registry.Background().DropSession(session)
+	a.tasks.dropSession(session)
 	return rep
 }
 

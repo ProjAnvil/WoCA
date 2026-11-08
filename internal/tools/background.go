@@ -1,11 +1,13 @@
 package tools
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -86,9 +88,13 @@ type backgroundShell struct {
 	command string
 	// session is the starting run's session id (tracing.RunFrom); "" when
 	// the shell started outside any run scope.
-	session   string
-	proc      executor.Process
-	buf       strings.Builder
+	session string
+	proc    executor.Process
+	// buf is the kept tail of the combined output, at most
+	// MaxBufferedOutputBytes; dropped counts the bytes the cap discarded
+	// from the front (keep-tail, F3). Both live under mu.
+	buf       []byte
+	dropped   int
 	mu        sync.Mutex
 	done      chan struct{}
 	exited    bool
@@ -215,6 +221,10 @@ func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWork
 		sh.ended = time.Now()
 		sh.mu.Unlock()
 		close(sh.done)
+		// Prune this session's finished records while the shell is still
+		// unpublished-as-changed: the onChange refetch below then observes
+		// the already-pruned list (F4).
+		b.pruneFinished(sh.session)
 		if onChange != nil {
 			onChange(sh.session)
 		}
@@ -254,7 +264,43 @@ type lineWriter struct{ sh *backgroundShell }
 func (w lineWriter) Write(p []byte) (int, error) {
 	w.sh.mu.Lock()
 	defer w.sh.mu.Unlock()
-	return w.sh.buf.Write(p)
+	w.sh.appendLocked(p)
+	return len(p), nil
+}
+
+// appendLocked appends output bytes and enforces the keep-tail cap (F3):
+// once the buffer passes MaxBufferedOutputBytes the overflow is dropped from
+// the front and counted, and the cut is backed off to a UTF-8 rune boundary
+// so a multibyte character is never split. Reslicing keeps this amortized
+// O(1) per byte — the underlying array is only recopied when append grows
+// it, roughly once per cap's worth of throughput.
+func (sh *backgroundShell) appendLocked(p []byte) {
+	sh.buf = append(sh.buf, p...)
+	if overflow := len(sh.buf) - MaxBufferedOutputBytes; overflow > 0 {
+		sh.buf = sh.buf[overflow:]
+		sh.dropped += overflow
+		for len(sh.buf) > 0 && !utf8.RuneStart(sh.buf[0]) {
+			sh.buf = sh.buf[1:]
+			sh.dropped++
+		}
+	}
+}
+
+// truncationMarker renders the loud dropped-bytes prefix (F3): one line,
+// prepended once per read — not per poll batch — naming exactly how many
+// older bytes the cap discarded.
+func truncationMarker(dropped int) string {
+	return fmt.Sprintf("[%d older bytes truncated]\n", dropped)
+}
+
+// outputLocked renders the shell's output for readers: the kept tail plus,
+// when the cap dropped bytes, the truncation marker in front. The caller
+// holds sh.mu.
+func (sh *backgroundShell) outputLocked() string {
+	if sh.dropped == 0 {
+		return string(sh.buf)
+	}
+	return truncationMarker(sh.dropped) + string(sh.buf)
 }
 
 // snapshot renders the shell's current state (never races with the writer
@@ -268,15 +314,17 @@ func (sh *backgroundShell) snapshot() BackgroundShellStatus {
 // snapshotLocked is snapshot for callers already holding sh.mu.
 func (sh *backgroundShell) snapshotLocked() BackgroundShellStatus {
 	st := BackgroundShellStatus{
-		ID:          sh.id,
-		Session:     sh.session,
-		Command:     sh.command,
-		Running:     true,
-		ExitCode:    -1,
-		Killed:      sh.killed,
-		StoppedBy:   sh.stoppedBy,
-		StartedAt:   sh.started,
-		OutputBytes: sh.buf.Len(),
+		ID:        sh.id,
+		Session:   sh.session,
+		Command:   sh.command,
+		Running:   true,
+		ExitCode:  -1,
+		Killed:    sh.killed,
+		StoppedBy: sh.stoppedBy,
+		StartedAt: sh.started,
+		// The honest total produced so far, dropped prefix included — the
+		// kept buffer alone would under-report a capped shell (F3).
+		OutputBytes: sh.dropped + len(sh.buf),
 	}
 	select {
 	case <-sh.done:
@@ -289,24 +337,100 @@ func (sh *backgroundShell) snapshotLocked() BackgroundShellStatus {
 }
 
 // ListFor returns snapshots of the shells a run in session can see, in
-// creation order: everything for the unscoped session "" (the TUI/REPL
-// single-session case), otherwise the unscoped shells plus the session's
-// own.
+// numeric id (creation) order: everything for the unscoped session "" (the
+// TUI/REPL single-session case), otherwise the unscoped shells plus the
+// session's own. Finished records are pruned per session (F4), so the live
+// map — not the historical id counter — is walked; ids are monotonic and
+// never reused.
 func (b *BackgroundShells) ListFor(session string) []BackgroundShellStatus {
 	b.mu.Lock()
 	shells := make([]*backgroundShell, 0, len(b.shells))
-	for i := 1; i <= b.next; i++ {
-		id := strconv.Itoa(i)
-		if sh, ok := b.shells[id]; ok && tracing.VisibleTo(sh.session, session) {
+	for _, sh := range b.shells {
+		if tracing.VisibleTo(sh.session, session) {
 			shells = append(shells, sh)
 		}
 	}
 	b.mu.Unlock()
+	slices.SortFunc(shells, func(a, b *backgroundShell) int { return cmpNumericID(a.id, b.id) })
 	out := make([]BackgroundShellStatus, 0, len(shells))
 	for _, sh := range shells {
 		out = append(out, sh.snapshot())
 	}
 	return out
+}
+
+// cmpNumericID orders numeric id strings by value ("2" before "10"), falling
+// back to lexical order for anything non-numeric.
+func cmpNumericID(a, b string) int {
+	na, ea := strconv.Atoi(a)
+	nb, eb := strconv.Atoi(b)
+	if ea == nil && eb == nil {
+		return cmp.Compare(na, nb)
+	}
+	return strings.Compare(a, b)
+}
+
+// pruneFinished caps the session's finished shell records at
+// MaxFinishedRecordsPerSession, dropping the OLDEST finished records first
+// (F4); running records are always kept. Called from a shell's exit
+// goroutine after it settles, before its change callback fires.
+func (b *BackgroundShells) pruneFinished(session string) {
+	type fin struct {
+		id    string
+		num   int
+		ended time.Time
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var fins []fin
+	for id, sh := range b.shells {
+		if sh.session != session {
+			continue
+		}
+		// done is closed exactly at the terminal transition, so this needs
+		// no per-shell lock; ended was written before the close.
+		select {
+		case <-sh.done:
+		default:
+			continue // running records are always kept
+		}
+		num, err := strconv.Atoi(id)
+		if err != nil {
+			continue // only counter-minted numeric ids are prunable
+		}
+		fins = append(fins, fin{id: id, num: num, ended: sh.ended})
+	}
+	if len(fins) <= MaxFinishedRecordsPerSession {
+		return
+	}
+	slices.SortFunc(fins, func(a, b fin) int {
+		if c := a.ended.Compare(b.ended); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.num, b.num)
+	})
+	for _, f := range fins[:len(fins)-MaxFinishedRecordsPerSession] {
+		delete(b.shells, f.id)
+	}
+}
+
+// DropSession removes every record the session owns, finished or running
+// (F4): ReleaseSession calls it after killing the session's running shells —
+// their exit goroutines finish invisibly, late completions are already
+// silenced for a released session. The unscoped "" bucket is never dropped
+// this way (it belongs to the local single-session surface). It returns how
+// many records were removed.
+func (b *BackgroundShells) DropSession(session string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for id, sh := range b.shells {
+		if sh.session == session {
+			delete(b.shells, id)
+			n++
+		}
+	}
+	return n
 }
 
 // StatusFor returns a snapshot of one shell, when session may see it.
@@ -318,8 +442,9 @@ func (b *BackgroundShells) StatusFor(session, id string) (BackgroundShellStatus,
 	return sh.snapshot(), nil
 }
 
-// OutputFor returns the accumulated output and status of one shell, when
-// session may see it.
+// OutputFor returns the shell's buffered output — the kept tail plus a
+// "[N older bytes truncated]" marker when the cap dropped bytes (F3) — and
+// its status, when session may see it.
 func (b *BackgroundShells) OutputFor(session, id string) (output string, status BackgroundShellStatus, err error) {
 	sh, err := b.lookup(session, id)
 	if err != nil {
@@ -327,33 +452,43 @@ func (b *BackgroundShells) OutputFor(session, id string) (output string, status 
 	}
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	return sh.buf.String(), sh.snapshotLocked(), nil
+	return sh.outputLocked(), sh.snapshotLocked(), nil
 }
 
 // TailFor returns at most the last maxBytes bytes of output plus the
 // truncated flag and the full byte count, when session may see the shell.
 // The cut point is backed off to a UTF-8 rune boundary so a multibyte
-// character is never split; maxBytes <= 0 returns the whole buffer.
+// character is never split; maxBytes <= 0 returns the whole buffer. When the
+// buffer cap itself dropped bytes (F3), the marker is prepended and the
+// truncated flag set regardless of maxBytes — the returned text is honestly
+// flagged as not the complete output — and total keeps reporting the full
+// logical byte count, dropped prefix included.
 func (b *BackgroundShells) TailFor(session, id string, maxBytes int) (tail string, truncated bool, total int, st BackgroundShellStatus, err error) {
 	sh, err := b.lookup(session, id)
 	if err != nil {
 		return "", false, 0, BackgroundShellStatus{}, err
 	}
 	sh.mu.Lock()
-	out := sh.buf.String()
+	tailBytes := sh.buf
+	if maxBytes > 0 && len(tailBytes) > maxBytes {
+		tailBytes = tailBytes[len(tailBytes)-maxBytes:]
+		// A leading continuation byte means the first character straddles
+		// the cut; drop its partial bytes so the tail starts on a rune
+		// boundary.
+		for len(tailBytes) > 0 && !utf8.RuneStart(tailBytes[0]) {
+			tailBytes = tailBytes[1:]
+		}
+	}
+	dropped := sh.dropped
+	total = dropped + len(sh.buf)
 	st = sh.snapshotLocked()
 	sh.mu.Unlock()
-	total = len(out)
-	if maxBytes <= 0 || total <= maxBytes {
-		return out, false, total, st, nil
+	tail = string(tailBytes)
+	if dropped > 0 {
+		tail = truncationMarker(dropped) + tail
 	}
-	tail = out[total-maxBytes:]
-	// A leading continuation byte means the first character straddles the
-	// cut; drop its partial bytes so the tail starts on a rune boundary.
-	for len(tail) > 0 && !utf8.RuneStart(tail[0]) {
-		tail = tail[1:]
-	}
-	return tail, true, total, st, nil
+	truncated = dropped > 0 || (maxBytes > 0 && total > maxBytes)
+	return tail, truncated, total, st, nil
 }
 
 // WaitFor blocks until the shell finishes, d elapses, or ctx is canceled,
@@ -509,6 +644,18 @@ func (b *BackgroundShells) killShell(sh *backgroundShell, by StopOrigin) (alread
 // notification so a chatty command cannot flood the context.
 const NotificationOutputCap = 2000
 
+// MaxBufferedOutputBytes caps the combined output one background shell
+// buffers in memory (keep-tail, spec F3): once the cap is reached the buffer
+// keeps the newest bytes and counts the dropped prefix, which reads surface
+// as a loud "[N older bytes truncated]" marker — never silent loss.
+const MaxBufferedOutputBytes = 1 << 20
+
+// MaxFinishedRecordsPerSession caps how many finished records each session
+// keeps per manager (spec F4) — the newest finished background shells here
+// and the newest finished tasks in agent.TaskManager; running records are
+// always kept, and the unscoped ("") bucket follows the same rule.
+const MaxFinishedRecordsPerSession = 20
+
 // MaxWaitMS is the largest BashOutput wait_ms (10 minutes); longer requests
 // are clamped so a typo cannot pin a tool round for hours.
 const MaxWaitMS = 600000
@@ -522,7 +669,7 @@ const MaxWaitMS = 600000
 func (sh *backgroundShell) completion() (text string, stoppedBy StopOrigin) {
 	sh.mu.Lock()
 	st := BackgroundShellStatus{ID: sh.id, Command: sh.command, ExitCode: sh.exit, StoppedBy: sh.stoppedBy}
-	out := sh.buf.String()
+	out := string(sh.buf)
 	sh.mu.Unlock()
 	var b strings.Builder
 	switch st.StoppedBy {
@@ -546,7 +693,7 @@ func (sh *backgroundShell) completion() (text string, stoppedBy StopOrigin) {
 // until it finishes.
 func bashOutputTool(bg *BackgroundShells) coretools.Tool {
 	t := MustTool(coretools.FromFunc("BashOutput",
-		"Get the current output and status of a background shell started with Bash run_in_background. Returns the accumulated stdout/stderr, whether it is still running, and its exit code once finished. Set wait_ms to block inside this call until the shell finishes or the wait elapses (max 600000ms), instead of polling repeatedly.",
+		"Get the current output and status of a background shell started with Bash run_in_background. Returns the buffered stdout/stderr (at most the newest 1 MiB is kept; when older output was dropped, the text starts with a \"[N older bytes truncated]\" marker naming the dropped byte count), whether it is still running, and its exit code once finished. Set wait_ms to block inside this call until the shell finishes or the wait elapses (max 600000ms), instead of polling repeatedly.",
 		func(ctx context.Context, a struct {
 			ShellID string `json:"shell_id"`
 			WaitMS  int    `json:"wait_ms,omitempty"`

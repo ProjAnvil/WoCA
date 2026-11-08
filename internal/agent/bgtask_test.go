@@ -1266,3 +1266,53 @@ func TestTaskNotificationFirstLines(t *testing.T) {
 		}
 	})
 }
+
+// F4: finished task records are capped per session — the newest
+// tools.MaxFinishedRecordsPerSession finished records stay (the notifyDone
+// hook prunes as each task finishes), running records are always kept, and
+// other sessions are untouched.
+func TestTaskManagerFinishedRecordsCappedPerSession(t *testing.T) {
+	m := newTaskManager()
+	ctxA := tracing.WithRun(t.Context(), "run-tasks", "sess-tasks")
+
+	running, err := m.start(ctxA, "never ends", "d", "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range tools.MaxFinishedRecordsPerSession + 6 {
+		tk, err := m.start(ctxA, "churn", "d", "general")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tk.setFinalIfRunning(TaskCompleted, "done")
+		m.notifyDone(tk) // the run goroutine's post-terminal hook
+	}
+
+	infos := m.ListFor("sess-tasks")
+	if len(infos) != tools.MaxFinishedRecordsPerSession+1 {
+		t.Fatalf("sess-tasks keeps %d records, want running + %d newest finished", len(infos), tools.MaxFinishedRecordsPerSession)
+	}
+	if infos[0].ID != running.ID || infos[0].Status != TaskRunning {
+		t.Fatalf("running record must be kept: %+v", infos[0])
+	}
+	if infos[1].ID != "task-8" || infos[len(infos)-1].ID != "task-27" {
+		t.Fatalf("kept finished set = %s…%s, want task-8…task-27", infos[1].ID, infos[len(infos)-1].ID)
+	}
+	for _, id := range []string{"task-2", "task-3", "task-4", "task-5", "task-6", "task-7"} {
+		if _, err := m.InfoFor("sess-tasks", id); !errors.Is(err, ErrTaskNotFound) {
+			t.Fatalf("pruned task %s still resolvable: %v", id, err)
+		}
+	}
+
+	// Another session's finished records are not this session's business.
+	ctxB := tracing.WithRun(t.Context(), "run-other", "sess-other")
+	other, err := m.start(ctxB, "other", "d", "general")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.setFinalIfRunning(TaskFailed, "boom")
+	m.notifyDone(other)
+	if got := m.ListFor("sess-other"); len(got) != 1 || got[0].ID != other.ID || got[0].Status != TaskFailed {
+		t.Fatalf("sess-other = %+v", got)
+	}
+}

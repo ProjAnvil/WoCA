@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -449,7 +450,9 @@ func (m *TaskManager) SetOnChange(fn func(session string)) {
 // callback (a no-op without one). Called from the task's run goroutine once
 // the task has reached its terminal state — completed or stopped alike, so a
 // stopped task is never silently dropped — with the stop attribution so the
-// queueing side can keep user stops Quiet (D1).
+// queueing side can keep user stops Quiet (D1). It also prunes the session's
+// finished records (F4): this is the one hook every goroutine-driven
+// terminal transition passes through.
 func (m *TaskManager) notifyDone(t *backgroundTask) {
 	m.mu.Lock()
 	fn := m.notify
@@ -458,6 +461,7 @@ func (m *TaskManager) notifyDone(t *backgroundTask) {
 		text, stoppedBy := t.completion()
 		fn(t.session, text, stoppedBy)
 	}
+	m.pruneFinished(t.session)
 }
 
 // RunningCount reports running background tasks (for /api/stats).
@@ -496,18 +500,90 @@ func (m *TaskManager) lookup(session, id string) (*backgroundTask, error) {
 // visible returns the tasks a run in session can see, in numeric id order
 // (task-2 before task-10): everything for the unscoped session "" (the
 // TUI/REPL single-session case), otherwise the unscoped tasks plus the
-// session's own. Ids are minted from a monotonic counter and never reused,
-// so walking the sequence is the creation order.
+// session's own. Finished records are pruned per session (F4), so the live
+// map — not the historical id counter — is walked; ids are minted from a
+// monotonic counter and never reused.
 func (m *TaskManager) visible(session string) []*backgroundTask {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	out := make([]*backgroundTask, 0, len(m.tasks))
-	for i := 1; i <= m.next; i++ {
-		if t, ok := m.tasks[fmt.Sprintf("task-%d", i)]; ok && tracing.VisibleTo(t.session, session) {
+	for _, t := range m.tasks {
+		if tracing.VisibleTo(t.session, session) {
 			out = append(out, t)
 		}
 	}
+	m.mu.Unlock()
+	slices.SortFunc(out, func(a, b *backgroundTask) int { return cmpTaskID(a.ID, b.ID) })
 	return out
+}
+
+// cmpTaskID orders task ids numerically (task-2 before task-10), falling
+// back to lexical order for anything off the counter's scheme.
+func cmpTaskID(a, b string) int {
+	na, ea := strconv.Atoi(strings.TrimPrefix(a, "task-"))
+	nb, eb := strconv.Atoi(strings.TrimPrefix(b, "task-"))
+	if ea == nil && eb == nil {
+		return cmp.Compare(na, nb)
+	}
+	return strings.Compare(a, b)
+}
+
+// pruneFinished caps the session's finished task records at
+// tools.MaxFinishedRecordsPerSession, dropping the OLDEST finished records
+// first (F4); running records are always kept. Called from the terminal
+// transitions' manager hooks — notifyDone (the run goroutine's post-terminal
+// path), StopFor and StopAll — so records stay bounded without new starts.
+func (m *TaskManager) pruneFinished(session string) {
+	type fin struct {
+		id    string
+		ended time.Time
+		num   int
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var fins []fin
+	for id, t := range m.tasks {
+		if t.session != session {
+			continue
+		}
+		info := t.info() // m.mu → t.mu, the managers' established order
+		if info.Status == TaskRunning {
+			continue // running records are always kept
+		}
+		num, err := strconv.Atoi(strings.TrimPrefix(id, "task-"))
+		if err != nil {
+			continue
+		}
+		fins = append(fins, fin{id: id, ended: info.EndedAt, num: num})
+	}
+	if len(fins) <= tools.MaxFinishedRecordsPerSession {
+		return
+	}
+	slices.SortFunc(fins, func(a, b fin) int {
+		if c := a.ended.Compare(b.ended); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.num, b.num)
+	})
+	for _, f := range fins[:len(fins)-tools.MaxFinishedRecordsPerSession] {
+		delete(m.tasks, f.id)
+	}
+}
+
+// dropSession removes every record the session owns, finished or running
+// (F4): ReleaseSession calls it after stopping the session's running tasks —
+// their goroutines finish invisibly, late completions are already silenced
+// for a released session. It returns how many records were removed.
+func (m *TaskManager) dropSession(session string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for id, t := range m.tasks {
+		if t.session == session {
+			delete(m.tasks, id)
+			n++
+		}
+	}
+	return n
 }
 
 // ListFor returns snapshots of the background tasks a run in session can
@@ -561,13 +637,16 @@ func (m *TaskManager) TailFor(session, id string, maxBytes int) (tail string, tr
 // StopFor stops a running task on behalf of by (model or user), recording
 // the stop attribution, when session may see it. Stopping an
 // already-finished task changes nothing: it reports alreadyFinished=true
-// with the unchanged snapshot.
+// with the unchanged snapshot. A stop is a terminal transition, so the
+// session's finished records are pruned here too (F4).
 func (m *TaskManager) StopFor(session, id string, by tools.StopOrigin) (info BackgroundTaskInfo, alreadyFinished bool, err error) {
 	t, err := m.lookup(session, id)
 	if err != nil {
 		return BackgroundTaskInfo{}, false, err
 	}
-	if !t.stop(by) {
+	moved := t.stop(by)
+	m.pruneFinished(t.session)
+	if !moved {
 		return t.info(), true, nil
 	}
 	return t.info(), false, nil
@@ -582,15 +661,19 @@ const taskStopSettleBound = 5 * time.Second
 
 // StopAll stops every running task on behalf of by — shutdown cleanup
 // (Agent.Close), where session scoping no longer matters because the whole
-// manager is going away. Finished tasks keep their recorded state. Like
-// BackgroundShells.KillAll it then waits up to taskStopSettleBound for the
-// stopped tasks' run goroutines to settle: background subagents are detached
-// from every context (D3), so without this a host that keeps living past
-// Close — the SDK — would carry orphaned runs still spending model calls.
+// manager is going away. Finished tasks keep their recorded state (each
+// session's finished records are pruned back under their cap, F4, since an
+// SDK host keeps living past Close). Like BackgroundShells.KillAll it then
+// waits up to taskStopSettleBound for the stopped tasks' run goroutines to
+// settle: background subagents are detached from every context (D3), so
+// without this a host that keeps living past Close — the SDK — would carry
+// orphaned runs still spending model calls.
 func (m *TaskManager) StopAll(by tools.StopOrigin) {
 	m.mu.Lock()
 	running := make([]*backgroundTask, 0, len(m.tasks))
+	sessions := map[string]bool{}
 	for _, t := range m.tasks {
+		sessions[t.session] = true
 		if st, _, _ := t.snapshot(); st == TaskRunning {
 			running = append(running, t)
 		}
@@ -598,6 +681,9 @@ func (m *TaskManager) StopAll(by tools.StopOrigin) {
 	m.mu.Unlock()
 	for _, t := range running {
 		t.stop(by)
+	}
+	for session := range sessions {
+		m.pruneFinished(session)
 	}
 	// Wait out the settle window: once a task's exited channel closes, its
 	// goroutine — and any work it still had in flight — is done.
