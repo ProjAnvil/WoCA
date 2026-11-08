@@ -16,7 +16,7 @@ import (
 //
 //	Todos  ← *tools.TodoStore        Shells ← *tools.BackgroundShells
 //	Tasks  ← *agent.TaskManager      Crons  ← *agent.cronScheduler
-//	Queue  ← *agent.queue
+//	Queue  ← *queue.Buffer
 //
 // (asserted in internal/agent/activity_delegate.go).
 
@@ -183,7 +183,7 @@ func (s *Seam) DeleteCron(session, id string) error {
 // queued items, removes the session's shell and task records entirely
 // (F4), and marks the session released. From that mark on, the session is
 // silent forever: late completions are dropped at the queue (the agent
-// wires Queue.DropScope and addTagged's released predicate to Released)
+// wires Queue.DropScope and Buffer.AddTagged's reject predicate to Released)
 // and no activity observer callback fires for it again.
 //
 // Only items the session owns are touched — unscoped ("") ones belong to

@@ -287,7 +287,7 @@ func TestQuietNotificationNeverWakeableDeliveredNextRun(t *testing.T) {
 
 // TestCoalesceQueuedInputs verifies the pure coalescing helper: several
 // queued items collapse into ONE Human message of per-item tagged blocks —
-// the same rendering formatQueuedInput uses — joined by a blank line, with
+// the same rendering queue.Format uses — joined by a blank line, with
 // an empty Tag falling back to the queued-user-input tag.
 func TestCoalesceQueuedInputs(t *testing.T) {
 	msg := CoalesceQueuedInputs([]QueuedInput{

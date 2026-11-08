@@ -136,7 +136,7 @@ func (s *cronScheduler) SetOnChange(fn func(session string)) {
 // Delete removes an entry by ID when the calling session may touch it:
 // session "" (the TUI/REPL single-session case) deletes any entry, and a
 // scoped session deletes its own plus unscoped ("") entries — the same
-// scope rule as queue.drain. An entry that exists but belongs to another
+// scope rule as queue.Buffer.Drain. An entry that exists but belongs to another
 // session is returned as not-found, never removed.
 func (s *cronScheduler) Delete(id, session string) bool {
 	s.mu.Lock()
