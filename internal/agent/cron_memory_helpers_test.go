@@ -829,16 +829,18 @@ func TestBeginToolUseSummaryJoinsBatches(t *testing.T) {
 
 func TestSpeculativeRegistryBounds(t *testing.T) {
 	var r speculativeRegistry
+	call := messages.ToolCall{ID: "id", Name: "Read"}
 	f := newToolFuture(nil)
-	if !r.add("id", f) {
+	if !r.add("run", call, f) {
 		t.Fatal("first add must register")
 	}
-	if r.add("id", newToolFuture(nil)) {
+	if r.add("run", call, newToolFuture(nil)) {
 		t.Fatal("duplicate add must be rejected")
 	}
 	// Eviction past the cap keeps the registry bounded.
 	for i := range maxSpeculativeFutures + 10 {
-		r.add(string(rune(i%128))+string(rune(i/128))+"-"+string(rune(i%10)), newToolFuture(nil))
+		id := string(rune(i%128)) + string(rune(i/128)) + "-" + string(rune(i%10))
+		r.add("run", messages.ToolCall{ID: id, Name: "Read"}, newToolFuture(nil))
 	}
 	r.mu.Lock()
 	size := len(r.futures)
@@ -849,14 +851,14 @@ func TestSpeculativeRegistryBounds(t *testing.T) {
 	// cancel aborts and removes.
 	ctx, cancel := context.WithCancel(t.Context())
 	g := newToolFuture(cancel)
-	r.add("gate", g)
-	r.cancel("gate")
+	r.add("gate", messages.ToolCall{ID: "gate", Name: "Read"}, g)
+	r.cancel("gate", "gate")
 	select {
 	case <-ctx.Done():
 	default:
 		t.Fatal("cancel did not abort the future")
 	}
-	if r.get("gate") != nil {
+	if r.get("gate", "gate") != nil {
 		t.Fatal("cancelled future not removed")
 	}
 }
@@ -872,11 +874,11 @@ func TestDispatchSpeculativeDuplicateIgnored(t *testing.T) {
 		t.Fatal("duplicate dispatch must be ignored")
 	}
 	// Wait for the future to finish so the test does not race the registry.
-	f := a.spec.get("d1")
+	f := a.spec.get("", "d1")
 	if f != nil {
 		_ = f.wait()
 	}
-	a.spec.consume("d1")
+	a.spec.consume("", "d1")
 	// Calls the gate would interrupt are never dispatched.
 	if a.dispatchSpeculative(t.Context(), messages.ToolCall{ID: "d2", Name: "AskUserQuestion"}) {
 		t.Fatal("interaction gate must not pre-run")

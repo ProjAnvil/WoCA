@@ -711,7 +711,7 @@ func TestDispatchSpeculativeRecoversToolPanic(t *testing.T) {
 	if !a.dispatchSpeculative(t.Context(), call) {
 		t.Fatal("expected the call to be dispatched speculatively")
 	}
-	f := a.spec.get("sp1")
+	f := a.spec.get("", "sp1")
 	if f == nil {
 		t.Fatal("future missing after dispatch")
 	}
@@ -719,7 +719,7 @@ func TestDispatchSpeculativeRecoversToolPanic(t *testing.T) {
 	if !strings.Contains(msg.Content, `tool "Read" panicked: read boom`) {
 		t.Fatalf("recovered message = %q", msg.Content)
 	}
-	a.spec.consume("sp1")
+	a.spec.consume("", "sp1")
 }
 
 // --- goalgraph.go: node guards, reply composition, token clamp ---

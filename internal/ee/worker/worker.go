@@ -197,6 +197,9 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 		// without these tags cannot be grouped by session downstream
 		// (Langfuse session.id, per-run filtering).
 		ctx = tracing.WithRun(ctx, run.RunID, run.SessionID)
+		// This worker is the run's driver: release the agent's speculative
+		// bookkeeping for it on every exit path below (done/error/cancel).
+		defer w.agent.EndRun(ctx)
 		history := []messages.Message{humanMessage(snap)}
 		if w.sessions != nil && snap.SessionID != "" {
 			if prev := w.sessions.Load(snap.SessionID); len(prev) > 0 {

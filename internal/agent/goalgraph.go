@@ -111,6 +111,11 @@ func (a *Agent) GoalStream(ctx context.Context, history []messages.Message) (ite
 	a.goal.pending = nil
 	a.goal.mu.Unlock()
 
+	// Capture the driver-supplied ctx as THE run context for speculative
+	// futures (see beginRunCtx): the goal execute cycles re-enter
+	// streamWithBudget with the goal graph's derived node ctx, which dies
+	// when this goal stream's iterator ends.
+	a.beginRunCtx(specRunID(ctx), ctx)
 	return a.goalChunkStream(ctx, history, g, run), nil
 }
 
@@ -127,6 +132,7 @@ func (a *Agent) GoalResume(ctx context.Context, answer any) (iter.Seq2[lggraph.S
 	if g == nil || !running {
 		return nil, fmt.Errorf("agent: no goal run in flight")
 	}
+	a.beginRunCtx(specRunID(ctx), ctx) // see GoalStream
 	return func(yield func(lggraph.StreamChunk, error) bool) {
 		paused := false
 		defer func() {

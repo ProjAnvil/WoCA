@@ -197,7 +197,7 @@ func TestStreamFallbackCleanMessage(t *testing.T) {
 		t.Fatalf("onFallback called %d times, want 1", fallbackNotified)
 	}
 	// The registry is fully drained after the turn.
-	if f := a.spec.get("new1"); f != nil {
+	if f := a.spec.get("", "new1"); f != nil {
 		t.Fatal("speculative registry still holds the consumed call")
 	}
 }

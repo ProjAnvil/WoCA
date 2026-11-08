@@ -336,8 +336,17 @@ type Agent struct {
 	hooksForFn  func(workdir string) *hooks.Runner
 	wsHooks     *wsCache[*hooks.Runner]
 	// spec tracks speculatively executed tool calls started while the model
-	// was still streaming (streaming tool execution).
+	// was still streaming (streaming tool execution), keyed by (run id,
+	// call id) so concurrent runs on one agent cannot poison each other
+	// through reused call ids.
 	spec speculativeRegistry
+	// runCtxs is the per-run context carrier for speculative execution
+	// (see beginRunCtx): run id -> the true run ctx the driver passed into
+	// Stream/Invoke/GoalStream. Futures are derived from it so they survive
+	// the graph's per-superstep ctx teardown when a sibling tool pauses the
+	// graph. Cleaned by EndRun on every run's terminal path.
+	runCtxMu sync.Mutex
+	runCtxs  map[string]context.Context
 	// batchMemo holds completed tool results of the in-flight call batch so
 	// an interrupt re-execution does not re-run tools that already executed
 	// (side effects). Keys are tool call IDs; entries are deleted when the
@@ -1052,6 +1061,10 @@ func (a *Agent) resetThread(ctx context.Context, threadID string) {
 
 // runTurn compacts history and runs one full graph turn.
 func (a *Agent) runTurn(ctx context.Context, history []messages.Message, threadID string) ([]messages.Message, error) {
+	// Capture the driver-supplied ctx as THE run context for speculative
+	// futures (see beginRunCtx) before the graph derives its per-superstep
+	// ctxs from it.
+	a.beginRunCtx(specRunID(ctx), ctx)
 	history = a.CompactHistory(ctx, history)
 	// Run-start delivery: input that arrived while idle rides in ahead of
 	// the fresh turn. After compaction, so the just-drained items reach the
@@ -1074,6 +1087,8 @@ func (a *Agent) runTurn(ctx context.Context, history []messages.Message, threadI
 // path: with a durable Saver configured, a process restart can resume the
 // thread's latest paused checkpoint (the old ResumeCheckpoint semantics).
 func (a *Agent) Resume(ctx context.Context, threadID string, resumeValue any) ([]messages.Message, error) {
+	// See runTurn: capture the driver's ctx as the run context.
+	a.beginRunCtx(specRunID(ctx), ctx)
 	// Keep LastThreadID in sync with the fresh-run paths (runTurn,
 	// streamWithBudget): a cross-process resume enters through here, and the
 	// foreground subagent relay derives the child thread from it.
@@ -1132,6 +1147,10 @@ func (a *Agent) ResumeStream(ctx context.Context, threadID string, resumeValue a
 // budget for this invocation; 0 uses the compiled default. Goal execute
 // cycles run with the doubled goalCycleStepBudget.
 func (a *Agent) streamWithBudget(ctx context.Context, history []messages.Message, threadID string, budget int) iter.Seq2[lggraph.StreamChunk, error] {
+	// See runTurn: capture the driver-supplied ctx as the run context (the
+	// goal execute cycles re-enter here with the goal graph's derived node
+	// ctx — beginRunCtx keeps the outer registration).
+	a.beginRunCtx(specRunID(ctx), ctx)
 	a.lastThread.Store(threadID)
 	history = a.CompactHistory(ctx, history)
 	history = a.prependQueued(ctx, history) // run-start delivery; see runTurn
@@ -1145,7 +1164,8 @@ func (a *Agent) streamWithBudget(ctx context.Context, history []messages.Message
 // resumeStreamWithBudget is the interrupt-resume counterpart of
 // streamWithBudget, keeping the cycle's budget across a pause.
 func (a *Agent) resumeStreamWithBudget(ctx context.Context, threadID string, resumeValue any, budget int) iter.Seq2[lggraph.StreamChunk, error] {
-	a.lastThread.Store(threadID) // see Resume
+	a.beginRunCtx(specRunID(ctx), ctx) // see streamWithBudget
+	a.lastThread.Store(threadID)       // see Resume
 	return a.graph.Stream(ctx, nil, lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue), RecursionLimit: budget},
 		Modes:   streamModes,
@@ -1353,9 +1373,10 @@ func (a *Agent) modelNode() lggraph.NodeFunc {
 			}
 			if model.IsRestartChunk(chunk) {
 				// The failed attempt's partial response is discarded:
-				// reset the accumulation and abort its speculative calls.
+				// reset the accumulation and abort its speculative calls
+				// (within this run's registry bucket).
 				if len(specIDs) > 0 {
-					a.spec.cancel(specIDs...)
+					a.spec.cancel(specRunID(ctx), specIDs...)
 					specIDs = nil
 				}
 				full = messages.Message{}
@@ -1503,6 +1524,10 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		}
 
 		calls := last.ToolCalls
+		// Speculative futures are resolved within THIS run's registry bucket:
+		// call ids are unique only per conversation, so a bare-id lookup
+		// would let a concurrent run consume a sibling's future.
+		specRun := specRunID(ctx)
 		// The run's thread rides the tool-call ctx (with the call ID) so the
 		// Task relay can address its child checkpoints without the
 		// agent-global LastThreadID, which concurrent sessions overwrite.
@@ -1526,7 +1551,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		// the gate too — their permission was already granted and re-asking
 		// would consume a resume value.
 		for i, call := range calls {
-			if f := a.spec.get(call.ID); f != nil {
+			if f := a.spec.get(specRun, call.ID); f != nil {
 				futures[i] = f
 				continue
 			}
@@ -1679,10 +1704,11 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 			a.batchMemo.Delete(call.ID)
 		}
 		// Results are merged into state: retire the consumed futures. On the
-		// interrupt path above they remain for a same-process resume.
+		// interrupt path above they remain for a same-process resume (their
+		// run ctx stays alive while the run is parked, so they complete).
 		for i := range calls {
 			if futures[i] != nil {
-				a.spec.consume(calls[i].ID)
+				a.spec.consume(specRun, calls[i].ID)
 			}
 		}
 		// Mid-turn user input: anything queued while

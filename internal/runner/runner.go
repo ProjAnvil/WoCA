@@ -96,6 +96,10 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 	// One run = one memory-prefetch scope: concurrent runs on the shared
 	// agent each get their own slot (see agent.WithMemoryScope).
 	ctx = agent.WithMemoryScope(ctx)
+	// Release the run's speculative-execution bookkeeping on every exit
+	// path (done, error, cancel): parked runs keep their futures until
+	// their run ends, and stragglers must not outlive the run.
+	defer r.agent.EndRun(ctx)
 	// File-mutation watermark: resolved into the run's changed-file delta at
 	// retain time (the recall_ops operation record's resources).
 	fhBase := r.agent.FileHistoryWatermark(ctx)
