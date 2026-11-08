@@ -68,25 +68,16 @@ func TestTUIWebActivityAPI(t *testing.T) {
 	}
 }
 
-// baseConfigFields is the shared field set BaseServerConfig owns (arch-cleanup
-// F2). Static is deliberately absent: each form wires its own frontend, and
-// agentbuild must stay webdist-free so headless roles never link the chat UI.
-// MemoryEngine and SessionDir may legitimately hold their zero value
-// (memory-engine=none builds no engine; DefaultDir may be empty).
-var baseConfigFields = []string{
-	"Agent", "Logger", "SessionDir", "WorkDir", "Settings", "Memory",
-	"MemoryEngine", "RebuildMemory", "RebuildModel", "CfgLive",
-	"SetThinkingBudget", "Quota", "ApplyClaudeEnv", "Plugins",
-	"InstallPlugin", "ActivityAPI",
-}
-
 // TestBaseServerConfigFieldCoverage pins the base's field set from both
 // directions: every field it sets belongs to the shared set, and every shared
 // field (except the documented may-be-zero ones) is actually set — so a new
-// field cannot silently join or leave the base.
+// field cannot silently join or leave the base. It consumes the canonical
+// exported list (SharedBaseConfigFields), guarding that list itself against
+// the base literal; Static is asserted absent separately below.
 func TestBaseServerConfigFieldCoverage(t *testing.T) {
 	ap := buildTestApp(t)
 	cfg := ap.BaseServerConfig()
+	baseConfigFields := SharedBaseConfigFields()
 
 	if cfg.Static != nil {
 		t.Fatal("base config must not carry a frontend (Static stays a per-form override)")

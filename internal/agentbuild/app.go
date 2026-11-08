@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -129,6 +130,29 @@ func (ap *App) BaseServerConfig() server.Config {
 		// serves it from this process's agent (see the doc comment).
 		ActivityAPI: true,
 	}
+}
+
+// sharedBaseConfigFields is the canonical list of server.Config fields the
+// shared base owns (see BaseServerConfig). It lives here, next to the base
+// literal it mirrors, so the list cannot drift from the guards that pin it:
+// agentbuild's TestBaseServerConfigFieldCoverage (which fails when the base
+// literal and this list disagree) and servefront's cross-form consistency
+// test both consume it via SharedBaseConfigFields. Static is deliberately
+// absent (each form wires its own frontend); MemoryEngine and SessionDir may
+// legitimately hold their zero value.
+var sharedBaseConfigFields = []string{
+	"Agent", "Logger", "SessionDir", "WorkDir", "Settings", "Memory",
+	"MemoryEngine", "RebuildMemory", "RebuildModel", "CfgLive",
+	"SetThinkingBudget", "Quota", "ApplyClaudeEnv", "Plugins",
+	"InstallPlugin", "ActivityAPI",
+}
+
+// SharedBaseConfigFields returns the server.Config field names owned by the
+// shared base (BaseServerConfig) — the set every deployment form must agree
+// on (arch-cleanup 2026-11-08 F2). The returned slice is a copy; iterating
+// it is the supported use, and mutating it does not affect the base.
+func SharedBaseConfigFields() []string {
+	return slices.Clone(sharedBaseConfigFields)
 }
 
 // effectiveProvider resolves the provider the same way RebuildModel does:

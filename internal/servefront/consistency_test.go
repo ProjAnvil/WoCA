@@ -11,26 +11,16 @@ import (
 	webdist "github.com/projanvil/woca/web"
 )
 
-// sharedBaseFields are the server.Config fields the shared base owns
-// (agentbuild.App.BaseServerConfig) — the set every deployment form must
-// agree on. Static is deliberately absent: each form wires its own frontend
-// (agentbuild stays webdist-free so headless roles never link the chat UI).
-// Keep in sync with the base set pinned by agentbuild's
-// TestBaseServerConfigFieldCoverage.
-var sharedBaseFields = []string{
-	"Agent", "Logger", "SessionDir", "WorkDir", "Settings", "Memory",
-	"MemoryEngine", "RebuildMemory", "RebuildModel", "CfgLive",
-	"SetThinkingBudget", "Quota", "ApplyClaudeEnv", "Plugins",
-	"InstallPlugin", "ActivityAPI",
-}
-
 // TestServeConfigPersonalMatchesTUIBase pins the two web construction paths
 // together (arch-cleanup 2026-11-08 F2): for the personal non-dispatch form,
 // serveConfig must agree with the TUI /web config (the bare base) on every
 // shared field, so the TUI's embedded web UI and `woca serve` cannot drift
-// apart again. Func-typed fields cannot be compared for identity in Go; for
-// those the test asserts both sides are wired (non-nil), which is the
-// observable contract of the shared base.
+// apart again. The shared field set is not re-declared here: it is consumed
+// from agentbuild.SharedBaseConfigFields, the single canonical list next to
+// BaseServerConfig, so a new base field is covered by this test the moment
+// it joins the base. Func-typed fields cannot be compared for identity in
+// Go; for those the test asserts both sides are wired (non-nil), which is
+// the observable contract of the shared base.
 func TestServeConfigPersonalMatchesTUIBase(t *testing.T) {
 	isolateEnv(t)
 	seedSettings(t, [2]string{"memory-engine", "none"})
@@ -62,7 +52,7 @@ func TestServeConfigPersonalMatchesTUIBase(t *testing.T) {
 		t.Fatal("personal serve form must keep ActivityAPI on (no dispatch)")
 	}
 
-	for _, name := range sharedBaseFields {
+	for _, name := range agentbuild.SharedBaseConfigFields() {
 		f, ok := reflect.TypeOf(server.Config{}).FieldByName(name)
 		if !ok {
 			t.Fatalf("server.Config has no field %s", name)
