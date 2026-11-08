@@ -41,14 +41,9 @@ type cronEntry struct {
 	nextFireOK bool
 }
 
-// CronInfo is a snapshot of one scheduled entry: identity plus the three
-// timestamps. LastFiredAt is zero when the entry never fired; NextFireAt is
-// zero when no matching minute exists ahead (e.g. "0 0 31 2 *": February
-// 31st never exists).
-type CronInfo struct {
-	ID, Session, Name, Spec, Prompt    string
-	CreatedAt, LastFiredAt, NextFireAt time.Time
-}
+// CronInfo (the entry snapshot InfoFor returns) moved to
+// internal/agent/activity with the seam (F1) and is re-exported here under
+// its historical name; see activity_delegate.go.
 
 // notificationSink is the single capability the scheduler needs from its
 // host: delivering a due prompt into the creating session's input queue.

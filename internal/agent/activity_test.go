@@ -1,3 +1,10 @@
+// Agent-side wiring tests for the activity seam (spec F1). The seam logic
+// itself lives in internal/agent/activity with its own unit tests; what
+// stays here is the composition the subpackage cannot test without
+// importing this package: the real managers satisfying its interfaces, the
+// OnChange hooks wired once at construction, the queue's released
+// predicate, and the released-silence interplay between the seam and the
+// notification queue.
 package agent
 
 import (
@@ -199,22 +206,6 @@ func TestActivityTailsAreBounded(t *testing.T) {
 	tail, truncated, total, info, err := a.TaskTailFor("sess-t", task.ID, 6)
 	if err != nil || !truncated || total != 17 || tail != "output" || info.ID != task.ID {
 		t.Fatalf("TaskTailFor = %q truncated=%v total=%d err=%v", tail, truncated, total, err)
-	}
-}
-
-func TestClampTailBytes(t *testing.T) {
-	cases := []struct{ in, want int }{
-		{0, ActivityTailBytesDefault},
-		{-5, ActivityTailBytesDefault},
-		{100, 100},
-		{ActivityTailBytesMax, ActivityTailBytesMax},
-		{ActivityTailBytesMax + 1, ActivityTailBytesMax},
-		{1 << 20, ActivityTailBytesMax},
-	}
-	for _, tc := range cases {
-		if got := clampTailBytes(tc.in); got != tc.want {
-			t.Errorf("clampTailBytes(%d) = %d, want %d", tc.in, got, tc.want)
-		}
 	}
 }
 
@@ -599,11 +590,11 @@ func TestQueueAddTaggedRejectsReleasedUnderLock(t *testing.T) {
 		t.Fatal("pre-mark item refused")
 	}
 	marked = true
-	if dropped := q.dropScope("s"); dropped != 1 {
+	if dropped := q.DropScope("s"); dropped != 1 {
 		t.Fatalf("dropScope removed %d, want 1", dropped)
 	}
 	if n := q.count("s"); n != 0 {
-		t.Fatalf("%d items survived dropScope", n)
+		t.Fatalf("%d items survived DropScope", n)
 	}
 
 	// Ordering 2: append attempts after the mark are refused under the lock.
@@ -669,7 +660,7 @@ func TestReleasedDropAtomicWithQueueing(t *testing.T) {
 // TestEmitActivityReleaseRaceCannotQueueOrWake pins the documented
 // best-effort contract of a manager change racing ReleaseSession (D2, spec
 // §1 item 3). A real completion drives two seams at once: the notification
-// queues (queueNotification) and the observer fan-out fires (emitActivity).
+// queues (queueNotification) and the observer fan-out fires (Emit).
 // The QUEUE half is atomic against the release — the released decision
 // lives inside addTagged's critical section, and dropScope removes anything
 // that appended before the mark — so the race can never leave a queued or
@@ -711,7 +702,7 @@ func TestEmitActivityReleaseRaceCannotQueueOrWake(t *testing.T) {
 				a.queueNotification(QueuedInput{
 					Text: "racing completion", Tag: "background-task-completed", Session: session,
 				})
-				a.emitActivity(session, ActivityShells)
+				a.activity.Emit(session, ActivityShells)
 			}()
 		}
 		go func() {
@@ -736,7 +727,7 @@ func TestEmitActivityReleaseRaceCannotQueueOrWake(t *testing.T) {
 		notifyMu.Lock()
 		notifBefore := notifyFired[session]
 		notifyMu.Unlock()
-		a.emitActivity(session, ActivityShells)
+		a.activity.Emit(session, ActivityShells)
 		a.queueNotification(QueuedInput{Text: "late", Tag: "background-task-completed", Session: session})
 		if got := rec.countForSession(session); got != obsBefore {
 			t.Fatalf("iteration %d: activity observer fired %d time(s) after the release mark", i, got-obsBefore)

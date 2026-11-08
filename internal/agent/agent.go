@@ -30,6 +30,7 @@ import (
 	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/projanvil/woca/internal/agent/activity"
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/bus"
 	"github.com/projanvil/woca/internal/compact"
@@ -372,9 +373,12 @@ type Agent struct {
 	toolBudget int
 	// inputs buffers mid-turn user input (queued commands).
 	inputs queue
-	// activity is the per-session activity seam's mutable state: the
-	// change observer and the released-session set (see activity.go).
-	activity activityState
+	// activity is the per-session activity seam (F1): the extracted
+	// internal/agent/activity package aggregating the todo/shell/task/cron
+	// manager surfaces and the notification queue into the snapshot/action/
+	// observer API. This package's public Activity* methods are thin
+	// delegations to it (see activity_delegate.go).
+	activity *activity.Seam
 	// notifyObserver is the optional notification seam (see
 	// SetNotificationObserver): fired synchronously from producer goroutines
 	// after a notification is queued; guarded by mu and must not block.
@@ -516,6 +520,17 @@ func New(cfg Config) (*Agent, error) {
 	// because it is only invoked by the scheduler loop, never here. The
 	// session-scoped sink matches the session captured on each entry.
 	a.cron = newCronScheduler(a.QueueNotificationFor)
+	// The activity seam (F1) aggregates the five manager surfaces; the
+	// managers above satisfy its interfaces directly (asserted in
+	// activity_delegate.go). Built before the OnChange wirings below, which
+	// hand the seam's Emit to each manager as its hook destination.
+	a.activity = activity.New(activity.Deps{
+		Todos:  a.registry.TodoStore(),
+		Shells: a.registry.Background(),
+		Tasks:  a.tasks,
+		Crons:  a.cron,
+		Queue:  &a.inputs,
+	})
 	// The memory runtime takes its dependencies as inputs: the KV store,
 	// the engine, the settings loader and a nil-safe obs log sink.
 	a.mem.init(cfg.Memory, cfg.MemoryEngine, cfg.LoadSettings, a.obsLogSink())
@@ -639,10 +654,10 @@ func New(cfg Config) (*Agent, error) {
 	// onChange per Start and tasks per start, so anything started before
 	// this would miss the hook. SetActivityObserver only swaps the
 	// destination; these wirings are permanent.
-	a.registry.Background().SetOnChange(func(session string) { a.emitActivity(session, ActivityShells) })
-	a.tasks.SetOnChange(func(session string) { a.emitActivity(session, ActivityTasks) })
-	a.cron.SetOnChange(func(session string) { a.emitActivity(session, ActivityCrons) })
-	a.registry.TodoStore().SetOnChange(func(session string) { a.emitActivity(session, ActivityTodos) })
+	a.registry.Background().SetOnChange(func(session string) { a.activity.Emit(session, activity.KindShells) })
+	a.tasks.SetOnChange(func(session string) { a.activity.Emit(session, activity.KindTasks) })
+	a.cron.SetOnChange(func(session string) { a.activity.Emit(session, activity.KindCrons) })
+	a.registry.TodoStore().SetOnChange(func(session string) { a.activity.Emit(session, activity.KindTodos) })
 	return a, nil
 }
 

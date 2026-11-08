@@ -18,10 +18,11 @@ package sdk
 //     at the bottom of this file.
 //
 // If this test fails because you deliberately changed the sdk surface:
-// update expectedAgentBindings (and agentTypeAliasIdentities plus the
-// anchors below) in the SAME change, and call out the API change in
-// sdk/README.md and the release notes. Do not "fix" the test by deleting
-// it or by widening the contract without review.
+// update the pinned lists (expectedAgentBindings and
+// expectedLanguageBindings, plus typeAliasIdentities and the anchors
+// below) in the SAME change, and call out the API change in sdk/README.md
+// and the release notes. Do not "fix" the test by deleting it or by
+// widening the contract without review.
 //
 // The same guard also pins the one non-agent alias, sdk.ChatModel =
 // language.ChatModel (expectedLanguageBindings): it is plugin-facing

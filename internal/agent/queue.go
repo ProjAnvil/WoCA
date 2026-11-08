@@ -91,7 +91,7 @@ func (q *queue) add(text string) {
 // Quiet flag included. released, when non-nil, is consulted INSIDE the
 // queue's critical section: an item scoped to a session the predicate
 // reports as released is refused (D2) — deciding under q.mu makes
-// check-and-append atomic against ReleaseSession's dropScope, so a
+// check-and-append atomic against the activity seam's DropScope, so a
 // completion racing the release can never land after the drop. It reports
 // whether an item was queued — blank text is dropped and a released
 // session is refused, nothing queues.
@@ -165,9 +165,10 @@ func (q *queue) wakeableCount(session string) int {
 	return n
 }
 
-// taggedCount is count over the tagged notification items (Quiet included):
-// the pending-notification count surfaces report.
-func (q *queue) taggedCount(session string) int {
+// TaggedCount is count over the tagged notification items (Quiet included):
+// the pending-notification count surfaces report. (Exported to satisfy
+// activity.Queue; the type itself stays package-internal.)
+func (q *queue) TaggedCount(session string) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	n := 0
@@ -179,11 +180,12 @@ func (q *queue) taggedCount(session string) int {
 	return n
 }
 
-// dropScope removes every item scoped exactly to session and reports how
+// DropScope removes every item scoped exactly to session and reports how
 // many went; unscoped items and other sessions' items stay queued, in
 // order. Session release (D2): a deleted session's pending input dies with
-// it instead of lingering where nothing will ever drain it.
-func (q *queue) dropScope(session string) int {
+// it instead of lingering where nothing will ever drain it. (Exported to
+// satisfy activity.Queue; the type itself stays package-internal.)
+func (q *queue) DropScope(session string) int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	keep := q.items[:0]
@@ -219,7 +221,18 @@ func (a *Agent) QueueInput(text string) {
 // Steers do not fire the notification observer: the user typed the input
 // for a run they can see, not to wake a session.
 func (a *Agent) QueueInputFor(session, text string) {
-	a.inputs.addTagged(QueuedInput{Text: text, Session: session}, a.sessionReleased)
+	a.inputs.addTagged(QueuedInput{Text: text, Session: session}, a.released)
+}
+
+// released is the queue's released-session predicate (D2), answering from
+// the activity seam's Released set. A zero-value Agent (constructed outside
+// New — tests only) has no seam and answers false, the same empty-set
+// answer a zero-value seam state gave before the extraction (F1).
+func (a *Agent) released(session string) bool {
+	if a.activity == nil {
+		return false
+	}
+	return a.activity.Released(session)
 }
 
 // QueueNotification buffers a machine-generated notification (e.g. a
@@ -265,11 +278,11 @@ func (a *Agent) queueBackgroundCompletion(session, text string, stoppedBy tools.
 // and fires nothing — the observer contract is "the item you just saw is in
 // the queue". Notifications scoped to a released session (ReleaseSession,
 // D2) are refused inside addTagged's critical section — atomic with
-// ReleaseSession's mark-then-dropScope — so a completion racing the release
+// the release's mark-then-DropScope — so a completion racing the release
 // can never leave a queued item, a wake, or an observer fire for a session
 // that was deleted.
 func (a *Agent) queueNotification(q QueuedInput) {
-	if !a.inputs.addTagged(q, a.sessionReleased) {
+	if !a.inputs.addTagged(q, a.released) {
 		if strings.TrimSpace(q.Text) != "" && q.Session != "" {
 			slog.Debug("agent: dropped notification for released session",
 				"session", q.Session, "tag", q.Tag)
@@ -334,14 +347,14 @@ func (a *Agent) WakeableCountFor(session string) int {
 // through it, so discarding session A can never eat an item queued for
 // session B.
 func (a *Agent) DropScopedInputsFor(session string) int {
-	return a.inputs.dropScope(session)
+	return a.inputs.DropScope(session)
 }
 
 // QueuedNotificationCountFor reports how many tagged notification items
 // (Quiet included) a run in session would drain — the pending-notification
 // count surfaces show.
 func (a *Agent) QueuedNotificationCountFor(session string) int {
-	return a.inputs.taggedCount(session)
+	return a.inputs.TaggedCount(session)
 }
 
 // prependQueued delivers run-start queued input: it drains the items scoped

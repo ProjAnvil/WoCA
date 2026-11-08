@@ -145,35 +145,10 @@ func (d detachRunMetaCtx) Value(key any) any {
 	return d.Context.Value(key)
 }
 
-// TaskStatus is the lifecycle state of a background task.
-type TaskStatus string
-
-const (
-	TaskRunning   TaskStatus = "running"
-	TaskCompleted TaskStatus = "completed"
-	TaskFailed    TaskStatus = "failed"
-	TaskStopped   TaskStatus = "stopped"
-)
-
-// ErrTaskNotFound covers both unknown ids and tasks owned by another
-// session; the two cases are deliberately indistinguishable.
-var ErrTaskNotFound = errors.New("no such background task")
-
-// BackgroundTaskInfo is a snapshot of one background task: identity, honest
-// status, stop attribution and timestamps. EndedAt is zero while running;
-// StoppedBy is "" unless the task was stopped. Mirrors
-// tools.BackgroundShellStatus so the activity seam aggregates both shapes
-// uniformly.
-type BackgroundTaskInfo struct {
-	ID          string
-	Session     string
-	Description string
-	Subagent    string
-	Status      TaskStatus
-	StoppedBy   tools.StopOrigin
-	StartedAt   time.Time
-	EndedAt     time.Time // zero while running
-}
+// TaskStatus, its four constants, ErrTaskNotFound and BackgroundTaskInfo
+// moved to internal/agent/activity with the seam (F1) — the activity
+// package owns the snapshot vocabulary its interfaces carry — and are
+// re-exported here under their historical names; see activity_delegate.go.
 
 // backgroundTask is a Task (subagent) running in the background.
 type backgroundTask struct {
@@ -569,11 +544,13 @@ func (m *TaskManager) pruneFinished(session string) {
 	}
 }
 
-// dropSession removes every record the session owns, finished or running
-// (F4): ReleaseSession calls it after stopping the session's running tasks —
-// their goroutines finish invisibly, late completions are already silenced
-// for a released session. It returns how many records were removed.
-func (m *TaskManager) dropSession(session string) int {
+// DropSession removes every record the session owns, finished or running
+// (F4): the activity seam's Release calls it after stopping the session's
+// running tasks — their goroutines finish invisibly, late completions are
+// already silenced for a released session. It returns how many records
+// were removed. (Exported to satisfy activity.Tasks; the type itself stays
+// package-internal.)
+func (m *TaskManager) DropSession(session string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := 0
