@@ -109,7 +109,7 @@ func main() {
 	}
 	root.Flags().StringVar(&logLevel, "log-level", "info", "debug | info | warn | error")
 	root.Flags().StringVar(&addr, "addr", ":8080", "listen address (env WOCA_CONFIG_ADDR)")
-	root.Flags().StringVar(&obsAddr, "obs-addr", defaultObsAddr(), "healthz/metrics listener address, or \"off\" (env WOCA_OBS_ADDR)")
+	root.Flags().StringVar(&obsAddr, "obs-addr", obs.DefaultAddr(9093), "healthz/metrics listener address, or \"off\" (env WOCA_OBS_ADDR)")
 	root.Flags().String("db", "", "shared settings database: sqlite path, postgres:// DSN (env WOCA_DB)")
 	if env := os.Getenv("WOCA_CONFIG_ADDR"); env != "" {
 		_ = root.Flags().Set("addr", env)
@@ -118,11 +118,4 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-func defaultObsAddr() string {
-	if v := os.Getenv("WOCA_OBS_ADDR"); v != "" {
-		return v
-	}
-	return ":9093"
 }

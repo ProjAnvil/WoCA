@@ -60,6 +60,9 @@ import (
 //	                                        standard OTEL_EXPORTER_OTLP_ENDPOINT)
 //	WOCA_OTEL_EXPORTER_OTLP_INSECURE         "false" to use TLS; plain HTTP
 //	                                        is the in-cluster default
+//	WOCA_OBS_ADDR                            healthz/metrics listener address,
+//	                                        or "off" to disable it (default:
+//	                                        the role's DefaultAddr port)
 //
 // Delivery contract: export is fully asynchronous and bounded — recording a
 // span enqueues into an in-memory batch queue (microseconds, no network on
@@ -71,6 +74,7 @@ const (
 	envServiceName  = "WOCA_SERVICE_NAME"
 	envOTLPEndpoint = "WOCA_OTEL_EXPORTER_OTLP_ENDPOINT"
 	envOTLPInsecure = "WOCA_OTEL_EXPORTER_OTLP_INSECURE"
+	addrEnv         = "WOCA_OBS_ADDR"
 )
 
 const scopeName = "github.com/projanvil/woca/internal/ee/obs"
@@ -108,6 +112,20 @@ func FromEnv() Config {
 		}
 	}
 	return cfg
+}
+
+// DefaultAddr resolves a role's healthz/metrics listener address: the
+// WOCA_OBS_ADDR override when set, else ":port" — the role's slot in the
+// probe series (worker :9092, config :9093, executor :9094). "off" in the
+// override disables the listener; the role binaries treat it as such.
+//
+// Shared so every role binary resolves the probe default the same way
+// (arch-cleanup F7; this used to be three copies of defaultObsAddr).
+func DefaultAddr(port int) string {
+	if v := os.Getenv(addrEnv); v != "" {
+		return v
+	}
+	return fmt.Sprintf(":%d", port)
 }
 
 // Obs owns the OTel providers and the HTTP observability handlers.

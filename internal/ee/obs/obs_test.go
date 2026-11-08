@@ -219,3 +219,27 @@ func TestSinkNilTracer(t *testing.T) {
 	}
 	var _ trace.Tracer // package used by the Obs struct
 }
+
+// TestDefaultAddr (arch-cleanup F7): every role binary resolves its probe
+// listener default through this one helper — override wins, else the role's
+// port slot, and "off" passes through for the caller to disable the listener.
+func TestDefaultAddr(t *testing.T) {
+	cases := []struct {
+		name string
+		env  string
+		port int
+		want string
+	}{
+		{"default port when env unset", "", 9094, ":9094"},
+		{"override wins", "127.0.0.1:9100", 9094, "127.0.0.1:9100"},
+		{"off passes through", "off", 9092, "off"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("WOCA_OBS_ADDR", c.env)
+			if got := DefaultAddr(c.port); got != c.want {
+				t.Fatalf("DefaultAddr(%d) with env %q = %q, want %q", c.port, c.env, got, c.want)
+			}
+		})
+	}
+}

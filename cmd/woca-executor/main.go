@@ -50,12 +50,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Environment: probe listener (worker's convention), the hardening
-// posture, the development-only fake backend, and the externally
-// routable advertise address (host:port the proxy should dial; defaults
-// to this host's name plus the --listen port).
+// Environment: the hardening posture, the development-only fake backend,
+// and the externally routable advertise address (host:port the proxy
+// should dial; defaults to this host's name plus the --listen port).
 const (
-	obsAddrEnv       = "WOCA_OBS_ADDR"
 	hardeningEnv     = "WOCA_SANDBOX_HARDENING"
 	fakeBackendEnv   = "WOCA_DEV_FAKE_BACKEND"
 	advertiseAddrEnv = "WOCA_EXECUTOR_ADVERTISE"
@@ -239,7 +237,7 @@ func newExecutorRoot() *cobra.Command {
 	root.Flags().String("docker-host", "", "docker daemon address for the dockerlab backend (\"\" = the default unix socket)")
 	root.Flags().Int("max-concurrent", 0, "concurrent live sandbox cap (0 = unlimited)")
 	root.Flags().String("db", "", "settings database: sqlite path, postgres:// or nacos:// DSN (env WOCA_DB)")
-	root.Flags().String("obs-addr", defaultObsAddr(), "healthz/metrics listener address, or \"off\" (env WOCA_OBS_ADDR)")
+	root.Flags().String("obs-addr", obs.DefaultAddr(9094), "healthz/metrics listener address, or \"off\" (env WOCA_OBS_ADDR)")
 	return root
 }
 
@@ -379,16 +377,6 @@ func advertiseAddr(advertise, listen string) string {
 		}
 	}
 	return advertise
-}
-
-// defaultObsAddr resolves the probe listener default from the environment
-// (:9094 — the next slot in the probe series after worker :9092 and
-// config :9093).
-func defaultObsAddr() string {
-	if v := os.Getenv(obsAddrEnv); v != "" {
-		return v
-	}
-	return ":9094"
 }
 
 // defaultWorkspaceRoot resolves the workspace root default from the

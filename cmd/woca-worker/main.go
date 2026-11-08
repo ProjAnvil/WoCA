@@ -38,9 +38,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-// obsAddrEnv is the probe/metrics listener address; "off" disables it.
-const obsAddrEnv = "WOCA_OBS_ADDR"
-
 func main() {
 	discovery.Install()
 	root := newWorkerRoot()
@@ -219,7 +216,7 @@ func newWorkerRoot() *cobra.Command {
 	}
 	root.Flags().StringVar(&logLevel, "log-level", "info", "debug | info | warn | error")
 	root.Flags().String("db", "", "settings database: sqlite path, postgres:// DSN (env WOCA_DB)")
-	root.Flags().String("obs-addr", defaultObsAddr(), "healthz/metrics listener address, or \"off\" (env WOCA_OBS_ADDR)")
+	root.Flags().String("obs-addr", obs.DefaultAddr(9092), "healthz/metrics listener address, or \"off\" (env WOCA_OBS_ADDR)")
 	return root
 }
 
@@ -249,14 +246,6 @@ func workerMetrics(o *obs.Obs) *worker.Metrics {
 			wm.RunDur.Record(context.Background(), dur)
 		},
 	}
-}
-
-// defaultObsAddr resolves the probe listener default from the environment.
-func defaultObsAddr() string {
-	if v := os.Getenv(obsAddrEnv); v != "" {
-		return v
-	}
-	return ":9092"
 }
 
 // serveProbes binds the /healthz + /metrics listener through webfx — the
