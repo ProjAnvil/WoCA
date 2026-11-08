@@ -19,6 +19,11 @@ import type { ActivitySnapshot, OutputTail, TodoItem } from '../types'
 // Trailing-debounce window for signal-driven snapshot refetches (PM §4.4:
 // frames inside one window coalesce into a single GET).
 const REFRESH_DEBOUNCE_MS = 200
+// Max-wait cap for one pending debounce (F6): a signal cadence faster than
+// the window (e.g. activity_changed every 150ms) would re-arm the trailing
+// edge forever and postpone the fetch indefinitely; once a window has been
+// pending this long, the next re-arm forces the fetch instead.
+const REFRESH_MAX_WAIT_MS = 1000
 // Output-tail polling cadence while an item runs and the page is visible.
 const OUTPUT_POLL_MS = 2000
 
@@ -114,6 +119,9 @@ export const useActivityStore = defineStore('activity', () => {
   const forgotten = new Set<string>()
 
   const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  // When the currently-pending debounce window OPENED (the first signal of
+  // the burst) — the max-wait cap measures from here, not from each re-arm.
+  const debounceStartedAt = new Map<string, number>()
   const watchers = new Map<string, Map<string, () => void>>()
   const viewedFailedIds = new Map<string, Set<string>>()
 
@@ -132,6 +140,7 @@ export const useActivityStore = defineStore('activity', () => {
       clearTimeout(t)
       debounceTimers.delete(sid)
     }
+    debounceStartedAt.delete(sid)
   }
 
   // applySnapshot installs a successful fetch: stale and error clear, the
@@ -183,8 +192,12 @@ export const useActivityStore = defineStore('activity', () => {
     }
   }
 
-  /** Debounced (200ms trailing) snapshot refetch for one session — the
-   * activity_changed/wake_capped signal path. Once a session is known
+  /** Debounced (200ms trailing, capped at 1s max-wait) snapshot refetch for
+   * one session — the activity_changed/wake_capped signal path. Each signal
+   * re-arms the trailing edge, but never past REFRESH_MAX_WAIT_MS after the
+   * window opened: a sustained sub-window signal cadence still lands a
+   * fetch at the cap (the timer is clamped), and a signal arriving past the
+   * cap forces the fetch immediately. Once a session is known
    * 501-unavailable, signals stop re-probing the absent endpoint. A
    * deliberate refresh re-interests the store in the sid (clears any
    * leftover forgotten marker — e.g. a recreated session id). */
@@ -197,12 +210,26 @@ export const useActivityStore = defineStore('activity', () => {
     if (bySession.value[sid]?.unavailable) return
     const t = debounceTimers.get(sid)
     if (t) clearTimeout(t)
+    // A pending window keeps its original open time (the cap is per burst,
+    // not per signal); a first signal opens a fresh one.
+    const startedAt = debounceStartedAt.get(sid) ?? Date.now()
+    debounceStartedAt.set(sid, startedAt)
+    const waited = Date.now() - startedAt
+    const wait = Math.max(0, Math.min(REFRESH_DEBOUNCE_MS, REFRESH_MAX_WAIT_MS - waited))
+    if (wait === 0) {
+      // Cap reached: force the fetch now (leading edge after the cap).
+      debounceTimers.delete(sid)
+      debounceStartedAt.delete(sid)
+      void fetchNow(sid)
+      return
+    }
     debounceTimers.set(
       sid,
       setTimeout(() => {
         debounceTimers.delete(sid)
+        debounceStartedAt.delete(sid)
         void fetchNow(sid)
-      }, REFRESH_DEBOUNCE_MS),
+      }, wait),
     )
   }
 

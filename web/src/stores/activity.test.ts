@@ -124,6 +124,41 @@ describe('snapshot caching and signal-driven refresh', () => {
     expect(m.statusOf('a')).toBe('ready')
   })
 
+  it('a sustained signal burst cannot postpone the fetch past the max-wait cap', async () => {
+    api.getActivity.mockResolvedValue(snap('a'))
+    const m = useActivityStore()
+    m.refresh('a') // t=0 opens the window
+    // A signal every 150ms — faster than the 200ms window — for a full 3s:
+    // a pure trailing debounce would re-arm forever and never fetch.
+    let landedWithinCap = false
+    for (let t = 150; t <= 3000; t += 150) {
+      await vi.advanceTimersByTimeAsync(150)
+      m.refresh('a')
+      if (t <= 1200 && api.getActivity.mock.calls.length >= 1) landedWithinCap = true
+    }
+    expect(landedWithinCap).toBe(true) // ≥1 fetch landed ≤ ~1.2s into the burst
+    // The cap repeats for the rest of the burst and a trailing edge closes
+    // the last window: several fetches over 3s of signals, never one per
+    // signal (21 signals → 3-4 GETs).
+    await vi.advanceTimersByTimeAsync(200)
+    expect(api.getActivity.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(api.getActivity.mock.calls.length).toBeLessThanOrEqual(4)
+    expect(m.statusOf('a')).toBe('ready')
+  })
+
+  it('without a burst a single signal still fetches once after the window', async () => {
+    api.getActivity.mockResolvedValue(snap('a'))
+    const m = useActivityStore()
+    m.refresh('a')
+    await vi.advanceTimersByTimeAsync(199)
+    expect(api.getActivity).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(api.getActivity).toHaveBeenCalledTimes(1)
+    // The cap only bounds a PENDING window — it never fires on its own.
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(api.getActivity).toHaveBeenCalledTimes(1)
+  })
+
   it('caches per session: switching keeps each session data isolated', async () => {
     api.getActivity.mockImplementation(async (sid: string) =>
       snap(sid, { shells: [shell(`${sid}-1`, 'running')] }),
