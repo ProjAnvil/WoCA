@@ -273,6 +273,10 @@ reasoning-effort 映射走同一路由。
 优先级为 `deny` → `ask` → `allow` → 模式默认。子代理 fail-closed：未授权
 的写权限表现为 *permission denied*，而不是弹窗询问。
 
+**设计上仅同源（same-origin by design）。** HTTP API 不返回任何 CORS
+响应头：Web UI 由拥有 API 的同一源直接服务，远程或跨源客户端通过
+edge/bridge 隧道接入，而非浏览器的直接跨源调用。
+
 ## 架构
 
 ```

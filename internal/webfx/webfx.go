@@ -6,6 +6,14 @@
 // either func(*Ctx) for ergonomics or plain http.Handler for SSE/proxy
 // surfaces that must not be rewritten.
 //
+// Same-origin by design (arch-cleanup F10): this package ships no CORS
+// middleware, and that is a decision, not an omission. Every woca HTTP
+// surface serves its own web UI, so browsers talk to the origin that owns
+// the API; remote and cross-origin clients reach the API through the
+// edge/bridge tunnels (ee/edgegw, ee/bridge), not direct browser calls. If
+// a browser-side third-party consumer ever appears, CORS belongs in the
+// edge gateway — one place — not in individual surfaces.
+//
 // Edition boundary: this package depends only on the standard library,
 // zerolog, and internal/platform — never on internal/ee.
 package webfx

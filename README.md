@@ -296,6 +296,11 @@ Precedence is `deny` → `ask` → `allow` → mode default. Subagents are
 fail-closed: an un-granted write permission surfaces as *permission denied*
 instead of prompting.
 
+**Same-origin by design.** The HTTP API serves no CORS headers: the web UI
+is served by the same origin that owns the API, and remote or cross-origin
+clients connect through the edge/bridge tunnels rather than direct browser
+calls.
+
 ## Architecture
 
 ```
