@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -17,6 +18,8 @@ import (
 	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/quota"
+	"github.com/projanvil/woca/internal/server"
+	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/store"
 )
@@ -56,6 +59,76 @@ func (ap *App) CurrentCfg() config.Config {
 	ap.cfgMu.RLock()
 	defer ap.cfgMu.RUnlock()
 	return ap.Cfg
+}
+
+// BaseServerConfig returns the shared base for every server.Config assembly
+// (arch-cleanup 2026-11-08 F2): the fields the two former hand-built
+// construction sites — the TUI /web embedded UI (cmd/woca) and the serve
+// deployment form (internal/servefront) — set identically. Both start here
+// and override only their form specifics, so a new shared field cannot drift
+// between the two web surfaces again.
+//
+// Fields owned by the base: Agent, Logger, SessionDir, WorkDir, Settings,
+// Memory, MemoryEngine, RebuildMemory, RebuildModel, CfgLive,
+// SetThinkingBudget, Quota, ApplyClaudeEnv, Plugins, InstallPlugin, and
+// ActivityAPI.
+//
+// ActivityAPI defaults to true: the personal single-process posture serves
+// the session-activity surface from this process's agent. A deployment form
+// whose sessions run elsewhere (queue dispatch) overrides it to false so the
+// activity endpoints answer 501 instead of an empty panel.
+//
+// Fields deliberately NOT set here, with their owners:
+//   - Static: each form wires its own frontend (the TUI and the personal
+//     serve command embed webdist; headless API roles serve none). agentbuild
+//     must not import webdist — headless roles (woca-scheduler, woca-worker)
+//     link this package and must stay free of the chat UI.
+//   - SessionDir's WOCA_SESSION_DIR override: servefront's shared-session
+//     deployments resolve it; the base keeps the personal default
+//     (<session.DefaultDir>/sessions), which servefront overrides.
+//   - The serve-form specifics (Auth, Authz, NativeAuth, RunLedger,
+//     DispatchToQueue, RunsOffHost, Sandbox*, WorkspaceRoot, MsgPlane,
+//     GrafanaURL, FS, Audit, Extras, AnonymousAPIPaths,
+//     HostGateExemptPrefixes, StreamReauth, ModelCatalog, ResolveModel):
+//     servefront layers these over the base.
+//
+// Call after BuildAgent has fully assembled the App.
+func (ap *App) BaseServerConfig() server.Config {
+	sessionDir := ""
+	if d := session.DefaultDir(); d != "" {
+		sessionDir = filepath.Join(d, "sessions")
+	}
+	return server.Config{
+		Agent:        ap.Agent,
+		Logger:       ap.Log,
+		SessionDir:   sessionDir,
+		WorkDir:      ap.Cfg.WorkDir,
+		Settings:     ap.Settings,
+		Memory:       ap.Memory,
+		MemoryEngine: ap.MemEngine,
+		RebuildMemory: func() error {
+			return ap.RebuildMemory()
+		},
+		RebuildModel: func() error {
+			return ap.RebuildModel()
+		},
+		CfgLive:           func() config.Config { return ap.CurrentCfg() },
+		SetThinkingBudget: ap.SetThinkingBudget,
+		Quota:             ap.FetchQuota,
+		ApplyClaudeEnv:    ap.ApplyClaudeEnv,
+		Plugins: func(enabled []string) []pluginrt.Status {
+			return ap.PluginMgr.Statuses(enabled)
+		},
+		InstallPlugin: func(ctx context.Context, name string, reinstall bool) error {
+			if reinstall {
+				return ap.PluginMgr.Reinstall(ctx, name)
+			}
+			return ap.PluginMgr.Install(ctx, name)
+		},
+		// Session activity surface: on by default — the personal posture
+		// serves it from this process's agent (see the doc comment).
+		ActivityAPI: true,
+	}
 }
 
 // effectiveProvider resolves the provider the same way RebuildModel does:

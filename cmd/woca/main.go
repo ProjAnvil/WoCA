@@ -46,14 +46,12 @@ import (
 	"github.com/projanvil/woca/internal/mcp"
 	"github.com/projanvil/woca/internal/oauth"
 	"github.com/projanvil/woca/internal/platform/authn"
-	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/plugins"
 	"github.com/projanvil/woca/internal/relayclient"
 	"github.com/projanvil/woca/internal/repl"
 	"github.com/projanvil/woca/internal/runner"
 	"github.com/projanvil/woca/internal/sdkout"
 	"github.com/projanvil/woca/internal/servefront"
-	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/tools"
@@ -108,7 +106,7 @@ func newRootCmd() *cobra.Command {
 			}
 			defer ap.PluginMgr.Close()
 			defer ap.Agent.Close()
-			cons := newConsole(ap, log)
+			cons := newConsole(ap)
 			runErr := tui.Run(ap.Agent, nil, ap.Cfg, version, tui.WithConsole(cons), tui.WithSettingsStore(ap.Settings))
 			_ = ap.Agent.RunSessionEnd(cmd.Context(), "exit")
 			return runErr
@@ -699,7 +697,7 @@ func run(ctx context.Context, opts agentbuild.Options, stdin io.Reader, stdout, 
 	}
 
 	// Interactive REPL with a slash-command registry.
-	cons := newConsole(ap, log)
+	cons := newConsole(ap)
 
 	// Interactive: launch the TUI on a terminal, else fall back to the plain
 	// line-based REPL (piped input / tests).
@@ -718,41 +716,15 @@ func run(ctx context.Context, opts agentbuild.Options, stdin io.Reader, stdout, 
 
 // newConsole builds the shared slash-command layer used by both the TUI and
 // the line REPL, including the on-demand web GUI (/web) and settings (/settings).
-func newConsole(ap *agentbuild.App, log zerolog.Logger) *console.Console {
+func newConsole(ap *agentbuild.App) *console.Console {
 	a, cfg := ap.Agent, ap.Cfg
-	sessionDir := ""
-	if d := session.DefaultDir(); d != "" {
-		sessionDir = filepath.Join(d, "sessions")
-	}
-	web := webgui.New(server.Config{
-		Agent:        a,
-		Static:       webdist.DistFS(),
-		Logger:       log,
-		SessionDir:   sessionDir,
-		WorkDir:      cfg.WorkDir,
-		Settings:     ap.Settings,
-		Memory:       ap.Memory,
-		MemoryEngine: ap.MemEngine,
-		RebuildMemory: func() error {
-			return ap.RebuildMemory()
-		},
-		RebuildModel: func() error {
-			return ap.RebuildModel()
-		},
-		CfgLive:           func() config.Config { return ap.CurrentCfg() },
-		SetThinkingBudget: ap.SetThinkingBudget,
-		Quota:             ap.FetchQuota,
-		ApplyClaudeEnv:    ap.ApplyClaudeEnv,
-		Plugins: func(enabled []string) []pluginrt.Status {
-			return ap.PluginMgr.Statuses(enabled)
-		},
-		InstallPlugin: func(ctx context.Context, name string, reinstall bool) error {
-			if reinstall {
-				return ap.PluginMgr.Reinstall(ctx, name)
-			}
-			return ap.PluginMgr.Install(ctx, name)
-		},
-	})
+	// The TUI's embedded web UI starts from the shared base config — the
+	// same fields the serve path assembles from — and adds only its
+	// specifics: the embedded frontend. agentbuild stays webdist-free so
+	// headless roles never link the chat UI, hence Static is wired here.
+	webCfg := ap.BaseServerConfig()
+	webCfg.Static = webdist.DistFS()
+	web := webgui.New(webCfg)
 	factory := func(name string) (language.ChatModel, error) {
 		c := cfg
 		// Re-resolve credentials so a provider/baseURL/key change made via

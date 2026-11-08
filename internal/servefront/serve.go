@@ -25,11 +25,9 @@ import (
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/agentbuild"
-	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/fsb"
 	"github.com/projanvil/woca/internal/logging"
 	"github.com/projanvil/woca/internal/platform/authn"
-	"github.com/projanvil/woca/internal/pluginrt"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/server"
 	"github.com/projanvil/woca/internal/session"
@@ -361,6 +359,92 @@ func NewWebCmd() *cobra.Command {
 	return cmd
 }
 
+// serveSessionDir resolves the serve form's session persistence directory:
+// WOCA_SESSION_DIR first (shared-session deployments — queue dispatch with
+// workers persisting transcripts — point every role at one volume), then the
+// personal default (<session.DefaultDir>/sessions, same as the shared base).
+func serveSessionDir() string {
+	if d := os.Getenv("WOCA_SESSION_DIR"); d != "" {
+		return d
+	}
+	if d := session.DefaultDir(); d != "" {
+		return filepath.Join(d, "sessions")
+	}
+	return ""
+}
+
+// serveForm carries the serve deployment form's specifics: everything about
+// server.Config that is NOT shared with the TUI /web base
+// (agentbuild.App.BaseServerConfig). ServeWithEdition fills it from its
+// flags, environment, edition, and the services it assembles.
+type serveForm struct {
+	ed            Edition
+	authProv      authn.Provider
+	native        server.NativeAuth
+	runLedger     *runstate.Ledger
+	dispatchQueue bool
+	runsOffHost   bool
+	plane         server.MsgPlane
+	fsSvc         *fsb.Service
+	sessionDir    string
+	grafanaURL    string
+	// sandboxFlagged mirrors opts.Sandbox != nil: the personal posture keeps
+	// the process-level sandbox flag (WOCA_SANDBOX_ENDPOINT) as the sandbox
+	// signal.
+	sandboxFlagged bool
+}
+
+// serveConfig layers the serve form's specifics over the shared base config
+// (arch-cleanup 2026-11-08 F2). The personal non-dispatch form (no auth
+// plane, no dispatch) leaves every shared base field exactly as
+// BaseServerConfig set it — the consistency test pins that equivalence.
+func serveConfig(ap *agentbuild.App, f serveForm) server.Config {
+	cfg := ap.BaseServerConfig()
+	cfg.Auth = f.authProv
+	// A non-local auth plane (serve --auth apikey, the bridge edition)
+	// owns the deployment: observability plugins are console-managed
+	// there, and serve-side user writes are rejected.
+	cfg.ObservabilityConsoleManaged = f.authProv != nil
+	cfg.ModelCatalog = f.ed.ModelCatalog
+	cfg.ResolveModel = f.ed.ResolveModel
+	cfg.AnonymousAPIPaths = f.ed.AnonymousAPIPaths
+	cfg.HostGateExemptPrefixes = f.ed.HostGateExemptPrefixes
+	cfg.StreamReauth = f.ed.StreamReauth
+	cfg.NativeAuth = f.native
+	cfg.RunLedger = f.runLedger
+	cfg.DispatchToQueue = f.dispatchQueue
+	// Session activity surface (PM §4.8): the personal posture serves it
+	// from this process's agent; a dispatching form runs its sessions on
+	// workers, so the local agent sees no session activity and the API
+	// answers 501 instead of an empty panel. The enterprise edition
+	// keeps this off until its routed activity design lands.
+	cfg.ActivityAPI = !f.dispatchQueue
+	cfg.RunsOffHost = f.runsOffHost
+	cfg.SandboxEnabled = func() bool {
+		// Enterprise injection wins; the personal posture keeps the
+		// process-level sandbox flag (WOCA_SANDBOX_ENDPOINT) as the
+		// sandbox signal.
+		if f.ed.SandboxEnabled != nil {
+			return f.ed.SandboxEnabled()
+		}
+		return f.sandboxFlagged
+	}
+	cfg.SandboxEndpoint = f.ed.SandboxEndpoint
+	cfg.WorkspaceRoot = f.ed.WorkspaceRoot
+	cfg.MsgPlane = f.plane
+	cfg.Static = f.ed.Static
+	cfg.SessionDir = f.sessionDir
+	cfg.GrafanaURL = f.grafanaURL
+	cfg.FS = f.fsSvc
+	cfg.Audit = f.ed.Audit
+	cfg.Extras = func(mux *http.ServeMux) {
+		if f.ed.Routes != nil {
+			f.ed.Routes(mux, f.authProv)
+		}
+	}
+	return cfg
+}
+
 // Serve runs the embedded web UI server (personal-edition posture: local
 // telemetry only).
 func Serve(ctx context.Context, opts agentbuild.Options, addr string, noBrowser bool, authMode string) error {
@@ -464,14 +548,7 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 		}
 	}
 
-	sessionDir := ""
-	if d := os.Getenv("WOCA_SESSION_DIR"); d != "" {
-		// Shared-session deployments (queue dispatch with workers persisting
-		// transcripts) point every role at one volume.
-		sessionDir = d
-	} else if d := session.DefaultDir(); d != "" {
-		sessionDir = filepath.Join(d, "sessions")
-	}
+	sessionDir := serveSessionDir()
 	// Message plane (design §5.4): the enterprise edition injects the
 	// plane through Edition.Plane — its resolver reads the settings store
 	// live, so console edits (mode / NATS URL / subject) apply to the very
@@ -498,75 +575,19 @@ func ServeWithEdition(ctx context.Context, opts agentbuild.Options, addr string,
 	if fsSvc == nil {
 		fsSvc = defaultFS(addr)
 	}
-	srv := server.New(server.Config{
-		Auth: authProv,
-		// A non-local auth plane (serve --auth apikey, the bridge edition)
-		// owns the deployment: observability plugins are console-managed
-		// there, and serve-side user writes are rejected.
-		ObservabilityConsoleManaged: authProv != nil,
-		ModelCatalog:                ed.ModelCatalog,
-		ResolveModel:                ed.ResolveModel,
-		AnonymousAPIPaths:           ed.AnonymousAPIPaths,
-		HostGateExemptPrefixes:      ed.HostGateExemptPrefixes,
-		StreamReauth:                ed.StreamReauth,
-		NativeAuth:                  native,
-		RunLedger:                   runLedger,
-		DispatchToQueue:             dispatchQueue,
-		// Session activity surface (PM §4.8): the personal posture serves it
-		// from this process's agent; a dispatching form runs its sessions on
-		// workers, so the local agent sees no session activity and the API
-		// answers 501 instead of an empty panel. The enterprise edition
-		// keeps this off until its routed activity design lands.
-		ActivityAPI: !dispatchQueue,
-		RunsOffHost: runsOffHost,
-		SandboxEnabled: func() bool {
-			// Enterprise injection wins; the personal posture keeps the
-			// process-level sandbox flag (WOCA_SANDBOX_ENDPOINT) as the
-			// sandbox signal.
-			if ed.SandboxEnabled != nil {
-				return ed.SandboxEnabled()
-			}
-			return opts.Sandbox != nil
-		},
-		SandboxEndpoint: ed.SandboxEndpoint,
-		WorkspaceRoot:   ed.WorkspaceRoot,
-		MsgPlane:        plane,
-		Agent:           ap.Agent,
-		Static:          ed.Static,
-		Logger:          log,
-		SessionDir:      sessionDir,
-		WorkDir:         ap.Cfg.WorkDir,
-		GrafanaURL:      os.Getenv("WOCA_GRAFANA_URL"),
-		Settings:        ap.Settings,
-		Memory:          ap.Memory,
-		MemoryEngine:    ap.MemEngine,
-		RebuildMemory: func() error {
-			return ap.RebuildMemory()
-		},
-		RebuildModel: func() error {
-			return ap.RebuildModel()
-		},
-		FS:    fsSvc,
-		Audit: ed.Audit,
-		Extras: func(mux *http.ServeMux) {
-			if ed.Routes != nil {
-				ed.Routes(mux, authProv)
-			}
-		},
-		CfgLive:           func() config.Config { return ap.CurrentCfg() },
-		SetThinkingBudget: ap.SetThinkingBudget,
-		Quota:             ap.FetchQuota,
-		ApplyClaudeEnv:    ap.ApplyClaudeEnv,
-		Plugins: func(enabled []string) []pluginrt.Status {
-			return ap.PluginMgr.Statuses(enabled)
-		},
-		InstallPlugin: func(ctx context.Context, name string, reinstall bool) error {
-			if reinstall {
-				return ap.PluginMgr.Reinstall(ctx, name)
-			}
-			return ap.PluginMgr.Install(ctx, name)
-		},
-	})
+	srv := server.New(serveConfig(ap, serveForm{
+		ed:             ed,
+		authProv:       authProv,
+		native:         native,
+		runLedger:      runLedger,
+		dispatchQueue:  dispatchQueue,
+		runsOffHost:    runsOffHost,
+		plane:          plane,
+		fsSvc:          fsSvc,
+		sessionDir:     sessionDir,
+		grafanaURL:     os.Getenv("WOCA_GRAFANA_URL"),
+		sandboxFlagged: opts.Sandbox != nil,
+	}))
 	real := http.Handler(srv.Handler())
 	// HTTP span plane (obs): one telemetry span per request, attributed to
 	// the service's registry identity — the counterpart of the chat/tool
