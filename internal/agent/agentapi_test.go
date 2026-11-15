@@ -419,20 +419,20 @@ func TestSpeculativeAllowedMirrorsGate(t *testing.T) {
 		{Name: "AskUserQuestion"}, {Name: "EnterPlanMode"}, {Name: "ExitPlanMode"},
 	}
 	for _, call := range gates {
-		if newAgent(config.ModeBypass).speculativeAllowed(call) {
+		if newAgent(config.ModeBypass).speculativeAllowed(t.Context(), call) {
 			t.Fatalf("%s must never pre-run", call.Name)
 		}
 	}
 	write := messages.ToolCall{Name: "Write", Args: map[string]any{"file_path": "x"}}
-	if newAgent(config.ModeBypass).speculativeAllowed(write) {
+	if newAgent(config.ModeBypass).speculativeAllowed(t.Context(), write) {
 		t.Fatal("bypass must not pre-run writes (read-only speculative gate)")
 	}
-	if newAgent(config.ModeDefault).speculativeAllowed(write) {
+	if newAgent(config.ModeDefault).speculativeAllowed(t.Context(), write) {
 		t.Fatal("default must not pre-run writes")
 	}
 	ask := newAgent(config.ModeBypass)
 	ask.perms = &permissions.Rules{Ask: []string{"Write"}}
-	if ask.speculativeAllowed(write) {
+	if ask.speculativeAllowed(t.Context(), write) {
 		t.Fatal("ask rule must not pre-run")
 	}
 }

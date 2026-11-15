@@ -327,11 +327,11 @@ func TestSpeculativeAllowedReadOnlyGate(t *testing.T) {
 	for _, mode := range []config.PermissionMode{config.ModeDefault, config.ModeAcceptEdits, config.ModeBypass, config.ModePlan, config.ModeReadOnly} {
 		a := &Agent{mode: mode, perms: nil}
 		write := messages.ToolCall{ID: "1", Name: "Write", Args: map[string]any{"path": "x.go", "content": "package x"}}
-		if a.speculativeAllowed(write) {
+		if a.speculativeAllowed(t.Context(), write) {
 			t.Fatalf("mode %v: write tool speculatively dispatched, want blocked", mode)
 		}
 		read := messages.ToolCall{ID: "2", Name: "Read", Args: map[string]any{"path": "x.go"}}
-		if !a.speculativeAllowed(read) {
+		if !a.speculativeAllowed(t.Context(), read) {
 			t.Fatalf("mode %v: read tool blocked, want allowed", mode)
 		}
 		// CatMeta tools with irreversible side effects are excluded from
@@ -339,13 +339,13 @@ func TestSpeculativeAllowedReadOnlyGate(t *testing.T) {
 		// registers a cron — a restarted model stream would run them twice.
 		for _, name := range []string{"Task", "ScheduleCron"} {
 			side := messages.ToolCall{ID: "3", Name: name, Args: map[string]any{}}
-			if a.speculativeAllowed(side) {
+			if a.speculativeAllowed(t.Context(), side) {
 				t.Fatalf("mode %v: %s speculatively dispatched, want blocked", mode, name)
 			}
 		}
 		// The remaining CatMeta tools keep the auto-allow behavior.
 		meta := messages.ToolCall{ID: "4", Name: "TaskList", Args: map[string]any{}}
-		if !a.speculativeAllowed(meta) {
+		if !a.speculativeAllowed(t.Context(), meta) {
 			t.Fatalf("mode %v: TaskList blocked, want allowed", mode)
 		}
 	}

@@ -329,6 +329,10 @@ type Agent struct {
 
 	mu       sync.Mutex
 	planMode bool
+	// grants holds the agent-global session grants when no per-session store
+	// was injected (the default adapter's single-session surface; see
+	// sessionpolicy.go). Guarded by mu; mutated copy-on-write only.
+	grants map[string]bool
 	// promptFor rebuilds the system prompt per run workspace and model
 	// (nil = SystemPrompt for every run); wsPrompts caches the results keyed
 	// by workspace+model (bounded LRU) and is invalidated by SetSystemPrompt.
@@ -832,8 +836,8 @@ func (a *Agent) SetPlanModeFor(session string, v bool) {
 // policyFor resolves the effective session policy for a run: the ctx-carried
 // per-session source first (serve-mode runs carry their session via
 // WithSessionPolicy), then the agent's injected store under the unnamed
-// session, and finally the agent-global mode/planMode fields — today's
-// single-session behavior, unchanged for the TUI, CLI and tests.
+// session, and finally the agent-global mode/planMode/grants fields —
+// today's single-session behavior, unchanged for the TUI, CLI and tests.
 func (a *Agent) policyFor(ctx context.Context) *SessionPolicy {
 	if session, src, ok := SessionPolicyFrom(ctx); ok {
 		if p := src.For(session); p != nil {
@@ -847,7 +851,19 @@ func (a *Agent) policyFor(ctx context.Context) *SessionPolicy {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return &SessionPolicy{Mode: a.mode, Plan: a.planMode}
+	return &SessionPolicy{Mode: a.mode, Plan: a.planMode, Grants: copyGrants(a.grants)}
+}
+
+// addGrantGlobal writes one agent-global session grant (the default
+// source's backing store; see sessionpolicy.go). Copy-on-write so policyFor
+// snapshots never share the map being mutated.
+func (a *Agent) addGrantGlobal(key string, on bool) {
+	if key == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.grants = withGrant(a.grants, key, on)
 }
 
 // planModeFor reports the run's session plan flag (see policyFor).
@@ -1641,6 +1657,11 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 			parentThread = ei.ThreadID
 		}
 		run := make([]bool, len(calls))
+		// grantKeys[i] is call i's session-grant key ("" when the tool has
+		// no grantable dimension), computed before the gate so the ask path
+		// already knows the key an "allow for session" answer would carry —
+		// Task 5's ApprovalAnswer envelope reads it from here.
+		grantKeys := make([]string, len(calls))
 		overrides := make([]*coretools.Result, len(calls))
 		preFeedback := make([]string, len(calls))
 		futures := make([]*toolFuture, len(calls))
@@ -1671,6 +1692,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				lggraph.ReplayInterruptConsumption(ctx, entry.consumed)
 				continue
 			}
+			grantKeys[i] = GrantKey(call)
 			gateConsumed := lggraph.InterruptConsumeCount(ctx)
 			// In-process guards run before the permission gate (host code
 			// is authoritative): deny skips the call, ask escalates to the
@@ -1963,12 +1985,13 @@ func (a *Agent) route(rt lgruntime.Runtime, state map[string]any) ([]any, error)
 }
 
 // checkPermission decides whether a tool call may run. Explicit permission
-// rules (deny/allow/ask) are evaluated first, then the session's permission
-// mode (resolved per run: the ctx-carried per-session policy, falling back
-// to the agent-global mode — see policyFor). It is input-sensitive:
-// read-only commands auto-allow, writes/shell ask in default mode. A session
-// in plan mode (the plan flag) is restricted to the read-only arm until its
-// ExitPlanMode is approved.
+// rules (deny/allow/ask) are evaluated first, then the session's grants
+// ("allow for session" answers, §3.3 — never past a deny or ask rule), then
+// the session's permission mode (resolved per run: the ctx-carried
+// per-session policy, falling back to the agent-global mode — see policyFor).
+// It is input-sensitive: read-only commands auto-allow, writes/shell ask in
+// default mode. A session in plan mode (the plan flag) is restricted to the
+// read-only arm until its ExitPlanMode is approved.
 func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bool, error) {
 	if a.perms != nil {
 		if action, ok := a.perms.Action(call.Name, call.Args); ok {
@@ -1983,10 +2006,17 @@ func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bo
 		}
 	}
 
+	p := a.policyFor(ctx)
+	// Session grants sit strictly between the explicit rules and the mode
+	// arms (design §3.3): a deny or ask rule above has already returned, so
+	// a grant can only lift the mode-arm ask — never an explicit decision.
+	if key := GrantKey(call); key != "" && p.Grants[key] {
+		return true, nil
+	}
+
 	readOnly := tools.IsReadOnly(call.Name, call.Args)
 	cat := tools.CategoryOf(call.Name)
 
-	p := a.policyFor(ctx)
 	mode := p.Mode
 	if p.Plan {
 		// Plan mode is enforced structurally, whatever the base mode: only

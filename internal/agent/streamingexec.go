@@ -310,7 +310,7 @@ func (a *Agent) EndRun(ctx context.Context) {
 // streaming: it mirrors checkPermission minus every path that interrupts
 // (ask rules and the mode fallthroughs that would prompt). A call that is
 // not deterministically allowed is simply left to the tools node.
-func (a *Agent) speculativeAllowed(call messages.ToolCall) bool {
+func (a *Agent) speculativeAllowed(ctx context.Context, call messages.ToolCall) bool {
 	switch call.Name {
 	case "AskUserQuestion", "EnterPlanMode", "ExitPlanMode":
 		return false // interaction gates must run in the tools node
@@ -324,6 +324,16 @@ func (a *Agent) speculativeAllowed(call messages.ToolCall) bool {
 		if action, ok := a.perms.Action(call.Name, call.Args); ok && action != permissions.ActionAllow {
 			return false // deny is pointless to pre-run; ask needs an interrupt
 		}
+	}
+	// Session grants occupy the same slot as in checkPermission (design §3.1:
+	// grants are consulted in the gate AND here) — after the explicit rules,
+	// before the mode arms. A granted call is deterministically allowed, but
+	// grants never lift the read-only gate below: a granted non-read-only
+	// call (the shell commands "allow for session" covers) waits for the
+	// tools node exactly like a call under an explicit allow rule, because a
+	// speculated call whose stream is restarted would have executed twice.
+	if key := GrantKey(call); key != "" && a.policyFor(ctx).Grants[key] {
+		return tools.IsReadOnly(call.Name, call.Args) || tools.CategoryOf(call.Name) == tools.CatMeta
 	}
 	// Speculative dispatch only runs read-only (or meta) tools. Writes wait
 	// for the real toolsNode regardless of permission mode — a speculated
@@ -345,7 +355,7 @@ func (a *Agent) dispatchSpeculative(ctx context.Context, call messages.ToolCall)
 	if len(a.toolGuards) > 0 {
 		return false
 	}
-	if call.ID == "" || call.Name == "" || !a.speculativeAllowed(call) {
+	if call.ID == "" || call.Name == "" || !a.speculativeAllowed(ctx, call) {
 		return false
 	}
 	runID := specRunID(ctx)
