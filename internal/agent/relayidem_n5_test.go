@@ -3,7 +3,7 @@ package agent
 // Regression pin for consent claim N5 of the relay idempotency analysis
 // (2026-11-08): a guard-escalated permission ask must be final. Revived from
 // the analysis-round archive; the shared fixtures (memoProbeTool, pumpStream)
-// live in taskrelay_test.go.
+// live in taskrelay_test.go, logToolMsgs in relayidem_helpers_test.go.
 
 import (
 	"context"
@@ -18,20 +18,6 @@ import (
 	"github.com/projanvil/woca/internal/permissions"
 	"github.com/projanvil/woca/internal/tools"
 )
-
-func logToolMsgs(t *testing.T, label string, msgs []messages.Message) {
-	t.Helper()
-	for _, m := range msgs {
-		if m.Role != messages.RoleTool {
-			continue
-		}
-		c := m.Content
-		if len(c) > 160 {
-			c = c[:160] + "…"
-		}
-		t.Logf("%s tool[%s]: %q", label, m.ToolCallID, c)
-	}
-}
 
 // askGuard escalates one tool to the permission prompt (ToolAsk).
 type askGuard struct{ name string }

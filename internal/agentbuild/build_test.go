@@ -54,6 +54,35 @@ func TestBuildAgentBasic(t *testing.T) {
 	}
 }
 
+// TestBuildAgentPerSessionPolicySource: the assembled agent carries a
+// per-session policy source (design §3.3) — serve-mode sessions resolve
+// mode/plan through it via the ctx carrier, so session writes must be
+// isolated while sessions without explicit state inherit the startup mode.
+func TestBuildAgentPerSessionPolicySource(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	url := fakeOpenAI(t, "hi")
+	ap, err := BuildAgent(t.Context(), baseOpts(t, url), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.PluginMgr.Close()
+	defer ap.Agent.Close()
+
+	src := ap.Agent.PolicySource()
+	if p := src.For("any-session"); p.Mode != config.ModeDefault || p.Plan {
+		t.Fatalf("startup policy = %+v, want the default mode", p)
+	}
+	src.SetMode("sess-1", config.ModeBypass)
+	src.SetPlan("sess-1", true)
+	if p := src.For("sess-1"); p.Mode != config.ModeBypass || !p.Plan {
+		t.Fatalf("sess-1 policy = %+v", p)
+	}
+	if p := src.For("sess-2"); p.Mode != config.ModeDefault || p.Plan {
+		t.Fatalf("sess-1 writes leaked into sess-2: %+v", p)
+	}
+}
+
 func TestBuildAgentDefaultsFromSettings(t *testing.T) {
 	home := isolateEnv(t)
 	url := fakeOpenAI(t, "hi")

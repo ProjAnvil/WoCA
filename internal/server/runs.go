@@ -421,13 +421,18 @@ func (s *Server) registerRun(id string, run *Run) {
 // workspace (a values-only ctx decoration, so the system prompt environment,
 // the file/shell tools, memory prefetch/tools and auto-retain all resolve
 // the session workspace while concurrent runs share the agent safely; see
-// agent.WithRunWorkspace and internal/runws), and tagged with the final
-// run/session identity so every span, tool call and background notification
-// inside the run correlates to the session that owns it (N2 invariant).
+// agent.WithRunWorkspace and internal/runws), carrying the run's session
+// policy (permission mode/plan resolved per session — see
+// agent.WithSessionPolicy), and tagged with the final run/session identity
+// so every span, tool call and background notification inside the run
+// correlates to the session that owns it (N2 invariant).
 // sid must be the FINAL session id — generate it first (see
 // newRegisteredRun), never pass an unresolved input id.
 func (s *Server) newRunContext(id, sid, workspace string) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(agent.WithRunWorkspace(context.Background(), workspace))
+	if s.agent != nil {
+		ctx = agent.WithSessionPolicy(ctx, sid, s.agent.PolicySource())
+	}
 	// Telemetry correlation: every span inside this run (tools, LLM calls,
 	// skill loads) carries the run/session identity.
 	return tracing.WithRun(ctx, id, sid), cancel

@@ -276,7 +276,10 @@ func (c *Console) permissions(args []string) (Result, error) {
 	default:
 		return Result{}, fmt.Errorf("unknown permission mode %q", args[0])
 	}
-	c.deps.Agent.SetMode(mode)
+	// The TUI/REPL is a single-session surface: route the switch through the
+	// same session-policy source the runs resolve (the unnamed session —
+	// the agent-global fields when no per-session store was injected).
+	c.deps.Agent.SetModeFor("", mode)
 	c.deps.Cfg.PermissionMode = mode
 	return Result{Output: "permission mode set to " + string(mode) + "\n"}, nil
 }

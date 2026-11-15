@@ -274,6 +274,12 @@ type Config struct {
 	// Obs is the observability log (graph/state/session/message tracing).
 	// Nil disables recording; the store's own enabled flag gates every write.
 	Obs *obslog.Store
+	// PolicySource, when set, stores per-session permission policy (mode,
+	// plan flag, grants): serve-mode sessions run concurrently over one
+	// agent, and each run addresses its session's entry through the ctx
+	// carrier (WithSessionPolicy). Nil keeps the agent-global mode/planMode
+	// fields — the single-session behavior of the TUI, CLI and tests.
+	PolicySource SessionPolicySource
 }
 
 // Agent is the compiled coding-agent graph plus its runtime dependencies.
@@ -434,6 +440,10 @@ type Agent struct {
 	// maxCompactFails auto-compaction is disabled until a manual compact
 	// succeeds (the auto-compact circuit breaker).
 	compactFails int
+	// policy is the optional per-session policy store (Config.PolicySource;
+	// see sessionpolicy.go). Set once at New, never mutated; nil keeps the
+	// agent-global mode/planMode fields.
+	policy SessionPolicySource
 }
 
 // setTranscript records the newest model-round input state (fork source).
@@ -511,6 +521,7 @@ func New(cfg Config) (*Agent, error) {
 		skillsForFn:    cfg.SkillsFor,
 		agentsForFn:    cfg.AgentsFor,
 		hooksForFn:     cfg.HooksFor,
+		policy:         cfg.PolicySource,
 	}
 	// The four per-workspace caches are bounded LRU (wsCacheCapacity) — the
 	// sync.Map versions grew without bound across distinct workspaces.
@@ -770,36 +781,90 @@ func (a *Agent) takeMemoryAttachments(ctx context.Context) []messages.Message {
 // SystemPrompt returns the agent's system prompt.
 func (a *Agent) SystemPrompt() string { return a.systemPrompt }
 
-// Mode returns the current permission mode.
+// Mode returns the current permission mode: the unnamed ("") session's
+// policy — the per-session store's base entry when one is wired, the
+// agent-global field otherwise (single-session surfaces).
 func (a *Agent) Mode() config.PermissionMode {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.mode
+	return a.policyFor(context.Background()).Mode
 }
 
-// SetMode sets the permission mode. Safe to call while a run is in flight
-// (the web API does); checkPermission reads the mode under the same mutex.
-func (a *Agent) SetMode(m config.PermissionMode) {
+// SetMode sets the permission mode of the unnamed ("") session. Safe to call
+// while a run is in flight (the web API does); runs resolve their own
+// session's policy through the ctx carrier (see policyFor).
+func (a *Agent) SetMode(m config.PermissionMode) { a.SetModeFor("", m) }
+
+// SetModeFor sets the permission mode of one session, routed through the
+// agent's policy source (the injected per-session store, or the agent-global
+// fields when none was wired — the TUI/console single-session form).
+func (a *Agent) SetModeFor(session string, m config.PermissionMode) {
+	if a.policy != nil {
+		a.policy.SetMode(session, m)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.mode = m
 }
 
-// PlanMode reports whether the agent is currently in plan mode.
+// PlanMode reports whether the unnamed ("") session is currently in plan
+// mode (the per-session store's base entry when wired, the agent-global
+// flag otherwise).
 func (a *Agent) PlanMode() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.planMode
+	return a.policyFor(context.Background()).Plan
 }
 
-func (a *Agent) setPlanMode(v bool) {
+// SetPlanMode sets the plan-mode state of the unnamed ("") session (used to
+// restore a resumed session).
+func (a *Agent) SetPlanMode(v bool) { a.SetPlanModeFor("", v) }
+
+// SetPlanModeFor sets the plan-mode state of one session through the policy
+// source.
+func (a *Agent) SetPlanModeFor(session string, v bool) {
+	if a.policy != nil {
+		a.policy.SetPlan(session, v)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.planMode = v
 }
 
-// SetPlanMode sets the plan-mode state (used to restore a resumed session).
-func (a *Agent) SetPlanMode(v bool) { a.setPlanMode(v) }
+// policyFor resolves the effective session policy for a run: the ctx-carried
+// per-session source first (serve-mode runs carry their session via
+// WithSessionPolicy), then the agent's injected store under the unnamed
+// session, and finally the agent-global mode/planMode fields — today's
+// single-session behavior, unchanged for the TUI, CLI and tests.
+func (a *Agent) policyFor(ctx context.Context) *SessionPolicy {
+	if session, src, ok := SessionPolicyFrom(ctx); ok {
+		if p := src.For(session); p != nil {
+			return p
+		}
+	}
+	if a.policy != nil {
+		if p := a.policy.For(""); p != nil {
+			return p
+		}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return &SessionPolicy{Mode: a.mode, Plan: a.planMode}
+}
+
+// planModeFor reports the run's session plan flag (see policyFor).
+func (a *Agent) planModeFor(ctx context.Context) bool {
+	return a.policyFor(ctx).Plan
+}
+
+// setPlanModeFor writes the run's session plan flag through the ctx-carried
+// source when the run carries one (per-session isolation), otherwise through
+// the agent-level source (SetPlanModeFor).
+func (a *Agent) setPlanModeFor(ctx context.Context, v bool) {
+	if session, src, ok := SessionPolicyFrom(ctx); ok {
+		src.SetPlan(session, v)
+		return
+	}
+	a.SetPlanModeFor("", v)
+}
 
 // SetTodos restores the unscoped ("") todo list from a persisted snapshot —
 // the single-session list TUI/REPL/CLI have always used.
@@ -1823,12 +1888,12 @@ func (a *Agent) gate(ctx context.Context, call messages.ToolCall) (run bool, ove
 		return false, &coretools.Result{Content: res}, nil
 
 	case "EnterPlanMode":
-		a.setPlanMode(true)
+		a.setPlanModeFor(ctx, true)
 		res := coretools.Result{Content: "Plan mode enabled. Use read-only tools to research and write a plan, then call ExitPlanMode to request approval before implementing."}
 		return false, &res, nil
 
 	case "ExitPlanMode":
-		if !a.PlanMode() {
+		if !a.planModeFor(ctx) {
 			res := coretools.Result{Content: "Not currently in plan mode."}
 			return false, &res, nil
 		}
@@ -1840,7 +1905,7 @@ func (a *Agent) gate(ctx context.Context, call messages.ToolCall) (run bool, ove
 		}
 		answerAny := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(PlanApprovalRequest{Plan: p.Plan}))))
 		if parseAnswer(answerAny) {
-			a.setPlanMode(false)
+			a.setPlanModeFor(ctx, false)
 			res := coretools.Result{Content: "Plan approved by the user. Proceeding with implementation."}
 			return false, &res, nil
 		}
@@ -1898,9 +1963,12 @@ func (a *Agent) route(rt lgruntime.Runtime, state map[string]any) ([]any, error)
 }
 
 // checkPermission decides whether a tool call may run. Explicit permission
-// rules (deny/allow/ask) are evaluated first, then the permission mode. It is
-// input-sensitive: read-only commands auto-allow, writes/shell ask in default
-// mode.
+// rules (deny/allow/ask) are evaluated first, then the session's permission
+// mode (resolved per run: the ctx-carried per-session policy, falling back
+// to the agent-global mode — see policyFor). It is input-sensitive:
+// read-only commands auto-allow, writes/shell ask in default mode. A session
+// in plan mode (the plan flag) is restricted to the read-only arm until its
+// ExitPlanMode is approved.
 func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bool, error) {
 	if a.perms != nil {
 		if action, ok := a.perms.Action(call.Name, call.Args); ok {
@@ -1918,9 +1986,14 @@ func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bo
 	readOnly := tools.IsReadOnly(call.Name, call.Args)
 	cat := tools.CategoryOf(call.Name)
 
-	a.mu.Lock()
-	mode := a.mode
-	a.mu.Unlock()
+	p := a.policyFor(ctx)
+	mode := p.Mode
+	if p.Plan {
+		// Plan mode is enforced structurally, whatever the base mode: only
+		// read-only/meta tools run until ExitPlanMode is approved (design
+		// §3.3; the ModePlan arm below is the same restriction).
+		mode = config.ModePlan
+	}
 	switch mode {
 	case config.ModeBypass:
 		return true, nil
@@ -1983,9 +2056,10 @@ func (a *Agent) newSubagent(ctx context.Context, def *agents.Definition) (*Agent
 	if def != nil && def.Prompt != "" {
 		sysPrompt = def.Prompt
 	}
-	a.mu.Lock()
-	mode := a.mode
-	a.mu.Unlock()
+	// The child's mode is its fallback only: when its ctx carries the
+	// parent's session (the run ctx the relay re-bases it on), the live
+	// per-session policy wins (see policyFor).
+	mode := a.Mode()
 	sub, err := New(Config{
 		Model:          a.subagentModel,
 		Registry:       reg,
@@ -1999,6 +2073,16 @@ func (a *Agent) newSubagent(ctx context.Context, def *agents.Definition) (*Agent
 		LoadSettings:   a.loadSettings,
 		// Share the parent's saver so a paused subagent resumes across processes when the parent is durable (and in-process otherwise).
 		Checkpointer: a.saver,
+		// The subagent runs inside the parent's trust boundary (audit A10/A2):
+		// the parent's explicit permission rules, hooks (static runner plus
+		// per-workspace resolver) and in-process guards apply to the child's
+		// own tool calls too. Live values, not spawn-time snapshots — the
+		// child re-reads them on every gate, exactly like the parent.
+		Permissions:  a.perms,
+		Hooks:        a.hooks,
+		HooksFor:     a.hooksForFn,
+		ToolGuards:   a.toolGuards,
+		PolicySource: a.policy,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("agent: build subagent: %w", err)

@@ -12,8 +12,13 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/projanvil/langchain-golang/core/language"
+	"github.com/projanvil/langchain-golang/core/messages"
+
+	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/quota"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 func newAgentAPIServer(t *testing.T, cfg config.Config, setThinking func(int) error, quotaFn func(ctx context.Context) (quota.Info, error)) (*Server, string) {
@@ -328,6 +333,75 @@ func TestAgentAPIDegradedAndValidation(t *testing.T) {
 	bad2.Body.Close()
 	if bad2.StatusCode != http.StatusBadRequest {
 		t.Fatalf("thinking bad JSON: status %d, want 400", bad2.StatusCode)
+	}
+}
+
+// TestSetPermissionModeSessionScoped: the permissions endpoint takes an
+// optional session id. A session-scoped switch lands in that session's
+// policy only (the base view other sessions inherit is untouched); a
+// session-less switch (legacy clients) updates the base policy.
+func TestSetPermissionModeSessionScoped(t *testing.T) {
+	a, err := agent.New(agent.Config{
+		Model:          language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))),
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeDefault,
+		PolicySource:   agent.NewPerSessionPolicySource(config.ModeDefault),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{Agent: a, Static: fstest.MapFS{}, Logger: zerolog.Nop()})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+
+	getMode := func() string {
+		resp, err := http.Get(ts.URL + "/api/agent")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var state agentState
+		if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state.PermissionMode
+	}
+	post := func(body string) int {
+		resp, err := http.Post(ts.URL+"/api/agent/permissions", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := getMode(); got != "default" {
+		t.Fatalf("startup mode = %q, want default", got)
+	}
+	if code := post(`{"session":"sess-1","mode":"bypassPermissions"}`); code != http.StatusOK {
+		t.Fatalf("session-scoped switch: status %d", code)
+	}
+	if got := getMode(); got != "default" {
+		t.Fatalf("session-scoped switch leaked into the base view: %q", got)
+	}
+	if p := a.PolicySource().For("sess-1"); p.Mode != config.ModeBypass {
+		t.Fatalf("sess-1 policy = %+v, want bypassPermissions", p)
+	}
+	// A session-less switch updates the base every session inherits — the
+	// legacy single-session behavior.
+	if code := post(`{"mode":"readOnly"}`); code != http.StatusOK {
+		t.Fatalf("base switch: status %d", code)
+	}
+	if got := getMode(); got != "readOnly" {
+		t.Fatalf("base view after session-less switch = %q, want readOnly", got)
+	}
+	if p := a.PolicySource().For("sess-2"); p.Mode != config.ModeReadOnly {
+		t.Fatalf("fresh session did not inherit the base mode: %+v", p)
+	}
+	// sess-1 keeps its explicit mode.
+	if p := a.PolicySource().For("sess-1"); p.Mode != config.ModeBypass {
+		t.Fatalf("sess-1 policy after base switch = %+v", p)
 	}
 }
 

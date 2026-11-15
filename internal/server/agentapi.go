@@ -69,14 +69,19 @@ func (s *Server) handleGetAgent(w http.ResponseWriter, _ *http.Request) {
 
 // handleSetPermissionMode switches the permission gate mode (default |
 // acceptEdits | bypassPermissions | readOnly | plan) for subsequent tool
-// calls; it takes effect immediately, even mid-run.
+// calls; it takes effect immediately, even mid-run. The optional session
+// scopes the switch to one session's policy: runs of that session resolve
+// their mode from the per-session store (see agent.WithSessionPolicy), while
+// an absent/empty session writes the base policy every session inherits —
+// the pre-session behavior of a single shared mode.
 func (s *Server) handleSetPermissionMode(w http.ResponseWriter, r *http.Request) {
 	if s.agent == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent is not available")
 		return
 	}
 	var req struct {
-		Mode string `json:"mode"`
+		Mode    string `json:"mode"`
+		Session string `json:"session"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -89,7 +94,7 @@ func (s *Server) handleSetPermissionMode(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "unknown permission mode "+req.Mode)
 		return
 	}
-	s.agent.SetMode(mode)
+	s.agent.SetModeFor(req.Session, mode)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mode": mode})
 }
 

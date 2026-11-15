@@ -283,12 +283,19 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		SystemPrompt:    sysPrompt,
 		SystemPromptFor: sysFor,
 		PermissionMode:  cfg.PermissionMode,
-		RecursionLimit:  cfg.RecursionLimit,
-		WorkDir:         cfg.WorkDir,
-		Hooks:           hookRunner,
-		ToolGuards:      opts.ToolGuards,
-		ModelHooks:      opts.ModelHooks,
-		ModelWrappers:   opts.ModelWrappers,
+		// Per-session permission policy (design §3.3): serve-mode sessions
+		// run concurrently over this one agent, so mode/plan state lives in
+		// a per-session store the runs address through their ctx; the server
+		// reads it back via Agent.PolicySource (see newRunContext and
+		// handleSetPermissionMode). Sessions without explicit state inherit
+		// the startup mode recorded here.
+		PolicySource:   agent.NewPerSessionPolicySource(cfg.PermissionMode),
+		RecursionLimit: cfg.RecursionLimit,
+		WorkDir:        cfg.WorkDir,
+		Hooks:          hookRunner,
+		ToolGuards:     opts.ToolGuards,
+		ModelHooks:     opts.ModelHooks,
+		ModelWrappers:  opts.ModelWrappers,
 		HooksFor: func(ws string) *hooks.Runner {
 			return hooks.NewRunner(loadHooksConfig(ws, pluginList), ws, "woca",
 				hooks.WithLogger(log), hooks.WithCommandRunner(hooks.ExecutorCommandRunner(x)))
