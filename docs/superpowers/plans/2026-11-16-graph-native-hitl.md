@@ -140,7 +140,7 @@
 **Files:**
 - Create: `internal/agent/epsilon.go` — on `Resume`/`ResumeCheckpoint` (agent.go:1117/1137): snapshot inspection via the fork checkpoint shape (`Checkpoint.Next` + `PendingWrites`, fork langgraph/checkpoint/checkpoint.go:49-50 — NOT internal/runstate); an unfinished superstep with missing tool results and no pending interrupt → synthesize `messages.Tool(callID, "Error: interrupted before completion; the tool may or may not have run. Verify before retrying.")` for every unanswered call and close the turn interrupted; never invoke the paused batch. (Legacy tools-node detection already shipped in Task 5.)
 - Modify: `README.md:72-74` + `README.zh-CN.md:68-69` — "pauses (pending approvals) resume across restarts; calls interrupted by a crash are marked interrupted and never re-run".
-- Tests: revive R2, R3 (both now expect interrupted markers, zero re-execution), new `TestLegacyToolsNodeCheckpointMarkedInterrupted`.
+- Tests: revive R2, R3 (both now expect interrupted markers, zero re-execution). The legacy-checkpoint test shipped with Task 5.
 
 - [ ] Steps: red (R2) → implement → green → `feat(agent): interrupted-marker resume; README pause/crash semantics`.
 
