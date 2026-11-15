@@ -64,6 +64,14 @@ func TestGrantKeyShapes(t *testing.T) {
 			want: "domain:localhost",
 		},
 		{
+			// Task 3 review ruling #2: hosts are case-insensitive; the key is
+			// lowercased so an approval stored from one casing matches every
+			// later casing of the same site.
+			name: "webfetch host lowercased into the key",
+			call: messages.ToolCall{Name: "WebFetch", Args: map[string]any{"url": "https://EXAMPLE.com/a/b?x=1"}},
+			want: "domain:example.com",
+		},
+		{
 			name: "webfetch unparseable url not grantable",
 			call: messages.ToolCall{Name: "WebFetch", Args: map[string]any{"url": "not a url"}},
 			want: "",
@@ -247,6 +255,66 @@ func TestGrantSuppressesReAsk(t *testing.T) {
 	}
 	if got := out[len(out)-1].Content; got != "did it twice" {
 		t.Fatalf("round 2 final message = %q", got)
+	}
+}
+
+// TestPlainAllowAnswerIsOncePerCall pins the once-semantics of a plain allow
+// (Task 3 review ruling #3): a permission ask answered "y" WITHOUT a grant
+// permits only that call — the identical next call asks again. Today's
+// behavior, pinned so Task 5's approval envelope cannot regress it: only an
+// explicit "allow for session" answer may add a grant.
+func TestPlainAllowAnswerIsOncePerCall(t *testing.T) {
+	workdir := t.TempDir()
+	marker := filepath.Join(workdir, "marker.txt")
+	bashCall := func(id string) messages.ToolCall {
+		return messages.ToolCall{ID: id, Name: "Bash", Args: map[string]any{"command": "touch marker.txt"}}
+	}
+	model := language.NewFakeChatModel(
+		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+		language.WithResponses(
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{bashCall("1")}},
+			messages.AI("did it once"),
+			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{bashCall("2")}},
+			messages.AI("did it twice"),
+		),
+	)
+	a, err := New(Config{
+		Model:          model,
+		Registry:       tools.NewRegistry(workdir),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeDefault,
+		WorkDir:        workdir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Round 1: default mode + a non-read-only command asks; answer a plain
+	// allow (no grant dimension in the resume value).
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("touch the marker")}, "once-t1")
+	ie := interruptFromError(t, err)
+	if req, ok := ie.Value.(PermissionRequest); !ok || req.ToolName != "Bash" {
+		t.Fatalf("round 1 interrupt = %#v, want a Bash PermissionRequest", ie.Value)
+	}
+	if _, err := a.Resume(t.Context(), "once-t1", "y"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("approved round-1 command did not run: %v", err)
+	}
+
+	// Round 2: the identical command must ask again — the plain allow created
+	// no session grant.
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("touch it again")}, "once-t2")
+	ie = interruptFromError(t, err)
+	if req, ok := ie.Value.(PermissionRequest); !ok || req.ToolName != "Bash" {
+		t.Fatalf("round 2 interrupt = %#v, want a second Bash PermissionRequest (plain allow is once)", ie.Value)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("SESSION GRANT LEAK: the second identical call ran without asking after a plain once-allow")
 	}
 }
 

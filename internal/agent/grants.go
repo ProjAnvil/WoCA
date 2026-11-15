@@ -19,8 +19,8 @@ import (
 //   - Bash: "bash:" + the first two whitespace-separated segments of the
 //     command + "*" — a prefix wildcard, so approving "git push --force"
 //     grants "git push ..." for the session ("bash:git push*").
-//   - WebFetch: "domain:" + the url argument's host, port stripped — the
-//     site, not the exact page ("domain:example.com").
+//   - WebFetch: "domain:" + the url argument's host, port stripped and
+//     lowercased — the site, not the exact page ("domain:example.com").
 //   - WebSearch: "websearch:" + the first two words of the query + "*"
 //     ("websearch:latest AI*").
 //
@@ -58,8 +58,9 @@ func firstWords(v any, n int) []string {
 	return fields
 }
 
-// domainKey returns "domain:" + the url's host (port stripped); missing or
-// unparseable urls return "".
+// domainKey returns "domain:" + the url's host (port stripped, lowercased —
+// hosts are case-insensitive, so a grant stored from one casing matches every
+// later casing of the same site); missing or unparseable urls return "".
 func domainKey(v any) string {
 	raw, _ := v.(string)
 	if raw == "" {
@@ -69,5 +70,5 @@ func domainKey(v any) string {
 	if err != nil || u.Hostname() == "" {
 		return ""
 	}
-	return "domain:" + u.Hostname()
+	return "domain:" + strings.ToLower(u.Hostname())
 }

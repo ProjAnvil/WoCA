@@ -2007,12 +2007,6 @@ func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bo
 	}
 
 	p := a.policyFor(ctx)
-	// Session grants sit strictly between the explicit rules and the mode
-	// arms (design §3.3): a deny or ask rule above has already returned, so
-	// a grant can only lift the mode-arm ask — never an explicit decision.
-	if key := GrantKey(call); key != "" && p.Grants[key] {
-		return true, nil
-	}
 
 	readOnly := tools.IsReadOnly(call.Name, call.Args)
 	cat := tools.CategoryOf(call.Name)
@@ -2023,6 +2017,18 @@ func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bo
 		// read-only/meta tools run until ExitPlanMode is approved (design
 		// §3.3; the ModePlan arm below is the same restriction).
 		mode = config.ModePlan
+	}
+	// Session grants sit strictly between the explicit rules and the mode
+	// arms (design §3.3): a deny or ask rule above has already returned, so
+	// a grant can only lift the mode-arm ask — never an explicit decision.
+	// The consult deliberately follows the plan override: enforced plan
+	// beats grants, so a pre-existing grant cannot punch through the
+	// read-only restriction; once ExitPlanMode's approval flips the flag
+	// off, the grant applies again.
+	if !p.Plan {
+		if key := GrantKey(call); key != "" && p.Grants[key] {
+			return true, nil
+		}
 	}
 	switch mode {
 	case config.ModeBypass:
