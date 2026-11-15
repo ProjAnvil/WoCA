@@ -1609,7 +1609,13 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 			gateConsumed := lggraph.InterruptConsumeCount(ctx)
 			// In-process guards run before the permission gate (host code
 			// is authoritative): deny skips the call, ask escalates to the
-			// permission prompt directly.
+			// permission prompt whose verdict is FINAL. A denial must not
+			// fall through to the gate — its allow rules would re-set
+			// run[i]=true and override the user's answer. An approval has
+			// already granted what the gate would ask again (re-asking
+			// would also consume a second resume value), so only the
+			// PreToolUse hook still runs below.
+			askApproved := false
 			if len(a.toolGuards) > 0 {
 				switch d := a.guardsBeforeTool(ctx, call); d.Action {
 				case ToolDeny:
@@ -1626,20 +1632,24 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 					}
 					if !ok {
 						run[i] = false
+						continue
 					}
+					askApproved = true
 				}
 			}
-			shouldRun, override, err := a.gate(ctx, call)
-			if err != nil {
-				return nil, err
-			}
-			if override != nil {
-				overrides[i] = override
-				continue
-			}
-			if !shouldRun {
-				run[i] = false
-				continue
+			if !askApproved {
+				shouldRun, override, err := a.gate(ctx, call)
+				if err != nil {
+					return nil, err
+				}
+				if override != nil {
+					overrides[i] = override
+					continue
+				}
+				if !shouldRun {
+					run[i] = false
+					continue
+				}
 			}
 			if h := a.hooksFor(ctx); h != nil {
 				d, err := h.PreToolUse(ctx, call.Name, call.Args)
