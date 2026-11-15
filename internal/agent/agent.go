@@ -302,6 +302,11 @@ type Agent struct {
 	recursionLimit int
 	subagentModel  language.ChatModel
 	graph          *lggraph.CompiledGraph
+	// children is the content-addressed subagent registry (subagents.go):
+	// one child agent per distinct def content, each registered as a graph
+	// subgraph node. Swapped whole by rebuildGraph under a.mu; read via
+	// childReg.
+	children *childRegistry
 	// saver is the checkpointer the graph was compiled with (nil only when
 	// the graph has none). Fresh-input runs reset their thread before
 	// starting: the fork layers fresh input onto a thread's latest
@@ -332,6 +337,13 @@ type Agent struct {
 
 	mu       sync.Mutex
 	planMode bool
+	// rebuildMu/rebuildTimer arm the debounced graph rebuild on subagent
+	// def-set changes; rebuildBuild serializes the rebuild bodies
+	// (subagents.go). Kept separate from a.mu so the wsCache.Set callback
+	// path never blocks on (or nests with) the agent lock.
+	rebuildMu    sync.Mutex
+	rebuildTimer *time.Timer
+	rebuildBuild sync.Mutex
 	// grants holds the agent-global session grants when no per-session store
 	// was injected (the default adapter's single-session surface; see
 	// sessionpolicy.go). Guarded by mu; mutated copy-on-write only.
@@ -540,6 +552,12 @@ func New(cfg Config) (*Agent, error) {
 	a.wsSkills = newWSCache[[]skills.Skill](wsCacheCapacity)
 	a.wsAgents = newWSCache[[]agents.Definition](wsCacheCapacity)
 	a.wsHooks = newWSCache[*hooks.Runner](wsCacheCapacity)
+	// Subagent def-set changes (a resolved workspace's def list arriving or
+	// changing — LRU eviction rides a Set too) schedule a debounced parent
+	// graph rebuild that re-registers the content-addressed subagent nodes
+	// (subagents.go; design §3.2). Installed before the first possible Set.
+	a.wsAgents.onChange = func(string, []agents.Definition) { a.scheduleGraphRebuild() }
+	a.children = newChildRegistry()
 	// The cron scheduler's only host dependency is the notification queue;
 	// the method value is safe to capture before the rest of the wiring
 	// because it is only invoked by the scheduler loop, never here. The
@@ -628,27 +646,6 @@ func New(cfg Config) (*Agent, error) {
 	}
 	a.boundModel = bound
 
-	g := lggraph.NewStateGraph()
-	g.AddReducer("messages", messagesChannel)
-	g.AddReducer(decisionsChannelName, decisionsChannel)
-	g.AddNode(nodeModel, a.observedNode("agent", nodeModel, a.modelNode()))
-	if len(a.toolList) > 0 {
-		// Topology (design §3.1): model →(route1)→ hooks → approval →(route2)
-		// → tools → model. Gates/hooks live in the hooks superstep (never
-		// interrupts, so it never re-executes); every user ask is ONE
-		// interrupt in the approval superstep; the tools node executes
-		// purely from the persisted decisions channel.
-		g.AddNode(nodeHooks, a.observedNode("agent", nodeHooks, a.hooksNode()))
-		g.AddNode(nodeApproval, a.observedNode("agent", nodeApproval, a.approvalNode()))
-		g.AddNode(nodeTools, a.observedNode("agent", nodeTools, a.toolsNode()))
-		g.AddEdge(nodeHooks, nodeApproval)
-		g.AddConditionalEdges(nodeApproval, a.routeTools)
-		g.AddEdge(nodeTools, nodeModel)
-	}
-	g.AddConditionalEdges(nodeModel, a.route)
-	g.SetEntryPoint(nodeModel)
-
-	compileOpts := []lggraph.CompileOption{lggraph.WithRecursionLimit(cfg.RecursionLimit)}
 	// A Saver is mandatory for in-node interrupts to be resumable: default
 	// to the in-process MemorySaver (per-run isolation comes from distinct
 	// thread IDs), upgrade to a durable backend when configured.
@@ -666,12 +663,13 @@ func New(cfg Config) (*Agent, error) {
 	default:
 		a.saver = lgcheckpoint.NewMemorySaver()
 	}
-	compileOpts = append(compileOpts, lggraph.WithCheckpointer(a.saver))
-	cg, err := g.Compile(compileOpts...)
-	if err != nil {
+	// Graph construction lives in rebuildGraph (subagents.go): the fixed
+	// model/hooks/approval/tools topology plus the subagent child subgraph
+	// nodes for the current def union. A compile failure fails New, exactly
+	// as the inline construction did before the extraction.
+	if err := a.rebuildGraph(); err != nil {
 		return nil, err
 	}
-	a.graph = cg
 	// Background-shell completions (Bash run_in_background) are delivered as
 	// tagged queue notifications after the next tool round, scoped to the
 	// session whose run started the shell. A user-initiated stop queues Quiet
@@ -696,8 +694,18 @@ func New(cfg Config) (*Agent, error) {
 	return a, nil
 }
 
+// currentGraph snapshots the compiled graph for one run: rebuildGraph
+// swaps the pointer under a.mu on subagent def-set changes, and every run
+// entry point pins the instance it starts with, so a rebuild landing
+// mid-run never changes that run's topology.
+func (a *Agent) currentGraph() *lggraph.CompiledGraph {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.graph
+}
+
 // Graph returns the compiled graph for streaming/resume.
-func (a *Agent) Graph() *lggraph.CompiledGraph { return a.graph }
+func (a *Agent) Graph() *lggraph.CompiledGraph { return a.currentGraph() }
 
 // Obs returns the observability store (nil when not wired).
 func (a *Agent) Obs() *obslog.Store { return a.obs }
@@ -966,7 +974,14 @@ func (a *Agent) AgentDefinitionsIn(ctx context.Context) []agents.Definition { re
 
 // SetAgentDefinitions replaces the custom subagent definitions at runtime
 // (used by the /agents manager to refresh after edits; call when idle).
-func (a *Agent) SetAgentDefinitions(defs []agents.Definition) { a.agentDefs = defs }
+// The def-set change schedules a debounced graph rebuild so the subagent
+// child registry re-registers its content-addressed nodes (subagents.go).
+func (a *Agent) SetAgentDefinitions(defs []agents.Definition) {
+	a.mu.Lock()
+	a.agentDefs = defs
+	a.mu.Unlock()
+	a.scheduleGraphRebuild()
+}
 
 // SetSystemPrompt swaps the system prompt at runtime (the /output-style
 // command). When a SystemPromptFor builder is wired the builder owns the
@@ -1197,7 +1212,8 @@ func (a *Agent) runTurn(ctx context.Context, history []messages.Message, threadI
 	history = a.prependQueued(ctx, history)
 	a.lastThread.Store(threadID)
 	a.resetThread(ctx, threadID)
-	res, err := a.graph.InvokeWithOptions(ctx, a.NewState(ctx, history), lggraph.Options{ThreadID: threadID})
+	g := a.currentGraph() // pin: a concurrent def-set rebuild must not swap this run's graph
+	res, err := g.InvokeWithOptions(ctx, a.NewState(ctx, history), lggraph.Options{ThreadID: threadID})
 	if err != nil {
 		return nil, err
 	}
@@ -1219,7 +1235,17 @@ func (a *Agent) Resume(ctx context.Context, threadID string, resumeValue any) ([
 	// streamWithBudget): a cross-process resume enters through here, and the
 	// foreground subagent relay derives the child thread from it.
 	a.lastThread.Store(threadID)
-	res, err := a.graph.InvokeWithOptions(ctx, nil, lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue)})
+	// Resolve the run workspace's def set first (populating the wsAgents
+	// cache — a cross-process resume starts with a cold one), then refuse
+	// resumes whose paused plan references a subagent node that no longer
+	// exists: the def was removed or edited under the pause, and falling
+	// through to re-execution is never acceptable (design §3.2).
+	_ = a.agentsFor(ctx)
+	if err := a.checkResumableSubagents(ctx, threadID); err != nil {
+		return nil, err
+	}
+	g := a.currentGraph() // pin: see runTurn
+	res, err := g.InvokeWithOptions(ctx, nil, lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue)})
 	if err != nil {
 		return nil, err
 	}
@@ -1283,7 +1309,8 @@ func (a *Agent) streamWithBudget(ctx context.Context, history []messages.Message
 	history = a.CompactHistory(ctx, history)
 	history = a.prependQueued(ctx, history) // run-start delivery; see runTurn
 	a.resetThread(ctx, threadID)
-	return a.graph.Stream(ctx, a.NewState(ctx, history), lggraph.StreamOptions{
+	g := a.currentGraph() // pin: see runTurn
+	return g.Stream(ctx, a.NewState(ctx, history), lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: threadID, RecursionLimit: budget},
 		Modes:   streamModes,
 	})
@@ -1294,7 +1321,8 @@ func (a *Agent) streamWithBudget(ctx context.Context, history []messages.Message
 func (a *Agent) resumeStreamWithBudget(ctx context.Context, threadID string, resumeValue any, budget int) iter.Seq2[lggraph.StreamChunk, error] {
 	a.beginRunCtx(specRunID(ctx), ctx) // see streamWithBudget
 	a.lastThread.Store(threadID)       // see Resume
-	return a.graph.Stream(ctx, nil, lggraph.StreamOptions{
+	g := a.currentGraph()              // pin: see runTurn
+	return g.Stream(ctx, nil, lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue), RecursionLimit: budget},
 		Modes:   streamModes,
 	})

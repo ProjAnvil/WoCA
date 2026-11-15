@@ -15,6 +15,11 @@ type wsCache[V any] struct {
 	cap   int
 	ll    *list.List // front = most recently used
 	items map[string]*list.Element
+	// onChange, when set, fires after every committed Set — including sets
+	// that evict LRU entries, so it observes every def-set change. Assigned
+	// once at construction, before the first Set; read-only afterwards, so
+	// it needs no guard of its own.
+	onChange func(key string, val V)
 }
 
 type wsCacheEntry[V any] struct {
@@ -39,18 +44,37 @@ func (c *wsCache[V]) Get(key string) (V, bool) {
 
 func (c *wsCache[V]) Set(key string, val V) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if el, ok := c.items[key]; ok {
 		el.Value = wsCacheEntry[V]{key, val}
 		c.ll.MoveToFront(el)
-		return
+		c.mu.Unlock()
+	} else {
+		c.items[key] = c.ll.PushFront(wsCacheEntry[V]{key, val})
+		for c.ll.Len() > c.cap {
+			back := c.ll.Back()
+			delete(c.items, back.Value.(wsCacheEntry[V]).key)
+			c.ll.Remove(back)
+		}
+		c.mu.Unlock()
 	}
-	c.items[key] = c.ll.PushFront(wsCacheEntry[V]{key, val})
-	for c.ll.Len() > c.cap {
-		back := c.ll.Back()
-		delete(c.items, back.Value.(wsCacheEntry[V]).key)
-		c.ll.Remove(back)
+	// Fired outside c.mu so the handler may read the cache (a handler that
+	// re-entered Set under the lock would deadlock).
+	if c.onChange != nil {
+		c.onChange(key, val)
 	}
+}
+
+// snapshot returns every cached key/value pair (the subagent registry's
+// def-union input; see subagents.go).
+func (c *wsCache[V]) snapshot() map[string]V {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]V, len(c.items))
+	for el := c.ll.Front(); el != nil; el = el.Next() {
+		e := el.Value.(wsCacheEntry[V])
+		out[e.key] = e.val
+	}
+	return out
 }
 
 // Clear drops every entry (workspace-prompt invalidation semantics).
