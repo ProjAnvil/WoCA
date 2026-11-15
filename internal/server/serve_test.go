@@ -293,6 +293,178 @@ func TestHandleInterruptSubagentFlatPayload(t *testing.T) {
 	<-done
 }
 
+// TestHandleInterruptApprovalEnvelope parks the Task-5 ask envelope: a
+// single ask parks under the ask's LEGACY kind with the legacy flat payload
+// (the current InterruptModal keeps working; audit M4) plus the embedded
+// asks; a multi-ask envelope parks as the new "approvals" kind whose answer
+// builds a per-ask ApprovalAnswer (with the legacy {approve} body fanned out
+// to every ask).
+func TestHandleInterruptApprovalEnvelope(t *testing.T) {
+	mkRun := func() (*Run, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(t.Context())
+		return newRun("ar", nil, ctx, cancel), cancel
+	}
+
+	bashAsk := agent.Ask{
+		CallID: "b1", ToolName: "Bash", ToolArgs: map[string]any{"command": "make"},
+		Reason: "Run command: make", Origin: agent.OriginMain, SessionRuleKey: "bash:make*",
+	}
+	planAsk := agent.Ask{CallID: "e1", ToolName: "ExitPlanMode", Plan: "the plan", Origin: agent.OriginMain}
+	askUser := agent.Ask{
+		CallID: "q1", ToolName: "AskUserQuestion", Origin: agent.OriginMain,
+		Questions: []tools.Question{{Question: "which?"}},
+	}
+
+	t.Run("single permission ask keeps the legacy flat card", func(t *testing.T) {
+		r, cancel := mkRun()
+		defer cancel()
+		got := make(chan any, 1)
+		go func() {
+			v, err := r.handleInterrupt(agent.ApprovalRequest{Asks: []agent.Ask{bashAsk}})
+			got <- any(err)
+			_ = v
+		}()
+		waitPending(t, r)
+		r.mu.Lock()
+		kind, payload := r.pending.kind, r.pending.payload
+		r.mu.Unlock()
+		if kind != "permission" {
+			t.Fatalf("kind = %q, want permission", kind)
+		}
+		m, ok := payload.(map[string]any)
+		if !ok {
+			t.Fatalf("payload = %T, want flat map", payload)
+		}
+		if m["tool_name"] != "Bash" || m["reason"] != "Run command: make" {
+			t.Fatalf("flat fields = %#v", m)
+		}
+		if _, hasAsks := m["asks"]; !hasAsks {
+			t.Fatalf("payload lacks the embedded asks: %#v", m)
+		}
+		// The legacy body still answers it (the graph-side scalar fallback).
+		if err := r.answer([]byte(`{"approve":true}`)); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-got:
+			if err != nil {
+				t.Fatalf("handleInterrupt: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("interrupt never resumed")
+		}
+	})
+
+	t.Run("single plan and ask_user asks park under their legacy kinds", func(t *testing.T) {
+		for _, tc := range []struct {
+			ask  agent.Ask
+			kind string
+		}{{planAsk, "plan"}, {askUser, "ask"}} {
+			r, cancel := mkRun()
+			got := make(chan any, 1)
+			go func() {
+				v, err := r.handleInterrupt(agent.ApprovalRequest{Asks: []agent.Ask{tc.ask}})
+				got <- any(err)
+				_ = v
+			}()
+			waitPending(t, r)
+			r.mu.Lock()
+			kind := r.pending.kind
+			r.mu.Unlock()
+			if kind != tc.kind {
+				t.Fatalf("kind = %q, want %q", kind, tc.kind)
+			}
+			if tc.kind == "plan" {
+				if err := r.answer([]byte(`{"approve":true}`)); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := r.answer([]byte(`{"answers":["a"]}`)); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-got:
+				if err != nil {
+					t.Fatalf("handleInterrupt: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("interrupt never resumed")
+			}
+			cancel()
+		}
+	})
+
+	t.Run("multi-ask envelope parks as approvals and decodes per-ask answers", func(t *testing.T) {
+		r, cancel := mkRun()
+		defer cancel()
+		got := make(chan any, 1)
+		go func() {
+			v, err := r.handleInterrupt(agent.ApprovalRequest{Asks: []agent.Ask{bashAsk, planAsk}})
+			if err != nil {
+				got <- err
+			} else {
+				got <- v
+			}
+		}()
+		waitPending(t, r)
+		r.mu.Lock()
+		kind := r.pending.kind
+		r.mu.Unlock()
+		if kind != "approvals" {
+			t.Fatalf("kind = %q, want approvals", kind)
+		}
+		if err := r.answer([]byte(`{"answers":{"b1":{"outcome":"allow","grant":"session"},"e1":{"outcome":"deny"}}}`)); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case v := <-got:
+			ans, ok := v.(agent.ApprovalAnswer)
+			if !ok {
+				t.Fatalf("resume value = %T, want ApprovalAnswer", v)
+			}
+			if d := ans.Decisions["b1"]; d.Outcome != agent.OutcomeAllow || d.Grant != agent.GrantSession {
+				t.Fatalf("b1 decision = %+v", d)
+			}
+			if d := ans.Decisions["e1"]; d.Outcome != agent.OutcomeDeny {
+				t.Fatalf("e1 decision = %+v", d)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("interrupt never resumed")
+		}
+	})
+
+	t.Run("legacy approve body fans out to every ask, failing closed", func(t *testing.T) {
+		r, cancel := mkRun()
+		defer cancel()
+		got := make(chan any, 1)
+		go func() {
+			v, err := r.handleInterrupt(agent.ApprovalRequest{Asks: []agent.Ask{bashAsk, planAsk}})
+			if err != nil {
+				got <- err
+			} else {
+				got <- v
+			}
+		}()
+		waitPending(t, r)
+		if err := r.answer([]byte(`{"approve":false}`)); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case v := <-got:
+			ans, ok := v.(agent.ApprovalAnswer)
+			if !ok {
+				t.Fatalf("resume value = %T, want ApprovalAnswer", v)
+			}
+			for _, id := range []string{"b1", "e1"} {
+				if d := ans.Decisions[id]; d.Outcome != agent.OutcomeDeny {
+					t.Fatalf("%s decision = %+v, want deny", id, d)
+				}
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("interrupt never resumed")
+		}
+	})
+}
+
 // waitPending blocks until the run has a parked interrupt.
 func waitPending(t *testing.T, r *Run) {
 	t.Helper()

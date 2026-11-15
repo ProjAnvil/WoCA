@@ -26,6 +26,14 @@ var decisionOptions = [2]string{"allow", "deny"}
 // interrupt.
 func (m *Model) pendingBegin() {
 	switch v := m.pending.value.(type) {
+	case agent.ApprovalRequest:
+		m.apprIdx = 0
+		m.apprDec = map[string]agent.AskDecision{}
+		if len(v.Asks) == 0 {
+			m.resolvePending(agent.ApprovalAnswer{Decisions: m.apprDec})
+			return
+		}
+		m.apprEnter(v)
 	case agent.PermissionRequest, agent.SubagentInterrupt, agent.PlanApprovalRequest:
 		m.decSel = 1 // safe default: deny
 	case agent.AskUserRequest:
@@ -39,6 +47,78 @@ func (m *Model) pendingBegin() {
 	}
 }
 
+// apprEnter sets up the per-ask interaction state for the envelope's
+// current ask (permission/plan asks get the allow/deny pair, AskUserQuestion
+// asks reuse the sequential question machine).
+func (m *Model) apprEnter(req agent.ApprovalRequest) {
+	ask := req.Asks[m.apprIdx]
+	if ask.ToolName == "AskUserQuestion" {
+		if len(ask.Questions) == 0 {
+			// Nothing to ask: auto-allow and keep walking the envelope.
+			m.apprAdvance(agent.AskDecision{Outcome: agent.OutcomeAllow})
+			return
+		}
+		m.askIdx = 0
+		m.askAnswers = nil
+		m.askResetFor(ask.Questions[0])
+		return
+	}
+	m.decSel = 1 // safe default: deny
+}
+
+// apprAdvance records the current ask's decision and moves to the next ask,
+// resolving the whole envelope with one ApprovalAnswer after the last.
+func (m *Model) apprAdvance(dec agent.AskDecision) {
+	req, ok := m.pending.value.(agent.ApprovalRequest)
+	if !ok || m.apprIdx >= len(req.Asks) {
+		return
+	}
+	m.apprDec[req.Asks[m.apprIdx].CallID] = dec
+	m.apprIdx++
+	if m.apprIdx < len(req.Asks) {
+		m.apprEnter(req)
+		return
+	}
+	m.resolvePending(agent.ApprovalAnswer{Decisions: m.apprDec})
+}
+
+// apprAbort resolves the envelope denying every ask that has not been
+// answered yet (ctrl+c / ctrl+d on any ask).
+func (m *Model) apprAbort() {
+	req, ok := m.pending.value.(agent.ApprovalRequest)
+	if ok {
+		for ; m.apprIdx < len(req.Asks); m.apprIdx++ {
+			m.apprDec[req.Asks[m.apprIdx].CallID] = agent.AskDecision{Outcome: agent.OutcomeDeny}
+		}
+	}
+	m.resolvePending(agent.ApprovalAnswer{Decisions: m.apprDec})
+}
+
+// currentQuestions returns the question list driving the ask machine: a bare
+// AskUserRequest's, or the current ApprovalRequest ask's questions.
+func (m *Model) currentQuestions() ([]tools.Question, bool) {
+	switch v := m.pending.value.(type) {
+	case agent.AskUserRequest:
+		return v.Questions, true
+	case agent.ApprovalRequest:
+		if m.apprIdx < len(v.Asks) && v.Asks[m.apprIdx].ToolName == "AskUserQuestion" {
+			return v.Asks[m.apprIdx].Questions, true
+		}
+	}
+	return nil, false
+}
+
+// askAbort resolves the current ask batch the way the interrupt shape
+// demands (an envelope continues with its remaining asks denied; a bare
+// AskUserRequest resolves with empty answers).
+func (m *Model) askAbort() {
+	if _, isApproval := m.pending.value.(agent.ApprovalRequest); isApproval {
+		m.apprAbort()
+		return
+	}
+	m.resolvePending(agent.AskUserAnswer{})
+}
+
 // askResetFor resets the per-question selection state.
 func (m *Model) askResetFor(q tools.Question) {
 	m.askSel = 0
@@ -47,7 +127,32 @@ func (m *Model) askResetFor(q tools.Question) {
 
 // resolvePendingKey handles a keypress while an interrupt awaits a decision.
 func (m *Model) resolvePendingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch m.pending.value.(type) {
+	switch v := m.pending.value.(type) {
+	case agent.ApprovalRequest:
+		if m.apprIdx >= len(v.Asks) {
+			return m, nil
+		}
+		ask := v.Asks[m.apprIdx]
+		if ask.ToolName == "AskUserQuestion" {
+			return m.askKey(msg)
+		}
+		switch msg.String() {
+		case "y", "Y":
+			m.apprAdvance(agent.AskDecision{Outcome: agent.OutcomeAllow})
+		case "n", "N", "esc":
+			m.apprAdvance(agent.AskDecision{Outcome: agent.OutcomeDeny})
+		case "left", "shift+tab":
+			m.decSel = (m.decSel + len(decisionOptions) - 1) % len(decisionOptions)
+		case "right", "tab":
+			m.decSel = (m.decSel + 1) % len(decisionOptions)
+		case "enter":
+			if m.decSel == 0 {
+				m.apprAdvance(agent.AskDecision{Outcome: agent.OutcomeAllow})
+			} else {
+				m.apprAdvance(agent.AskDecision{Outcome: agent.OutcomeDeny})
+			}
+		}
+		return m, nil
 	case agent.PermissionRequest, agent.SubagentInterrupt, agent.PlanApprovalRequest:
 		switch msg.String() {
 		case "y", "Y":
@@ -74,20 +179,23 @@ func (m *Model) resolvePendingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // askKey handles one keypress for an AskUserQuestion batch: questions with
 // options render as a selectable list (space toggles in multi-select mode);
-// questions without options collect free text on the input line.
+// questions without options collect free text on the input line. Inside a
+// Task-5 ApprovalRequest envelope the machine walks the CURRENT ask's
+// questions (see currentQuestions) and hands the collected answers back to
+// the envelope walker.
 func (m *Model) askKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	req, ok := m.pending.value.(agent.AskUserRequest)
-	if !ok || m.askIdx >= len(req.Questions) {
-		m.resolvePending(agent.AskUserAnswer{})
+	questions, ok := m.currentQuestions()
+	if !ok || m.askIdx >= len(questions) {
+		m.askAbort()
 		return m, nil
 	}
-	q := req.Questions[m.askIdx]
+	q := questions[m.askIdx]
 	// esc aborts the whole batch: remaining questions get empty answers.
 	abort := func() {
-		for i := m.askIdx; i < len(req.Questions); i++ {
+		for i := m.askIdx; i < len(questions); i++ {
 			m.askAnswers = append(m.askAnswers, "")
 		}
-		m.resolvePending(agent.AskUserAnswer{Answers: m.askAnswers})
+		m.askAdvance()
 	}
 	if len(q.Options) > 0 {
 		switch msg.String() {
@@ -122,8 +230,7 @@ func (m *Model) askKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			abort()
 		case "ctrl+c", "ctrl+d":
-			m.resolvePending(agent.AskUserAnswer{})
-			return m, tea.Quit
+			return m.askAbortQuit()
 		}
 		return m, nil
 	}
@@ -143,8 +250,7 @@ func (m *Model) askKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		abort()
 	case "ctrl+c", "ctrl+d":
-		m.resolvePending(agent.AskUserAnswer{})
-		return m, tea.Quit
+		return m.askAbortQuit()
 	default:
 		if len(msg.Runes) > 0 {
 			r := string(msg.Runes)
@@ -155,12 +261,25 @@ func (m *Model) askKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// askAdvance moves to the next question or resolves the batch.
+// askAbortQuit is the ctrl+c/ctrl+d path: the batch aborts (empty answers,
+// or the envelope's remaining asks denied) and the program quits.
+func (m *Model) askAbortQuit() (tea.Model, tea.Cmd) {
+	m.askAbort()
+	return m, tea.Quit
+}
+
+// askAdvance moves to the next question or resolves the batch — inside an
+// envelope, finishing one ask's questions records that ask's answers and
+// walks to the next ask.
 func (m *Model) askAdvance() {
-	req, ok := m.pending.value.(agent.AskUserRequest)
+	questions, ok := m.currentQuestions()
 	m.askIdx++
-	if ok && m.askIdx < len(req.Questions) {
-		m.askResetFor(req.Questions[m.askIdx])
+	if ok && m.askIdx < len(questions) {
+		m.askResetFor(questions[m.askIdx])
+		return
+	}
+	if req, isApproval := m.pending.value.(agent.ApprovalRequest); isApproval && m.apprIdx < len(req.Asks) {
+		m.apprAdvance(agent.AskDecision{Outcome: agent.OutcomeAllow, Answers: m.askAnswers})
 		return
 	}
 	m.resolvePending(agent.AskUserAnswer{Answers: m.askAnswers})
@@ -168,9 +287,31 @@ func (m *Model) askAdvance() {
 
 // pendingPrompt renders the body of the pending interrupt: the question with
 // its selectable options, or the plain approval line with the allow/deny
-// pair.
+// pair. A Task-5 ApprovalRequest envelope renders one ask at a time, with a
+// position marker when several are queued.
 func (m *Model) pendingPrompt() string {
 	switch v := m.pending.value.(type) {
+	case agent.ApprovalRequest:
+		if m.apprIdx >= len(v.Asks) {
+			return "Continue?"
+		}
+		ask := v.Asks[m.apprIdx]
+		marker := ""
+		if len(v.Asks) > 1 {
+			marker = fmt.Sprintf("ask %d/%d — ", m.apprIdx+1, len(v.Asks))
+		}
+		switch ask.ToolName {
+		case "AskUserQuestion":
+			return marker + m.askUserPrompt(ask.Questions)
+		case "ExitPlanMode":
+			plan := ask.Plan
+			if plan != "" {
+				plan = "\n" + dimStyle.Render(truncate(plan, 400)) + "\n"
+			}
+			return marker + "Approve this plan?" + plan + "\n" + m.decisionRow()
+		default:
+			return fmt.Sprintf("%sAllow %s? — %s\n%s", marker, ask.ToolName, ask.Reason, m.decisionRow())
+		}
 	case agent.PermissionRequest:
 		return fmt.Sprintf("Allow %s? — %s\n%s", v.ToolName, v.Reason, m.decisionRow())
 	case agent.SubagentInterrupt:
@@ -178,41 +319,47 @@ func (m *Model) pendingPrompt() string {
 	case agent.PlanApprovalRequest:
 		return fmt.Sprintf("Approve this plan?\n%s", m.decisionRow())
 	case agent.AskUserRequest:
-		if m.askIdx >= len(v.Questions) {
-			return "Continue?"
-		}
-		q := v.Questions[m.askIdx]
-		var b strings.Builder
-		title := q.Question
-		if q.Header != "" {
-			title = q.Header + ": " + q.Question
-		}
-		if len(v.Questions) > 1 {
-			fmt.Fprintf(&b, "(%d/%d) %s\n", m.askIdx+1, len(v.Questions), title)
-		} else {
-			fmt.Fprintf(&b, "%s\n", title)
-		}
-		for i, opt := range q.Options {
-			mark := " "
-			if q.MultiSelect && i < len(m.askPicks) && m.askPicks[i] {
-				mark = "x"
-			}
-			row := fmt.Sprintf("[%s] %s", mark, opt.Label)
-			if opt.Description != "" {
-				row += dimStyle.Render(" — " + opt.Description)
-			}
-			if i == m.askSel {
-				b.WriteString("  " + selStyle.Render(row) + "\n")
-			} else {
-				b.WriteString("  " + row + "\n")
-			}
-		}
-		if len(q.Options) == 0 {
-			b.WriteString("  " + dimStyle.Render("(type your answer, enter to submit)") + "\n")
-		}
-		return b.String()
+		return m.askUserPrompt(v.Questions)
 	}
 	return "Continue?"
+}
+
+// askUserPrompt renders the sequential question UI for one question batch
+// (shared by the bare AskUserRequest and envelope ask_user asks).
+func (m *Model) askUserPrompt(questions []tools.Question) string {
+	if m.askIdx >= len(questions) {
+		return "Continue?"
+	}
+	q := questions[m.askIdx]
+	var b strings.Builder
+	title := q.Question
+	if q.Header != "" {
+		title = q.Header + ": " + q.Question
+	}
+	if len(questions) > 1 {
+		fmt.Fprintf(&b, "(%d/%d) %s\n", m.askIdx+1, len(questions), title)
+	} else {
+		fmt.Fprintf(&b, "%s\n", title)
+	}
+	for i, opt := range q.Options {
+		mark := " "
+		if q.MultiSelect && i < len(m.askPicks) && m.askPicks[i] {
+			mark = "x"
+		}
+		row := fmt.Sprintf("[%s] %s", mark, opt.Label)
+		if opt.Description != "" {
+			row += dimStyle.Render(" — " + opt.Description)
+		}
+		if i == m.askSel {
+			b.WriteString("  " + selStyle.Render(row) + "\n")
+		} else {
+			b.WriteString("  " + row + "\n")
+		}
+	}
+	if len(q.Options) == 0 {
+		b.WriteString("  " + dimStyle.Render("(type your answer, enter to submit)") + "\n")
+	}
+	return b.String()
 }
 
 // decisionRow renders the allow/deny pair with the highlighted (safe-default

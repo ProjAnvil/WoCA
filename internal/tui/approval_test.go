@@ -258,3 +258,81 @@ func TestRunInterruptApprovalEndToEnd(t *testing.T) {
 		t.Fatalf("approved Write did not execute: %v %q", err, data)
 	}
 }
+
+// TestPendingApprovalEnvelope walks a Task-5 ApprovalRequest one ask at a
+// time (permission, plan, ask_user) and resolves the whole envelope with ONE
+// ApprovalAnswer carrying per-ask decisions.
+func TestPendingApprovalEnvelope(t *testing.T) {
+	env := agent.ApprovalRequest{Asks: []agent.Ask{
+		{CallID: "b1", ToolName: "Bash", Reason: "Run command: make", Origin: agent.OriginMain, SessionRuleKey: "bash:make*"},
+		{CallID: "e1", ToolName: "ExitPlanMode", Plan: "the plan", Origin: agent.OriginMain},
+		{CallID: "q1", ToolName: "AskUserQuestion", Origin: agent.OriginMain,
+			Questions: []tools.Question{{Question: "pick one"}}},
+	}}
+	m, answerCh := newPendingModel(t, env)
+
+	// Ask 1 of 3: the Bash permission, with the position marker.
+	if v := m.View(); !strings.Contains(v, "ask 1/3") || !strings.Contains(v, "Allow Bash?") {
+		t.Fatalf("view missing the first ask:\n%s", v)
+	}
+	model, _ := m.Update(key("y"))
+	m = model.(*Model)
+
+	// Ask 2 of 3: the plan approval.
+	if v := m.View(); !strings.Contains(v, "ask 2/3") || !strings.Contains(v, "Approve this plan?") || !strings.Contains(v, "the plan") {
+		t.Fatalf("view missing the plan ask:\n%s", v)
+	}
+	model, _ = m.Update(key("n"))
+	m = model.(*Model)
+
+	// Ask 3 of 3: the free-text question.
+	if v := m.View(); !strings.Contains(v, "ask 3/3") || !strings.Contains(v, "pick one") {
+		t.Fatalf("view missing the ask_user ask:\n%s", v)
+	}
+	for _, r := range []string{"o", "p", "t", "2"} {
+		model, _ = m.Update(key(r))
+		m = model.(*Model)
+	}
+	m.Update(key("enter"))
+
+	ans := <-answerCh
+	aa, ok := ans.(agent.ApprovalAnswer)
+	if !ok {
+		t.Fatalf("answer = %T, want ApprovalAnswer", ans)
+	}
+	if d := aa.Decisions["b1"]; d.Outcome != agent.OutcomeAllow || d.Grant == agent.GrantSession {
+		t.Fatalf("b1 = %+v, want once-allow", d)
+	}
+	if d := aa.Decisions["e1"]; d.Outcome != agent.OutcomeDeny {
+		t.Fatalf("e1 = %+v, want deny", d)
+	}
+	if d := aa.Decisions["q1"]; d.Outcome != agent.OutcomeAllow || len(d.Answers) != 1 || d.Answers[0] != "opt2" {
+		t.Fatalf("q1 = %+v, want allow with [opt2]", d)
+	}
+	if m.pending != nil {
+		t.Fatal("pending not cleared after the last ask")
+	}
+}
+
+// TestPendingApprovalEnvelopeSingleAsk: a one-ask envelope behaves like the
+// legacy permission card (same keys, one decision).
+func TestPendingApprovalEnvelopeSingleAsk(t *testing.T) {
+	env := agent.ApprovalRequest{Asks: []agent.Ask{
+		{CallID: "w1", ToolName: "Write", Reason: "writes a file", Origin: agent.OriginMain},
+	}}
+	m, answerCh := newPendingModel(t, env)
+	if v := m.View(); !strings.Contains(v, "Allow Write?") || strings.Contains(v, "ask 1/1") {
+		t.Fatalf("single-ask view wrong:\n%s", v)
+	}
+	// Safe default: enter executes the deny highlight.
+	model, _ := m.Update(key("enter"))
+	m = model.(*Model)
+	ans := <-answerCh
+	aa, ok := ans.(agent.ApprovalAnswer)
+	if !ok || aa.Decisions["w1"].Outcome != agent.OutcomeDeny {
+		t.Fatalf("answer = %#v, want deny for w1", ans)
+	}
+	if m.pending != nil {
+		t.Fatal("pending not cleared")
+	}
+}

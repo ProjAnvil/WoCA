@@ -6,6 +6,7 @@ import (
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/agentbuild"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 func TestBuildOptionsTranslatesFields(t *testing.T) {
@@ -64,6 +65,73 @@ func TestDefaultInterruptHandlerAutoDenies(t *testing.T) {
 	_, err = h(struct{}{})
 	if err == nil {
 		t.Fatal("unknown interrupt type must error")
+	}
+}
+
+// TestInterruptFromApprovalEnvelope pins the "approvals" kind: every ask
+// rides with its grant key and per-ask payloads, the headless default denies
+// every ask, and a custom handler's ApprovalAnswer translates back.
+func TestInterruptFromApprovalEnvelope(t *testing.T) {
+	in := agent.ApprovalRequest{Asks: []agent.Ask{
+		{CallID: "b1", ToolName: "Bash", ToolArgs: map[string]any{"command": "make"},
+			Reason: "Run command: make", Origin: agent.OriginMain, SessionRuleKey: "bash:make*"},
+		{CallID: "q1", ToolName: "AskUserQuestion", Origin: agent.OriginMain,
+			Questions: []tools.Question{{Question: "which?"}}},
+		{CallID: "e1", ToolName: "ExitPlanMode", Plan: "the plan", Origin: agent.OriginMain},
+	}}
+	i := interruptFrom(in)
+	if i.Kind != "approvals" || i.Approvals == nil {
+		t.Fatalf("interrupt = %+v, want approvals", i)
+	}
+	asks := i.Approvals.Asks
+	if len(asks) != 3 {
+		t.Fatalf("asks = %+v", asks)
+	}
+	if asks[0].SessionRuleKey != "bash:make*" || asks[0].Origin != agent.OriginMain {
+		t.Fatalf("bash ask = %+v", asks[0])
+	}
+	if len(asks[1].Questions) != 1 || asks[1].Questions[0] != "which?" {
+		t.Fatalf("ask_user ask = %+v", asks[1])
+	}
+	if asks[2].Plan != "the plan" {
+		t.Fatalf("plan ask = %+v", asks[2])
+	}
+
+	// Headless default: deny every ask.
+	v, err := (Options{}).interruptHandler()(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans, ok := v.(agent.ApprovalAnswer)
+	if !ok {
+		t.Fatalf("resume value = %T", v)
+	}
+	for _, id := range []string{"b1", "q1", "e1"} {
+		if d := ans.Decisions[id]; d.Outcome != agent.OutcomeDeny {
+			t.Fatalf("%s = %+v, want deny", id, d)
+		}
+	}
+
+	// Custom handler answers translate per-ask decisions back.
+	o := Options{OnInterrupt: func(i Interrupt) (any, error) {
+		return ApprovalAnswer{Decisions: map[string]AskDecisionView{
+			"b1": {Outcome: agent.OutcomeAllow, Grant: agent.GrantSession},
+			"e1": {Outcome: agent.OutcomeDeny},
+		}}, nil
+	}}
+	v, err = o.interruptHandler()(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans, ok = v.(agent.ApprovalAnswer)
+	if !ok {
+		t.Fatalf("resume value = %T", v)
+	}
+	if d := ans.Decisions["b1"]; d.Outcome != agent.OutcomeAllow || d.Grant != agent.GrantSession {
+		t.Fatalf("b1 = %+v", d)
+	}
+	if d := ans.Decisions["e1"]; d.Outcome != agent.OutcomeDeny {
+		t.Fatalf("e1 = %+v", d)
 	}
 }
 

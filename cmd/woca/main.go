@@ -916,6 +916,56 @@ func turnTokenBudgetFromEnv() int {
 func interruptHandler(stdin *bufio.Reader, interactive bool, stderr io.Writer) runner.InterruptHandler {
 	return func(value any) (any, error) {
 		switch v := value.(type) {
+		case agent.ApprovalRequest:
+			// The Task-5 ask envelope: print each ask, answer per-ask, and
+			// build one ApprovalAnswer for the whole batch. Non-interactive
+			// runs fail closed (deny everything, empty ask_user answers).
+			decisions := make(map[string]agent.AskDecision, len(v.Asks))
+			for _, ask := range v.Asks {
+				switch ask.ToolName {
+				case "AskUserQuestion":
+					for i, q := range ask.Questions {
+						fmt.Fprintf(stderr, "\n%s", tools.FormatQuestion(i, q))
+					}
+					if !interactive {
+						decisions[ask.CallID] = agent.AskDecision{Outcome: agent.OutcomeAllow, Answers: nil}
+						continue
+					}
+					answers := make([]string, 0, len(ask.Questions))
+					for i, q := range ask.Questions {
+						fmt.Fprintf(stderr, "  Answer %d%s: ", i+1, multiHint(q.MultiSelect))
+						line, err := stdin.ReadString('\n')
+						if err != nil {
+							answers = append(answers, "")
+							continue
+						}
+						answers = append(answers, strings.TrimSpace(line))
+					}
+					decisions[ask.CallID] = agent.AskDecision{Outcome: agent.OutcomeAllow, Answers: answers}
+				case "ExitPlanMode":
+					fmt.Fprintln(stderr, "\nPlan proposed for approval:")
+					if ask.Plan != "" {
+						fmt.Fprintln(stderr, ask.Plan)
+					}
+					if !interactive {
+						decisions[ask.CallID] = agent.AskDecision{Outcome: agent.OutcomeDeny}
+						continue
+					}
+					fmt.Fprint(stderr, "  Approve plan? [y/N] ")
+					decisions[ask.CallID] = yesNoDecision(readYesNo(stdin))
+				default:
+					fmt.Fprintf(stderr, "\nPermission requested: %s — %s\n", ask.ToolName, ask.Reason)
+					if !interactive {
+						fmt.Fprintln(stderr, "  (non-interactive: denied; use --dangerously-skip-permissions or --accept-edits to allow)")
+						decisions[ask.CallID] = agent.AskDecision{Outcome: agent.OutcomeDeny}
+						continue
+					}
+					fmt.Fprint(stderr, "  Allow? [y/N] ")
+					decisions[ask.CallID] = yesNoDecision(readYesNo(stdin))
+				}
+			}
+			return agent.ApprovalAnswer{Decisions: decisions}, nil
+
 		case agent.PermissionRequest:
 			fmt.Fprintf(stderr, "\nPermission requested: %s — %s\n", v.ToolName, v.Reason)
 			if !interactive {
@@ -987,6 +1037,15 @@ func readYesNo(stdin *bufio.Reader) (any, error) {
 		line = "n"
 	}
 	return line, nil
+}
+
+// yesNoDecision converts a readYesNo result into an ask decision.
+func yesNoDecision(v any, _ error) agent.AskDecision {
+	outcome := agent.OutcomeDeny
+	if s, ok := v.(string); ok && (s == "y" || s == "yes") {
+		outcome = agent.OutcomeAllow
+	}
+	return agent.AskDecision{Outcome: outcome, Grant: agent.GrantNone}
 }
 
 // endSession persists the last-session snapshot and runs SessionEnd hooks.

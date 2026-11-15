@@ -178,6 +178,12 @@ type Model struct {
 	askSel     int
 	askPicks   []bool
 	askAnswers []string
+	// apprIdx/apprDec walk a Task-5 ApprovalRequest envelope: one ask at a
+	// time (y/n for permission and plan asks, the question UI for
+	// AskUserQuestion asks), accumulating per-call decisions until the last
+	// ask resolves the whole envelope with one ApprovalAnswer.
+	apprIdx int
+	apprDec map[string]agent.AskDecision
 	// blocks is the structured transcript behind the review overlay
 	// (ctrl+o): full tool args/results, reasoning, prompts, and command
 	// output, untruncated.
@@ -785,6 +791,32 @@ func (m *Model) resolvePending(answer any) {
 	}
 	m.pending = nil
 	switch v := p.value.(type) {
+	case agent.ApprovalRequest:
+		// The Task-5 ask envelope: echo every ask's verdict in order.
+		for _, ask := range v.Asks {
+			verdict := "denied"
+			label := ask.ToolName
+			switch ask.ToolName {
+			case "AskUserQuestion":
+				answers := ""
+				if d, ok := answer.(agent.ApprovalAnswer); ok {
+					if dec := d.Decisions[ask.CallID]; len(dec.Answers) > 0 {
+						answers = strings.Join(dec.Answers, " · ")
+						verdict = "answered: " + answers
+					}
+				}
+				m.write("\n" + dimStyle.Render("[question] "+verdict+" by user") + "\n")
+				continue
+			case "ExitPlanMode":
+				label = "plan approval"
+			}
+			if d, ok := answer.(agent.ApprovalAnswer); ok {
+				if dec := d.Decisions[ask.CallID]; dec.Outcome == agent.OutcomeAllow {
+					verdict = "approved"
+				}
+			}
+			m.write("\n" + dimStyle.Render(fmt.Sprintf("[%s] %s — %s (%s by user)", label, ask.Reason, ask.ToolName, verdict)) + "\n")
+		}
 	case agent.PermissionRequest:
 		verdict := "denied"
 		if s, ok := answer.(string); ok && (s == "y" || s == "Y") {
@@ -945,9 +977,9 @@ func (m *Model) View() string {
 		title := boldDimStyle.Render("⏵ awaiting your decision")
 		body := m.pendingPrompt()
 		var hint string
-		if ask, isAsk := m.pending.value.(agent.AskUserRequest); isAsk {
-			if m.askIdx < len(ask.Questions) && len(ask.Questions[m.askIdx].Options) > 0 {
-				if ask.Questions[m.askIdx].MultiSelect {
+		if questions, isAsk := m.currentQuestions(); isAsk {
+			if m.askIdx < len(questions) && len(questions[m.askIdx].Options) > 0 {
+				if questions[m.askIdx].MultiSelect {
 					hint = dimStyle.Render("↑↓ move · space toggle · enter confirm · esc skip")
 				} else {
 					hint = dimStyle.Render("↑↓ select · enter confirm · esc skip")

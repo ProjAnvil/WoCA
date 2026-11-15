@@ -284,6 +284,58 @@ func TestInterruptHandler(t *testing.T) {
 	}
 }
 
+// TestInterruptHandlerApprovalEnvelope: the Task-5 ask envelope iterates
+// asks and builds one ApprovalAnswer (per-ask y/N; ask_user asks collect
+// text); non-interactive runs fail closed.
+func TestInterruptHandlerApprovalEnvelope(t *testing.T) {
+	var stderr bytes.Buffer
+	envelope := agent.ApprovalRequest{Asks: []agent.Ask{
+		{CallID: "b1", ToolName: "Bash", Reason: "Run command: make", SessionRuleKey: "bash:make*"},
+		{CallID: "e1", ToolName: "ExitPlanMode", Plan: "the plan"},
+		{CallID: "q1", ToolName: "AskUserQuestion", Questions: []tools.Question{{Question: "pick"}}},
+	}}
+
+	// Non-interactive: every permission/plan ask denied, ask_user empty.
+	nonInteractive := interruptHandler(bufio.NewReader(strings.NewReader("")), false, &stderr)
+	v, err := nonInteractive(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans, ok := v.(agent.ApprovalAnswer)
+	if !ok {
+		t.Fatalf("resume value = %T, want ApprovalAnswer", v)
+	}
+	if d := ans.Decisions["b1"]; d.Outcome != agent.OutcomeDeny {
+		t.Fatalf("b1 = %+v, want deny", d)
+	}
+	if d := ans.Decisions["e1"]; d.Outcome != agent.OutcomeDeny {
+		t.Fatalf("e1 = %+v, want deny", d)
+	}
+	if d := ans.Decisions["q1"]; d.Outcome != agent.OutcomeAllow || len(d.Answers) != 0 {
+		t.Fatalf("q1 = %+v, want allow with empty answers", d)
+	}
+
+	// Interactive: y for the Bash, n for the plan, free text for the ask.
+	interactive := interruptHandler(bufio.NewReader(strings.NewReader("y\nn\npick-one\n")), true, &stderr)
+	v, err = interactive(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ans, ok = v.(agent.ApprovalAnswer)
+	if !ok {
+		t.Fatalf("resume value = %T, want ApprovalAnswer", v)
+	}
+	if d := ans.Decisions["b1"]; d.Outcome != agent.OutcomeAllow || d.Grant != agent.GrantNone {
+		t.Fatalf("b1 = %+v, want once-allow", d)
+	}
+	if d := ans.Decisions["e1"]; d.Outcome != agent.OutcomeDeny {
+		t.Fatalf("e1 = %+v, want deny", d)
+	}
+	if d := ans.Decisions["q1"]; len(d.Answers) != 1 || d.Answers[0] != "pick-one" {
+		t.Fatalf("q1 = %+v, want the typed answer", d)
+	}
+}
+
 func TestInterruptHandlerSubagent(t *testing.T) {
 	sub := agent.SubagentInterrupt{
 		Subagent: "reviewer",

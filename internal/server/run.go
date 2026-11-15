@@ -15,6 +15,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/platform/eventbus"
 	"github.com/projanvil/woca/internal/runner"
+	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/tracing"
 )
 
@@ -34,6 +35,10 @@ type interruptState struct {
 	kind    string
 	payload any
 	reply   chan any
+	// asks carries the envelope's asks for "approvals"-kind parks, so the
+	// answer path can translate legacy {approve:true/false} bodies into a
+	// per-ask ApprovalAnswer.
+	asks []agent.Ask
 }
 
 // Run is one in-flight agent execution.
@@ -205,6 +210,8 @@ func (r *Run) renderMessage(m messages.Message) {
 // handleInterrupt classifies a graph interrupt and parks it awaiting an answer.
 func (r *Run) handleInterrupt(value any) (any, error) {
 	switch v := value.(type) {
+	case agent.ApprovalRequest:
+		return r.parkApproval(v)
 	case agent.PermissionRequest:
 		return r.park("permission", v)
 	case agent.SubagentInterrupt:
@@ -226,6 +233,45 @@ func (r *Run) handleInterrupt(value any) (any, error) {
 	}
 }
 
+// parkApproval parks the Task-5 single-interrupt ask envelope (design §3.4,
+// audit fix M1/M4). A single-ask envelope parks under the ask's LEGACY kind
+// with the legacy flat payload — the current web InterruptModal keeps
+// rendering and answering it unchanged — plus the envelope itself under
+// "asks" for forward-compatible clients. Multi-ask envelopes park as the new
+// "approvals" kind carrying the whole envelope (Task 11's HitlStack).
+func (r *Run) parkApproval(v agent.ApprovalRequest) (any, error) {
+	if len(v.Asks) == 1 {
+		ask := v.Asks[0]
+		switch ask.ToolName {
+		case "AskUserQuestion":
+			return r.park("ask", map[string]any{
+				"questions": ask.Questions,
+				"asks":      v.Asks,
+			})
+		case "ExitPlanMode":
+			return r.park("plan", map[string]any{
+				"plan": ask.Plan,
+				"asks": v.Asks,
+			})
+		default:
+			return r.park("permission", map[string]any{
+				"tool_name":    ask.ToolName,
+				"tool_args":    ask.ToolArgs,
+				"reason":       ask.Reason,
+				"is_read_only": tools.IsReadOnly(ask.ToolName, ask.ToolArgs),
+				"asks":         v.Asks,
+			})
+		}
+	}
+	// Multi-ask: remember the asks so the answer path can fan a legacy
+	// {approve} body out to every ask.
+	reply := make(chan any, 1)
+	r.mu.Lock()
+	r.pending = &interruptState{kind: "approvals", payload: v, reply: reply, asks: v.Asks}
+	r.mu.Unlock()
+	return r.waitParked("approvals", reply)
+}
+
 // parkedRunTTL bounds how long a run may sit parked on an unanswered
 // interrupt before it is cancelled (local decision — no industry
 // precedent; see spec §6.3).
@@ -240,7 +286,15 @@ func (r *Run) park(kind string, payload any) (any, error) {
 	r.mu.Lock()
 	r.pending = &interruptState{kind: kind, payload: payload, reply: reply}
 	r.mu.Unlock()
+	return r.waitParked(kind, reply)
+}
 
+// waitParked emits the parked interrupt and blocks for its answer (the tail
+// every park variant shares).
+func (r *Run) waitParked(kind string, reply chan any) (any, error) {
+	r.mu.Lock()
+	payload := r.pending.payload
+	r.mu.Unlock()
 	r.emit(Event{Type: EventInterrupt, Data: interruptPayload{Kind: kind, Payload: payload}})
 	if r.onPark != nil {
 		r.onPark()
@@ -278,6 +332,22 @@ func (r *Run) answer(body []byte) error {
 			return fmt.Errorf("decode answer: %w", err)
 		}
 		resume = agent.AskUserAnswer{Answers: req.Answers}
+	case "approvals":
+		// The multi-card answer: per-ask decisions keyed by call id, with a
+		// legacy {approve:true|false} body fanned out to every ask of the
+		// parked envelope (old clients, and the interim modal's Allow/Deny).
+		var req struct {
+			Approve bool `json:"approve"`
+			Answers map[string]struct {
+				Outcome string   `json:"outcome"`
+				Grant   string   `json:"grant"`
+				Answers []string `json:"answers"`
+			} `json:"answers"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			return fmt.Errorf("decode answer: %w", err)
+		}
+		resume = approvalAnswerFromHTTP(p.asks, req.Approve, req.Answers)
 	default: // permission, plan
 		var req struct {
 			Approve bool `json:"approve"`
@@ -307,6 +377,30 @@ func (r *Run) answer(body []byte) error {
 	default:
 	}
 	return nil
+}
+
+// approvalAnswerFromHTTP builds the resume value for an "approvals" park:
+// explicit per-ask decisions when the body carries an answers map, else the
+// legacy approve flag applied to every ask. Asks without an explicit entry
+// fail closed (deny).
+func approvalAnswerFromHTTP(asks []agent.Ask, approve bool, answers map[string]struct {
+	Outcome string   `json:"outcome"`
+	Grant   string   `json:"grant"`
+	Answers []string `json:"answers"`
+}) agent.ApprovalAnswer {
+	out := agent.ApprovalAnswer{Decisions: make(map[string]agent.AskDecision, len(asks))}
+	for _, ask := range asks {
+		if a, ok := answers[ask.CallID]; ok {
+			out.Decisions[ask.CallID] = agent.AskDecision{Outcome: a.Outcome, Grant: a.Grant, Answers: a.Answers}
+			continue
+		}
+		outcome := agent.OutcomeDeny
+		if approve {
+			outcome = agent.OutcomeAllow
+		}
+		out.Decisions[ask.CallID] = agent.AskDecision{Outcome: outcome}
+	}
+	return out
 }
 
 // emit appends an event to history and fans it out to live subscribers.
