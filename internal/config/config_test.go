@@ -26,7 +26,7 @@ func TestProvidersAndDefaults(t *testing.T) {
 		}
 	}
 	def := Default()
-	if def.Provider != ProviderAnthropic || def.Model != "claude-sonnet-4-5" || def.MaxTokens != 8192 || def.RecursionLimit != 50 {
+	if def.Provider != ProviderAnthropic || def.Model != "claude-sonnet-4-5" || def.MaxTokens != 8192 || def.RecursionLimit != 100 {
 		t.Fatalf("Default = %+v", def)
 	}
 }

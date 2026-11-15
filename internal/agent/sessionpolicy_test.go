@@ -116,8 +116,8 @@ func TestSessionPolicyPlanApprovalIsolatedPerSession(t *testing.T) {
 	if len(intrs) != 1 {
 		t.Fatalf("B pauses = %d, want 1 (its plan approval)", len(intrs))
 	}
-	if _, ok := decodeInterruptPayload(intrs[0].Value).(PlanApprovalRequest); !ok {
-		t.Fatalf("B pause = %T, want PlanApprovalRequest", decodeInterruptPayload(intrs[0].Value))
+	if req, ok := decodeInterruptPayload(intrs[0].Value).(ApprovalRequest); !ok || len(req.Asks) != 1 || req.Asks[0].ToolName != "ExitPlanMode" {
+		t.Fatalf("B pause = %T, want an ExitPlanMode ask", decodeInterruptPayload(intrs[0].Value))
 	}
 	pumpStream(t, a.ResumeStream(ctxB, "thread-x1-b", "y"))
 	a.EndRun(ctxB)
@@ -135,8 +135,8 @@ func TestSessionPolicyPlanApprovalIsolatedPerSession(t *testing.T) {
 		t.Errorf("CROSS-SESSION LEAK: A's ExitPlanMode raised %d approval prompts, want 1 — B's approval waived A's plan approval", len(intrs))
 	} else {
 		// Approve A's plan and finish the turn cleanly.
-		if _, ok := decodeInterruptPayload(intrs[0].Value).(PlanApprovalRequest); !ok {
-			t.Errorf("A pause = %T, want PlanApprovalRequest", decodeInterruptPayload(intrs[0].Value))
+		if req, ok := decodeInterruptPayload(intrs[0].Value).(ApprovalRequest); !ok || len(req.Asks) != 1 || req.Asks[0].ToolName != "ExitPlanMode" {
+			t.Errorf("A pause = %T, want an ExitPlanMode ask", decodeInterruptPayload(intrs[0].Value))
 		}
 		pumpStream(t, a.ResumeStream(ctxA2, "thread-x1-a", "y"))
 		if src.For("sess-a").Plan {

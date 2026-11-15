@@ -65,6 +65,9 @@ func init() {
 	cpserde.RegisterType(AskUserRequest{}, "woca.agent.AskUserRequest")
 	cpserde.RegisterType(AskUserAnswer{}, "woca.agent.AskUserAnswer")
 	cpserde.RegisterType(PlanApprovalRequest{}, "woca.agent.PlanApprovalRequest")
+	cpserde.RegisterType(ApprovalRequest{}, "woca.agent.ApprovalRequest")
+	cpserde.RegisterType(ApprovalAnswer{}, "woca.agent.ApprovalAnswer")
+	cpserde.RegisterType(decisionsState{}, "woca.agent.decisions")
 	cpserde.RegisterType(GoalDelta{}, "woca.agent.GoalDelta")
 	cpserde.RegisterType(ReasoningDelta{}, "woca.agent.ReasoningDelta")
 }
@@ -484,7 +487,11 @@ func New(cfg Config) (*Agent, error) {
 		cfg.PermissionMode = config.ModeDefault
 	}
 	if cfg.RecursionLimit <= 0 {
-		cfg.RecursionLimit = 50
+		// 100 supersteps ≈ 25 model⇄tools rounds: the hooks + approval
+		// supersteps (design §3.1) doubled the per-round step count from 2
+		// to 4, so the default doubled to keep the historical 25-round
+		// budget (the pre-Task-5 default of 50 bought only 12 rounds).
+		cfg.RecursionLimit = 100
 	}
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "."
@@ -623,9 +630,19 @@ func New(cfg Config) (*Agent, error) {
 
 	g := lggraph.NewStateGraph()
 	g.AddReducer("messages", messagesChannel)
+	g.AddReducer(decisionsChannelName, decisionsChannel)
 	g.AddNode(nodeModel, a.observedNode("agent", nodeModel, a.modelNode()))
 	if len(a.toolList) > 0 {
+		// Topology (design §3.1): model →(route1)→ hooks → approval →(route2)
+		// → tools → model. Gates/hooks live in the hooks superstep (never
+		// interrupts, so it never re-executes); every user ask is ONE
+		// interrupt in the approval superstep; the tools node executes
+		// purely from the persisted decisions channel.
+		g.AddNode(nodeHooks, a.observedNode("agent", nodeHooks, a.hooksNode()))
+		g.AddNode(nodeApproval, a.observedNode("agent", nodeApproval, a.approvalNode()))
 		g.AddNode(nodeTools, a.observedNode("agent", nodeTools, a.toolsNode()))
+		g.AddEdge(nodeHooks, nodeApproval)
+		g.AddConditionalEdges(nodeApproval, a.routeTools)
 		g.AddEdge(nodeTools, nodeModel)
 	}
 	g.AddConditionalEdges(nodeModel, a.route)
@@ -1630,8 +1647,12 @@ type batchMemoKey struct {
 	call string
 }
 
-// toolsNode executes pending tool calls, applying the interaction gate and
-// Pre/Post tool-use hooks.
+// toolsNode executes the batch's tool calls from the decisions the hooks and
+// approval supersteps committed to graph state. It runs NO gate logic and
+// raises NO gate interrupts; the only interrupts that can originate here are
+// EXECUTION-phase ones (the Task relay's re-entry and a tool's own
+// lggraph.Interrupt), which keep the GraphInterrupt re-panic machinery below
+// (the relay lives until Task 7).
 func (a *Agent) toolsNode() lggraph.NodeFunc {
 	return func(rt lgruntime.Runtime, state map[string]any) (any, error) {
 		ctx := rt
@@ -1645,6 +1666,30 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		}
 
 		calls := last.ToolCalls
+		ds := decisionsFrom(state)
+		// Legacy guard (audit C1, spec §3.5): a checkpoint whose pending
+		// interrupt addresses the tools node predates the decisions channel
+		// — resuming it must NEVER execute ungated. In the new topology every
+		// legal entry into this node carries a decision for each call of the
+		// batch (hooks writes the table, approval merges the asks, and both
+		// persist in the resumed state), so a missing table (or a missing
+		// entry) is by construction a pre-upgrade checkpoint: synthesize
+		// interrupted markers for the whole batch and close out the round.
+		if missingDecision(ds, calls) {
+			results := legacyMarkers(calls)
+			return map[string]any{"messages": results}, nil
+		}
+		// Defensive twin of the guard: an unresolved ask reaching this node
+		// means corrupted state (the approval node merges every ask). Fail
+		// closed rather than executing an undecided call.
+		if ds.hasPendingAsk(calls) {
+			results := make([]messages.Message, len(calls))
+			for i, call := range calls {
+				results[i] = messages.Tool(call.ID, "Error: permission decision missing (interrupted); the call was not executed.")
+			}
+			return map[string]any{"messages": results}, nil
+		}
+
 		// Speculative futures are resolved within THIS run's registry bucket:
 		// call ids are unique only per conversation, so a bare-id lookup
 		// would let a concurrent run consume a sibling's future.
@@ -1656,122 +1701,43 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		if ei := rt.ExecutionInfo; ei != nil {
 			parentThread = ei.ThreadID
 		}
-		run := make([]bool, len(calls))
-		// grantKeys[i] is call i's session-grant key ("" when the tool has
-		// no grantable dimension), computed before the gate so the ask path
-		// already knows the key an "allow for session" answer would carry —
-		// Task 5's ApprovalAnswer envelope reads it from here.
-		grantKeys := make([]string, len(calls))
-		overrides := make([]*coretools.Result, len(calls))
-		preFeedback := make([]string, len(calls))
 		futures := make([]*toolFuture, len(calls))
 		memoHits := make([]bool, len(calls))
-		consumed := make([]int, len(calls))
 		results := make([]messages.Message, len(calls))
 
-		// Gates and PreToolUse hooks run sequentially so interrupts pause
-		// deterministically. Calls already speculatively executed during
-		// model streaming (permission decided then) skip the gate: the tools
-		// node only awaits their result. Calls memoized by a previous
-		// execution of this batch (which then paused on an interrupt) skip
-		// the gate too — their permission was already granted and re-asking
-		// would consume a resume value.
+		// Calls memoized by a previous execution of this batch (which then
+		// paused on an execution-phase interrupt) reuse their result and
+		// replay their resume consumption so the positional queue stays
+		// aligned under the calls that still interrupt (the relay).
 		for i, call := range calls {
-			if f := a.spec.get(specRun, call.ID); f != nil {
-				futures[i] = f
-				continue
+			if a.spec.get(specRun, call.ID) != nil {
+				continue // awaited below
 			}
 			if m, ok := a.batchMemo.Load(batchMemoKey{run: specRun, call: call.ID}); ok {
 				entry := m.(batchMemoEntry)
 				results[i] = entry.msg
 				memoHits[i] = true
-				// This call's gate consumed entry.consumed resume values in
-				// the earlier execution; skipping the gate must not shift the
-				// positional resume queue under the calls that still
-				// interrupt.
 				lggraph.ReplayInterruptConsumption(ctx, entry.consumed)
-				continue
 			}
-			grantKeys[i] = GrantKey(call)
-			gateConsumed := lggraph.InterruptConsumeCount(ctx)
-			// In-process guards run before the permission gate (host code
-			// is authoritative): deny skips the call, ask escalates to the
-			// permission prompt whose verdict is FINAL. A denial must not
-			// fall through to the gate — its allow rules would re-set
-			// run[i]=true and override the user's answer. An approval has
-			// already granted what the gate would ask again (re-asking
-			// would also consume a second resume value), so only the
-			// PreToolUse hook still runs below.
-			askApproved := false
-			if len(a.toolGuards) > 0 {
-				switch d := a.guardsBeforeTool(ctx, call); d.Action {
-				case ToolDeny:
-					content := "Error: tool use denied by guard"
-					if d.Reason != "" {
-						content = "Error: " + d.Reason
-					}
-					overrides[i] = &coretools.Result{Content: content}
-					continue
-				case ToolAsk:
-					ok, err := a.askPermission(ctx, call)
-					if err != nil {
-						return nil, err
-					}
-					if !ok {
-						run[i] = false
-						continue
-					}
-					askApproved = true
-				}
-			}
-			if !askApproved {
-				shouldRun, override, err := a.gate(ctx, call)
-				if err != nil {
-					return nil, err
-				}
-				if override != nil {
-					overrides[i] = override
-					continue
-				}
-				if !shouldRun {
-					run[i] = false
-					continue
-				}
-			}
-			if h := a.hooksFor(ctx); h != nil {
-				d, err := h.PreToolUse(ctx, call.Name, call.Args)
-				if err != nil {
-					return nil, err
-				}
-				if !d.Allowed {
-					content := "Error: tool use denied by hook"
-					if d.Feedback != "" {
-						content = "Error: " + d.Feedback
-					}
-					overrides[i] = &coretools.Result{Content: content}
-					continue
-				}
-				preFeedback[i] = d.Feedback
-			}
-			run[i] = true
-			consumed[i] = lggraph.InterruptConsumeCount(ctx) - gateConsumed
 		}
 
 		var wg sync.WaitGroup
 		paused := make([]*lgtypes.GraphInterrupt, len(calls))
 		for i, call := range calls {
-			if futures[i] != nil {
+			if f := a.spec.get(specRun, call.ID); f != nil {
+				futures[i] = f
 				results[i] = futures[i].wait()
 				continue
 			}
 			if memoHits[i] {
 				continue
 			}
-			if overrides[i] != nil {
-				results[i] = messages.Tool(call.ID, overrides[i].Content)
+			d := ds.PerCall[call.ID]
+			if d.Override != nil {
+				results[i] = messages.Tool(call.ID, d.Override.Content)
 				continue
 			}
-			if !run[i] {
+			if !d.Run {
 				results[i] = messages.Tool(call.ID, "Error: permission denied")
 				continue
 			}
@@ -1796,13 +1762,14 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				}()
 				tctx := withToolCallThread(ctx, call.ID, parentThread)
 				// Baseline for this call's execution-phase Interrupt
-				// consumption; the memo stores the per-call total (gate
-				// delta + execution delta) so a memo hit replays both.
+				// consumption; the memo stores the per-call total so a memo
+				// hit replays it (gate consumption no longer exists — the
+				// gate lives in the hooks superstep).
 				execBase := lggraph.InterruptConsumeCount(tctx)
 				res := a.execute(tctx, call.Name, call.Args)
 				content := res.Content
-				if preFeedback[i] != "" {
-					content = preFeedback[i] + "\n" + content
+				if d.PreFeedback != "" {
+					content = d.PreFeedback + "\n" + content
 				}
 				if len(a.toolGuards) > 0 {
 					if fb := a.guardsAfterTool(ctx, call, content); fb != "" {
@@ -1822,7 +1789,7 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				// Concurrent goroutines can interleave their consumption, so
 				// the attribution is approximate when two calls interrupt at
 				// the same time — already an order-ambiguous case.
-				total := consumed[i] + lggraph.InterruptConsumeCount(tctx) - execBase
+				total := lggraph.InterruptConsumeCount(tctx) - execBase
 				a.batchMemo.Store(batchMemoKey{run: specRun, call: call.ID}, batchMemoEntry{msg: results[i], consumed: total})
 			})
 		}
@@ -1892,58 +1859,18 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 	}
 }
 
-// gate decides whether a tool call should run, or produces an override result
-// for harness-handled interactions (AskUserQuestion, plan mode). It may
-// interrupt the graph.
-func (a *Agent) gate(ctx context.Context, call messages.ToolCall) (run bool, override *coretools.Result, err error) {
-	switch call.Name {
-	case "AskUserQuestion":
-		var q struct {
-			Questions []tools.Question `json:"questions"`
-		}
-		if err := decodeArgs(call.Args, &q); err != nil {
-			return false, nil, err
-		}
-		answerAny := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(AskUserRequest{Questions: q.Questions}))))
-		answer, _ := answerAny.(AskUserAnswer)
-		res := formatAskUserAnswers(q.Questions, answer.Answers)
-		return false, &coretools.Result{Content: res}, nil
-
-	case "EnterPlanMode":
-		a.setPlanModeFor(ctx, true)
-		res := coretools.Result{Content: "Plan mode enabled. Use read-only tools to research and write a plan, then call ExitPlanMode to request approval before implementing."}
-		return false, &res, nil
-
-	case "ExitPlanMode":
-		if !a.planModeFor(ctx) {
-			res := coretools.Result{Content: "Not currently in plan mode."}
-			return false, &res, nil
-		}
-		var p struct {
-			Plan string `json:"plan"`
-		}
-		if err := decodeArgs(call.Args, &p); err != nil {
-			return false, nil, err
-		}
-		answerAny := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(PlanApprovalRequest{Plan: p.Plan}))))
-		if parseAnswer(answerAny) {
-			a.setPlanModeFor(ctx, false)
-			res := coretools.Result{Content: "Plan approved by the user. Proceeding with implementation."}
-			return false, &res, nil
-		}
-		res := coretools.Result{Content: "Plan rejected by the user. Revise your plan based on their feedback and call ExitPlanMode again."}
-		return false, &res, nil
+// checkPermission is the direct-call permission seam (unit tests and
+// non-graph callers): the pure evaluation of evalPermission, with the ask
+// arm surfaced as an in-graph interrupt when one is active (outside a graph
+// run the interrupt guard panics, as the direct tests pin). The production
+// gate no longer runs here — the hooks node derives decisions from
+// evalPermission and the approval node asks (see approval.go).
+func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bool, error) {
+	allow, ask := a.evalPermission(ctx, call)
+	if !ask {
+		return allow, nil
 	}
-
-	allowed, err := a.checkPermission(ctx, call)
-	if err != nil {
-		return false, nil, err
-	}
-	if !allowed {
-		res := coretools.Result{Content: "Error: permission denied by user"}
-		return false, &res, nil
-	}
-	return true, nil, nil
+	return a.askPermission(ctx, call)
 }
 
 // execute runs a tool by name from the agent's full tool set.
@@ -1968,7 +1895,8 @@ func (a *Agent) execute(ctx context.Context, name string, args map[string]any) c
 	return res
 }
 
-// route decides whether to run tools or end the turn.
+// route is route1 (design §3.1): an AI message with tool calls enters the
+// gate supersteps (hooks → approval → tools); anything else ends the turn.
 func (a *Agent) route(rt lgruntime.Runtime, state map[string]any) ([]any, error) {
 	msgs := MessagesFrom(state)
 	if len(msgs) == 0 {
@@ -1979,77 +1907,15 @@ func (a *Agent) route(rt lgruntime.Runtime, state map[string]any) ([]any, error)
 	hasTools := len(a.toolList) > 0
 	a.mu.Unlock()
 	if last.Role == messages.RoleAI && len(last.ToolCalls) > 0 && hasTools {
-		return []any{nodeTools}, nil
+		return []any{nodeHooks}, nil
 	}
 	return []any{lgtypes.END}, nil
 }
 
-// checkPermission decides whether a tool call may run. Explicit permission
-// rules (deny/allow/ask) are evaluated first, then the session's grants
-// ("allow for session" answers, §3.3 — never past a deny or ask rule), then
-// the session's permission mode (resolved per run: the ctx-carried
-// per-session policy, falling back to the agent-global mode — see policyFor).
-// It is input-sensitive: read-only commands auto-allow, writes/shell ask in
-// default mode. A session in plan mode (the plan flag) is restricted to the
-// read-only arm until its ExitPlanMode is approved.
-func (a *Agent) checkPermission(ctx context.Context, call messages.ToolCall) (bool, error) {
-	if a.perms != nil {
-		if action, ok := a.perms.Action(call.Name, call.Args); ok {
-			switch action {
-			case permissions.ActionDeny:
-				return false, nil
-			case permissions.ActionAllow:
-				return true, nil
-			case permissions.ActionAsk:
-				return a.askPermission(ctx, call)
-			}
-		}
-	}
-
-	p := a.policyFor(ctx)
-
-	readOnly := tools.IsReadOnly(call.Name, call.Args)
-	cat := tools.CategoryOf(call.Name)
-
-	mode := p.Mode
-	if p.Plan {
-		// Plan mode is enforced structurally, whatever the base mode: only
-		// read-only/meta tools run until ExitPlanMode is approved (design
-		// §3.3; the ModePlan arm below is the same restriction).
-		mode = config.ModePlan
-	}
-	// Session grants sit strictly between the explicit rules and the mode
-	// arms (design §3.3): a deny or ask rule above has already returned, so
-	// a grant can only lift the mode-arm ask — never an explicit decision.
-	// The consult deliberately follows the plan override: enforced plan
-	// beats grants, so a pre-existing grant cannot punch through the
-	// read-only restriction; once ExitPlanMode's approval flips the flag
-	// off, the grant applies again.
-	if !p.Plan {
-		if key := GrantKey(call); key != "" && p.Grants[key] {
-			return true, nil
-		}
-	}
-	switch mode {
-	case config.ModeBypass:
-		return true, nil
-	case config.ModePlan, config.ModeReadOnly:
-		return readOnly || cat == tools.CatMeta, nil
-	case config.ModeAcceptEdits:
-		if cat == tools.CatWrite {
-			return true, nil
-		}
-		if readOnly || cat == tools.CatMeta {
-			return true, nil
-		}
-		return a.askPermission(ctx, call)
-	default: // ModeDefault
-		if readOnly || cat == tools.CatMeta {
-			return true, nil
-		}
-		return a.askPermission(ctx, call)
-	}
-}
+// checkPermission's production successor is evalPermission (approval.go);
+// the pure evaluation order it implements — explicit rules, then session
+// grants (never past a deny or ask rule, never while plan is enforced), then
+// the mode arms with the plan override — is documented there.
 
 func (a *Agent) askPermission(ctx context.Context, call messages.ToolCall) (bool, error) {
 	// PermissionRequest hooks run before the interrupt: a hook may

@@ -71,9 +71,10 @@ func TestPlanModeBlocksWrites(t *testing.T) {
 	ie := interruptFromError(t, err)
 	// The run's ONLY pause is the plan approval: the in-plan Write must have
 	// been denied outright, not asked (an ask would have surfaced as a
-	// PermissionRequest here instead).
-	if _, ok := ie.Value.(PlanApprovalRequest); !ok {
-		t.Fatalf("pause = %#v, want PlanApprovalRequest (the in-plan Write must not ask)", ie.Value)
+	// second, Write-typed ask in the envelope).
+	req, ok := ie.Value.(ApprovalRequest)
+	if !ok || len(req.Asks) != 1 || req.Asks[0].ToolName != "ExitPlanMode" {
+		t.Fatalf("pause = %#v, want one ExitPlanMode ask (the in-plan Write must not ask)", ie.Value)
 	}
 	if !a.PlanMode() {
 		t.Fatal("plan flag must stay on until the user approves the exit")

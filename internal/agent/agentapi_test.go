@@ -456,9 +456,9 @@ func TestGateInteractionTools(t *testing.T) {
 	a := newBypassAgent(t, language.NewFakeChatModel(language.WithResponses(messages.AI("ok"))))
 
 	// EnterPlanMode flips plan mode and overrides the result.
-	run, override, err := a.gate(t.Context(), messages.ToolCall{Name: "EnterPlanMode"})
-	if run || err != nil || override == nil {
-		t.Fatalf("EnterPlanMode gate = %v/%v/%v", run, override, err)
+	d, err := a.hooksGate(t.Context(), messages.ToolCall{Name: "EnterPlanMode"})
+	if err != nil || d.Run || d.Override == nil {
+		t.Fatalf("EnterPlanMode gate = %+v/%v", d, err)
 	}
 	if !a.PlanMode() {
 		t.Fatal("EnterPlanMode did not enable plan mode")
@@ -466,29 +466,29 @@ func TestGateInteractionTools(t *testing.T) {
 
 	// ExitPlanMode without plan mode reports it.
 	a.SetPlanMode(false)
-	_, override, err = a.gate(t.Context(), messages.ToolCall{Name: "ExitPlanMode"})
-	if err != nil || override == nil || !strings.Contains(override.Content, "Not currently in plan mode") {
-		t.Fatalf("ExitPlanMode gate = %v/%v", override, err)
+	d, err = a.hooksGate(t.Context(), messages.ToolCall{Name: "ExitPlanMode"})
+	if err != nil || d.Override == nil || !strings.Contains(d.Override.Content, "Not currently in plan mode") {
+		t.Fatalf("ExitPlanMode gate = %+v/%v", d, err)
 	}
 
 	// ExitPlanMode with a bad args payload errors on decode.
 	a.SetPlanMode(true)
-	if _, _, err := a.gate(t.Context(), messages.ToolCall{Name: "ExitPlanMode", Args: map[string]any{"plan": 42}}); err == nil {
+	if _, err := a.hooksGate(t.Context(), messages.ToolCall{Name: "ExitPlanMode", Args: map[string]any{"plan": 42}}); err == nil {
 		// plan is a string field; an int decode failure surfaces the error.
 		t.Fatalf("bad ExitPlanMode args must error: %v", err)
 	}
 
 	// AskUserQuestion with bad args errors.
-	if _, _, err := a.gate(t.Context(), messages.ToolCall{Name: "AskUserQuestion", Args: map[string]any{"questions": 42}}); err == nil {
+	if _, err := a.hooksGate(t.Context(), messages.ToolCall{Name: "AskUserQuestion", Args: map[string]any{"questions": 42}}); err == nil {
 		t.Fatal("bad AskUserQuestion args must error")
 	}
 
 	// A denied permission yields the override result.
 	denied := &Agent{mode: config.ModeDefault}
 	denied.perms = &permissions.Rules{Deny: []string{"Write"}}
-	run, override, err = denied.gate(t.Context(), messages.ToolCall{Name: "Write", Args: map[string]any{"file_path": "x"}})
-	if run || err != nil || override == nil || !strings.Contains(override.Content, "permission denied") {
-		t.Fatalf("denied gate = %v/%v/%v", run, override, err)
+	d, err = denied.hooksGate(t.Context(), messages.ToolCall{Name: "Write", Args: map[string]any{"file_path": "x"}})
+	if err != nil || d.Run || d.Override == nil || !strings.Contains(d.Override.Content, "permission denied") {
+		t.Fatalf("denied gate = %+v/%v", d, err)
 	}
 }
 

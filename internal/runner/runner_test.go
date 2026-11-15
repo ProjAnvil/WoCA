@@ -46,15 +46,17 @@ func TestRunnerInterruptAndRender(t *testing.T) {
 	handled := 0
 	var rendered strings.Builder
 	r := New(a, func(value any) (any, error) {
-		req, ok := value.(agent.PermissionRequest)
+		req, ok := value.(agent.ApprovalRequest)
 		if !ok {
 			t.Fatalf("interrupt value = %T", value)
 		}
-		if req.ToolName != "Write" {
-			t.Fatalf("unexpected tool %q", req.ToolName)
+		if len(req.Asks) != 1 || req.Asks[0].ToolName != "Write" {
+			t.Fatalf("unexpected asks %+v", req.Asks)
 		}
 		handled++
-		return "y", nil
+		return agent.ApprovalAnswer{Decisions: map[string]agent.AskDecision{
+			req.Asks[0].CallID: {Outcome: agent.OutcomeAllow},
+		}}, nil
 	}, DefaultRenderer(&rendered))
 
 	out, err := r.Run(context.Background(), []messages.Message{messages.Human("write it")})

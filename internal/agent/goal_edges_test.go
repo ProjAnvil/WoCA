@@ -42,7 +42,7 @@ func TestNewDefaultPromptModeAndLimits(t *testing.T) {
 	if a.Mode() != config.ModeDefault {
 		t.Fatalf("default mode = %q", a.Mode())
 	}
-	if a.recursionLimit != 50 || a.workdir != "." {
+	if a.recursionLimit != 100 || a.workdir != "." {
 		t.Fatalf("defaults = %d/%q", a.recursionLimit, a.workdir)
 	}
 }

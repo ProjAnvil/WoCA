@@ -99,12 +99,12 @@ func TestToolGuardAsk(t *testing.T) {
 	}
 	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("run it")}, "t")
 	ie := interruptFromError(t, err)
-	req, ok := ie.Value.(PermissionRequest)
+	req, ok := ie.Value.(ApprovalRequest)
 	if !ok {
-		t.Fatalf("interrupt value = %T (%v), want PermissionRequest", ie.Value, ie.Value)
+		t.Fatalf("interrupt value = %T (%v), want ApprovalRequest", ie.Value, ie.Value)
 	}
-	if req.ToolName != "Bash" {
-		t.Fatalf("interrupt tool = %q", req.ToolName)
+	if len(req.Asks) != 1 || req.Asks[0].ToolName != "Bash" {
+		t.Fatalf("interrupt asks = %+v, want one Bash ask", req.Asks)
 	}
 	out, err := a.Resume(t.Context(), "t", "y")
 	if err != nil {

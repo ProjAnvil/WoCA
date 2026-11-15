@@ -628,7 +628,7 @@ func TestObservedNodeRecordsInterrupt(t *testing.T) {
 	a := newObsAgent(t, gatedWriteModel("done"), config.ModeDefault)
 	_, err := a.Invoke(t.Context(), []messages.Message{messages.Human("write")}, "t")
 	ie := interruptFromError(t, err)
-	if _, ok := ie.Value.(PermissionRequest); !ok {
+	if _, ok := ie.Value.(ApprovalRequest); !ok {
 		t.Fatalf("interrupt value = %T", ie.Value)
 	}
 }
@@ -852,7 +852,7 @@ func TestGoalResumeRepausesAndBreaks(t *testing.T) {
 	if len(second.interrupts) != 1 {
 		t.Fatalf("second pause interrupts = %d (err %v)", len(second.interrupts), second.err)
 	}
-	if _, ok := second.interrupts[0].Value.(PermissionRequest); !ok {
+	if _, ok := second.interrupts[0].Value.(ApprovalRequest); !ok {
 		t.Fatalf("second interrupt value = %T", second.interrupts[0].Value)
 	}
 

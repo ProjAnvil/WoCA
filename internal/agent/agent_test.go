@@ -83,12 +83,12 @@ func TestAgentPermissionInterrupt(t *testing.T) {
 
 	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("write a file")}, "t")
 	ie := interruptFromError(t, err)
-	req, ok := ie.Value.(PermissionRequest)
+	req, ok := ie.Value.(ApprovalRequest)
 	if !ok {
 		t.Fatalf("interrupt value = %T (%v)", ie.Value, ie.Value)
 	}
-	if req.ToolName != "Write" {
-		t.Fatalf("interrupt tool = %q, want Write", req.ToolName)
+	if len(req.Asks) != 1 || req.Asks[0].ToolName != "Write" {
+		t.Fatalf("interrupt asks = %+v, want one Write ask", req.Asks)
 	}
 
 	out, err := a.Resume(t.Context(), "t", "y")
@@ -153,12 +153,12 @@ func TestAgentPlanMode(t *testing.T) {
 
 	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("plan a feature")}, "t")
 	ie := interruptFromError(t, err)
-	req, ok := ie.Value.(PlanApprovalRequest)
+	req, ok := ie.Value.(ApprovalRequest)
 	if !ok {
 		t.Fatalf("interrupt value = %T", ie.Value)
 	}
-	if req.Plan != "my plan" {
-		t.Fatalf("plan = %q", req.Plan)
+	if len(req.Asks) != 1 || req.Asks[0].ToolName != "ExitPlanMode" || req.Asks[0].Plan != "my plan" {
+		t.Fatalf("interrupt asks = %+v, want one ExitPlanMode ask with the plan", req.Asks)
 	}
 	if !a.PlanMode() {
 		t.Fatal("should still be in plan mode before approval")
@@ -203,12 +203,15 @@ func TestAgentAskUserQuestion(t *testing.T) {
 
 	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("help")}, "t")
 	ie := interruptFromError(t, err)
-	req, ok := ie.Value.(AskUserRequest)
+	req, ok := ie.Value.(ApprovalRequest)
 	if !ok {
 		t.Fatalf("interrupt value = %T", ie.Value)
 	}
-	if len(req.Questions) != 1 || req.Questions[0].Question != "which one?" {
-		t.Fatalf("questions = %+v", req.Questions)
+	if len(req.Asks) != 1 || req.Asks[0].ToolName != "AskUserQuestion" {
+		t.Fatalf("interrupt asks = %+v, want one AskUserQuestion ask", req.Asks)
+	}
+	if len(req.Asks[0].Questions) != 1 || req.Asks[0].Questions[0].Question != "which one?" {
+		t.Fatalf("questions = %+v", req.Asks[0].Questions)
 	}
 
 	msgs, err := a.Resume(t.Context(), "t", AskUserAnswer{Answers: []string{"a"}})
@@ -550,9 +553,9 @@ func TestToolPanicBecomesErrorResult(t *testing.T) {
 }
 
 // TestAgentTwoAsksInOneBatchConverge pins the multi-approval livelock fix:
-// one AI message carrying two permission-gated calls must ask each call
-// exactly once, and each call's execution decision must match the answer the
-// user gave for THAT call (the fork's consumed-resume-prefix semantics; the
+// one AI message carrying two permission-gated calls surfaces ONE
+// ApprovalRequest whose per-call decisions route each answer to ITS call
+// (Task 5's envelope; the fork's consumed-resume-prefix semantics and the
 // old in-house engine misrouted the second answer onto the first gate and
 // re-prompted forever).
 func TestAgentTwoAsksInOneBatchConverge(t *testing.T) {
@@ -577,38 +580,38 @@ func TestAgentTwoAsksInOneBatchConverge(t *testing.T) {
 	}
 
 	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("write two files")}, "t")
-	asked := map[string]int{}
-	for range 4 {
-		ie := interruptFromError(t, err)
-		req := ie.Value.(PermissionRequest)
-		file, _ := req.ToolArgs["file_path"].(string)
-		asked[file]++
-		if asked[file] > 1 {
-			t.Fatalf("asked about %s twice — livelock", file)
+	ie := interruptFromError(t, err)
+	req, ok := ie.Value.(ApprovalRequest)
+	if !ok {
+		t.Fatalf("interrupt value = %T", ie.Value)
+	}
+	if len(req.Asks) != 2 {
+		t.Fatalf("asks = %+v, want both calls in one envelope", req.Asks)
+	}
+	// Approve x, deny y — in ONE answer.
+	out, err := a.Resume(t.Context(), "t", ApprovalAnswer{Decisions: map[string]AskDecision{
+		"1": {Outcome: OutcomeAllow},
+		"2": {Outcome: OutcomeDeny},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := out[len(out)-1].Content; got != "done" {
+		t.Fatalf("final = %q, want done", got)
+	}
+	for _, m := range out {
+		if m.Role != messages.RoleTool {
+			continue
 		}
-		var out []messages.Message
-		out, err = a.Resume(t.Context(), "t", file == "x.txt") // approve x, deny y
-		if err == nil {
-			if got := out[len(out)-1].Content; got != "done" {
-				t.Fatalf("final = %q, want done", got)
+		switch m.ToolCallID {
+		case "1":
+			if strings.Contains(m.Content, "permission denied") {
+				t.Fatalf("x.txt approved by user but denied: %q", m.Content)
 			}
-			for _, m := range out {
-				if m.Role != messages.RoleTool {
-					continue
-				}
-				switch m.ToolCallID {
-				case "1":
-					if strings.Contains(m.Content, "permission denied") {
-						t.Fatalf("x.txt approved by user but denied: %q", m.Content)
-					}
-				case "2":
-					if !strings.Contains(m.Content, "permission denied") {
-						t.Fatalf("y.txt denied by user but ran: %q", m.Content)
-					}
-				}
+		case "2":
+			if !strings.Contains(m.Content, "permission denied") {
+				t.Fatalf("y.txt denied by user but ran: %q", m.Content)
 			}
-			return
 		}
 	}
-	t.Fatalf("did not converge within 4 rounds (asked: %v)", asked)
 }

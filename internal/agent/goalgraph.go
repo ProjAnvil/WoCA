@@ -283,11 +283,12 @@ func isRecursionLimit(err error) bool {
 // turn; hitting the budget is a soft cut (salvage + evaluate), so any finite
 // value is safe. The per-invocation override (lggraph.Options.RecursionLimit)
 // lets the one compiled agent graph serve turns and cycles at different
-// budgets — with the default turn limit of 50, a cycle gets 100 supersteps
-// (≈ 50 model⇄tools rounds).
+// budgets — with the default turn limit of 100 (four supersteps per round
+// since the hooks/approval split), a cycle gets 200 supersteps (≈ 50
+// model⇄tools rounds).
 func goalCycleStepBudget(turnLimit int) int {
 	if turnLimit <= 0 {
-		turnLimit = 50 // agent.New's default turn limit
+		turnLimit = 100 // agent.New's default superstep limit (≈25 rounds)
 	}
 	return 2 * turnLimit
 }

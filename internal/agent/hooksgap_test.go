@@ -354,8 +354,8 @@ func TestNotificationHookFiresOnPermissionInterrupt(t *testing.T) {
 	if len(intrs) != 1 {
 		t.Fatalf("interrupts = %d, want 1", len(intrs))
 	}
-	if req, ok := decodeInterruptPayload(intrs[0].Value).(PermissionRequest); !ok || req.ToolName != "Write" {
-		t.Fatalf("interrupt payload = %#v, want PermissionRequest for Write", DecodeInterruptValue(intrs[0].Value))
+	if req, ok := decodeInterruptPayload(intrs[0].Value).(ApprovalRequest); !ok || len(req.Asks) != 1 || req.Asks[0].ToolName != "Write" {
+		t.Fatalf("interrupt payload = %#v, want an ApprovalRequest with one Write ask", DecodeInterruptValue(intrs[0].Value))
 	}
 	fired, events := log.snapshot()
 	if len(fired) != 1 || fired[0] != "notify" {

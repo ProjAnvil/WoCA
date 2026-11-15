@@ -198,11 +198,11 @@ func TestGoalCycleSurvivesInnerRecursionLimit(t *testing.T) {
 // the typed detection of the runtime's recursion-limit error.
 func TestGoalCycleStepBudgetAndLimitDetection(t *testing.T) {
 	cases := []struct{ turnLimit, want int }{
-		{0, 100},   // unset → default turn limit 50, doubled
-		{-3, 100},  // negative → same as unset
+		{0, 200},   // unset → default superstep limit 100 (≈25 rounds), doubled
+		{-3, 200},  // negative → same as unset
 		{5, 10},    // the integration test's configuration
-		{50, 100},  // the default configuration
-		{100, 200}, // scales with a user-raised turn limit
+		{50, 100},  // an explicit configuration
+		{100, 200}, // the default configuration
 	}
 	for _, tc := range cases {
 		if got := goalCycleStepBudget(tc.turnLimit); got != tc.want {
@@ -425,8 +425,8 @@ func TestGoalInterruptResumesMidCycle(t *testing.T) {
 	if len(res.interrupts) == 0 {
 		t.Fatalf("expected a permission interrupt, got err=%v", res.err)
 	}
-	req, ok := res.interrupts[0].Value.(PermissionRequest)
-	if !ok || req.ToolName != "Write" {
+	req, ok := res.interrupts[0].Value.(ApprovalRequest)
+	if !ok || len(req.Asks) != 1 || req.Asks[0].ToolName != "Write" {
 		t.Fatalf("interrupt value = %#v", res.interrupts[0].Value)
 	}
 

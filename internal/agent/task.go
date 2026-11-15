@@ -85,14 +85,57 @@ func (a *Agent) subagentStarted(ctx context.Context, sub *Agent, thread string) 
 }
 
 // subagentPendingPermission decodes the permission request the child is
-// paused on, so a re-entering relay can rebuild an accurate payload.
-func subagentPendingPermission(ctx context.Context, sub *Agent, thread string) (PermissionRequest, bool) {
+// paused on, so a re-entering relay can rebuild an accurate payload. Since
+// Task 5 the child pauses on an ApprovalRequest (its own approval superstep);
+// legacy PermissionRequest child pauses (pre-upgrade checkpoints) still
+// decode, and the new shape also returns the whole envelope so the relay can
+// answer every child ask.
+func subagentPendingPermission(ctx context.Context, sub *Agent, thread string) (req PermissionRequest, approval ApprovalRequest, ok bool) {
 	snap, err := sub.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: thread})
 	if err != nil || len(snap.Interrupts) == 0 {
-		return PermissionRequest{}, false
+		return PermissionRequest{}, ApprovalRequest{}, false
 	}
-	req, ok := decodeInterruptPayload(snap.Interrupts[0].Value).(PermissionRequest)
-	return req, ok
+	switch v := decodeInterruptPayload(snap.Interrupts[0].Value).(type) {
+	case ApprovalRequest:
+		return permissionFromAsks(v), v, true
+	case PermissionRequest:
+		return v, ApprovalRequest{}, true
+	}
+	return PermissionRequest{}, ApprovalRequest{}, false
+}
+
+// subagentPendingApproval reports the child's paused ApprovalRequest
+// envelope, if its pause is the new shape.
+func subagentPendingApproval(ctx context.Context, sub *Agent, thread string) (ApprovalRequest, bool) {
+	_, approval, ok := subagentPendingPermission(ctx, sub, thread)
+	return approval, ok && len(approval.Asks) > 0
+}
+
+// permissionFromAsks projects an ApprovalRequest onto the legacy
+// PermissionRequest the relay's wire (SubagentInterrupt.Inner) carries: the
+// first ask's card. The relay is single-answer ("y"/"n" applies to every
+// child ask); Task 7's β topology replaces it with per-NS routing.
+func permissionFromAsks(req ApprovalRequest) PermissionRequest {
+	if len(req.Asks) == 0 {
+		return PermissionRequest{}
+	}
+	ask := req.Asks[0]
+	return PermissionRequest{
+		ToolName:   ask.ToolName,
+		ToolArgs:   ask.ToolArgs,
+		Reason:     ask.Reason,
+		IsReadOnly: tools.IsReadOnly(ask.ToolName, ask.ToolArgs),
+	}
+}
+
+// approvalAnswerAll builds the child resume value applying one outcome to
+// every ask of the child's paused envelope.
+func approvalAnswerAll(req ApprovalRequest, outcome string) ApprovalAnswer {
+	decisions := make(map[string]AskDecision, len(req.Asks))
+	for _, ask := range req.Asks {
+		decisions[ask.CallID] = AskDecision{Outcome: outcome}
+	}
+	return ApprovalAnswer{Decisions: decisions}
 }
 
 // graphCarrierKey reports whether key is one of the named unexported
@@ -1026,7 +1069,7 @@ func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Messag
 		// child's paused checkpoint and fast-forward the positional resume
 		// queue past the answers earlier re-executions already consumed, so
 		// the loop's first Interrupt call reads THIS resume's answer.
-		if req, ok := subagentPendingPermission(ctx, sub, thread); ok {
+		if req, _, ok := subagentPendingPermission(ctx, sub, thread); ok {
 			pending.Inner = req
 		}
 		seq = a.relaySeq(ctx, thread)
@@ -1046,7 +1089,15 @@ func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Messag
 				_ = a.saver.DeleteThread(context.WithoutCancel(ctx), thread)
 				return fmt.Sprintf("Subagent %q paused for a permission (%s) the user denied; the task was aborted.", name, pending.Inner.ToolName), nil
 			}
-			msgs, err = sub.Resume(subCtx, thread, "y")
+			// The child's own pause is an ApprovalRequest since Task 5 (its
+			// approval superstep): the parent's single y/n applies to every
+			// child ask. Legacy child checkpoints pause on a bare
+			// PermissionRequest and keep the scalar "y" resume.
+			resumeValue := any("y")
+			if approval, isApproval := subagentPendingApproval(ctx, sub, thread); isApproval {
+				resumeValue = approvalAnswerAll(approval, OutcomeAllow)
+			}
+			msgs, err = sub.Resume(subCtx, thread, resumeValue)
 		}
 		gi, ok := errors.AsType[*lgtypes.GraphInterrupt](err)
 		if !ok {
@@ -1056,12 +1107,18 @@ func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Messag
 			}
 			return "", err
 		}
-		req, ok := decodeInterruptPayload(gi.Interrupt.Value).(PermissionRequest)
-		if !ok {
+		switch v := decodeInterruptPayload(gi.Interrupt.Value).(type) {
+		case ApprovalRequest:
+			// The child's approval superstep paused: relay the first ask's
+			// card (the legacy wire) and pause the parent.
+			pending.Inner = permissionFromAsks(v)
+		case PermissionRequest:
+			// Legacy child checkpoint pause (pre-upgrade child thread).
+			pending.Inner = v
+		default:
 			// Non-permission pauses (AskUser etc.) stay fatal for subagents.
 			return "", err
 		}
-		pending.Inner = req
 		pending.Seq = seq
 		// Pause the parent graph. On the pause pass this call never returns
 		// (panics GraphInterrupt); the re-execution restarts this function

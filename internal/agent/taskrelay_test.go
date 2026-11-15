@@ -245,9 +245,9 @@ func TestToolsNodeMemoReplayKeepsResumeAlignment(t *testing.T) {
 		}
 		pauses++
 		answer := "r2"
-		if req, ok := decodeInterruptPayload(intrs[0].Value).(PermissionRequest); ok {
-			if req.ToolName != "counting_tool" {
-				t.Fatalf("permission ask for %q, want counting_tool", req.ToolName)
+		if req, ok := decodeInterruptPayload(intrs[0].Value).(ApprovalRequest); ok {
+			if len(req.Asks) != 1 || req.Asks[0].ToolName != "counting_tool" {
+				t.Fatalf("approval asks = %+v, want one counting_tool ask", req.Asks)
 			}
 			answer = "y"
 		}

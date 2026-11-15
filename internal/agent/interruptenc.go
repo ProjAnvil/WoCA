@@ -29,7 +29,7 @@ const wocaResumePrefix = "__woca_resume__:"
 // and unknown shapes pass through unchanged.
 func encodeInterruptPayload(v any) any {
 	switch v.(type) {
-	case PermissionRequest, AskUserRequest, AskUserAnswer, PlanApprovalRequest, GoalDelta, SubagentInterrupt:
+	case PermissionRequest, AskUserRequest, AskUserAnswer, PlanApprovalRequest, ApprovalRequest, ApprovalAnswer, GoalDelta, SubagentInterrupt:
 	default:
 		return v // JSON-native or already envelope-shaped
 	}
@@ -73,6 +73,10 @@ func decodeInterruptPayload(v any) any {
 		out = &AskUserAnswer{}
 	case "agent.PlanApprovalRequest":
 		out = &PlanApprovalRequest{}
+	case "agent.ApprovalRequest":
+		out = &ApprovalRequest{}
+	case "agent.ApprovalAnswer":
+		out = &ApprovalAnswer{}
 	case "agent.GoalDelta":
 		out = &GoalDelta{}
 	case "agent.SubagentInterrupt":
@@ -97,6 +101,10 @@ func derefAny(v any) any {
 		return *p
 	case *PlanApprovalRequest:
 		return *p
+	case *ApprovalRequest:
+		return *p
+	case *ApprovalAnswer:
+		return *p
 	case *GoalDelta:
 		return *p
 	case *SubagentInterrupt:
@@ -110,7 +118,7 @@ func derefAny(v any) any {
 // fork's interrupt-ID-map resume semantics. Other values pass through.
 func encodeResumeValue(v any) any {
 	switch v.(type) {
-	case AskUserAnswer:
+	case AskUserAnswer, ApprovalAnswer:
 	default:
 		return v
 	}
@@ -140,6 +148,8 @@ func decodeResumeValue(v any) any {
 	switch kind {
 	case "agent.AskUserAnswer":
 		out = &AskUserAnswer{}
+	case "agent.ApprovalAnswer":
+		out = &ApprovalAnswer{}
 	default:
 		return v
 	}

@@ -227,11 +227,14 @@ func TestGrantSuppressesReAsk(t *testing.T) {
 	// Round 1: default mode + a non-read-only command must ask.
 	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("touch the marker")}, "grants-t1")
 	ie := interruptFromError(t, err)
-	if req, ok := ie.Value.(PermissionRequest); !ok || req.ToolName != "Bash" {
-		t.Fatalf("round 1 interrupt = %#v, want a Bash PermissionRequest", ie.Value)
+	req, ok := ie.Value.(ApprovalRequest)
+	if !ok || len(req.Asks) != 1 || req.Asks[0].ToolName != "Bash" {
+		t.Fatalf("round 1 interrupt = %#v, want one Bash ask", ie.Value)
 	}
-	// Approve once (the resume value cannot carry Grant until Task 5).
-	if _, err := a.Resume(t.Context(), "grants-t1", "y"); err != nil {
+	// Approve for the session THROUGH the envelope (Task 5's Grant field).
+	if _, err := a.Resume(t.Context(), "grants-t1", ApprovalAnswer{Decisions: map[string]AskDecision{
+		req.Asks[0].CallID: {Outcome: OutcomeAllow, Grant: GrantSession},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -290,13 +293,16 @@ func TestPlainAllowAnswerIsOncePerCall(t *testing.T) {
 	}
 
 	// Round 1: default mode + a non-read-only command asks; answer a plain
-	// allow (no grant dimension in the resume value).
+	// allow (Grant stays none).
 	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("touch the marker")}, "once-t1")
 	ie := interruptFromError(t, err)
-	if req, ok := ie.Value.(PermissionRequest); !ok || req.ToolName != "Bash" {
-		t.Fatalf("round 1 interrupt = %#v, want a Bash PermissionRequest", ie.Value)
+	req, ok := ie.Value.(ApprovalRequest)
+	if !ok || len(req.Asks) != 1 || req.Asks[0].ToolName != "Bash" {
+		t.Fatalf("round 1 interrupt = %#v, want one Bash ask", ie.Value)
 	}
-	if _, err := a.Resume(t.Context(), "once-t1", "y"); err != nil {
+	if _, err := a.Resume(t.Context(), "once-t1", ApprovalAnswer{Decisions: map[string]AskDecision{
+		req.Asks[0].CallID: {Outcome: OutcomeAllow},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(marker); err != nil {
@@ -310,8 +316,8 @@ func TestPlainAllowAnswerIsOncePerCall(t *testing.T) {
 	}
 	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("touch it again")}, "once-t2")
 	ie = interruptFromError(t, err)
-	if req, ok := ie.Value.(PermissionRequest); !ok || req.ToolName != "Bash" {
-		t.Fatalf("round 2 interrupt = %#v, want a second Bash PermissionRequest (plain allow is once)", ie.Value)
+	if req, ok := ie.Value.(ApprovalRequest); !ok || len(req.Asks) != 1 || req.Asks[0].ToolName != "Bash" {
+		t.Fatalf("round 2 interrupt = %#v, want a second Bash ask (plain allow is once)", ie.Value)
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("SESSION GRANT LEAK: the second identical call ran without asking after a plain once-allow")
@@ -403,5 +409,59 @@ func TestSpeculativeAllowedHonorsGrant(t *testing.T) {
 	}
 	if a.speculativeAllowed(ctx, other) {
 		t.Fatal("cross-session grant enabled speculation")
+	}
+}
+
+// TestPlanBeatsBypassDirect (parked from Task 4): enforced plan mode
+// overrides even bypass — the pure gate evaluator must route a non-read-only
+// call to ask (not allow) while the plan flag is on, whatever the session's
+// base mode. The hooks node turns that ask into an ApprovalRequest ask; it
+// must never silently allow under bypass.
+func TestPlanBeatsBypassDirect(t *testing.T) {
+	src := NewPerSessionPolicySource(config.ModeBypass)
+	a := &Agent{mode: config.ModeBypass}
+	a.policy = src
+	ctx := WithSessionPolicy(t.Context(), "plan-bypass", src)
+	call := messages.ToolCall{ID: "pb1", Name: "Bash", Args: map[string]any{"command": "touch x.txt"}}
+	src.SetPlan("plan-bypass", true)
+
+	allow, _ := a.evalPermission(ctx, call)
+	if allow {
+		t.Fatal("PLAN LEAK: plan=true over bypass allowed a non-read-only call (plan outranks the mode)")
+	}
+
+	// Once the plan flag flips off (ExitPlanMode approved), bypass allows
+	// the same call outright.
+	src.SetPlan("plan-bypass", false)
+	allow, ask := a.evalPermission(ctx, call)
+	if !allow || ask {
+		t.Fatalf("bypass after plan approval = allow=%v ask=%v, want allowed", allow, ask)
+	}
+}
+
+// TestSpeculativeGrantPlanClampDirect (parked from Task 4): a session grant
+// never lifts the plan-mode restriction in the speculative path either —
+// speculativeAllowed keeps its read-only clamp while the plan flag is on,
+// and grants do not punch through.
+func TestSpeculativeGrantPlanClampDirect(t *testing.T) {
+	src := NewPerSessionPolicySource(config.ModeDefault)
+	a := &Agent{mode: config.ModeDefault}
+	a.policy = src
+	ctx := WithSessionPolicy(t.Context(), "plan-clamp", src)
+	write := messages.ToolCall{ID: "pc1", Name: "Bash", Args: map[string]any{"command": "touch y.txt"}}
+	read := messages.ToolCall{ID: "pc2", Name: "Bash", Args: map[string]any{"command": "git status --short"}}
+	src.AddGrant("plan-clamp", GrantKey(write))
+	src.AddGrant("plan-clamp", GrantKey(read))
+	src.SetPlan("plan-clamp", true)
+
+	if a.speculativeAllowed(ctx, write) {
+		t.Fatal("PLAN LEAK: granted non-read-only call speculated under plan=true")
+	}
+	if allow, ask := a.evalPermission(ctx, write); allow {
+		t.Fatalf("PLAN LEAK: granted non-read-only call allowed (ask=%v) under plan=true — plan must deny before grants lift", ask)
+	}
+	// Read-only stays fine under plan, grant or no grant.
+	if !a.speculativeAllowed(ctx, read) {
+		t.Fatal("granted classifier-read-only call must still speculate under plan=true")
 	}
 }

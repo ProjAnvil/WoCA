@@ -24,7 +24,7 @@ func TestNormalizeDefaultMaxTokens(t *testing.T) {
 		t.Fatalf("MaxTokens = %d, want default 8192", n.MaxTokens)
 	}
 	if n.Provider != ProviderOpenAI || n.Model != "gpt-4o" || n.PermissionMode != ModeDefault ||
-		n.RecursionLimit != 50 || n.WorkDir != "." {
+		n.RecursionLimit != 100 || n.WorkDir != "." {
 		t.Fatalf("defaults not filled: %+v", n)
 	}
 }

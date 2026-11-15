@@ -144,7 +144,7 @@ func Default() Config {
 		Model:          "claude-sonnet-4-5",
 		MaxTokens:      8192,
 		PermissionMode: ModeDefault,
-		RecursionLimit: 50,
+		RecursionLimit: 100,
 	}
 }
 
@@ -167,7 +167,7 @@ func (c Config) Normalize() (Config, error) {
 		out.PermissionMode = ModeDefault
 	}
 	if out.RecursionLimit <= 0 {
-		out.RecursionLimit = 50
+		out.RecursionLimit = 100
 	}
 	if out.MaxTokens <= 0 {
 		out.MaxTokens = 8192

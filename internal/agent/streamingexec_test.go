@@ -304,7 +304,7 @@ func TestStreamingExecutionSkipsGatedCalls(t *testing.T) {
 
 	_, err = a.Invoke(t.Context(), []messages.Message{messages.Human("write a file")}, "t")
 	ie := interruptFromError(t, err)
-	if req, ok := ie.Value.(PermissionRequest); !ok || req.ToolName != "Write" {
+	if req, ok := ie.Value.(ApprovalRequest); !ok || len(req.Asks) != 1 || req.Asks[0].ToolName != "Write" {
 		t.Fatalf("interrupt value = %+v", ie.Value)
 	}
 	if got := rec.count(); got != 0 {
