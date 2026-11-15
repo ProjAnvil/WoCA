@@ -133,6 +133,17 @@ func NewRegistry(workdir string) *Registry {
 // the shell and file tools perform their side effects through x. A nil
 // executor falls back to the local machine.
 func NewRegistryWithExecutor(workdir string, x executor.Executor) *Registry {
+	return NewRegistryWithBackground(workdir, x, nil)
+}
+
+// NewRegistryWithBackground is NewRegistryWithExecutor with a SHARED
+// background-shell manager (graph-native HITL §3.7, A6): the registry stays
+// per-workspace (todos, dir, history, LSP pool, executor), but Bash
+// run_in_background shells land in the caller-supplied manager so ids never
+// collide across the main graph and its subagent children and every shell
+// carries its initiator (see WithShellOwner). A nil bg keeps a private
+// manager, exactly like NewRegistryWithExecutor.
+func NewRegistryWithBackground(workdir string, x executor.Executor, bg *BackgroundShells) *Registry {
 	if workdir == "" {
 		workdir = "."
 	}
@@ -150,7 +161,10 @@ func NewRegistryWithExecutor(workdir string, x executor.Executor) *Registry {
 		),
 		exec: x,
 	}
-	r.bg = NewBackgroundShellsWithExecFor(r.ExecForFn())
+	if bg == nil {
+		bg = NewBackgroundShellsWithExecFor(r.ExecForFn())
+	}
+	r.bg = bg
 	for _, t := range defaultTools(r.dir, r.todos, r.bg, r.history, r.lspPool, r.ExecForFn()) {
 		r.Register(t)
 	}

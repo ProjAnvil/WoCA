@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -190,6 +191,29 @@ func (r *speculativeRegistry) endRun(runID string) {
 	r.order = slices.DeleteFunc(r.order, func(k specKey) bool { return k.run == runID })
 }
 
+// endRunFamily is endRun over runID and every per-tool-call child bucket
+// runID+"/"+id (the suffixed specRunID buckets a subagent child's nodes key
+// on; see specRunID). The parent's EndRun sweeps the registered children
+// with it, because nothing else terminates a child's buckets: no driver ever
+// hands a child ctx to EndRun.
+func (r *speculativeRegistry) endRunFamily(runID string) {
+	prefix := runID + "/"
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, f := range r.futures {
+		if key.run != runID && !strings.HasPrefix(key.run, prefix) {
+			continue
+		}
+		if f.cancel != nil {
+			f.cancel()
+		}
+		delete(r.futures, key)
+	}
+	r.order = slices.DeleteFunc(r.order, func(k specKey) bool {
+		return k.run == runID || strings.HasPrefix(k.run, prefix)
+	})
+}
+
 // dropLocked removes ids from the eviction order (futures may already be
 // gone; the order must not outlive its entries).
 func (r *speculativeRegistry) dropLocked(runID string, ids ...string) {
@@ -230,13 +254,32 @@ func describeToolCall(c messages.ToolCall) string {
 
 // specRunID returns the speculative-registry bucket for ctx's run: the run
 // id its ctx carries via tracing.WithRun (every server-driven run — plain,
-// goal, btw, wake, and the ee worker — sets it). Runs without a run scope
-// (the TUI/REPL single-run surfaces and unit tests) share the "" bucket —
-// the same convention as the session "" of tracing.VisibleTo: at most one
-// such run is in flight, so bare call ids cannot collide across concurrent
-// runs. Concurrent unscoped runs on one shared agent would still interfere;
-// scoped ctxs are the contract for multi-run surfaces.
+// goal, btw, wake, and the ee worker — sets it), suffixed with "/"+the
+// executing tool call's id when the ctx carries one. The suffix isolates
+// PARALLEL SAME-DEF subagent children: the per-def child Agent is a
+// singleton, so two Send tasks of one node share its spec/run-ctx
+// registries, and the per-child suffix (the parent's Task call id, installed
+// by the child-side node wrapper via withToolCallID) keeps their buckets —
+// and their speculative futures — from colliding (design §3.2). Runs without
+// a run scope (the TUI/REPL single-run surfaces and unit tests) share the ""
+// root, the same convention as the session "" of tracing.VisibleTo.
 func specRunID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	var run string
+	if sc, ok := tracing.RunFrom(ctx); ok {
+		run = sc.RunID
+	}
+	if id := toolCallIDFrom(ctx); id != "" {
+		return run + "/" + id
+	}
+	return run
+}
+
+// baseRunID is specRunID without the per-tool-call suffix — the bucket the
+// DRIVER-side bookkeeping (beginRunCtx, EndRun) keys on.
+func baseRunID(ctx context.Context) string {
 	if ctx == nil {
 		return ""
 	}
@@ -285,25 +328,54 @@ func (a *Agent) runCtxFor(runID string, fallback context.Context) context.Contex
 // EndRun releases a run's speculative-execution bookkeeping: remaining
 // futures are cancelled (the run is over — done, errored or cancelled — so
 // stragglers like a tail -f speculated sibling must not outlive it), the
-// captured run context is dropped, and the run's batch-memo entries are
-// removed (a run cancelled while parked never returns from its tools node,
-// so its memoized results would otherwise leak — and, on the "" bucket,
-// outlive their run). Every driver calls it on every exit path (runner.Run
-// and RunGoal defers; the ee worker). Idempotent and a no-op for runs that
-// never speculated. Runs without a tracing scope release the "" bucket (see
-// specRunID).
+// captured run context is dropped, and the same cleanup runs on every
+// registered subagent child over its per-child suffixed buckets (the child
+// graphs ran inside this run; no driver ever ends their buckets directly).
+// A run whose ctx is already cancelled also stops its session's active
+// subagent children in the runs registry — they died with the run, and
+// without the sweep they would hold concurrency-cap slots forever. Every
+// driver calls it on every exit path (runner.Run and RunGoal defers; the ee
+// worker). Idempotent and a no-op for runs that never speculated. Runs
+// without a tracing scope release the "" bucket (see specRunID).
 func (a *Agent) EndRun(ctx context.Context) {
-	runID := specRunID(ctx)
-	a.spec.endRun(runID)
-	a.runCtxMu.Lock()
-	delete(a.runCtxs, runID)
-	a.runCtxMu.Unlock()
+	runID := baseRunID(ctx)
+	a.endRunFamily(runID)
 	a.batchMemo.Range(func(k, _ any) bool {
 		if key, ok := k.(batchMemoKey); ok && key.run == runID {
 			a.batchMemo.Delete(k)
 		}
 		return true
 	})
+	if ctx != nil && ctx.Err() != nil && a.subagents != nil {
+		a.subagents.stopSession(sessionFromCtx(ctx))
+	}
+}
+
+// endRunFamily sweeps this agent's run bucket family (runID and every
+// runID+"/"+callID suffix) across the speculative registry and the captured
+// run contexts.
+func (a *Agent) endRunFamily(runID string) {
+	a.spec.endRunFamily(runID)
+	a.runCtxMu.Lock()
+	prefix := runID + "/"
+	for id := range a.runCtxs {
+		if id == runID || strings.HasPrefix(id, prefix) {
+			delete(a.runCtxs, id)
+		}
+	}
+	a.runCtxMu.Unlock()
+	// The registered subagent children ran their own registries under the
+	// same suffixed buckets (their node wrapper keys specRunID on the parent
+	// call id). Children built for other workspaces of the same agent are
+	// swept too — a bucket nobody ran under sweeps nothing. A bare
+	// zero-value Agent (unit tests) has no registry to walk.
+	if reg := a.childReg(); reg != nil {
+		for _, node := range reg.nodes() {
+			if child := reg.lookup(node); child != nil {
+				child.endRunFamily(runID)
+			}
+		}
+	}
 }
 
 // speculativeAllowed reports whether call may be pre-started during model

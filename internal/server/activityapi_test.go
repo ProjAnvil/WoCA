@@ -22,10 +22,12 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/platform/authz"
 	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/settings"
@@ -52,9 +54,33 @@ func (e *activityEnv) url(format string, args ...any) string {
 // newWakeAgent); responses cycle. mods mutate the Config after defaults
 // (ActivityAPI on, no settings store).
 func newActivityServer(t *testing.T, delay time.Duration, responses []messages.Message, mods ...func(*Config)) *activityEnv {
+	return newActivityServerAgentMod(t, delay, responses, nil, mods...)
+}
+
+// newActivityServerAgentMod is newActivityServer with a hook over the agent
+// config. The snapshot-shape test pins a distinct subagent model with it:
+// subagent shells now land in the session-shared manager (graph-native HITL
+// §3.7), so a scripted child replaying the main arm round would add shells
+// and completions the scenario never meant to cover.
+func newActivityServerAgentMod(t *testing.T, delay time.Duration, responses []messages.Message, agentMod func(*agent.Config), mods ...func(*Config)) *activityEnv {
 	t.Helper()
 	reg := tools.NewRegistry(t.TempDir())
 	a := newWakeAgentReg(t, delay, reg, responses...)
+	if agentMod != nil {
+		acfg := agent.Config{
+			Model:          language.NewFakeChatModel(language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}), language.WithResponses(responses...)),
+			Registry:       reg,
+			SystemPrompt:   "test",
+			PermissionMode: config.ModeBypass,
+			RecursionLimit: 10,
+		}
+		agentMod(&acfg)
+		var err error
+		a, err = agent.New(acfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	cfg := Config{
 		Agent:       a,
 		Static:      fstest.MapFS{},
@@ -248,10 +274,15 @@ func TestActivitySnapshotShape(t *testing.T) {
 		{ID: fmt.Sprintf("act-%d", wakeToolSeq.Add(1)), Name: "ScheduleCron", Args: map[string]any{
 			"name": "nightly-check", "prompt": "Run the test suite and report failures", "cron": "0 2 * * *"}},
 	}}
-	env := newActivityServer(t, 0, []messages.Message{
+	env := newActivityServerAgentMod(t, 0, []messages.Message{
 		armRound,
 		messages.AI("armed"),
 		messages.AI("task report"),
+	}, func(ac *agent.Config) {
+		// Distinct subagent model: the background Task's child must not
+		// replay the arm round (its shells would join the session-shared
+		// manager — a different scenario than this shape test pins).
+		ac.SubagentModel = language.NewFakeChatModel(language.WithResponses(messages.AI("task report")))
 	}, func(c *Config) { c.Settings = wakeSettings(t, settings.KeyAutoWake, "false") })
 
 	runID, sid, _ := postRun(t, env.ts.URL, "s1", "arm everything")

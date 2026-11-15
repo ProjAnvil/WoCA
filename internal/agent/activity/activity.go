@@ -33,6 +33,9 @@ const (
 	KindTasks  ActivityKind = "tasks"
 	KindCrons  ActivityKind = "crons"
 	KindWake   ActivityKind = "wake"
+	// KindSubagents: the session's foreground subagent children changed
+	// (graph-native HITL §3.7; fed by the subagent-runs registry).
+	KindSubagents ActivityKind = "subagents"
 )
 
 // ErrNotFound is the seam's single not-found error: the id is unknown, or it

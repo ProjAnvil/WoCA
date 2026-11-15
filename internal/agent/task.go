@@ -1084,7 +1084,7 @@ func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Messag
 	// follow the run's lifetime — survive the relay's pause (which suspends
 	// the parent graph and tears down its stream, cancelling the derived ctx
 	// tree) and die only with the parent run (spec decision F1).
-	subCtx := detachStreamCtx{a.runCtxFor(specRunID(ctx), ctx)}
+	subCtx := detachStreamCtx{a.runCtxFor(baseRunID(ctx), ctx)}
 	started := a.subagentStarted(ctx, sub, thread)
 	pending := SubagentInterrupt{Subagent: name, ToolCallID: toolCallIDFrom(ctx), ThreadID: thread}
 	seq := 0

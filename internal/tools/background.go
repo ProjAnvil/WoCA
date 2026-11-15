@@ -45,16 +45,48 @@ var ErrShellNotFound = errors.New("no such background shell")
 
 // BackgroundShellStatus is a snapshot of one background shell.
 type BackgroundShellStatus struct {
-	ID          string
-	Session     string
-	Command     string
-	Running     bool
-	ExitCode    int        // -1 while running or after a signal kill (unchanged tool semantics)
-	Killed      bool       // terminated through KillFor, any origin
-	StoppedBy   StopOrigin // "" unless Killed
-	StartedAt   time.Time
-	EndedAt     time.Time // zero while running
-	OutputBytes int
+	ID      string
+	Session string
+	Command string
+	// Owner attributes the shell to its initiator (graph-native HITL §3.7,
+	// D6): "main" for the main agent graph, "subagent:<def>#<callID>" for a
+	// shell a subagent child started. The activity UI renders it as the
+	// Initiator column.
+	Owner        string
+	Running      bool
+	ExitCode     int        // -1 while running or after a signal kill (unchanged tool semantics)
+	Killed       bool       // terminated through KillFor, any origin
+	StoppedBy    StopOrigin // "" unless Killed
+	StartedAt    time.Time
+	EndedAt      time.Time // zero while running
+	OutputBytes  int
+}
+
+// shellMainOwner is the Owner rendered for shells started without an
+// explicit attribution ctx (the main agent graph).
+const shellMainOwner = "main"
+
+// shellOwnerKey carries the initiator attribution through the invoking ctx
+// (see WithShellOwner).
+type shellOwnerKey struct{}
+
+// WithShellOwner attributes background shells started under ctx to owner
+// ("main" when unset). The agent's subagent child nodes install
+// "subagent:<def>#<callID>" so the shared shell manager's statuses name the
+// initiating child (graph-native HITL §3.7).
+func WithShellOwner(ctx context.Context, owner string) context.Context {
+	if owner == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, shellOwnerKey{}, owner)
+}
+
+// shellOwnerFrom resolves the ctx's shell owner, defaulting to "main".
+func shellOwnerFrom(ctx context.Context) string {
+	if v, ok := ctx.Value(shellOwnerKey{}).(string); ok && v != "" {
+		return v
+	}
+	return shellMainOwner
 }
 
 // ShellCompletion is one finished background shell handed to the notify
@@ -89,7 +121,10 @@ type backgroundShell struct {
 	// session is the starting run's session id (tracing.RunFrom); "" when
 	// the shell started outside any run scope.
 	session string
-	proc    executor.Process
+	// owner names the initiating surface ("main" or "subagent:<def>#<id>",
+	// see WithShellOwner).
+	owner string
+	proc  executor.Process
 	// buf is the kept tail of the combined output, at most
 	// MaxBufferedOutputBytes; dropped counts the bytes the cap discarded
 	// from the front (keep-tail, F3). Both live under mu.
@@ -173,6 +208,7 @@ func (b *BackgroundShells) Start(ctx context.Context, command, workdir, baseWork
 		id:      id,
 		command: command,
 		session: sessionFromCtx(ctx),
+		owner:   shellOwnerFrom(ctx),
 		done:    make(chan struct{}),
 		exit:    -1,
 		started: time.Now(),
@@ -317,6 +353,7 @@ func (sh *backgroundShell) snapshotLocked() BackgroundShellStatus {
 		ID:        sh.id,
 		Session:   sh.session,
 		Command:   sh.command,
+		Owner:     sh.owner,
 		Running:   true,
 		ExitCode:  -1,
 		Killed:    sh.killed,

@@ -1079,3 +1079,78 @@ func TestBackgroundShellFinishedRecordsCappedPerSession(t *testing.T) {
 		t.Fatalf("unscoped churn pruned another session's records: %d own records survive, want %d", own, MaxFinishedRecordsPerSession+1)
 	}
 }
+
+// TestShellOwnerAttribution (graph-native HITL §3.7, D6): shells started
+// without an attribution ctx carry Owner "main"; shells started under
+// WithShellOwner carry it verbatim ("subagent:<def>#<callID>" for subagent
+// children), in both the running and the finished snapshot.
+func TestShellOwnerAttribution(t *testing.T) {
+	dir := t.TempDir()
+	reg := NewRegistry(dir)
+	bg := reg.Background()
+
+	mine, err := bg.Start(t.Context(), "echo main-owned", dir, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childCtx := WithShellOwner(t.Context(), "subagent:reviewer#t7")
+	sub, err := bg.Start(childCtx, "echo sub-owned", dir, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := bg.StatusFor("", mine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Owner != "main" {
+		t.Fatalf("plain shell Owner = %q, want main", st.Owner)
+	}
+	st, err = bg.StatusFor("", sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Owner != "subagent:reviewer#t7" {
+		t.Fatalf("subagent shell Owner = %q, want subagent:reviewer#t7", st.Owner)
+	}
+
+	// Owner survives completion.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, st, _ = bg.OutputFor("", sub)
+		if !st.Running {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if st.Owner != "subagent:reviewer#t7" {
+		t.Fatalf("finished shell Owner = %q, want it kept", st.Owner)
+	}
+}
+
+// TestRegistrySharesBackgroundManager: NewRegistryWithBackground keeps the
+// registry per-workspace (own todos) while the shell manager is the caller's
+// instance — the seam subagent children use so shell ids never collide with
+// the main graph's (A6).
+func TestRegistrySharesBackgroundManager(t *testing.T) {
+	shared := NewBackgroundShells()
+	r1 := NewRegistryWithBackground(t.TempDir(), nil, shared)
+	r2 := NewRegistryWithBackground(t.TempDir(), nil, shared)
+	if r1.Background() != shared || r2.Background() != shared {
+		t.Fatal("registries did not adopt the shared shell manager")
+	}
+	if r1.TodoStore() == r2.TodoStore() {
+		t.Fatal("registries must keep separate todo stores")
+	}
+
+	bash, ok := r1.Get("Bash")
+	if !ok {
+		t.Fatal("Bash tool missing")
+	}
+	if _, err := bash.Invoke(t.Context(), map[string]any{"command": "echo hi", "run_in_background": true}); err != nil {
+		t.Fatal(err)
+	}
+	if shells := shared.ListFor(""); len(shells) != 1 {
+		t.Fatalf("shared manager holds %d shells, want 1", len(shells))
+	}
+}

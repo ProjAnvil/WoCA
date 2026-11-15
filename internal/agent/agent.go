@@ -307,6 +307,10 @@ type Agent struct {
 	// subgraph node. Swapped whole by rebuildGraph under a.mu; read via
 	// childReg.
 	children *childRegistry
+	// subagents is the session-scoped registry of ACTIVE foreground
+	// subagent children (subagentruns.go): the concurrency cap's accounting
+	// (route2), the lifecycle-event source and the Subagents-tab snapshot.
+	subagents *subagentRuns
 	// saver is the checkpointer the graph was compiled with (nil only when
 	// the graph has none). Fresh-input runs reset their thread before
 	// starting: the fork layers fresh input onto a thread's latest
@@ -417,6 +421,11 @@ type Agent struct {
 	toolSummaries toolSummaryBuffer
 	// subagent marks Task-spawned agents (see Config.Subagent).
 	subagent bool
+	// runParent is the spawning parent agent (set by newSubagent): the
+	// child's node wrapper reaches back for the parent's run-ctx table (so
+	// the child's speculative futures share the parent run's lifetime) and
+	// the subagent-runs registry. Nil on root agents.
+	runParent *Agent
 	// refreshTools re-collects extra tools between turns (optional).
 	refreshTools func(ctx context.Context) []coretools.Tool
 	refreshMu    sync.Mutex // serializes extra-tool swap commits only (no I/O under it)
@@ -558,6 +567,9 @@ func New(cfg Config) (*Agent, error) {
 	// (subagents.go; design §3.2). Installed before the first possible Set.
 	a.wsAgents.onChange = func(string, []agents.Definition) { a.scheduleGraphRebuild() }
 	a.children = newChildRegistry()
+	// Session-scoped active-children registry (subagentruns.go): the
+	// fan-out cap's accounting and the Subagents activity surface.
+	a.subagents = newSubagentRuns(defaultMaxSubagents)
 	// The cron scheduler's only host dependency is the notification queue;
 	// the method value is safe to capture before the rest of the wiring
 	// because it is only invoked by the scheduler loop, never here. The
@@ -691,6 +703,7 @@ func New(cfg Config) (*Agent, error) {
 	a.tasks.SetOnChange(func(session string) { a.activity.Emit(session, activity.KindTasks) })
 	a.cron.SetOnChange(func(session string) { a.activity.Emit(session, activity.KindCrons) })
 	a.registry.TodoStore().SetOnChange(func(session string) { a.activity.Emit(session, activity.KindTodos) })
+	a.subagents.SetOnChange(func(session string) { a.activity.Emit(session, activity.KindSubagents) })
 	return a, nil
 }
 
@@ -1981,13 +1994,18 @@ func (a *Agent) newSubagent(ctx context.Context, def *agents.Definition) (*Agent
 	// run executor from the ctx first, a.exec as fallback), so the parent
 	// run's executor override — a per-run sandbox — flows into subagent
 	// tool calls with the ctx unchanged (see TestSubregistryResolvesRunExecutor).
-	reg := tools.NewRegistryWithExecutor(ws, a.exec)
+	// The registry stays per-workspace EXCEPT the background-shell manager,
+	// which is the parent's (graph-native HITL §3.7, A6): subagent shells
+	// land in the session's shared manager — ids never collide across the
+	// main graph and children, and every shell carries its initiator
+	// (BackgroundShellStatus.Owner).
+	reg := tools.NewRegistryWithBackground(ws, a.exec, a.registry.Background())
 	sysPrompt := prompt.SubagentPrompt(ws)
 	if def != nil && def.Prompt != "" {
 		sysPrompt = def.Prompt
 	}
 	// The child's mode is its fallback only: when its ctx carries the
-	// parent's session (the run ctx the relay re-bases it on), the live
+	// parent's session (the run ctx the subgraph runs under), the live
 	// per-session policy wins (see policyFor).
 	mode := a.Mode()
 	sub, err := New(Config{
@@ -2017,6 +2035,10 @@ func (a *Agent) newSubagent(ctx context.Context, def *agents.Definition) (*Agent
 	if err != nil {
 		return nil, fmt.Errorf("agent: build subagent: %w", err)
 	}
+	// The child reaches back for the parent's run-ctx table (speculative
+	// futures share the parent run's lifetime) and the subagent-runs
+	// registry (its child-side node wrapper feeds both).
+	sub.runParent = a
 	if def != nil && len(def.Tools) > 0 {
 		sub.toolList = allowTools(sub.toolList, def.Tools)
 		sub.toolByName = make(map[string]coretools.Tool, len(sub.toolList))
