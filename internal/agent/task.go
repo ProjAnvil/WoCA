@@ -114,7 +114,8 @@ func subagentPendingApproval(ctx context.Context, sub *Agent, thread string) (Ap
 // permissionFromAsks projects an ApprovalRequest onto the legacy
 // PermissionRequest the relay's wire (SubagentInterrupt.Inner) carries: the
 // first ask's card. The relay is single-answer ("y"/"n" applies to every
-// child ask); Task 7's β topology replaces it with per-NS routing.
+// child ask); Task 7's β topology replaces it with per-NS routing. It is
+// only valid for PLAIN permission envelopes — see nonPermissionAsk.
 func permissionFromAsks(req ApprovalRequest) PermissionRequest {
 	if len(req.Asks) == 0 {
 		return PermissionRequest{}
@@ -126,6 +127,29 @@ func permissionFromAsks(req ApprovalRequest) PermissionRequest {
 		Reason:     ask.Reason,
 		IsReadOnly: tools.IsReadOnly(ask.ToolName, ask.ToolArgs),
 	}
+}
+
+// nonPermissionAsk returns the first ask of the envelope that is NOT a plain
+// permission ask (AskUserQuestion and ExitPlanMode asks carry questions/plan
+// text the relay has no way to surface), or nil. Such asks must fail closed:
+// projecting them onto a permission card would let a parent "y" approve an
+// unseen plan or hand AskUser an empty answer — the pre-Task-5 relay made
+// them fatal for the child, and this keeps that stance for the relay's
+// remaining lifetime.
+func nonPermissionAsk(req ApprovalRequest) *Ask {
+	for i := range req.Asks {
+		if req.Asks[i].ToolName == "AskUserQuestion" || req.Asks[i].ToolName == "ExitPlanMode" {
+			return &req.Asks[i]
+		}
+	}
+	return nil
+}
+
+// relayNoAnswerError is the fail-closed error for child asks the relay
+// cannot carry to the user (mirrors the background arm's "no one to answer"
+// semantics).
+func relayNoAnswerError(subagent, toolName string) error {
+	return fmt.Errorf("subagent %q paused (%s) while running in the foreground relay with no one to answer", subagent, toolName)
 }
 
 // approvalAnswerAll builds the child resume value applying one outcome to
@@ -1068,7 +1092,14 @@ func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Messag
 		// Re-entry after a parent resume: rebuild the payload from the
 		// child's paused checkpoint and fast-forward the positional resume
 		// queue past the answers earlier re-executions already consumed, so
-		// the loop's first Interrupt call reads THIS resume's answer.
+		// the loop's first Interrupt call reads THIS resume's answer. A
+		// parked envelope carrying a non-permission ask (only possible from
+		// a pre-fix checkpoint) fails closed here too.
+		if approval, isApproval := subagentPendingApproval(ctx, sub, thread); isApproval {
+			if bad := nonPermissionAsk(approval); bad != nil {
+				return "", relayNoAnswerError(name, bad.ToolName)
+			}
+		}
 		if req, _, ok := subagentPendingPermission(ctx, sub, thread); ok {
 			pending.Inner = req
 		}
@@ -1109,8 +1140,14 @@ func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Messag
 		}
 		switch v := decodeInterruptPayload(gi.Interrupt.Value).(type) {
 		case ApprovalRequest:
-			// The child's approval superstep paused: relay the first ask's
-			// card (the legacy wire) and pause the parent.
+			// The child's approval superstep paused. Plain permission asks
+			// relay as the first ask's card (the legacy wire); anything the
+			// relay cannot carry (AskUser questions, plan approval) fails
+			// closed — the child aborts with an error instead of surfacing
+			// a blanket-approvable card.
+			if bad := nonPermissionAsk(v); bad != nil {
+				return "", relayNoAnswerError(name, bad.ToolName)
+			}
 			pending.Inner = permissionFromAsks(v)
 		case PermissionRequest:
 			// Legacy child checkpoint pause (pre-upgrade child thread).

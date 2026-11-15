@@ -142,7 +142,7 @@ func TestGoalCycleSurvivesInnerRecursionLimit(t *testing.T) {
 		Registry:       tools.NewRegistry(t.TempDir()),
 		SystemPrompt:   "test",
 		PermissionMode: config.ModeBypass,
-		RecursionLimit: 5, // turn budget 5 → goal-cycle budget 10
+		RecursionLimit: 10, // turn budget 10 → cycle budget 20 = five 4-step rounds
 	})
 	if err != nil {
 		t.Fatal(err)

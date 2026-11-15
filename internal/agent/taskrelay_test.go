@@ -1146,3 +1146,79 @@ func batchMemoLen(a *Agent) int {
 	a.batchMemo.Range(func(_, _ any) bool { count++; return true })
 	return count
 }
+
+// TestForegroundSubagentNonPermissionAskFailsClosed: a child pause whose
+// envelope carries ANY non-permission ask (AskUserQuestion, ExitPlanMode)
+// must NOT surface as a permission card the parent could blanket-approve —
+// the relay has no way to carry the questions/plan to the user, so the child
+// fails closed with an error (the pre-Task-5 default-arm stance), never a
+// parkable interrupt. Subagents normally lack these tools; the model can
+// still emit the call, and the child's hooks/approval supersteps ask for it.
+func TestForegroundSubagentNonPermissionAskFailsClosed(t *testing.T) {
+	askCall := func(id string) messages.Message {
+		return messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+			ID:   id,
+			Name: "AskUserQuestion",
+			Args: map[string]any{"questions": []map[string]any{{
+				"question": "pick one",
+				"options":  []map[string]any{{"label": "a"}, {"label": "b"}},
+			}}},
+		}}}
+	}
+	workdir := t.TempDir()
+	a := relayTestAgent(t, workdir,
+		askCall("q1"),
+		messages.AI("child done"),
+	)
+	ctx := t.Context()
+	thread := "thread-fg-nonperm-ask"
+	intrs, final := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread))
+	if len(intrs) != 0 {
+		t.Fatalf("non-permission child ask surfaced as a parkable interrupt: %#v", DecodeInterruptValue(intrs[0].Value))
+	}
+	if !toolContentContains(final, "no one to answer") {
+		t.Fatalf("Task result lacks the fail-closed error; final transcript: %v", final)
+	}
+	logToolMsgs(t, "final", final)
+
+	// The plan-approval variant fails closed the same way: a child in plan
+	// mode (the run ctx's session policy is shared with the child) asking
+	// ExitPlanMode must never become an approve-an-unseen-plan card. The
+	// parent's own Task call stays allowed (CatMeta under plan).
+	planCall := messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+		ID: "e1", Name: "ExitPlanMode", Args: map[string]any{"plan": "secret plan"},
+	}}}
+	src := NewPerSessionPolicySource(config.ModeDefault)
+	src.SetPlan("plan-relay", true)
+	a2, err := New(Config{
+		Model: language.NewFakeChatModel(
+			language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
+			language.WithResponses(
+				messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+					{ID: "t1", Name: "Task", Args: map[string]any{
+						"description": "plan task",
+						"prompt":      "exit the plan",
+					}},
+				}},
+				messages.AI("parent done"),
+			),
+		),
+		SubagentModel:  &transcriptModel{script: []messages.Message{planCall, messages.AI("child done")}},
+		Registry:       tools.NewRegistry(workdir),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeDefault,
+		WorkDir:        workdir,
+		PolicySource:   src,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx2 := WithSessionPolicy(ctx, "plan-relay", src)
+	intrs2, final2 := pumpStream(t, a2.Stream(ctx2, []messages.Message{messages.Human("do it")}, "thread-fg-nonperm-plan"))
+	if len(intrs2) != 0 {
+		t.Fatalf("plan-approval child ask surfaced as a parkable interrupt: %#v", DecodeInterruptValue(intrs2[0].Value))
+	}
+	if !toolContentContains(final2, "no one to answer") {
+		t.Fatalf("Task result lacks the fail-closed error; final transcript: %v", final2)
+	}
+}
