@@ -18,7 +18,13 @@ const toast = useToastStore()
 
 const text = computed(() => {
   const report = props.run.report?.trim()
-  return report ? report : t('activity.transcriptLive')
+  if (report) return report
+  // Done/stopped/failed without a report is NOT "still running" — render
+  // the terminal state honestly instead of a misleading live label.
+  if (props.run.state === 'done' || props.run.state === 'failed' || props.run.state === 'stopped') {
+    return t('activity.subagentsEmptyReport')
+  }
+  return t('activity.transcriptLive')
 })
 
 async function copy(): Promise<void> {

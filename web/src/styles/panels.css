@@ -664,7 +664,10 @@ html.dark .shiki-host span {
   .interrupt-actions .btn,
   .hitl-queue-more,
   .grants-chip,
-  .grant-revoke {
+  .grant-revoke,
+  .act-origin,
+  .act-origin-pop input[type='checkbox'],
+  .sub-copy-btn {
     min-width: 44px;
     min-height: 44px;
   }

@@ -22,6 +22,7 @@ export default {
   viewTranscript: 'View transcript',
   subGotoApprovalLabel: 'Go to the approval {name} is waiting for',
   transcriptLive: 'Running — the final report appears here when the child finishes',
+  subagentsEmptyReport: 'Finished without a report',
   // Background tab initiator column
   initiator: 'Initiator',
   initiatorNoMatch: 'No items match the selected initiators',

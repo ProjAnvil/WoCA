@@ -22,6 +22,7 @@ export default {
   viewTranscript: '查看记录',
   subGotoApprovalLabel: '去审批 {name} 正在等待的请求',
   transcriptLive: '运行中 — 子代理结束后在此显示最终报告',
+  subagentsEmptyReport: '已结束（无报告）',
   // 后台标签页的发起方列
   initiator: '发起方',
   initiatorNoMatch: '没有匹配所选发起方的任务',

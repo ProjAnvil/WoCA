@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Users } from 'lucide-vue-next'
 import { useActivityStore } from '../../stores/activity'
@@ -36,9 +36,21 @@ const clockOffsetMs = computed(() => {
 const now = ref(Date.now())
 let tick: number | undefined
 
-onMounted(() => {
-  tick = window.setInterval(() => (now.value = Date.now()), 1000)
-})
+// The one-second elapsed tick only matters while some row is still
+// running or waiting — terminal rows render a frozen duration, so the
+// interval (and its per-second re-render of every row) stops when nothing
+// is live.
+const anyLive = computed(() =>
+  runs.value.some((r) => r.state === 'running' || r.state === 'waiting'),
+)
+watch(anyLive, (live) => {
+  if (live && tick === undefined) {
+    tick = window.setInterval(() => (now.value = Date.now()), 1000)
+  } else if (!live && tick !== undefined) {
+    window.clearInterval(tick)
+    tick = undefined
+  }
+}, { immediate: true })
 onBeforeUnmount(() => window.clearInterval(tick))
 
 /* --------------------------- expansion (reveal) --------------------------- */
@@ -71,7 +83,9 @@ function gotoApproval(run: SubagentRun): void {
       `[data-testid="hitl-card-${CSS.escape(requestId)}"]`,
     )
     el?.scrollIntoView({ block: 'center' })
-    el?.focus()
+    // Focus lands inside the card (its first actionable button) so keyboard
+    // users land where the decision is; the card root is the fallback.
+    ;(el?.querySelector<HTMLElement>('button') ?? el)?.focus()
   })
 }
 
@@ -123,7 +137,11 @@ function onListKeydown(e: KeyboardEvent): void {
           @toggle="toggle(run)"
           @goto="gotoApproval(run)"
         />
-        <TranscriptView v-if="expanded.has(run.call_id)" :run="run" />
+        <div class="sub-transcript-reveal" :class="{ open: expanded.has(run.call_id) }">
+          <div class="sub-transcript-reveal-inner" :aria-hidden="expanded.has(run.call_id) ? undefined : 'true'" :inert="!expanded.has(run.call_id)">
+            <TranscriptView v-if="expanded.has(run.call_id)" :run="run" />
+          </div>
+        </div>
       </div>
     </div>
     <div v-else class="act-empty" data-testid="sub-empty">
@@ -144,5 +162,21 @@ function onListKeydown(e: KeyboardEvent): void {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+/* Reveal (motion.css four-grammar rule): the transcript expands via the
+ * grid-rows 0fr↔1fr pattern WCollapseCard uses — height-only, no transform
+ * tricks on content. */
+.sub-transcript-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur-slow) var(--ease-out);
+}
+.sub-transcript-reveal.open {
+  grid-template-rows: 1fr;
+}
+.sub-transcript-reveal-inner {
+  min-height: 0;
+  overflow: hidden;
 }
 </style>

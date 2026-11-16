@@ -138,6 +138,7 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
     class="hitl-card interrupt-card card"
     :class="[`tier-${tier}`, { 'is-timed-out': card.timedOut }]"
     role="group"
+    tabindex="-1"
     :aria-labelledby="`hitl-tool-${requestId}`"
     :data-key="key"
   >

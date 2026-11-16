@@ -360,14 +360,35 @@ describe('BackgroundTab initiator column', () => {
     const opts = w.findAll('.act-origin-menu input[type="checkbox"]')
     await opts[1].setValue(true) // researcher only
     expect(w.find('[data-testid="act-origin-m1"]').exists()).toBe(false)
-    // The child's record drops out of the snapshot (pruned); the selection
-    // now matches nothing — a note, never the session-level empty state.
+    // The child's record drops out of the snapshot (pruned). A selection
+    // whose rows ALL vanished is a dead filter: the checkbox is gone, so
+    // the live-filter intersection drops the stale key and the list falls
+    // back to "all" — never a stuck no-match and never the empty state.
     api.getActivity.mockResolvedValueOnce(snap('s1', { shells: [shell('m1', 'completed')] }))
     await activity.fetchNow('s1')
     await flush()
-    expect(w.find('.act-row').exists()).toBe(false)
-    expect(w.get('[data-testid="bg-no-match"]').text()).toBe(
-      i18n.global.t('activity.initiatorNoMatch'),
-    )
+    expect(w.find('[data-testid="act-origin-m1"]').exists()).toBe(true)
+    expect(w.find('[data-testid="bg-no-match"]').exists()).toBe(false)
+  })
+
+  it('a PARTIALLY vanished selection keeps filtering the survivor set', async () => {
+    const w = await mountWith({
+      shells: [
+        shell('m1', 'completed'),
+        shell('s2', 'completed', { owner: 'subagent:researcher#call-a1b2' }),
+        shell('s3', 'completed', { owner: 'subagent:coder#call-c3d4' }),
+      ],
+    })
+    await w.get('[data-testid="initiator-col"]').trigger('click')
+    const opts = w.findAll('.act-origin-menu input[type="checkbox"]')
+    await opts[1].setValue(true) // researcher only
+    // coder's row vanishes while researcher's remains: the researcher
+    // option survives the option derivation, so the filter keeps
+    // applying and hides main's row.
+    api.getActivity.mockResolvedValueOnce(snap('s1', { shells: [shell('m1', 'completed'), shell('s2', 'completed', { owner: 'subagent:researcher#call-a1b2' })] }))
+    await activity.fetchNow('s1')
+    await flush()
+    expect(w.find('[data-testid="act-origin-s2"]').exists()).toBe(true)
+    expect(w.find('[data-testid="act-origin-m1"]').exists()).toBe(false)
   })
 })

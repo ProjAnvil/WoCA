@@ -41,6 +41,7 @@ const duration = computed(() => {
     :data-testid="`sub-row-${run.call_id}`"
     :data-row-key="run.call_id"
     :title="run.origin"
+    role="button"
     :aria-expanded="expanded"
     tabindex="-1"
     @click="emit('toggle')"

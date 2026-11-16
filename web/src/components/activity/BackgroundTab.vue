@@ -116,9 +116,19 @@ const originOptions = computed(() => {
   return opts
 })
 
+// Stale-filter hygiene: options derive from the CURRENT rows, so a selected
+// origin whose rows all finished would otherwise leave an unremovable key
+// (the checkbox vanishes but the filter persists, hiding everything with no
+// way back to "all"). Intersect first; dead keys read as unselected.
+const liveFilter = computed(() => {
+  const keys = new Set(originOptions.value.map((o) => o.key))
+  const live = [...originFilter.value].filter((k) => keys.has(k))
+  return new Set(live)
+})
+
 const visibleRows = computed(() => {
-  if (!originFilter.value.size) return rows.value
-  return rows.value.filter((r) => originFilter.value.has(r.originKey))
+  if (!liveFilter.value.size) return rows.value
+  return rows.value.filter((r) => liveFilter.value.has(r.originKey))
 })
 
 function toggleOrigin(key: string, on: boolean): void {
@@ -273,7 +283,7 @@ function onListKeydown(e: KeyboardEvent): void {
           {{ t('activity.initiator') }}
           <ChevronDown v-if="filterOpen" :size="12" aria-hidden="true" />
           <ChevronRight v-else :size="12" aria-hidden="true" />
-          <span v-if="originFilter.size" class="act-origin-count">{{ originFilter.size }}</span>
+          <span v-if="liveFilter.size" class="act-origin-count">{{ liveFilter.size }}</span>
         </button>
         <div v-if="filterOpen" class="act-origin-menu" role="group" :aria-label="t('activity.initiator')">
           <label v-for="o in originOptions" :key="o.key" class="act-origin-opt">
