@@ -130,9 +130,10 @@ func TestGoalCycleSurvivesInnerRecursionLimit(t *testing.T) {
 		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
 		language.WithResponses(
 			messages.AI("assess 1"), // cycle 1 assess
-			// cycle 1 execute: with the doubled cycle budget (2×5=10
-			// supersteps) five tool rounds complete; the sixth model
-			// dispatch is refused and the cycle is salvaged.
+			// cycle 1 execute: the doubled cycle budget is 20 supersteps
+			// (4 per tool round since the hooks/approval split) — five
+			// tool rounds complete (5×4=20) and the sixth model dispatch
+			// is refused and the cycle is salvaged.
 			tc("1"), tc("2"), tc("3"), tc("4"), tc("5"),
 			messages.AI(`{"verdict":"continue","gaps":"more to do"}`), // cycle 1 evaluate
 		),
@@ -200,7 +201,7 @@ func TestGoalCycleStepBudgetAndLimitDetection(t *testing.T) {
 	cases := []struct{ turnLimit, want int }{
 		{0, 200},   // unset → default superstep limit 100 (≈25 rounds), doubled
 		{-3, 200},  // negative → same as unset
-		{5, 10},    // the integration test's configuration
+		{5, 10},    // unit-level: budget doubling only (the integration test pairs this with its own step math)
 		{50, 100},  // an explicit configuration
 		{100, 200}, // the default configuration
 	}

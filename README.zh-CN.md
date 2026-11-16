@@ -463,26 +463,34 @@ NAT 之后、零入站端口的 bridge。loopback bridge 保留零登录的个�
 > 命令（请使用 `woca-tenant`），`woca serve --auth apikey` 现在需要
 > `woca-scheduler` 二进制 —— 多租户认证是企业版能力。
 
+> **升级说明（图原生 HITL）。** 旧中断中继拓扑下暂停的会话将以
+> `interrupted` 标记恢复：受影响的工具调用报告「可能已执行也可能未执
+> 行」且绝不重跑 —— 需要重做请重新发消息确认。
+
 ### 代理图
 
 ```
-        ┌──────────┐   no tool calls   ┌──────┐
+        ┌──────────┐   无工具调用      ┌──────┐
 START ─▶│  model   │──────────────────▶│ END  │
         └────┬─────┘                   └──────┘
-             │ has tool calls
+             │ 有工具调用
              ▼
-        ┌──────────┐   (gate + hooks)   ┌──────┐
-        │  tools   │───────────────────▶│ INT  │
-        └────┬─────┘                   └──┬───┘
-             │ (always loops back)        │ resume
-             └────────────────────────────┘
+        ┌──────────┐              ┌────────────┐   有待答询问   ┌──────┐
+        │  hooks   │──▶ approval ─▶│   tools    │──────────────▶│ INT  │
+        └──────────┘   （扇出）    └─────┬──────┘               └──┬───┘
+                                    │ （循环回 model）             │ resume
+                                    └─────────────────────────────┘
 ```
 
-`tools` 节点先逐调用运行**门控**（权限、AskUserQuestion、plan 审批）—— 因
-此中断暂停是确定性的 —— 再并发执行放行的调用。Pre/Post 工具 hook 包裹每
-次调用；Pre hook 以 `2` 退出即拒绝该工具，Post hook 以 `2` 退出则将其输
-出回喂给模型。状态是单一 `messages` 通道加 `add_messages` reducer，流式
-增量、工具结果与中断因此可组合。
+门控跑在专属 superstep 里，恢复时不会重跑：`hooks` 节点在不中断的前提下
+评估规则/会话授权/模式并触发 Pre/Post 工具 hook；`approval` 节点把本轮的
+全部用户询问（权限、AskUserQuestion、plan 审批）合并为**一次**中断，答复
+按调用 ID 定向。前台 `Task` 调用从 `approval` 扇出为内容寻址的子代理子图
+（`types.Send` + `AddSubgraph`）：并行子代理在各自的询问上暂停 —— 一次暂
+停可携带多张卡片，每张按其 checkpoint 命名空间定向作答。状态是 `messages`
+通道（add_messages reducer）加一条 `decisions` 通道持久化本轮门控结论，
+恢复的运行因此不会重新推导授权。崩溃的 superstep 以 `interrupted` 标记恢
+复 —— 受影响的工具调用报告「可能已执行也可能未执行」且绝不重跑。
 
 ### 目标模式
 

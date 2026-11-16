@@ -511,6 +511,11 @@ packages reach enterprise capabilities only through seams —
 > (use `woca-tenant`), and `woca serve --auth apikey` now requires the
 > `woca-scheduler` binary — multi-tenant auth is an enterprise capability.
 
+> **Upgrade note (graph-native HITL).** Sessions paused under the previous
+> interrupt-relay topology resume as `interrupted` markers: the affected
+> tool calls report "may or may not have run" and never re-execute —
+> re-approve by sending a new message.
+
 ### The agent graph
 
 ```
@@ -519,20 +524,25 @@ START ─▶│  model   │─────────────────�
         └────┬─────┘                   └──────┘
              │ has tool calls
              ▼
-        ┌──────────┐   (gate + hooks)   ┌──────┐
-        │  tools   │───────────────────▶│ INT  │
-        └────┬─────┘                   └──┬───┘
-             │ (always loops back)        │ resume
-             └────────────────────────────┘
+        ┌──────────┐              ┌────────────┐   asks pending   ┌──────┐
+        │  hooks   │──▶ approval ─▶│   tools    │────────────────▶│ INT  │
+        └──────────┘   (fan-out)   └─────┬──────┘                 └──┬───┘
+                                    │ (loops back to model)         │ resume
+                                    └───────────────────────────────┘
 ```
 
-The `tools` node runs a per-call **gate** (permissions, AskUserQuestion,
-plan approval) sequentially — so interrupts pause deterministically — then
-executes allowed calls concurrently. Pre/Post tool-use hooks wrap every
-call; a Pre hook exiting `2` denies the tool, a Post hook exiting `2` feeds
-its output back to the model. State is a single `messages` channel with an
-`add_messages` reducer, so streaming deltas, tool results, and interrupts
-all compose.
+Gates run in dedicated supersteps so resumes never re-run them: the
+`hooks` node evaluates rules/grants/mode and fires Pre/Post tool-use hooks
+without interrupting; the `approval` node collects every user ask of the
+round (permission, AskUserQuestion, plan approval) into ONE interrupt whose
+answer is addressed per call id. Foreground `Task` calls fan out from
+`approval` into content-addressed subagent subgraphs (`types.Send` +
+`AddSubgraph`): parallel children pause on their own asks — one pause may
+carry several cards, each answered by its checkpoint namespace. State is a
+`messages` channel (add_messages reducer) plus a `decisions` channel that
+persists the round's gate outcomes, so a resumed run never re-derives
+consent. A crashed superstep resumes with `interrupted` markers — the
+affected tool calls report "may or may not have run" and never re-execute.
 
 ### Goal mode
 
