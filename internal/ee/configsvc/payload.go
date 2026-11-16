@@ -76,10 +76,12 @@ func (s *Service) bridgeConfig(_ context.Context, _ string) (string, map[string]
 			kv["builtin-plugins"] = string(raw)
 		}
 	}
-	// The subagent concurrency cap (D12): the loaded settings normalize 0
-	// to the default 8, so the key rides whenever a value resolves — the
-	// console default is itself a managed choice.
-	if cfg.SubagentsMaxConcurrent > 0 {
+	// The subagent concurrency cap (D12) rides only when the operator set
+	// it: like every other pack key, an absent value leaves the bridge's
+	// own users in control (agent assembly defaults an unset cap to 8).
+	// The loaded config normalizes 0 to 8, so the RAW key's presence — not
+	// the resolved value — is the "operator pinned it" signal.
+	if s.settings.HasKey("subagents_max_concurrent") { // the settings ROW spelling (Save writes snake_case)
 		kv["subagents.max-concurrent"] = strconv.Itoa(cfg.SubagentsMaxConcurrent)
 	}
 	// The Langfuse observability plugin rides when the console enabled it

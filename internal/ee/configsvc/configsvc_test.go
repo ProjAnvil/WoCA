@@ -614,14 +614,16 @@ func TestStorageMemoryRidePackage(t *testing.T) {
 // TestSubagentsMaxConcurrentConsoleAndPackage: the subagent concurrency cap
 // (graph-native HITL D12) is console-editable and rides the bridge config
 // package — a PUT persists it, GET reports it, and bridgeConfig delivers it
-// under the settings key spelling, defaulting to 8 when untouched.
+// under the settings key spelling. UNTOUCHED, the key does NOT ride (the
+// house escape hatch: an absent pack key leaves the bridge's own users in
+// control; agent assembly defaults an unset cap to 8).
 func TestSubagentsMaxConcurrentConsoleAndPackage(t *testing.T) {
 	f := newFixture(t)
 
-	// Default package: the console-managed default (8) rides.
+	// Default package: untouched — the key is absent.
 	payload, _ := fetchPayload(t, f.svc)
-	if payload["subagents.max-concurrent"] != "8" {
-		t.Fatalf("default package cap = %q, want 8", payload["subagents.max-concurrent"])
+	if _, rides := payload["subagents.max-concurrent"]; rides {
+		t.Fatalf("default package carries the cap %q; want absent (escape hatch)", payload["subagents.max-concurrent"])
 	}
 
 	// Console edit path: PUT persists, GET reports, the package carries it.

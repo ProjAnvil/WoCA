@@ -286,6 +286,9 @@ func (s Settings) Normalize() (Settings, error) {
 	if out.SubagentsMaxConcurrent <= 0 {
 		out.SubagentsMaxConcurrent = DefaultSubagentsMaxConcurrent
 	}
+	if out.SubagentsMaxConcurrent > 64 {
+		out.SubagentsMaxConcurrent = 64 // Apply validates writes; direct DB loads clamp too
+	}
 	return out, nil
 }
 
