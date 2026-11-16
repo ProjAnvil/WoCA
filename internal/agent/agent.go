@@ -1809,7 +1809,58 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		// the post-Wait reads are race-free (the historical pattern).
 		out := make([]messages.Message, len(exec))
 		var consumedFutures []string
-		var wg sync.WaitGroup
+		// runCall is one call's execution: the recover-wrapped body shared
+		// by every dispatch shape below.
+		runCall := func(i int, call messages.ToolCall, d callDecision) {
+			defer func() {
+				if rec := recover(); rec != nil {
+					// Execution-phase interrupts no longer exist: a tool
+					// panicking GraphInterrupt degrades to its error
+					// result (the gates own every legal pause).
+					if gi, ok := rec.(*lgtypes.GraphInterrupt); ok {
+						out[i] = messages.Tool(call.ID,
+							fmt.Sprintf("Error: tool %q attempted an in-execution pause (%v); execution-phase interrupts are not supported — route the pause through a gate", call.Name, gi.Interrupt.Value))
+						return
+					}
+					stack := debug.Stack()
+					if len(stack) > 2048 {
+						stack = stack[:2048]
+					}
+					out[i] = messages.Tool(call.ID, fmt.Sprintf("Error: tool %q panicked: %v\n%s", call.Name, rec, stack))
+				}
+			}()
+			tctx := withToolCallID(ctx, call.ID)
+			res := a.execute(tctx, call.Name, call.Args)
+			content := res.Content
+			if d.PreFeedback != "" {
+				content = d.PreFeedback + "\n" + content
+			}
+			if len(a.toolGuards) > 0 {
+				if fb := a.guardsAfterTool(ctx, call, content); fb != "" {
+					content += "\n" + fb
+				}
+			}
+			if h := a.hooksFor(ctx); h != nil {
+				if p, err := h.PostToolUse(ctx, call.Name, call.Args, content); err == nil && p.Feedback != "" {
+					content += "\n" + p.Feedback
+				}
+			}
+			out[i] = toolMessageFromResult(call.ID, content, &res)
+		}
+		// Same-batch file-mutation serialization (deepagents borrow, woca's
+		// stance): deepagents rejects a batch with two filesystem writes;
+		// woca runs batches concurrently, so two writes to ONE path raced —
+		// both read the same base content and the later write silently
+		// clobbered the earlier edit. Calls mutating the same path run
+		// sequentially in call order; disjoint calls keep the historical
+		// per-call parallelism.
+		type queuedCall struct {
+			i    int
+			call messages.ToolCall
+			d    callDecision
+		}
+		var unkeyed []queuedCall
+		chains := make(map[string][]queuedCall)
 		for i, call := range exec {
 			if f := a.spec.get(specRun, call.ID); f != nil {
 				out[i] = f.wait()
@@ -1825,41 +1876,22 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 				out[i] = messages.Tool(call.ID, "Error: permission denied")
 				continue
 			}
+			q := queuedCall{i: i, call: call, d: d}
+			if key := fileMutationKey(call); key != "" {
+				chains[key] = append(chains[key], q)
+				continue
+			}
+			unkeyed = append(unkeyed, q)
+		}
+		var wg sync.WaitGroup
+		for _, q := range unkeyed {
+			wg.Go(func() { runCall(q.i, q.call, q.d) })
+		}
+		for _, chain := range chains {
 			wg.Go(func() {
-				defer func() {
-					if rec := recover(); rec != nil {
-						// Execution-phase interrupts no longer exist: a tool
-						// panicking GraphInterrupt degrades to its error
-						// result (the gates own every legal pause).
-						if gi, ok := rec.(*lgtypes.GraphInterrupt); ok {
-							out[i] = messages.Tool(call.ID,
-								fmt.Sprintf("Error: tool %q attempted an in-execution pause (%v); execution-phase interrupts are not supported — route the pause through a gate", call.Name, gi.Interrupt.Value))
-							return
-						}
-						stack := debug.Stack()
-						if len(stack) > 2048 {
-							stack = stack[:2048]
-						}
-						out[i] = messages.Tool(call.ID, fmt.Sprintf("Error: tool %q panicked: %v\n%s", call.Name, rec, stack))
-					}
-				}()
-				tctx := withToolCallID(ctx, call.ID)
-				res := a.execute(tctx, call.Name, call.Args)
-				content := res.Content
-				if d.PreFeedback != "" {
-					content = d.PreFeedback + "\n" + content
+				for _, q := range chain {
+					runCall(q.i, q.call, q.d)
 				}
-				if len(a.toolGuards) > 0 {
-					if fb := a.guardsAfterTool(ctx, call, content); fb != "" {
-						content += "\n" + fb
-					}
-				}
-				if h := a.hooksFor(ctx); h != nil {
-					if p, err := h.PostToolUse(ctx, call.Name, call.Args, content); err == nil && p.Feedback != "" {
-						content += "\n" + p.Feedback
-					}
-				}
-				out[i] = toolMessageFromResult(call.ID, content, &res)
 			})
 		}
 		wg.Wait()
