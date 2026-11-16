@@ -141,3 +141,71 @@ func TestSessionGrantCollapsesSameKeyPendingCards(t *testing.T) {
 		t.Fatal("ask card must stay pending")
 	}
 }
+
+// TestBufferedAnswerAppliesToNextPark: an answer arriving while the pause is
+// being resumed (r.pending already nil — the re-park lands only after the
+// interrupted child re-executes) must BUFFER and apply to the next park, not
+// fail with "no pending interrupt". This is the e2e composition bug: the UI
+// optimistically keeps the sibling card answerable, the user clicks inside
+// the resume window, and the answer used to 400 while the card rendered.
+func TestBufferedAnswerAppliesToNextPark(t *testing.T) {
+	r := &Run{id: "test", subs: map[*subscriber]struct{}{}, ctx: t.Context()}
+	ask := agent.Ask{CallID: "c2", ToolName: "Bash", SessionRuleKey: "bash:npm *"}
+	ns := "subagent:general-x/approval:deadbeef"
+
+	// The race window: no pending pause.
+	body := []byte(`{"answers":[{"key":"` + ns + `","value":{"decisions":{"c2":{"outcome":"deny"}}}}]}`)
+	if err := r.answer(body); err != nil {
+		t.Fatalf("answer in the resume window must buffer, got: %v", err)
+	}
+
+	// The re-park arrives: the buffered deny applies without anyone
+	// answering the new pause.
+	done := make(chan any, 1)
+	go func() {
+		ans, err := r.handleInterrupt([]agent.PauseCard{{
+			NS:    ns,
+			Value: agent.ApprovalRequest{Asks: []agent.Ask{ask}},
+		}})
+		if err != nil {
+			t.Error(err)
+		}
+		done <- ans
+	}()
+	select {
+	case ans := <-done:
+		// Single pending card answered by the buffer → scalar resume.
+		got, ok := ans.(agent.ApprovalAnswer)
+		if !ok || got.Decisions["c2"].Outcome != agent.OutcomeDeny {
+			t.Fatalf("buffered answer did not apply: %#v", ans)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleInterrupt blocked: the buffered answer never applied")
+	}
+}
+
+// TestBufferedAnswerForVanishedCardIsDropped: a buffered entry whose card
+// never re-parks (the sibling completed instead) is discarded when the next
+// park carries no matching card — the pause waits for a real answer.
+func TestBufferedAnswerForVanishedCardIsDropped(t *testing.T) {
+	r := &Run{id: "test", subs: map[*subscriber]struct{}{}, ctx: t.Context()}
+	if err := r.answer([]byte(`{"answers":[{"key":"ghost/ns","value":{"approve":true}}]}`)); err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+	// Park an unrelated card; the stale buffer entry must not leak into it.
+	done := make(chan struct{})
+	r.onPark = func() { close(done) }
+	go func() {
+		_, _ = r.handleInterrupt([]agent.PauseCard{{
+			NS:    "other/ns",
+			Value: agent.PermissionRequest{ToolName: "Bash"},
+		}})
+	}()
+	<-done
+	select {
+	case ans := <-r.pending.reply:
+		t.Fatalf("stale buffered entry leaked: %#v", ans)
+	default:
+	}
+	r.cancelRun()
+}

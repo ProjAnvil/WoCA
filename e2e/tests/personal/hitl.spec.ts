@@ -220,13 +220,25 @@ test('hitl: two parallel child approvals, session grant, deny, subagents tab', a
   };
   expect(after.grants).toHaveLength(0);
 
-  // (5) DENY PATH — intentionally not driven here: answering the
-  // re-parked sibling (allow-once first, deny second) hits a composition
-  // anomaly where the answer posts report "no pending interrupt" while a
-  // card still renders (store answer-slot vs the re-parked pause; filed as
-  // a follow-up bug for headed debugging). The deny semantics themselves
-  // are pinned by the Go suite (partial-map re-pause + deny continuation)
-  // and the button by vitest.
+  // (5) DENY PATH in a fresh session: allow one child; the sibling card
+  // stays optimistically answerable while the server re-parks it — deny
+  // inside that resume window must BUFFER server-side and apply to the
+  // re-park (the former "no pending interrupt" race), the denied child
+  // reports, and the run completes.
+  const sid2 = await freshSession(page);
+  const cards2 = stack.locator('[data-testid^="hitl-card-"]');
+  await expect(stack).toBeVisible({ timeout: 30_000 });
+  await expect(cards2).toHaveCount(2);
+  const allow = cards2.nth(0);
+  const allowId = (await allow.getAttribute('data-testid'))!.replace('hitl-card-', '');
+  await allow.locator(`[data-testid="hitl-allow-${allowId}"]`).click();
+  const cardsAfterAllow = stack.locator('[data-testid^="hitl-card-"]');
+  await expect(cardsAfterAllow).toHaveCount(1, { timeout: 20_000 });
+  const deny = cardsAfterAllow.nth(0);
+  const denyId = (await deny.getAttribute('data-testid'))!.replace('hitl-card-', '');
+  await deny.locator(`[data-testid="hitl-deny-${denyId}"]`).click();
+  await expect(stack).toBeHidden({ timeout: 20_000 });
+  await sessionDone(page, sid2, 'Fan-out complete.');
 
 
   // (6) The Subagents tab: rows for the four child lifetimes, a terminal

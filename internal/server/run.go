@@ -73,6 +73,12 @@ type Run struct {
 	subs    map[*subscriber]struct{}
 	history []Event
 	pending *interruptState
+	// buffered holds answers that arrived while no pause was pending —
+	// the resume window between a partial answer and the interrupted
+	// sibling's re-park (the child must re-execute its approval node
+	// first). They apply to the next park whose cards they address;
+	// entries for cards that never re-park are dropped with that park.
+	buffered []cardAnswerEntry
 	done    bool // terminal event (done or error) emitted
 	// finishKind records the terminal event type for the run ledger.
 	finishKind string
@@ -242,7 +248,47 @@ func (r *Run) handleInterrupt(cards []agent.PauseCard) (any, error) {
 	reply := make(chan any, 1)
 	r.mu.Lock()
 	r.pending = &interruptState{cards: parked, reply: reply}
+	// Answers buffered during the resume window apply now: entries whose
+	// key addresses one of THIS park's cards decode against it and become
+	// the pause's resume value (the same scalar/map rules as answer());
+	// entries for cards that never re-parked die here.
+	var resume any
+	if len(r.buffered) > 0 {
+		byKey := make(map[string]parkedCard, len(parked))
+		for _, c := range parked {
+			byKey[c.key()] = c
+		}
+		answered := make(map[string]any)
+		kept := r.buffered[:0:0]
+		for _, e := range r.buffered {
+			card, ok := byKey[e.Key]
+			if !ok {
+				continue
+			}
+			value, err := cardAnswerValue(card, e.Value)
+			if err != nil {
+				kept = append(kept, e) // undecodable against this card: keep for a later one
+				continue
+			}
+			answered[e.Key] = value
+		}
+		r.buffered = kept
+		switch {
+		case len(answered) == 0:
+			// nothing matched; fall through to a normal wait
+		case len(answered) == len(parked):
+			for k := range answered {
+				resume = answered[k]
+				break
+			}
+		default:
+			resume = answered // partial: the unmatched cards re-pause
+		}
+	}
 	r.mu.Unlock()
+	if resume != nil {
+		reply <- resume
+	}
 	return r.waitParked(parked, reply)
 }
 
@@ -396,7 +442,17 @@ func (r *Run) answer(body []byte) error {
 	p := r.pending
 	r.mu.Unlock()
 	if p == nil {
-		return errors.New("no pending interrupt")
+		// The resume window (see Run.buffered): list-form answers buffer
+		// and apply to the next park; the legacy single-card forms cannot
+		// be addressed without their card and stay an error.
+		entries, isList := decodeCardAnswerList(body)
+		if !isList {
+			return errors.New("no pending interrupt")
+		}
+		r.mu.Lock()
+		r.buffered = append(r.buffered, entries...)
+		r.mu.Unlock()
+		return nil
 	}
 
 	entries, isList := decodeCardAnswerList(body)
@@ -778,6 +834,7 @@ func (r *Run) unsubscribe(sub *subscriber) {
 func (r *Run) cancelRun() {
 	r.mu.Lock()
 	r.pending = nil
+	r.buffered = nil
 	r.mu.Unlock()
 	if r.cancel != nil {
 		r.cancel()
