@@ -1385,7 +1385,15 @@ func (a *Agent) resumeStreamWithBudget(ctx context.Context, threadID string, res
 		return errorStream(err)
 	}
 	return g.Stream(ctx, nil, lggraph.StreamOptions{
-		Options: lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue), RecursionLimit: budget},
+		Options: lggraph.Options{
+			ThreadID: threadID, Resume: encodeResumeValue(resumeValue), RecursionLimit: budget,
+			// Fork v0.13 strict resume (opt-in): a stale/empty/ambiguous
+			// answer errors BEFORE any write instead of silently
+			// mis-feeding an interrupt — the explicit-over-silent stance
+			// woca takes everywhere else. Partial maps stay legal (the
+			// unmatched interrupts re-pause natively).
+			StrictResume: true,
+		},
 		Modes:   streamModes,
 	})
 }

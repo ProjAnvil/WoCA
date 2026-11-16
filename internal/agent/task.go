@@ -809,9 +809,15 @@ func (a *Agent) sendArgs(ctx context.Context, child *Agent, call messages.ToolCa
 	}
 	name := subagentName(def, args)
 	history := []messages.Message{messages.Human(prompt)}
+	// Fork-mode system prompt (deepagents 0.7.35 borrow): keep the PARENT's
+	// system message instead of the child's subagent prompt — the fork is a
+	// continuation of this thread, and a shared prefix lets the provider
+	// reuse the parent's prompt cache across both conversations.
+	forkSystem := ""
 	if args.Fork {
 		base := a.transcriptSnapshot()
 		for len(base) > 0 && base[0].Role == messages.RoleSystem {
+			forkSystem = base[0].Content
 			base = base[1:]
 		}
 		history = append(append([]messages.Message(nil), base...), messages.Human(forkTaskPrompt(prompt)))
@@ -822,6 +828,13 @@ func (a *Agent) sendArgs(ctx context.Context, child *Agent, call messages.ToolCa
 		Session:      sessionFromCtx(ctx),
 		Origin:       "subagent:" + name + "#" + call.ID,
 		Description:  args.Description,
+	}
+	if forkSystem != "" {
+		msgs := append([]messages.Message{messages.System(forkSystem)}, history...)
+		return map[string]any{
+			"messages":          msgs,
+			subagentChannelName: meta,
+		}
 	}
 	msgs := append([]messages.Message{messages.System(child.systemPrompt)}, history...)
 	return map[string]any{

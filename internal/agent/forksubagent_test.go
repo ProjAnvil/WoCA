@@ -129,8 +129,11 @@ func TestTaskForkInheritsConversation(t *testing.T) {
 	if !sawEarlier || !sawFork {
 		t.Fatalf("fork history missing pieces: earlier=%v fork=%v (%d messages)", sawEarlier, sawFork, len(got))
 	}
-	if sawParentSystem {
-		t.Fatal("parent system prompt must not leak into the forked history")
+	// deepagents 0.7.35 borrow: the fork carries the PARENT's system message
+	// as the leading system — a shared prefix lets the provider reuse the
+	// parent's prompt cache across both conversations.
+	if !sawParentSystem || got[0].Role != messages.RoleSystem || !strings.Contains(got[0].Content, "parent-system") {
+		t.Fatalf("forked child must open with the parent's system message, got %+v", got[:min(2, len(got))])
 	}
 
 	// The parent got the forked subagent's report back as the tool result.

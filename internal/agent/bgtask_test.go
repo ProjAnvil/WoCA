@@ -1422,3 +1422,37 @@ func TestTaskManagerFinishedRecordsCappedPerSession(t *testing.T) {
 		t.Fatalf("sess-other = %+v", got)
 	}
 }
+
+// TestForkKeepsParentSystemPrompt (deepagents 0.7.35 borrow): a forked child
+// must carry the PARENT's system message — a shared prefix lets the provider
+// reuse the parent's prompt cache across both conversations.
+func TestForkKeepsParentSystemPrompt(t *testing.T) {
+	var saw string
+	sub := &promptRecordingModel{reply: "fork report"}
+	a, err := New(Config{
+		Model:          &taskCallModel{args: taskArgs{Description: "continue", Fork: true}},
+		SubagentModel:  sub,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "PARENT SYSTEM MARKER",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := runTaskViaGraphHist(t, a, "thread-fork-sys", messages.Human("earlier"), messages.Human("go"))
+	res, ok := taskResultFor(final, "t0")
+	if !ok || res.Content != "fork report" {
+		t.Fatalf("fork report = %q ok=%v (transcript %v)", res.Content, ok, final)
+	}
+	_ = saw
+	// The child's transcript is not directly observable here; assert through
+	// the fork prompt path instead: sendArgs keeps the parent system (white-box).
+	hist := []messages.Message{messages.System("PARENT SYSTEM MARKER"), messages.Human("ctx")}
+	a.setTranscript(hist)
+	call := messages.ToolCall{ID: "t0", Name: "Task", Args: map[string]any{"description": "d", "fork": true}}
+	state := a.sendArgs(t.Context(), a, call)
+	msgs := MessagesFrom(state)
+	if len(msgs) == 0 || msgs[0].Role != messages.RoleSystem || msgs[0].Content != "PARENT SYSTEM MARKER" {
+		t.Fatalf("fork child system = %+v, want the parent's system message first", msgs[:min(2, len(msgs))])
+	}
+}
