@@ -189,6 +189,7 @@ describe('ChatPanel activity header entry', () => {
           shells: [],
           tasks: [],
           crons: [],
+          subagents: [],
           wake: { enabled: true, capped: true, stalled: false, pending_notifications: 1 },
         },
         loading: false,

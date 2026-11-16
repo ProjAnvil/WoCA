@@ -19,12 +19,45 @@ import (
 // The managers satisfy the seam's interfaces directly — the assertions pin
 // the wiring (a method renamed away from its interface shape breaks here).
 var (
-	_ activity.Todos  = (*tools.TodoStore)(nil)
-	_ activity.Shells = (*tools.BackgroundShells)(nil)
-	_ activity.Tasks  = (*TaskManager)(nil)
-	_ activity.Crons  = (*cronScheduler)(nil)
-	_ activity.Queue  = (*queue.Buffer)(nil)
+	_ activity.Todos     = (*tools.TodoStore)(nil)
+	_ activity.Shells    = (*tools.BackgroundShells)(nil)
+	_ activity.Tasks     = (*TaskManager)(nil)
+	_ activity.Crons     = (*cronScheduler)(nil)
+	_ activity.Queue     = (*queue.Buffer)(nil)
+	_ activity.Subagents = (*subagentRunsSeam)(nil)
 )
+
+// subagentRunsSeam adapts the session-scoped subagent-runs registry
+// (subagentruns.go, Task 7) onto the seam's Subagents surface: the registry
+// keeps its own richer snapshot type (SubagentRun, with the unexported
+// token-baseline bookkeeping); the adapter projects it onto the seam's
+// wire-facing SubagentRunInfo, mapping the zero EndedAt to nil.
+type subagentRunsSeam struct {
+	runs *subagentRuns
+}
+
+func (s subagentRunsSeam) ListFor(session string) []activity.SubagentRunInfo {
+	src := s.runs.snapshotFor(session)
+	out := make([]activity.SubagentRunInfo, 0, len(src))
+	for _, run := range src {
+		info := activity.SubagentRunInfo{
+			Def:       run.Def,
+			CallID:    run.CallID,
+			Session:   run.Session,
+			Origin:    run.Origin,
+			State:     activity.SubagentState(run.State),
+			Tokens:    run.Tokens,
+			Report:    run.Report,
+			StartedAt: run.StartedAt,
+		}
+		if !run.EndedAt.IsZero() {
+			ended := run.EndedAt
+			info.EndedAt = &ended
+		}
+		out = append(out, info)
+	}
+	return out
+}
 
 // Re-exported seam vocabulary, historical names preserved.
 
@@ -43,6 +76,11 @@ type (
 	BackgroundTaskInfo = activity.BackgroundTaskInfo
 	// CronInfo is a snapshot of one scheduled entry.
 	CronInfo = activity.CronInfo
+	// SubagentRunInfo is the seam's snapshot of one foreground subagent
+	// child (graph-native HITL §3.7).
+	SubagentRunInfo = activity.SubagentRunInfo
+	// SubagentState is one child's lifecycle state.
+	SubagentState = activity.SubagentState
 )
 
 const (
@@ -52,6 +90,16 @@ const (
 	ActivityCrons  = activity.KindCrons
 	// ActivityWake is emitted by the server's wake driver only.
 	ActivityWake = activity.KindWake
+	// ActivitySubagents: the session's foreground subagent children changed.
+	ActivitySubagents = activity.KindSubagents
+)
+
+const (
+	SubagentStateRunning = activity.SubagentStateRunning
+	SubagentStateWaiting = activity.SubagentStateWaiting
+	SubagentStateDone    = activity.SubagentStateDone
+	SubagentStateFailed  = activity.SubagentStateFailed
+	SubagentStateStopped = activity.SubagentStateStopped
 )
 
 const (

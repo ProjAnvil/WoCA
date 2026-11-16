@@ -51,6 +51,7 @@ const snap = (sid: string, over: Partial<ActivitySnapshot> = {}): ActivitySnapsh
   shells: [],
   tasks: [],
   crons: [],
+  subagents: [],
   wake: { enabled: true, capped: false, stalled: false, pending_notifications: 0 },
   ...over,
 })
@@ -64,6 +65,7 @@ const shell = (id: string, status: BackgroundShell['status']): BackgroundShell =
   started_at: '2026-11-07T00:00:00Z',
   ended_at: status === 'running' ? null : '2026-11-07T00:00:01Z',
   output_bytes: 0,
+  owner: 'main',
 })
 
 const task = (id: string, status: BackgroundTask['status']): BackgroundTask => ({

@@ -67,15 +67,24 @@ type Queue interface {
 	DropScope(session string) int
 }
 
+// Subagents is the foreground-subagent-children surface (graph-native HITL
+// §3.7): the session-filtered snapshot read feeding the Subagents tab. The
+// registry behind it has no seam-side actions (children are stopped through
+// their parent run, not the panel), so Snapshot is its entire seam use.
+type Subagents interface {
+	ListFor(session string) []SubagentRunInfo
+}
+
 // Deps bundles the manager surfaces the seam aggregates. Every field must
 // be non-nil; the agent package is the only production constructor and
-// always wires all five.
+// always wires all six.
 type Deps struct {
-	Todos  Todos
-	Shells Shells
-	Tasks  Tasks
-	Crons  Crons
-	Queue  Queue
+	Todos     Todos
+	Shells    Shells
+	Tasks     Tasks
+	Crons     Crons
+	Queue     Queue
+	Subagents Subagents
 }
 
 // Seam is the activity seam: one instance per process, owned by the agent,
@@ -108,6 +117,10 @@ func (s *Seam) Snapshot(session string) Activity {
 	if todos == nil {
 		todos = []tools.Todo{} // unknown or cleared reads as [], never null
 	}
+	subagents := s.deps.Subagents.ListFor(session)
+	if subagents == nil {
+		subagents = []SubagentRunInfo{} // the registry renders [], never null
+	}
 	return Activity{
 		Todos:                todos,
 		TodosUpdatedAt:       updatedAt,
@@ -115,6 +128,7 @@ func (s *Seam) Snapshot(session string) Activity {
 		Shells:               s.deps.Shells.ListFor(session),
 		Tasks:                s.deps.Tasks.ListFor(session),
 		Crons:                s.deps.Crons.InfoFor(session),
+		Subagents:            subagents,
 		PendingNotifications: s.deps.Queue.TaggedCount(session),
 	}
 }

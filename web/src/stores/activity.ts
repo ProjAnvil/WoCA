@@ -68,6 +68,7 @@ function emptySnapshot(sid: string): ActivitySnapshot {
     shells: [],
     tasks: [],
     crons: [],
+    subagents: [],
     wake: { enabled: false, capped: false, stalled: false, pending_notifications: 0 },
   }
 }
@@ -503,6 +504,16 @@ export const useActivityStore = defineStore('activity', () => {
     return bySession.value[sid]?.snapshot?.crons.length ?? 0
   }
 
+  /** Still-active subagent children (running + waiting) — the Subagents
+   * tab's badge count; finished rows stay visible without a count. */
+  function subagentCountOf(sid: string): number {
+    const s = bySession.value[sid]?.snapshot
+    if (!s) return 0
+    // Tolerate snapshots without the subagents slice (fixtures, and any
+    // cached shape a mid-upgrade server might still hand out).
+    return (s.subagents ?? []).filter((x) => x.state === 'running' || x.state === 'waiting').length
+  }
+
   function unviewedFailureCountOf(sid: string): number {
     return unviewedFailures.value[sid] ?? 0
   }
@@ -552,6 +563,7 @@ export const useActivityStore = defineStore('activity', () => {
     todoCountOf,
     backgroundCountOf,
     cronCountOf,
+    subagentCountOf,
     unviewedFailureCountOf,
     outputOf,
     outputErrorOf,

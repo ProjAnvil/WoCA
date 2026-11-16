@@ -8,6 +8,23 @@ export default {
   tabTodo: '待办',
   tabBackground: '后台',
   tabScheduled: '定时',
+  // 子代理标签页（graph-native HITL §4.1/§4.2）
+  subagents: '子代理',
+  subagentsEmpty: '本会话没有子代理',
+  subStatus: {
+    running: '运行中',
+    waiting: '等待审批',
+    done: '完成',
+    failed: '失败',
+    stopped: '已停止',
+  },
+  subGotoApproval: '去审批',
+  viewTranscript: '查看记录',
+  subGotoApprovalLabel: '去审批 {name} 正在等待的请求',
+  transcriptLive: '运行中 — 子代理结束后在此显示最终报告',
+  // 后台标签页的发起方列
+  initiator: '发起方',
+  initiatorNoMatch: '没有匹配所选发起方的任务',
   // 面板状态
   loadingSr: '正在加载会话活动…',
   staleNotice: '可能已过期 — 重连后自动刷新',

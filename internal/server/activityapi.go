@@ -87,14 +87,37 @@ type activityTodos struct {
 }
 
 type activityShell struct {
-	Command     string  `json:"command"`
-	EndedAt     *string `json:"ended_at"`
-	ExitCode    *int    `json:"exit_code"` // null while running or after a signal kill
-	ID          string  `json:"id"`
-	OutputBytes int     `json:"output_bytes"`
-	StartedAt   string  `json:"started_at"`
-	Status      string  `json:"status"`
-	StoppedBy   string  `json:"stopped_by"`
+	Command  string  `json:"command"`
+	EndedAt  *string `json:"ended_at"`
+	ExitCode *int    `json:"exit_code"` // null while running or after a signal kill
+	ID       string  `json:"id"`
+	// Owner attributes the shell to its initiator (graph-native HITL
+	// §3.7): "main" or "subagent:<def>#<callID>" — the panel's initiator
+	// column. Pre-attribution records (written before the Owner field)
+	// read "main": unattributed shells could only have been started by
+	// the root graph of their day.
+	OutputBytes int    `json:"output_bytes"`
+	Owner       string `json:"owner"`
+	StartedAt   string `json:"started_at"`
+	Status      string `json:"status"`
+	StoppedBy   string `json:"stopped_by"`
+}
+
+// activitySubagent is one foreground subagent child (graph-native HITL
+// §3.7): identity, lifecycle state and the finished child's report — the
+// Subagents tab's row source. The live transcript stays in the child's
+// checkpoint namespace (by design); report is the readonly summary the
+// tab's transcript view renders.
+type activitySubagent struct {
+	CallID    string  `json:"call_id"`
+	Def       string  `json:"def"`
+	EndedAt   *string `json:"ended_at"`
+	Origin    string  `json:"origin"`
+	Report    string  `json:"report,omitempty"`
+	Session   string  `json:"session"`
+	StartedAt string  `json:"started_at"`
+	State     string  `json:"state"`
+	Tokens    int     `json:"tokens,omitempty"`
 }
 
 type activityTask struct {
@@ -125,13 +148,14 @@ type activityWakeInfo struct {
 }
 
 type activitySnapshot struct {
-	Crons      []activityCron   `json:"crons"`
-	ServerTime string           `json:"server_time"`
-	SessionID  string           `json:"session_id"`
-	Shells     []activityShell  `json:"shells"`
-	Tasks      []activityTask   `json:"tasks"`
-	Todos      activityTodos    `json:"todos"`
-	Wake       activityWakeInfo `json:"wake"`
+	Crons      []activityCron     `json:"crons"`
+	ServerTime string             `json:"server_time"`
+	SessionID  string             `json:"session_id"`
+	Shells     []activityShell    `json:"shells"`
+	Subagents  []activitySubagent `json:"subagents"`
+	Tasks      []activityTask     `json:"tasks"`
+	Todos      activityTodos      `json:"todos"`
+	Wake       activityWakeInfo   `json:"wake"`
 }
 
 type activityOutput struct {
@@ -194,10 +218,45 @@ func shellItem(st tools.BackgroundShellStatus) activityShell {
 		ExitCode:    shellExitCode(st),
 		ID:          st.ID,
 		OutputBytes: st.OutputBytes,
+		Owner:       shellOwnerText(st),
 		StartedAt:   rfc3339UTC(st.StartedAt),
 		Status:      shellStatusText(st),
 		StoppedBy:   string(st.StoppedBy),
 	}
+}
+
+// shellOwnerText renders the initiator attribution: the Owner value
+// verbatim when attributed, "main" for unattributed records (shells
+// started before the field existed, or by surfaces that never set it —
+// only the root graph could).
+func shellOwnerText(st tools.BackgroundShellStatus) string {
+	if st.Owner == "" {
+		return "main"
+	}
+	return st.Owner
+}
+
+func subagentItem(run agent.SubagentRunInfo) activitySubagent {
+	return activitySubagent{
+		CallID:    run.CallID,
+		Def:       run.Def,
+		EndedAt:   rfc3339UTCOrNull(derefTime(run.EndedAt)),
+		Origin:    run.Origin,
+		Report:    run.Report,
+		Session:   run.Session,
+		StartedAt: rfc3339UTC(run.StartedAt),
+		State:     string(run.State),
+		Tokens:    run.Tokens,
+	}
+}
+
+// derefTime maps the seam's nil-able end time back onto a zero time for
+// rfc3339UTCOrNull (nil → null on the wire).
+func derefTime(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
 }
 
 func taskItem(info agent.BackgroundTaskInfo) activityTask {
@@ -264,12 +323,16 @@ func (s *Server) handleActivitySnapshot(w http.ResponseWriter, r *http.Request) 
 		ServerTime: rfc3339UTC(time.Now()),
 		SessionID:  sid,
 		Shells:     make([]activityShell, 0, len(act.Shells)),
+		Subagents:  make([]activitySubagent, 0, len(act.Subagents)),
 		Tasks:      make([]activityTask, 0, len(act.Tasks)),
 		Todos:      activityTodos{Items: todos, UpdatedAt: rfc3339UTCOrNull(todosUpdatedAt)},
 		Wake:       s.activityWakeInfo(sid, act.PendingNotifications),
 	}
 	for _, st := range act.Shells {
 		snap.Shells = append(snap.Shells, shellItem(st))
+	}
+	for _, run := range act.Subagents {
+		snap.Subagents = append(snap.Subagents, subagentItem(run))
 	}
 	for _, info := range act.Tasks {
 		snap.Tasks = append(snap.Tasks, taskItem(info))

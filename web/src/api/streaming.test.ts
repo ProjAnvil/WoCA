@@ -283,7 +283,7 @@ describe('global event dispatch', () => {
     emit(es, 'session_state', 'null')
     emit(es, 'session_state', '5')
     emit(es, 'wake_capped', '[]')
-    emit(es, 'activity_changed', JSON.stringify({ kind: 'subagents', session_id: 's1' })) // a server kind this client doesn't know
+    emit(es, 'activity_changed', JSON.stringify({ kind: 'snowflakes', session_id: 's1' })) // a server kind this client doesn't know
     emit(es, 'activity_changed', JSON.stringify({ session_id: 's1' })) // kind missing
 
     expect(h.onSessionState).not.toHaveBeenCalled()

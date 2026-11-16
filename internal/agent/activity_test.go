@@ -173,6 +173,40 @@ func TestActivitySnapshotAggregatesAllManagers(t *testing.T) {
 	}
 }
 
+// The subagent-runs registry feeds the seam's Subagents slice (graph-native
+// HITL §3.7, Task 12): ActivityFor carries the session's runs — facts only,
+// the base-token bookkeeping stays behind — and every registry transition
+// announces itself as kind=subagents so the panel refetches.
+func TestActivityForSurfacesSubagentRuns(t *testing.T) {
+	a, _ := newActivityAgent(t)
+	rec := &activityRecorder{}
+	a.SetActivityObserver(rec.observe)
+
+	a.subagents.start(SubagentRun{Def: "general", CallID: "call-9", Session: "sess-sub", Origin: "subagent:general#call-9"})
+	snap := a.ActivityFor("sess-sub")
+	if len(snap.Subagents) != 1 {
+		t.Fatalf("subagents = %+v, want 1 run", snap.Subagents)
+	}
+	run := snap.Subagents[0]
+	if run.Def != "general" || run.CallID != "call-9" || run.Origin != "subagent:general#call-9" ||
+		run.State != SubagentStateRunning || run.StartedAt.IsZero() {
+		t.Fatalf("subagent run = %+v", run)
+	}
+	if run.EndedAt != nil || run.Tokens != 0 || run.Report != "" {
+		t.Fatalf("running run must carry no terminal facts: %+v", run)
+	}
+
+	// Registry transitions fire kind=subagents (the panel's refetch signal).
+	if n := rec.count("sess-sub", ActivitySubagents); n != 1 {
+		t.Fatalf("kind=subagents events = %d, want 1 (all: %+v)", n, rec.events)
+	}
+
+	// Ownership: a foreign session sees none of the runs.
+	if other := a.ActivityFor("sess-other"); len(other.Subagents) != 0 || other.Subagents == nil {
+		t.Fatalf("foreign subagents = %+v", other.Subagents)
+	}
+}
+
 func TestActivityTailsAreBounded(t *testing.T) {
 	a, reg := newActivityAgent(t)
 	s1 := tracing.WithRun(t.Context(), "run-t", "sess-t")

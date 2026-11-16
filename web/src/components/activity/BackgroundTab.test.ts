@@ -48,6 +48,7 @@ const shell = (
   started_at: '2026-11-07T00:00:00Z',
   ended_at: status === 'running' ? null : '2026-11-07T00:00:01Z',
   output_bytes: 0,
+  owner: 'main',
   ...over,
 })
 
@@ -72,6 +73,7 @@ const snap = (sid: string, over: Partial<ActivitySnapshot> = {}): ActivitySnapsh
   shells: [],
   tasks: [],
   crons: [],
+  subagents: [],
   wake: { enabled: true, capped: false, stalled: false, pending_notifications: 0 },
   ...over,
 })
@@ -303,6 +305,69 @@ describe('BackgroundTab announcements', () => {
     await flush()
     expect(w.get('[aria-live="polite"]').text()).toBe(
       i18n.global.t('activity.liveFinished', { name: '$ cmd-r1' }),
+    )
+  })
+})
+
+describe('BackgroundTab initiator column', () => {
+  it('renders an origin badge per row with the act-origin testid; main stays quiet', async () => {
+    const w = await mountWith({
+      shells: [
+        shell('m1', 'completed'),
+        shell('s2', 'completed', { owner: 'subagent:researcher#call-a1b2' }),
+      ],
+    })
+    const main = w.get('[data-testid="act-origin-m1"]')
+    expect(main.text()).toBe(i18n.global.t('chat.sourceMain'))
+    expect(main.classes()).toContain('main')
+    // Subagent rows carry the def name plus the 4-char short code.
+    // the badge's CSS uppercases visually; the DOM text stays raw
+    expect(w.get('[data-testid="act-origin-s2"]').text()).toBe('researcher#a1b2')
+  })
+
+  it('the initiator header opens a multi-select filter over the origins present', async () => {
+    const w = await mountWith({
+      shells: [
+        shell('m1', 'completed'),
+        shell('s2', 'completed', { owner: 'subagent:researcher#call-a1b2' }),
+        shell('s3', 'completed', { owner: 'subagent:researcher#call-c3d4' }),
+      ],
+    })
+    expect(w.find('.act-origin-menu').exists()).toBe(false)
+    await w.get('[data-testid="initiator-col"]').trigger('click')
+    expect(w.get('[data-testid="initiator-col"]').attributes('aria-expanded')).toBe('true')
+    // Options: main once + the researcher def once (calls fold into defs).
+    const opts = w.findAll('.act-origin-menu input[type="checkbox"]')
+    expect(opts).toHaveLength(2)
+    // Selecting only the subagent origin hides the main shell.
+    await opts[1].setValue(true)
+    expect(w.find('[data-testid="act-origin-m1"]').exists()).toBe(false)
+    expect(w.findAll('.act-row')).toHaveLength(2)
+    // Multi-select: adding main brings every row back.
+    await opts[0].setValue(true)
+    expect(w.findAll('.act-row')).toHaveLength(3)
+    // Clearing the selection restores the unfiltered list.
+    await opts[0].setValue(false)
+    await opts[1].setValue(false)
+    expect(w.findAll('.act-row')).toHaveLength(3)
+  })
+
+  it('a selection whose rows all vanished shows the no-match note, not the empty state', async () => {
+    const w = await mountWith({
+      shells: [shell('m1', 'completed'), shell('s2', 'completed', { owner: 'subagent:researcher#call-a1b2' })],
+    })
+    await w.get('[data-testid="initiator-col"]').trigger('click')
+    const opts = w.findAll('.act-origin-menu input[type="checkbox"]')
+    await opts[1].setValue(true) // researcher only
+    expect(w.find('[data-testid="act-origin-m1"]').exists()).toBe(false)
+    // The child's record drops out of the snapshot (pruned); the selection
+    // now matches nothing — a note, never the session-level empty state.
+    api.getActivity.mockResolvedValueOnce(snap('s1', { shells: [shell('m1', 'completed')] }))
+    await activity.fetchNow('s1')
+    await flush()
+    expect(w.find('.act-row').exists()).toBe(false)
+    expect(w.get('[data-testid="bg-no-match"]').text()).toBe(
+      i18n.global.t('activity.initiatorNoMatch'),
     )
   })
 })

@@ -105,6 +105,45 @@ type CronInfo struct {
 	CreatedAt, LastFiredAt, NextFireAt time.Time
 }
 
+// SubagentState is one foreground subagent child's lifecycle state
+// (graph-native HITL §3.7), mirroring the runs registry's vocabulary.
+type SubagentState string
+
+const (
+	// SubagentStateRunning: the child graph is executing.
+	SubagentStateRunning SubagentState = "running"
+	// SubagentStateWaiting: the child paused on an interrupt (approval
+	// ask) awaiting the user's answer.
+	SubagentStateWaiting SubagentState = "waiting"
+	// SubagentStateDone: the child finished and its report backfilled.
+	SubagentStateDone SubagentState = "done"
+	// SubagentStateFailed: the child errored out.
+	SubagentStateFailed SubagentState = "failed"
+	// SubagentStateStopped: the child died with its parent run's
+	// cancellation.
+	SubagentStateStopped SubagentState = "stopped"
+)
+
+// SubagentRunInfo is the seam's snapshot of one foreground subagent child:
+// the wire-facing facts of the agent package's registry entry (SubagentRun),
+// minus the unexported token-baseline bookkeeping. EndedAt is nil while the
+// child is running or waiting; Tokens and Report are 0/"" until finish.
+// The agent package adapts its registry onto this shape (Task 12).
+type SubagentRunInfo struct {
+	Def    string
+	CallID string
+	// Session is the starting run's session id; Origin is the shell-owner
+	// form "subagent:<def>#<callID>" — the initiator attribution the
+	// shells tab and approval cards share.
+	Session   string
+	Origin    string
+	State     SubagentState
+	Tokens    int
+	Report    string
+	StartedAt time.Time
+	EndedAt   *time.Time // nil while running/waiting
+}
+
 // Activity is the per-session activity snapshot (PM §4.3): the todo list,
 // background shells, background subagent tasks, scheduled prompts and the
 // pending-notification count, in one shape for the panel. It carries
@@ -137,6 +176,10 @@ type Activity struct {
 	Shells []tools.BackgroundShellStatus
 	Tasks  []BackgroundTaskInfo
 	Crons  []CronInfo
+	// Subagents is the session's foreground subagent children (graph-native
+	// HITL §3.7), in start order — the Subagents tab's source. Non-nil like
+	// every slice.
+	Subagents []SubagentRunInfo
 	// PendingNotifications counts the session's queued tagged
 	// notifications, Quiet included (the panel's wake badge numerator).
 	PendingNotifications int

@@ -571,11 +571,12 @@ func New(cfg Config) (*Agent, error) {
 	// activity_delegate.go). Built before the OnChange wirings below, which
 	// hand the seam's Emit to each manager as its hook destination.
 	a.activity = activity.New(activity.Deps{
-		Todos:  a.registry.TodoStore(),
-		Shells: a.registry.Background(),
-		Tasks:  a.tasks,
-		Crons:  a.cron,
-		Queue:  &a.inputs,
+		Todos:     a.registry.TodoStore(),
+		Shells:    a.registry.Background(),
+		Tasks:     a.tasks,
+		Crons:     a.cron,
+		Queue:     &a.inputs,
+		Subagents: subagentRunsSeam{runs: a.subagents},
 	})
 	// The memory runtime takes its dependencies as inputs: the KV store,
 	// the engine, the settings loader and a nil-safe obs log sink.

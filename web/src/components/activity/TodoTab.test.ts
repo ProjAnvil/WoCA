@@ -43,6 +43,7 @@ describe('TodoTab', () => {
       shells: [],
       tasks: [],
       crons: [],
+      subagents: [],
       wake: { enabled: true, capped: false, stalled: false, pending_notifications: 0 },
     } satisfies ActivitySnapshot)
     await activity.fetchNow('s1')

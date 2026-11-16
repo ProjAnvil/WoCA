@@ -24,6 +24,8 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
+	"github.com/projanvil/langchain-golang/core/runnables"
+	"github.com/projanvil/langchain-golang/core/schema"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/agent"
@@ -438,6 +440,7 @@ func TestActivitySnapshotUnknownSessionIsEmpty(t *testing.T) {
 		Shells     json.RawMessage `json:"shells"`
 		Tasks      json.RawMessage `json:"tasks"`
 		Crons      json.RawMessage `json:"crons"`
+		Subagents  json.RawMessage `json:"subagents"`
 		Wake       struct {
 			Enabled              bool `json:"enabled"`
 			Capped               bool `json:"capped"`
@@ -452,9 +455,10 @@ func TestActivitySnapshotUnknownSessionIsEmpty(t *testing.T) {
 		t.Fatalf("session_id = %q", raw.SessionID)
 	}
 	parseRFC3339UTC(t, raw.ServerTime)
-	if string(raw.Shells) != "[]" || string(raw.Tasks) != "[]" || string(raw.Crons) != "[]" {
-		t.Fatalf("arrays must render [] not null: shells=%s tasks=%s crons=%s",
-			raw.Shells, raw.Tasks, raw.Crons)
+	if string(raw.Shells) != "[]" || string(raw.Tasks) != "[]" || string(raw.Crons) != "[]" ||
+		string(raw.Subagents) != "[]" {
+		t.Fatalf("arrays must render [] not null: shells=%s tasks=%s crons=%s subagents=%s",
+			raw.Shells, raw.Tasks, raw.Crons, raw.Subagents)
 	}
 	var todos struct {
 		Items     json.RawMessage `json:"items"`
@@ -472,6 +476,107 @@ func TestActivitySnapshotUnknownSessionIsEmpty(t *testing.T) {
 	// No settings store: the design default is wake on.
 	if !raw.Wake.Enabled || raw.Wake.Capped || raw.Wake.Stalled || raw.Wake.PendingNotifications != 0 {
 		t.Fatalf("wake = %+v, want enabled defaults", raw.Wake)
+	}
+}
+
+// subagentSectionModel scripts the subagents-section scenario parent: it
+// re-issues the arm batch (one background shell + one foreground Task)
+// until BOTH call ids carry tool results — a transcript-driven model, not a
+// cursor-scripted FakeChatModel, because the fan-out re-binds tools per
+// round and every bind is a fresh cursor copy that would re-arm forever
+// (the same reason subgraphfanout_test.go's N1 parent is transcript-driven).
+type subagentSectionModel struct{}
+
+func (m *subagentSectionModel) pick(input []messages.Message) messages.Message {
+	answered := map[string]bool{}
+	for _, msg := range input {
+		if msg.Role == messages.RoleTool {
+			answered[msg.ToolCallID] = true
+		}
+	}
+	if answered["sub-sec-shell"] && answered["sub-sec-task"] {
+		return messages.AI("after the child")
+	}
+	return messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+		{ID: "sub-sec-shell", Name: "Bash", Args: map[string]any{
+			"command": "sleep 30", "run_in_background": true}},
+		{ID: "sub-sec-task", Name: "Task", Args: map[string]any{
+			"description": "Summarize the tree", "prompt": "Summarize the tree"}},
+	}}
+}
+
+func (m *subagentSectionModel) Invoke(_ context.Context, input []messages.Message, _ ...runnables.Option) (messages.Message, error) {
+	return m.pick(input), nil
+}
+
+func (m *subagentSectionModel) Stream(_ context.Context, input []messages.Message, _ ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	return runnables.NewSliceStream([]messages.Message{m.pick(input)}), nil
+}
+
+func (m *subagentSectionModel) Batch(ctx context.Context, inputs [][]messages.Message, opts ...runnables.Option) ([]messages.Message, error) {
+	out := make([]messages.Message, len(inputs))
+	for i, in := range inputs {
+		out[i], _ = m.Invoke(ctx, in, opts...)
+	}
+	return out, nil
+}
+
+func (m *subagentSectionModel) BindTools([]coretools.Tool) (language.ChatModel, error) {
+	return m, nil
+}
+
+func (m *subagentSectionModel) Capabilities() language.ChatModelCapabilities {
+	return language.ChatModelCapabilities{ToolCalling: true, Streaming: true}
+}
+
+func (m *subagentSectionModel) InputSchema() schema.Schema {
+	return schema.Schema{"type": "array", "description": "chat messages"}
+}
+
+func (m *subagentSectionModel) OutputSchema() schema.Schema { return schema.Schema{"type": "object"} }
+
+// The Subagents section (graph-native HITL §3.7, Task 12): a foreground
+// Task child registers in the session's runs registry and surfaces in the
+// snapshot with its lifecycle facts (def, call id, origin, done state,
+// report, timestamps); shells carry the initiator attribution — "main" for
+// shells the root graph started. Auto-wake is off so the sleeping shell's
+// eventual completion can never cycle the scripted responses.
+func TestActivitySubagentsSectionAndShellOwner(t *testing.T) {
+	env := newActivityServerAgentMod(t, 0, nil, func(ac *agent.Config) {
+		ac.Model = &subagentSectionModel{}
+		ac.SubagentModel = language.NewFakeChatModel(language.WithResponses(messages.AI("child report")))
+	}, func(c *Config) { c.Settings = wakeSettings(t, settings.KeyAutoWake, "false") })
+
+	runID, sid, _ := postRun(t, env.ts.URL, "s1", "run a subagent")
+	waitRunDoneInProc(t, env.s, runID)
+
+	snap := waitForActivity(t, env, sid, "one done subagent run", func(m map[string]any) bool {
+		subs, _ := m["subagents"].([]any)
+		return len(subs) == 1
+	})
+	subs, _ := snap["subagents"].([]any)
+	sub, _ := subs[0].(map[string]any)
+	if sub["def"] != "general" || sub["state"] != "done" {
+		t.Fatalf("subagent run = %v", sub)
+	}
+	if sub["report"] != "child report" {
+		t.Fatalf("subagent report = %v", sub)
+	}
+	callID, _ := sub["call_id"].(string)
+	if callID == "" || sub["origin"] != "subagent:general#"+callID {
+		t.Fatalf("subagent identity = %v", sub)
+	}
+	if _, ok := sub["started_at"].(string); !ok {
+		t.Fatalf("subagent started_at = %v", sub["started_at"])
+	}
+	if _, ok := sub["ended_at"].(string); !ok {
+		t.Fatalf("subagent ended_at = %v", sub["ended_at"])
+	}
+
+	// Shell initiator: the arm round's shell was started by the main graph.
+	shells := shellEntries(t, snap)
+	if len(shells) != 1 || shells[0]["owner"] != "main" {
+		t.Fatalf("shells = %v, want one main-owned shell", shells)
 	}
 }
 

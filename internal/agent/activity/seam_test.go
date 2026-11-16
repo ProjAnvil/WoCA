@@ -118,6 +118,22 @@ func (f *fakeCrons) Delete(id, session string) bool {
 	return false
 }
 
+// fakeSubagents is a minimal Subagents implementation: a static list,
+// filtered by session the way the registry's snapshotFor is.
+type fakeSubagents struct {
+	list []SubagentRunInfo
+}
+
+func (f *fakeSubagents) ListFor(session string) []SubagentRunInfo {
+	out := make([]SubagentRunInfo, 0, len(f.list))
+	for _, run := range f.list {
+		if run.Session == session {
+			out = append(out, run)
+		}
+	}
+	return out
+}
+
 // fakeQueue is a minimal Queue implementation: per-session tagged counts
 // plus recorded scoped drops.
 type fakeQueue struct {
@@ -173,7 +189,47 @@ func newSeam(t *testing.T, tasks *fakeTasks, crons *fakeCrons, q *fakeQueue) (*S
 	if q == nil {
 		q = &fakeQueue{counts: map[string]int{}}
 	}
-	return New(Deps{Todos: todos, Shells: shells, Tasks: tasks, Crons: crons, Queue: q}), todos, shells
+	return New(Deps{
+		Todos:     todos,
+		Shells:    shells,
+		Tasks:     tasks,
+		Crons:     crons,
+		Queue:     q,
+		Subagents: &fakeSubagents{},
+	}), todos, shells
+}
+
+// The Subagents slice (graph-native HITL §3.7): the snapshot carries the
+// registry's session-filtered runs verbatim, and an unknown session — or a
+// registry with nothing for the session — renders [], never null.
+func TestSnapshotCarriesSubagents(t *testing.T) {
+	s, _, _ := newSeam(t, nil, nil, nil)
+	ended := time.Unix(2500, 0).UTC()
+	s.deps.Subagents = &fakeSubagents{list: []SubagentRunInfo{
+		{Def: "general", CallID: "call-1", Session: "sess-1", Origin: "subagent:general#call-1", State: SubagentStateRunning, StartedAt: time.Unix(1000, 0).UTC()},
+		{Def: "researcher", CallID: "call-2", Session: "sess-2", Origin: "subagent:researcher#call-2", State: SubagentStateDone, Tokens: 42, Report: "found it", StartedAt: time.Unix(2000, 0).UTC(), EndedAt: &ended},
+	}}
+
+	snap := s.Snapshot("sess-1")
+	if len(snap.Subagents) != 1 {
+		t.Fatalf("subagents = %+v, want the one sess-1 run", snap.Subagents)
+	}
+	run := snap.Subagents[0]
+	if run.Def != "general" || run.CallID != "call-1" || run.Origin != "subagent:general#call-1" ||
+		run.State != SubagentStateRunning || !run.StartedAt.Equal(time.Unix(1000, 0).UTC()) {
+		t.Fatalf("subagent run = %+v", run)
+	}
+	if run.EndedAt != nil || run.Tokens != 0 || run.Report != "" {
+		t.Fatalf("running run must carry no terminal facts: %+v", run)
+	}
+
+	// A session with no children and an unknown session both render [].
+	for _, sid := range []string{"sess-none", "no-such-session"} {
+		empty := s.Snapshot(sid)
+		if empty.Subagents == nil || len(empty.Subagents) != 0 {
+			t.Fatalf("subagents for %s = %+v, want empty non-nil", sid, empty.Subagents)
+		}
+	}
 }
 
 func TestSnapshotAggregatesAndNormalizes(t *testing.T) {

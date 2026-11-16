@@ -53,6 +53,7 @@ function snapWith(crons: CronEntry[], w: WakeState): ActivitySnapshot {
     todos: { items: [], updated_at: null },
     shells: [],
     tasks: [],
+    subagents: [],
     crons,
     wake: w,
   }

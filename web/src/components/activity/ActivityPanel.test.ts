@@ -13,6 +13,7 @@ import type {
   ActivitySnapshot,
   BackgroundShell,
   CronEntry,
+  SubagentRun,
   TodoItem,
 } from '../../types'
 
@@ -40,6 +41,7 @@ const snap = (sid: string, over: Partial<ActivitySnapshot> = {}): ActivitySnapsh
   shells: [],
   tasks: [],
   crons: [],
+  subagents: [],
   wake: { enabled: true, capped: false, stalled: false, pending_notifications: 0 },
   ...over,
 })
@@ -53,6 +55,17 @@ const shell = (id: string, status: BackgroundShell['status']): BackgroundShell =
   started_at: '2026-11-07T00:00:00Z',
   ended_at: status === 'running' ? null : '2026-11-07T00:00:01Z',
   output_bytes: 0,
+  owner: 'main',
+})
+
+const sub = (call_id: string, state: SubagentRun['state']): SubagentRun => ({
+  def: 'general',
+  call_id,
+  session: 's1',
+  origin: `subagent:general#${call_id}`,
+  state,
+  started_at: '2026-11-07T00:00:00Z',
+  ended_at: state === 'running' || state === 'waiting' ? null : '2026-11-07T00:00:01Z',
 })
 
 const cron = (id: string): CronEntry => ({
@@ -84,7 +97,7 @@ beforeEach(() => {
 })
 
 describe('ActivityPanel dialog + tabs', () => {
-  it('renders as a non-modal dialog with a tablist and three tabs', async () => {
+  it('renders as a non-modal dialog with a tablist and four tabs', async () => {
     api.getActivity.mockResolvedValueOnce(snap('s1'))
     await activity.fetchNow('s1')
     const w = mountPanel()
@@ -94,13 +107,15 @@ describe('ActivityPanel dialog + tabs', () => {
     expect(w.findAll('[role="tab"]').map((x) => x.text())).toEqual([
       expect.stringContaining(i18n.global.t('activity.tabTodo')),
       expect.stringContaining(i18n.global.t('activity.tabBackground')),
+      expect.stringContaining(i18n.global.t('activity.subagents')),
       expect.stringContaining(i18n.global.t('activity.tabScheduled')),
     ])
-    // background is the default tab
+    // background is the default tab; the subagents tab carries the contract testid
     expect(w.get('[role="tab"][data-tab="background"]').attributes('aria-selected')).toBe('true')
+    expect(w.get('[role="tab"][data-tab="subagents"]').attributes('data-testid')).toBe('sub-tab')
   })
 
-  it('shows each tab count from the snapshot (todo done/total, bg total, crons)', async () => {
+  it('shows each tab count from the snapshot (todo done/total, bg total, active subagents, crons)', async () => {
     api.getActivity.mockResolvedValueOnce(
       snap('s1', {
         todos: {
@@ -108,6 +123,11 @@ describe('ActivityPanel dialog + tabs', () => {
           updated_at: '2026-11-07T00:00:00Z',
         },
         shells: [shell('s1', 'running'), shell('s2', 'completed')],
+        subagents: [
+          sub('call-1', 'running'),
+          sub('call-2', 'waiting'),
+          sub('call-3', 'done'),
+        ],
         crons: [cron('c1')],
       }),
     )
@@ -115,6 +135,8 @@ describe('ActivityPanel dialog + tabs', () => {
     const w = mountPanel()
     expect(w.get('[data-tab="todo"] .act-tab-count').text()).toBe('2/3')
     expect(w.get('[data-tab="background"] .act-tab-count').text()).toBe('2')
+    // Only the still-active children count (running + waiting).
+    expect(w.get('[data-tab="subagents"] .act-tab-count').text()).toBe('2')
     expect(w.get('[data-tab="scheduled"] .act-tab-count').text()).toBe('1')
   })
 
@@ -127,7 +149,7 @@ describe('ActivityPanel dialog + tabs', () => {
       expect(tabs()[1].attributes('tabindex')).toBe('0')
       expect(tabs()[2].attributes('tabindex')).toBe('-1')
 
-      await tabs()[2].trigger('click')
+      await tabs()[3].trigger('click') // scheduled is the last of four now
       expect(w.get('[data-tab="scheduled"]').attributes('aria-selected')).toBe('true')
 
       await w.get('.act-tabs').trigger('keydown', { key: 'ArrowRight' })
@@ -231,6 +253,10 @@ describe('ActivityPanel data states', () => {
     await w.get('[data-tab="scheduled"]').trigger('click')
     expect(w.get('[aria-labelledby="act-tab-scheduled"]').text()).toContain(
       i18n.global.t('activity.scheduledEmpty'),
+    )
+    await w.get('[data-tab="subagents"]').trigger('click')
+    expect(w.get('[aria-labelledby="act-tab-subagents"]').text()).toContain(
+      i18n.global.t('activity.subagentsEmpty'),
     )
   })
 })

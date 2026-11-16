@@ -607,7 +607,7 @@ export interface WebSearchTestResult {
  * Which slice of a session's activity an `activity_changed` signal refers
  * to (agent.ActivityKind plus the server's own "wake" driver signal).
  */
-export const ACTIVITY_KINDS = ['todos', 'shells', 'tasks', 'crons', 'wake'] as const
+export const ACTIVITY_KINDS = ['todos', 'shells', 'tasks', 'crons', 'subagents', 'wake'] as const
 
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number]
 
@@ -646,6 +646,9 @@ export interface BackgroundShell {
   started_at: string
   ended_at: string | null
   output_bytes: number
+  /** Initiator attribution (graph-native HITL §3.7): "main" or
+   * "subagent:<def>#<callID>" — the BackgroundTab initiator column. */
+  owner: string
 }
 
 /** One background subagent task (Task run_in_background). */
@@ -679,6 +682,34 @@ export interface WakeState {
   pending_notifications: number
 }
 
+/**
+ * Lifecycle state of a foreground subagent child (the runs registry's
+ * vocabulary, graph-native HITL §3.7): running → waiting ⇄ running →
+ * done | failed | stopped.
+ */
+export type SubagentState = 'running' | 'waiting' | 'done' | 'failed' | 'stopped'
+
+/**
+ * One foreground subagent child of the session (activity snapshot's
+ * subagents array). The live transcript stays in the child's checkpoint
+ * namespace by design; `report` is the final summary the readonly
+ * transcript view renders (v1 source decision, Task 12).
+ */
+export interface SubagentRun {
+  def: string
+  /** The parent's Task tool-call id — the row identity. */
+  call_id: string
+  session: string
+  /** "subagent:<def>#<callID>" — the shell-owner form. */
+  origin: string
+  state: SubagentState
+  /** At finish, when available. */
+  tokens?: number
+  report?: string
+  started_at: string
+  ended_at: string | null
+}
+
 /** GET /api/sessions/{id}/activity — the panel's full-state snapshot. */
 export interface ActivitySnapshot {
   session_id: string
@@ -688,6 +719,7 @@ export interface ActivitySnapshot {
   shells: BackgroundShell[]
   tasks: BackgroundTask[]
   crons: CronEntry[]
+  subagents: SubagentRun[]
   wake: WakeState
 }
 

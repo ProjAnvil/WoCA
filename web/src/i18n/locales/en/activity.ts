@@ -8,6 +8,23 @@ export default {
   tabTodo: 'Todo',
   tabBackground: 'Background',
   tabScheduled: 'Scheduled',
+  // Subagents tab (graph-native HITL §4.1/§4.2)
+  subagents: 'Subagents',
+  subagentsEmpty: 'No subagents in this session',
+  subStatus: {
+    running: 'Running',
+    waiting: 'Waiting for approval',
+    done: 'Done',
+    failed: 'Failed',
+    stopped: 'Stopped',
+  },
+  subGotoApproval: 'Go to approval',
+  viewTranscript: 'View transcript',
+  subGotoApprovalLabel: 'Go to the approval {name} is waiting for',
+  transcriptLive: 'Running — the final report appears here when the child finishes',
+  // Background tab initiator column
+  initiator: 'Initiator',
+  initiatorNoMatch: 'No items match the selected initiators',
   // Panel states
   loadingSr: 'Loading session activity…',
   staleNotice: 'May be out of date — will refresh on reconnect',

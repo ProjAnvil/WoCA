@@ -1,29 +1,33 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { CalendarClock, CircleSlash, ListChecks, Terminal, TriangleAlert, X } from 'lucide-vue-next'
+import { CalendarClock, CircleSlash, ListChecks, Terminal, TriangleAlert, Users, X } from 'lucide-vue-next'
 import { useActivityStore } from '../../stores/activity'
 import WSkeleton from '../ui/WSkeleton.vue'
 import WButton from '../ui/WButton.vue'
 import TodoTab from './TodoTab.vue'
 import BackgroundTab from './BackgroundTab.vue'
+import SubagentTab from './SubagentTab.vue'
 import ScheduledTab from './ScheduledTab.vue'
 
 // The anchored popover's card (UIUX §3 option A): tablist (Todo /
-// Background / Scheduled, each with a count) + the data state machine
-// (loading → ready | empty-per-tab | error+retry | unavailable). Rendered
-// inside ActivityTrigger's teleported, fixed-position shell; the trigger
-// owns open/close and focus return.
+// Background / Subagents / Scheduled, each with a count) + the data state
+// machine (loading → ready | empty-per-tab | error+retry | unavailable).
+// Rendered inside ActivityTrigger's teleported, fixed-position shell; the
+// trigger owns open/close and focus return.
 const props = defineProps<{ sid: string }>()
 const emit = defineEmits<{ close: []; compose: [] }>()
 
 const { t } = useI18n()
 const activity = useActivityStore()
 
-type TabId = 'todo' | 'background' | 'scheduled'
-const TABS: Array<{ id: TabId; labelKey: string; icon: Component }> = [
+type TabId = 'todo' | 'background' | 'subagents' | 'scheduled'
+// testid: the Subagents tab button carries the contract id "sub-tab"
+// (§4.2); the other tabs address by data-tab like the tablist tests do.
+const TABS: Array<{ id: TabId; labelKey: string; icon: Component; testid?: string }> = [
   { id: 'todo', labelKey: 'activity.tabTodo', icon: ListChecks },
   { id: 'background', labelKey: 'activity.tabBackground', icon: Terminal },
+  { id: 'subagents', labelKey: 'activity.subagents', icon: Users, testid: 'sub-tab' },
   { id: 'scheduled', labelKey: 'activity.tabScheduled', icon: CalendarClock },
 ]
 
@@ -41,6 +45,12 @@ function tabCount(id: TabId): string {
   }
   if (id === 'background') {
     const n = activity.backgroundCountOf(props.sid)
+    return n ? String(n) : ''
+  }
+  if (id === 'subagents') {
+    // Only still-active children count (running + waiting); finished rows
+    // stay listed without a badge.
+    const n = activity.subagentCountOf(props.sid)
     return n ? String(n) : ''
   }
   const n = activity.cronCountOf(props.sid)
@@ -126,6 +136,7 @@ function onTablistKeydown(e: KeyboardEvent): void {
           type="button"
           role="tab"
           :data-tab="tb.id"
+          :data-testid="tb.testid"
           :aria-selected="tab === tb.id"
           :tabindex="tab === tb.id ? 0 : -1"
           @click="tab = tb.id"
@@ -188,6 +199,14 @@ function onTablistKeydown(e: KeyboardEvent): void {
           <BackgroundTab :sid="props.sid" />
         </div>
         <div
+          v-show="tab === 'subagents'"
+          class="act-tabpanel"
+          role="tabpanel"
+          aria-labelledby="act-tab-subagents"
+        >
+          <SubagentTab :sid="props.sid" />
+        </div>
+        <div
           v-show="tab === 'scheduled'"
           class="act-tabpanel"
           role="tabpanel"
@@ -204,7 +223,9 @@ function onTablistKeydown(e: KeyboardEvent): void {
 .act-pop-card {
   display: flex;
   flex-direction: column;
-  width: min(400px, calc(100vw - 16px));
+  /* 440px (was 400) since the Subagents tab landed (§4.2): the row's
+   * badge + name + status + elapsed + tokens column needs the width. */
+  width: min(440px, calc(100vw - 16px));
   max-height: 65vh;
   background: var(--surface);
   border: 1px solid var(--border);
