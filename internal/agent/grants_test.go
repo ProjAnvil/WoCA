@@ -92,8 +92,40 @@ func TestGrantKeyShapes(t *testing.T) {
 			want: "",
 		},
 		{
+			// The file plane (deepagents borrow): approving one write grants
+			// its top directory, a root file grants exactly itself.
+			name: "write descending path grants its top directory",
+			call: messages.ToolCall{Name: "Write", Args: map[string]any{"file_path": "src/parse/x.go", "content": "y"}},
+			want: "file:src/*",
+		},
+		{
+			name: "edit root file grants exactly itself",
+			call: messages.ToolCall{Name: "Edit", Args: map[string]any{"file_path": "notes.txt", "old_string": "a", "new_string": "b"}},
+			want: "file:notes.txt",
+		},
+		{
+			name: "notebook edit keyed on notebook_path",
+			call: messages.ToolCall{Name: "NotebookEdit", Args: map[string]any{"notebook_path": "nb/analysis.ipynb", "new_source": "x"}},
+			want: "file:nb/*",
+		},
+		{
+			name: "write without file_path not grantable",
+			call: messages.ToolCall{Name: "Write", Args: map[string]any{"content": "y"}},
+			want: "",
+		},
+		{
+			name: "write escaping the workspace not grantable",
+			call: messages.ToolCall{Name: "Write", Args: map[string]any{"file_path": "../outside.txt", "content": "y"}},
+			want: "",
+		},
+		{
+			name: "write absolute path not grantable",
+			call: messages.ToolCall{Name: "Write", Args: map[string]any{"file_path": "/etc/passwd", "content": "y"}},
+			want: "",
+		},
+		{
 			name: "other tools not grantable",
-			call: messages.ToolCall{Name: "Write", Args: map[string]any{"file_path": "x", "content": "y"}},
+			call: messages.ToolCall{Name: "KillShell", Args: map[string]any{"id": "x"}},
 			want: "",
 		},
 	}

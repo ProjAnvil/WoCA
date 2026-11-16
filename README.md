@@ -288,7 +288,7 @@ auto-allows while `Bash("rm -rf …")` asks. Explicit rules override the mode:
   "permissions": {
     "allow": ["Bash(git *)", "Read"],
     "deny":  ["Bash(rm *)"],
-    "ask":   []
+    "ask":   ["FileWrite(secrets/**)"]
   }
 }
 ```
@@ -296,6 +296,14 @@ auto-allows while `Bash("rm -rf …")` asks. Explicit rules override the mode:
 Precedence is `deny` → `ask` → `allow` → mode default. Subagents are
 fail-closed: an un-granted write permission surfaces as *permission denied*
 instead of prompting.
+
+File tools also take **path rules**: `Write`/`Edit`/`NotebookEdit`/
+`Read`/`Glob`/`Grep`/`ListDir` match their path argument against a
+path-shaped glob (`*` and `?` stay inside a segment, `**` spans
+directories), and the virtual names `FileWrite(...)`/`FileRead(...)` cover
+the write/read operation classes — `"deny": ["FileWrite(**/.env)"]` blocks
+every write to any `.env`, `"ask": ["FileWrite(secrets/**)"]` re-asks for
+writes under `secrets/` even in `acceptEdits` mode.
 
 **Same-origin by design.** The HTTP API serves no CORS headers: the web UI
 is served by the same origin that owns the API, and remote or cross-origin

@@ -9,6 +9,7 @@ package agent
 
 import (
 	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/projanvil/langchain-golang/core/messages"
@@ -23,6 +24,10 @@ import (
 //     lowercased — the site, not the exact page ("domain:example.com").
 //   - WebSearch: "websearch:" + the first two words of the query + "*"
 //     ("websearch:latest AI*").
+//   - Write/Edit/NotebookEdit: "file:" + the path's first segment — the
+//     directory (with a "/*" wildcard when the path descends), the bare
+//     name for a root file ("file:src/*", "file:notes.txt"). Paths that
+//     escape the workspace ("..") or arrive absolute are not grantable.
 //
 // Any other tool — and any call whose key dimension is missing or
 // unparseable — returns "", meaning no session grant can be offered for it.
@@ -34,8 +39,33 @@ func GrantKey(call messages.ToolCall) string {
 		return domainKey(call.Args["url"])
 	case "WebSearch":
 		return prefixKey("websearch", firstWords(call.Args["query"], 2))
+	case "Write", "Edit":
+		return fileGrantKey(call.Args["file_path"])
+	case "NotebookEdit":
+		return fileGrantKey(call.Args["notebook_path"])
 	}
 	return ""
+}
+
+// fileGrantKey derives "file:" + the cleaned first path segment: a
+// descending path grants its whole top directory ("src/a.go" →
+// "file:src/*"), a root file grants exactly itself ("notes.txt" →
+// "file:notes.txt"). Escaping ("..") or absolute paths return "" — a grant
+// must stay inside the workspace.
+func fileGrantKey(v any) string {
+	s, _ := v.(string)
+	if s == "" {
+		return ""
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(s))
+	head, rest, _ := strings.Cut(cleaned, "/")
+	if head == "" || head == "." || head == ".." {
+		return ""
+	}
+	if rest != "" {
+		return "file:" + head + "/*"
+	}
+	return "file:" + head
 }
 
 // prefixKey renders "" when words is empty (nothing grantable), otherwise

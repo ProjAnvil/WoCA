@@ -265,13 +265,20 @@ reasoning-effort 映射走同一路由。
   "permissions": {
     "allow": ["Bash(git *)", "Read"],
     "deny":  ["Bash(rm *)"],
-    "ask":   []
+    "ask":   ["FileWrite(secrets/**)"]
   }
 }
 ```
 
 优先级为 `deny` → `ask` → `allow` → 模式默认。子代理 fail-closed：未授权
 的写权限表现为 *permission denied*，而不是弹窗询问。
+
+文件类工具还支持**路径规则**：`Write`/`Edit`/`NotebookEdit`/`Read`/
+`Glob`/`Grep`/`ListDir` 的 `Tool(glob)` 规则按路径参数匹配（`*`、`?`
+不跨目录，`**` 跨目录），虚拟名 `FileWrite(...)`/`FileRead(...)` 覆盖
+写/读两类操作——`"deny": ["FileWrite(**/.env)"]` 拒绝一切对 `.env` 的
+写入，`"ask": ["FileWrite(secrets/**)"]` 让 `secrets/` 下的写入即使在
+`acceptEdits` 模式下也要询问。
 
 **设计上仅同源（same-origin by design）。** HTTP API 不返回任何 CORS
 响应头：Web UI 由拥有 API 的同一源直接服务，远程或跨源客户端通过
