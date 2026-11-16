@@ -167,6 +167,56 @@ export type Interrupt =
   | { kind: 'ask'; payload: AskPayload }
   | { kind: 'plan'; payload: PlanPayload }
 
+// --- multi-card pauses (the Task 8 interrupt contract) ---
+
+/**
+ * One pending card of a parked pause, mirroring the server's interrupt
+ * `cards[]` entry. `ns` is the answer key namespace (approval:… /
+ * subagent:…); NS-less legacy interrupts are addressed by `id`. `payload`
+ * is the per-kind wire payload (legacy flat shapes, or an ApprovalRequest
+ * for approvals cards — single-ask envelopes also carry `asks` inside the
+ * flat payload for forward-compatible clients). `timedOut` marks cards
+ * whose parked TTL fired (the run is being cancelled server-side).
+ */
+export interface InterruptCardData {
+  id: string
+  ns: string
+  kind: string
+  payload: unknown
+  timedOut?: boolean
+}
+
+/** One ask inside an ApprovalRequest envelope (mirror of agent.Ask). */
+export interface ApprovalAsk {
+  call_id: string
+  tool_name: string
+  args_summary?: string
+  tool_args?: Record<string, unknown>
+  reason?: string
+  /** "main" on the root graph; the subagent def name for child asks. */
+  origin: string
+  /** Rule key an "allow for session" answer would create ("" = none). */
+  session_rule_key?: string
+  questions?: Question[]
+  plan?: string
+}
+
+/** The approvals-card payload: every ask of one approval round. */
+export interface ApprovalRequest {
+  asks: ApprovalAsk[]
+}
+
+/** One entry of the list-form answer body {answers: [{key, value}]}. */
+export interface CardAnswerEntry {
+  key: string
+  value: unknown
+}
+
+/** One granted session rule key (GET /api/agent/grants). */
+export interface GrantInfo {
+  key: string
+}
+
 // --- transcript (the Go server's messages.Message JSON shape) ---
 
 export interface TranscriptMessage {

@@ -23,6 +23,10 @@ const toast = useToastStore()
 type CtlPop = '' | 'mode' | 'thinking' | 'quota' | 'model'
 const pop = ref<CtlPop>('')
 
+// Polite announcement of mode switches (§4.2): no toast — switches are
+// frequent; failures keep the existing toast.error path below.
+const modeAnnouncement = ref('')
+
 function togglePop(which: CtlPop) {
   pop.value = pop.value === which ? '' : which
 }
@@ -61,11 +65,17 @@ async function pickModel(id: string) {
 
 async function pickMode(mode: PermissionMode) {
   try {
-    await agent.setMode(mode)
+    // Session-scoped (§4.2): the switch applies to the active session's
+    // policy only — the popover's note line says so.
+    await agent.setMode(mode, store.activeId || undefined)
   } catch (e) {
     toast.error(e)
     return
   }
+  modeAnnouncement.value = t('sessions.commands.permissionSwitched', {
+    label: MODE_LABELS[mode] ?? mode,
+    mode,
+  })
   pop.value = ''
 }
 
@@ -206,13 +216,20 @@ onMounted(() => {
         :class="{ open: pop === 'mode' }"
         :title="t('chat.switchModeTitle')"
         :aria-expanded="pop === 'mode'"
+        data-testid="mode-chip"
         @click="togglePop('mode')"
       >
         <ShieldCheck :size="13" />
-        <span>{{ agent.modeLabel }}</span>
+        <!-- Keyed label: the fade transition cross-fades mode switches (240ms). -->
+        <Transition name="mode-fade" mode="out-in">
+          <span :key="agent.modeLabel">{{ agent.modeLabel }}</span>
+        </Transition>
       </button>
+      <!-- Polite switch announcements live next to the chip they describe. -->
+      <span class="sr-only" aria-live="polite">{{ modeAnnouncement }}</span>
       <div v-if="pop === 'mode'" class="ctl-pop">
         <div class="ctl-pop-header">{{ t('chat.permissionMode') }}</div>
+        <div class="ctl-pop-note-line" data-testid="mode-session-note">{{ t('chat.modeSessionNote') }}</div>
         <button
           v-for="[m, label] in modeList"
           :key="m"
@@ -221,7 +238,9 @@ onMounted(() => {
           type="button"
           @click="pickMode(m)"
         >
-          <span class="ctl-opt-name">{{ label }}</span>
+          <span class="ctl-opt-name"
+            >{{ label }}<span v-if="agent.mode === m" class="ctl-opt-session">{{ t('chat.modeSessionBadge') }}</span></span
+          >
           <span class="ctl-opt-desc">{{ MODE_DESCRIPTIONS[m] }}</span>
         </button>
       </div>
@@ -435,3 +454,29 @@ onMounted(() => {
     <div v-if="pop || ctxPinned" class="ctl-backdrop" @click="pop = ''; ctxPinned = false"></div>
   </div>
 </template>
+
+<style scoped>
+/* Session-scoped mode popover (§4.2): the note line under the header, the
+   active option's "this session" suffix badge, and the 240ms label fade. */
+.ctl-pop-note-line {
+  padding: 2px 12px 8px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.ctl-opt-session {
+  margin-inline-start: 6px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  font-size: 10.5px;
+}
+.mode-fade-enter-active,
+.mode-fade-leave-active {
+  transition: opacity 240ms var(--ease-in-out);
+}
+.mode-fade-enter-from,
+.mode-fade-leave-to {
+  opacity: 0;
+}
+</style>

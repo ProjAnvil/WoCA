@@ -18,6 +18,7 @@ import type {
   SSEEventType,
   SessionStatePayload,
   TextPayload,
+  TimeoutPayload,
   ToolCallPayload,
   ToolResultPayload,
   WakeCappedPayload,
@@ -35,6 +36,8 @@ export interface StreamHandlers {
   onInterrupt: (ev: InterruptPayload) => void
   /** An interrupt was answered (also replayed) — clear any pending card. */
   onInterruptResolved?: () => void
+  /** The parked-interrupt TTL fired — cards flip to their timed-out state. */
+  onTimeout?: (ev: TimeoutPayload) => void
   onGoal?: (ev: GoalPayload) => void
   onRunQueued?: (position: number) => void
   onQueuePosition?: (position: number) => void
@@ -135,7 +138,9 @@ export function streamRun(
             break
           case 'timeout':
             // Parked-interrupt TTL fired; the server cancels the run and the
-            // terminal done event closes the stream — nothing to render.
+            // terminal done event closes the stream. Pending cards flip to
+            // their persisted "timed out" state until then.
+            handlers.onTimeout?.(data as TimeoutPayload)
             break
           case 'goal':
             handlers.onGoal?.(data as GoalPayload)

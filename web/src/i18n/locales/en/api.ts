@@ -12,6 +12,8 @@ export default {
   saveSettingsFailed: 'Failed to save settings',
   loadCompletionsFailed: 'Failed to load completion list',
   loadAgentStateFailed: 'Failed to load agent state',
+  loadGrantsFailed: 'Failed to load session grants',
+  revokeGrantFailed: 'Failed to revoke grant',
   loadQuotaFailed: 'Failed to query quota',
   loadContextUsageFailed: 'Failed to query context usage',
   loadClaudeEnvFailed: 'Failed to load Claude environment',

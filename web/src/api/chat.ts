@@ -3,6 +3,8 @@
 import i18n from '../i18n'
 import type {
   AgentState,
+  CardAnswerEntry,
+  GrantInfo,
   PermissionMode,
   ThinkingLevel,
   CreateRunResponse,
@@ -53,9 +55,13 @@ export function dropLastTurn(sessionId: string): Promise<{ kept: number }> {
   })
 }
 
+/** Answers a parked interrupt. The body is either the list form
+ * {answers: [{key, value}]} (any card count; entries may answer a subset —
+ * unanswered cards re-park) or — for a single pending legacy card — the
+ * scalar forms ({approve}, ask answers as a string list). */
 export function answerRun(
   runId: string,
-  body: { approve?: boolean; answers?: string[] },
+  body: { approve?: boolean; answers?: string[] | CardAnswerEntry[] },
 ): Promise<void> {
   return postJSON<void>(`/api/runs/${runId}/answer`, body)
 }
@@ -77,9 +83,12 @@ export function getAgent(): Promise<AgentState> {
   return request('/api/agent', undefined, i18n.global.t('api.loadAgentStateFailed'))
 }
 
-/** Switches the permission mode; takes effect for subsequent tool calls. */
-export function setPermissionMode(mode: PermissionMode): Promise<{ ok: boolean; mode: string }> {
-  return postJSON('/api/agent/permissions', { mode })
+/** Switches the permission mode; takes effect for subsequent tool calls.
+ * The optional session scopes the switch to one session's policy (absent /
+ * empty writes the base policy every session inherits — the pre-session
+ * body shape, kept byte-identical for legacy callers). */
+export function setPermissionMode(mode: PermissionMode, session?: string): Promise<{ ok: boolean; mode: string }> {
+  return postJSON('/api/agent/permissions', session ? { mode, session } : { mode })
 }
 
 /** Switches the thinking level (off | low | medium | high); applies next turn. */
@@ -89,6 +98,21 @@ export function setThinkingLevel(level: ThinkingLevel): Promise<{
   budget: number
 }> {
   return postJSON('/api/agent/thinking', { level })
+}
+
+// --- session grants ("allow for session" rule keys, §3.3) ---
+
+/** Lists the session's granted rule keys (the base's when session is ''). */
+export function listGrants(session?: string): Promise<{ session: string; grants: GrantInfo[] }> {
+  const params = session ? `?session=${encodeURIComponent(session)}` : ''
+  return request(`/api/agent/grants${params}`, undefined, i18n.global.t('api.loadGrantsFailed'))
+}
+
+/** Revokes one session grant; revoking an absent key is a server-side no-op. */
+export function revokeGrant(key: string, session?: string): Promise<void> {
+  const params = new URLSearchParams({ key })
+  if (session) params.set('session', session)
+  return request(`/api/agent/grants?${params}`, { method: 'DELETE' }, i18n.global.t('api.revokeGrantFailed'))
 }
 
 /** Provider account usage (plan quota / balance) + session usage fallback. */

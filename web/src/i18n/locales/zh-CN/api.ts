@@ -12,6 +12,8 @@ export default {
   saveSettingsFailed: '保存设置失败',
   loadCompletionsFailed: '加载补全列表失败',
   loadAgentStateFailed: '加载智能体状态失败',
+  loadGrantsFailed: '加载会话授权失败',
+  revokeGrantFailed: '撤销授权失败',
   loadQuotaFailed: '查询额度失败',
   loadContextUsageFailed: '查询上下文用量失败',
   loadClaudeEnvFailed: '加载 Claude 环境失败',

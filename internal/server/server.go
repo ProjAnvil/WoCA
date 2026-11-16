@@ -482,6 +482,11 @@ func (s *Server) Handler() http.Handler {
 	s.route(mux, "GET /api/agent", authz.ScopeSettingsRead, s.handleGetAgent)
 	s.route(mux, "POST /api/agent/permissions", authz.ScopeAgentWrite, s.handleSetPermissionMode)
 	s.route(mux, "POST /api/agent/thinking", authz.ScopeAgentWrite, s.handleSetThinking)
+	// Session grants ("allow for session" rule keys): reading them is the
+	// same trust class as the agent state; revoking re-arms the approval
+	// gate — a permission-mode write.
+	s.route(mux, "GET /api/agent/grants", authz.ScopeSettingsRead, s.handleListGrants)
+	s.route(mux, "DELETE /api/agent/grants", authz.ScopeAgentWrite, s.handleRevokeGrant)
 	s.route(mux, "GET /api/quota", authz.ScopeSettingsRead, s.handleQuota)
 	s.route(mux, "GET /api/claude-env", authz.ScopeSettingsRead, s.handleGetClaudeEnv)
 	// Importing ~/.claude skills/MCP is user extensibility — the same trust

@@ -2,9 +2,11 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import type {
   Attachment,
+  CardAnswerEntry,
   ChatItem,
   Goal,
   Interrupt,
+  InterruptCardData,
   RunStatus,
   Session,
   SessionDeleteReport,
@@ -13,6 +15,7 @@ import type {
 import * as api from '../api/client'
 import i18n from '../i18n'
 import { truncate, baseName } from '../lib/format'
+import { hitlCardKey } from '../lib/hitl'
 import { isNoticeContent, messagesToItems, nid } from '../lib/transcript'
 import { useAgentStore, isPermissionMode, isThinkingLevel } from './agent'
 import { toErrorMessage } from '../lib/errors'
@@ -53,7 +56,11 @@ export const useSessionStore = defineStore('sessions', () => {
   const queuePosition = ref<Record<string, number>>({})
   const error = ref<Record<string, string>>({})
   const runId = ref<Record<string, string>>({})
-  const interrupt = ref<Record<string, Interrupt | null>>({})
+  // Parked interrupt cards per session, in pause order: one entry per
+  // pending card of the parked pause (multi-card stacks, design §4). The
+  // legacy single-card shape is derived (activeInterrupt) so InterruptModal
+  // keeps rendering old-style pauses; HitlStack renders everything else.
+  const interrupt = ref<Record<string, InterruptCardData[] | null>>({})
   // Text submitted via send() while a run is active: queued into the live
   // run's input immediately (Codex-style steering) rather than waiting for
   // it to finish. Cleared on completion; resubmitted as a fresh turn if the
@@ -126,7 +133,24 @@ export const useSessionStore = defineStore('sessions', () => {
   const activeItems = computed(() => items.value[activeId.value] ?? [])
   const activeStatus = computed(() => status.value[activeId.value] ?? 'idle')
   const activeError = computed(() => error.value[activeId.value] ?? '')
-  const activeInterrupt = computed(() => interrupt.value[activeId.value] ?? null)
+  // The legacy single-card view: only a pure legacy pause (one NS-less card
+  // of a legacy kind) surfaces here; multi-card pauses, approvals envelopes
+  // and NS-keyed cards belong to the HitlStack (activeHitlCards below).
+  const activeInterrupt = computed<Interrupt | null>(() => {
+    const cards = interrupt.value[activeId.value]
+    if (!cards || cards.length !== 1) return null
+    const c = cards[0]
+    if (c.kind === 'approvals' || c.ns) return null
+    return { kind: c.kind, payload: c.payload } as unknown as Interrupt
+  })
+  // The stack's card list: every pause the HitlStack renders (more than one
+  // pending card, an approvals envelope, or an NS-keyed new-topology card).
+  const activeHitlCards = computed<InterruptCardData[] | null>(() => {
+    const cards = interrupt.value[activeId.value]
+    if (!cards || !cards.length) return null
+    if (cards.length > 1 || cards.some((c) => c.kind === 'approvals' || c.ns)) return cards
+    return null
+  })
   const activeGoal = computed(() => goal.value[activeId.value] ?? null)
   const activePendingSteers = computed(() => pendingSteers.value[activeId.value] ?? [])
 
@@ -193,7 +217,7 @@ export const useSessionStore = defineStore('sessions', () => {
   function triggerInterrupt(intr: Interrupt) {
     const sid = activeId.value
     if (!sid) return
-    interrupt.value[sid] = intr
+    interrupt.value[sid] = [{ id: '', ns: '', kind: intr.kind, payload: intr.payload }]
     status.value[sid] = 'awaiting'
   }
 
@@ -548,8 +572,9 @@ export const useSessionStore = defineStore('sessions', () => {
   async function answerInterrupt(approve: boolean, answers?: string[]) {
     const sid = activeId.value
     const rid = runId.value[sid]
-    const intr = interrupt.value[sid]
-    if (!intr) return
+    const cards = interrupt.value[sid]
+    if (!cards?.length) return
+    const intr = activeInterrupt.value
     // Demo mode (no live run): just clear the interrupt.
     if (!rid || demo.value) {
       interrupt.value[sid] = null
@@ -557,7 +582,7 @@ export const useSessionStore = defineStore('sessions', () => {
       return
     }
     try {
-      const body = intr.kind === 'ask' ? { answers: answers ?? [] } : { approve }
+      const body = intr?.kind === 'ask' ? { answers: answers ?? [] } : { approve }
       await api.answerRun(rid, body)
       interrupt.value[sid] = null
       status.value[sid] = 'running'
@@ -565,6 +590,38 @@ export const useSessionStore = defineStore('sessions', () => {
       error.value[sid] = toErrorMessage(e)
       status.value[sid] = 'error'
       interrupt.value[sid] = null
+    }
+  }
+
+  // answerCards answers a subset of the parked cards with the list-form body
+  // {answers: [{key, value}]} (Task 8 contract): entries address cards by
+  // their NS-keyed answer key; cards without an entry re-park server-side,
+  // so the optimistic removal only drops what this call answered.
+  async function answerCards(entries: CardAnswerEntry[]) {
+    const sid = activeId.value
+    const rid = runId.value[sid]
+    const cards = interrupt.value[sid]
+    if (!cards?.length || !entries.length) return
+    if (!rid || demo.value) {
+      interrupt.value[sid] = null
+      status.value[sid] = 'done'
+      return
+    }
+    try {
+      await api.answerRun(rid, { answers: entries })
+      const answered = new Set(entries.map((e) => e.key))
+      const rest = cards.filter((c) => !answered.has(hitlCardKey(c)))
+      if (rest.length) {
+        interrupt.value[sid] = rest
+      } else {
+        interrupt.value[sid] = null
+        status.value[sid] = 'running'
+      }
+    } catch (e) {
+      // The parked cards stay for retry; the failing card surfaces the
+      // error inline (HitlCard) and the session error channel records it.
+      error.value[sid] = toErrorMessage(e)
+      throw e
     }
   }
 
@@ -628,6 +685,10 @@ export const useSessionStore = defineStore('sessions', () => {
     status,
     activeError,
     activeInterrupt,
+    // The parked-card map (read-only consumers and component tests; the
+    // write paths are the stream handlers and the answer actions below).
+    interrupt,
+    activeHitlCards,
     activeGoal,
     activePendingSteers,
     goal,
@@ -659,6 +720,7 @@ export const useSessionStore = defineStore('sessions', () => {
     sendGoalCommand,
     continueGoalLoop,
     answerInterrupt,
+    answerCards,
     cancel,
     steer,
     setDemo,

@@ -195,4 +195,50 @@ func TestMultiCardAnswerValidations(t *testing.T) {
 			t.Fatal("interrupt never resumed")
 		}
 	})
+
+	t.Run("asks-bearing legacy card accepts the decision form (session grants)", func(t *testing.T) {
+		// A single-ask envelope parks under the legacy kind with `asks`
+		// attached; its decision-form answer must carry the session grant
+		// (Task 11's three-button card), while the flat {approve} body
+		// keeps the bool resume.
+		cards := []agent.PauseCard{
+			{NS: "approval:se9", ID: "i9", Value: agent.ApprovalRequest{Asks: []agent.Ask{
+				{CallID: "b9", ToolName: "Bash", ToolArgs: map[string]any{"command": "git push"}, Origin: agent.OriginMain, SessionRuleKey: "bash:git push*"},
+			}}},
+		}
+		r, cancel, got := parkCardsForTest(t, cards)
+		defer cancel()
+		if err := r.answer([]byte(`{"answers":[{"key":"approval:se9","value":{
+			"decisions":{"b9":{"outcome":"allow","grant":"session"}}
+		}}]}`)); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case v := <-got:
+			ans, ok := v.(agent.ApprovalAnswer)
+			if !ok {
+				t.Fatalf("resume value = %T, want ApprovalAnswer", v)
+			}
+			if d := ans.Decisions["b9"]; d.Outcome != agent.OutcomeAllow || d.Grant != agent.GrantSession {
+				t.Fatalf("b9 = %+v", d)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("interrupt never resumed")
+		}
+
+		// The flat body on the same shape still resumes the plain flag.
+		r2, cancel2, got2 := parkCardsForTest(t, cards)
+		defer cancel2()
+		if err := r2.answer([]byte(`{"answers":[{"key":"approval:se9","value":{"approve":true}}]}`)); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case v := <-got2:
+			if v != true {
+				t.Fatalf("flat resume = %#v, want true", v)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("interrupt never resumed")
+		}
+	})
 }

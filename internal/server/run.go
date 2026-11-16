@@ -502,26 +502,16 @@ func legacySingleCardAnswer(card parkedCard, body []byte) (any, error) {
 
 // cardAnswerValue decodes one card's answer value from the list form:
 // approvals cards take {decisions: {callID: ...}} or a {approve} fanout;
-// ask cards take {answers: [...]}; permission/plan cards take {approve}.
+// ask cards take {answers: [...]}; permission/plan cards take {approve} —
+// and, when the card carries the envelope's asks (single-ask envelopes park
+// under the legacy kind with `asks` attached for forward-compatible
+// clients), the approvals decision form too, so "allow for session" grants
+// are expressible on every approval card (the flat {approve} body keeps
+// its bool resume).
 func cardAnswerValue(card parkedCard, raw json.RawMessage) (any, error) {
 	switch card.kind {
 	case "approvals":
-		var v struct {
-			Approve   *bool `json:"approve"`
-			Decisions map[string]struct {
-				Outcome string   `json:"outcome"`
-				Grant   string   `json:"grant"`
-				Answers []string `json:"answers"`
-			} `json:"decisions"`
-		}
-		if err := json.Unmarshal(raw, &v); err != nil {
-			return nil, fmt.Errorf("decode answer value: %w", err)
-		}
-		approve := false
-		if v.Approve != nil {
-			approve = *v.Approve
-		}
-		return approvalAnswerFromHTTP(card.asks, approve, v.Decisions), nil
+		return decodeApprovalValue(card, raw)
 	case "ask":
 		var v struct {
 			Answers []string `json:"answers"`
@@ -531,6 +521,15 @@ func cardAnswerValue(card parkedCard, raw json.RawMessage) (any, error) {
 		}
 		return agent.AskUserAnswer{Answers: v.Answers}, nil
 	default: // permission, plan
+		if len(card.asks) > 0 {
+			// Asks-bearing legacy card: try the decision form first; a body
+			// without decisions falls through to the flat approve flag.
+			if v, ok, err := decodeApprovalDecisions(card, raw); err != nil {
+				return nil, err
+			} else if ok {
+				return v, nil
+			}
+		}
 		var v struct {
 			Approve bool `json:"approve"`
 		}
@@ -539,6 +538,44 @@ func cardAnswerValue(card parkedCard, raw json.RawMessage) (any, error) {
 		}
 		return v.Approve, nil
 	}
+}
+
+// decodeApprovalValue decodes the approvals-card answer form: explicit
+// per-ask decisions when present, else the approve flag fanned out.
+func decodeApprovalValue(card parkedCard, raw json.RawMessage) (any, error) {
+	v, ok, err := decodeApprovalDecisions(card, raw)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		return v, nil
+	}
+	var flat struct {
+		Approve bool `json:"approve"`
+	}
+	if err := json.Unmarshal(raw, &flat); err != nil {
+		return nil, fmt.Errorf("decode answer value: %w", err)
+	}
+	return approvalAnswerFromHTTP(card.asks, flat.Approve, nil), nil
+}
+
+// decodeApprovalDecisions reports the ApprovalAnswer when the body carries
+// an explicit per-ask decisions map (ok=false when it does not).
+func decodeApprovalDecisions(card parkedCard, raw json.RawMessage) (any, bool, error) {
+	var v struct {
+		Decisions map[string]struct {
+			Outcome string   `json:"outcome"`
+			Grant   string   `json:"grant"`
+			Answers []string `json:"answers"`
+		} `json:"decisions"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, false, fmt.Errorf("decode answer value: %w", err)
+	}
+	if len(v.Decisions) == 0 {
+		return nil, false, nil
+	}
+	return approvalAnswerFromHTTP(card.asks, false, v.Decisions), true, nil
 }
 
 // approvalAnswerFromHTTP builds the ApprovalAnswer for an approvals card:

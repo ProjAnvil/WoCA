@@ -72,6 +72,35 @@ describe('permission mode chip', () => {
     expect(toast.toasts.length).toBeGreaterThan(0)
     expect(w.find('.ctl-pop').exists()).toBe(true)
   })
+
+  it('is session-scoped: the popover carries the session note and picks send the session id', async () => {
+    const w = mountChips()
+    const store = useSessionStore()
+    store.seed(
+      [{ id: 's1', title: 'S', updatedAt: '', loaded: true, workspace: '', workspaceName: '' }],
+      { s1: [] },
+    )
+    await w.vm.$nextTick()
+    expect(w.find('[data-testid="mode-chip"]').exists()).toBe(true)
+    await w.get('[data-testid="mode-chip"]').trigger('click')
+    expect(w.get('[data-testid="mode-session-note"]').text()).not.toBe('')
+    // The active option carries the "this session" suffix badge.
+    expect(w.find('.ctl-opt.active .ctl-opt-session').exists()).toBe(true)
+    await w.findAll('.ctl-opt')[1].trigger('click')
+    await flush(w)
+    expect(api.setPermissionMode).toHaveBeenCalledWith(expect.any(String), 's1')
+  })
+
+  it('announces mode switches politely (aria-live) instead of toasting', async () => {
+    const w = mountChips()
+    await w.get('[data-testid="mode-chip"]').trigger('click')
+    await w.findAll('.ctl-opt')[1].trigger('click')
+    await flush(w)
+    const announcer = w.get('[aria-live="polite"]')
+    expect(announcer.text()).not.toBe('')
+    const toast = useToastStore()
+    expect(toast.toasts.length).toBe(0)
+  })
 })
 
 describe('model chip', () => {

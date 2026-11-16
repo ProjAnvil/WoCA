@@ -99,4 +99,21 @@ export default {
   submit: 'Submit',
   deny: 'Deny',
   allow: 'Allow',
+
+  // --- HITL approval cards (the design §4.1 key list) ---
+  approveOnce: 'Allow once',
+  approveSession: 'Allow for session',
+  denyRequest: 'Deny',
+  denyAndStopSubagent: 'Deny & stop subagent',
+  sessionRuleKey: 'Session rule {key}',
+  pendingCount: '{count} more pending',
+  requestCancelled: 'Cancel',
+  requestTimedOut: 'Timed out',
+  sourceMain: 'main',
+  grantedRules: '{count} granted · manage',
+  // Minimal additions beyond the §4.1 list the panels require
+  grantsEmpty: 'No session grants yet',
+  revokeGrant: 'Revoke this grant',
+  modeSessionNote: 'Applies to this session only',
+  modeSessionBadge: 'this session',
 }

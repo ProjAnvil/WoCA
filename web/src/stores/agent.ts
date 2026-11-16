@@ -209,9 +209,13 @@ export const useAgentStore = defineStore('agent', () => {
     }
   }
 
-  async function setMode(m: PermissionMode) {
+  /** setMode switches the permission mode. The optional session scopes the
+   * switch to one session's policy (the composer passes the active session
+   * id so the chip is session-scoped, design §4.2); absent writes the base
+   * policy every session inherits. */
+  async function setMode(m: PermissionMode, session?: string) {
     if (!MODE_LABELS[m]) throw new Error(i18n.global.t('agent.unknownMode', { mode: m }))
-    await api.setPermissionMode(m)
+    await api.setPermissionMode(m, session)
     if (state.value) state.value.permission_mode = m
   }
 

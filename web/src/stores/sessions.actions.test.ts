@@ -182,7 +182,9 @@ describe('tryAgentCommand', () => {
     api.createRun.mockResolvedValue({ run_id: 'run-x', state: 'running', queue_position: 0 })
     api.setPermissionMode.mockResolvedValueOnce({ ok: true, mode: 'plan' })
     await store.send('/permissions plan')
-    expect(api.setPermissionMode).toHaveBeenCalledWith('plan')
+    // The API seam gained an optional session scope (Task 11); the command
+    // path passes none.
+    expect(api.setPermissionMode).toHaveBeenCalledWith('plan', undefined)
     const bubble = lastItem(store) as { kind: string; content: string }
     expect(bubble.kind).toBe('assistant')
     // Mode label echoes through the localized command answer bubble.

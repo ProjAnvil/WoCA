@@ -99,4 +99,21 @@ export default {
   submit: '提交',
   deny: '拒绝',
   allow: '允许',
+
+  // --- HITL 审批卡片（设计 §4.1 键清单） ---
+  approveOnce: '允许一次',
+  approveSession: '本会话内允许',
+  denyRequest: '拒绝',
+  denyAndStopSubagent: '拒绝并停止子代理',
+  sessionRuleKey: '会话规则 {key}',
+  pendingCount: '还有 {count} 项待确认',
+  requestCancelled: '取消',
+  requestTimedOut: '已超时',
+  sourceMain: '主代理',
+  grantedRules: '{count} 项会话授权 · 管理',
+  // 面板所需的少量补充键（§4.1 清单之外的最小集）
+  grantsEmpty: '本会话还没有会话级授权',
+  revokeGrant: '撤销这条授权',
+  modeSessionNote: '权限模式仅对当前会话生效',
+  modeSessionBadge: '本会话',
 }

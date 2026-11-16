@@ -44,8 +44,19 @@ export interface ToolResultPayload {
   content: string
 }
 
-/** payload is the parked request value; its shape depends on kind. */
+/** payload is the parked request value; its shape depends on kind. Cards
+ * always carries every pending card of the pause (kind "multi" marks a
+ * several-card pause with no single top-level payload). */
 export interface InterruptPayload {
+  kind: string
+  payload?: unknown
+  cards?: InterruptCardWire[]
+}
+
+/** One pending card of an interrupt event (mirror of the server's shape). */
+export interface InterruptCardWire {
+  id: string
+  ns?: string
   kind: string
   payload: unknown
 }

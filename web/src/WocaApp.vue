@@ -8,6 +8,7 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import GoalPanel from './components/GoalPanel.vue'
 import MemoryPanel from './components/MemoryPanel.vue'
 import InterruptModal from './components/InterruptModal.vue'
+import HitlStack from './components/hitl/HitlStack.vue'
 import LoginGate from './components/LoginGate.vue'
 import ToastStack from './components/ToastStack.vue'
 import WConfirmDialog from './components/ui/WConfirmDialog.vue'
@@ -132,6 +133,10 @@ watch(
     <Transition name="panel-pop">
       <MemoryPanel v-if="memory.panelOpen" />
     </Transition>
+    <!-- Approval surfaces: the multi-card stack for pauses HitlStack owns
+         (multi-card / approvals / NS-keyed cards), the legacy InterruptModal
+         for old-style single-card pauses. -->
+    <HitlStack />
     <InterruptModal v-if="sessions.activeInterrupt" />
     <Transition name="gate-dissolve">
       <LoginGate v-if="auth.gateOpen" :revoked="auth.gateCode === 'revoked'" @authenticated="auth.onAuthenticated" />

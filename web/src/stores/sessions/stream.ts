@@ -1,5 +1,6 @@
 import { ref, type Ref } from 'vue'
-import type { Goal, Interrupt, RunStatus, Session } from '../../types'
+import type { Goal, InterruptCardData, RunStatus, Session } from '../../types'
+import { hitlCardKey } from '../../lib/hitl'
 import { toErrorMessage } from '../../lib/errors'
 import * as api from '../../api/client'
 import type { RunStartedPayload } from '../../api/events'
@@ -15,7 +16,7 @@ export interface StreamDeps {
   activeId: Ref<string>
   sessions: Ref<Session[]>
   status: Ref<Record<string, RunStatus>>
-  interrupt: Ref<Record<string, Interrupt | null>>
+  interrupt: Ref<Record<string, InterruptCardData[] | null>>
   error: Ref<Record<string, string>>
   queuePosition: Ref<Record<string, number>>
   runId: Ref<Record<string, string>>
@@ -201,15 +202,42 @@ export function createRunStreams(deps: StreamDeps) {
         onToolCall: (tc) => addToolCall(sid, tc),
         onToolResult: (tr) => addToolResult(sid, tr),
         onInterrupt: (ev) => {
-          interrupt.value[sid] = { kind: ev.kind, payload: ev.payload } as unknown as Interrupt
+          // Park every pending card of the pause, in event order. The
+          // reattach path REPLAYS the same interrupt events from history —
+          // dedupe by answer key so a replay never stacks duplicate cards
+          // (design §4 edge cases); a genuine re-park of the same pause
+          // folds into the existing card too.
+          const incoming: InterruptCardData[] = ev.cards?.length
+            ? ev.cards.map((c) => ({ id: c.id, ns: c.ns ?? '', kind: c.kind, payload: c.payload }))
+            : ev.kind && ev.kind !== 'multi'
+              ? [{ id: '', ns: '', kind: ev.kind, payload: ev.payload }]
+              : []
+          const cur = interrupt.value[sid] ?? []
+          const seen = new Set(cur.map(hitlCardKey))
+          const next = [...cur]
+          for (const c of incoming) {
+            const key = hitlCardKey(c)
+            if (seen.has(key)) continue
+            seen.add(key)
+            next.push(c)
+          }
+          interrupt.value[sid] = next
           status.value[sid] = 'awaiting'
         },
         onInterruptResolved: () => {
           // Fired live on answer and on replay: a satisfied interrupt must
           // never linger as an unanswered card (the refresh-reattach path
-          // replays answered interrupts too).
+          // replays answered interrupts too). A partial answer re-parks the
+          // remainder as a fresh interrupt event right after this.
           interrupt.value[sid] = null
           if (status.value[sid] === 'awaiting') status.value[sid] = 'running'
+        },
+        onTimeout: () => {
+          // The parked TTL fired server-side: the run is being cancelled
+          // and the terminal done follows. Cards persist in their "timed
+          // out" state (buttons disabled) until then — never a run error.
+          const cards = interrupt.value[sid]
+          if (cards?.length) interrupt.value[sid] = cards.map((c) => ({ ...c, timedOut: true }))
         },
         onGoal: (ev) => {
           goal.value[sid] = ev.goal

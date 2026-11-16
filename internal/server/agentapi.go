@@ -159,6 +159,46 @@ func (s *Server) handleSetThinking(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// grantEntry is one granted rule key of GET /api/agent/grants.
+type grantEntry struct {
+	Key string `json:"key"`
+}
+
+// handleListGrants lists a session's granted rule keys ("allow for session"
+// answers, design §3.3/§4.1): GET /api/agent/grants?session=… — the base
+// policy's grants when the session is absent or empty. The web grants panel
+// (and the approval stack's "N granted · manage" footnote) consume this.
+func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
+	if s.agent == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent is not available")
+		return
+	}
+	session := r.URL.Query().Get("session")
+	keys := s.agent.PolicySource().ListGrants(session)
+	grants := make([]grantEntry, 0, len(keys))
+	for _, k := range keys {
+		grants = append(grants, grantEntry{Key: k})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"session": session, "grants": grants})
+}
+
+// handleRevokeGrant removes one session grant:
+// DELETE /api/agent/grants?session=…&key=… — revoking an absent key is a
+// no-op (the next gate evaluation simply does not match it).
+func (s *Server) handleRevokeGrant(w http.ResponseWriter, r *http.Request) {
+	if s.agent == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent is not available")
+		return
+	}
+	key := r.URL.Query().Get("key")
+	if key == "" {
+		writeError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+	s.agent.PolicySource().RevokeGrant(r.URL.Query().Get("session"), key)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // handleQuota reports the provider quota plus this process's session usage
 // (the always-available fallback when the provider has no quota API).
 func (s *Server) handleQuota(w http.ResponseWriter, r *http.Request) {
