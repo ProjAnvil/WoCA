@@ -176,20 +176,6 @@ func (r *speculativeRegistry) cancel(runID string, ids ...string) {
 // endRun cancels and removes every future of runID (spec F1: a run's
 // speculative bookkeeping dies with the run — done, error and cancel paths
 // alike).
-func (r *speculativeRegistry) endRun(runID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for key, f := range r.futures {
-		if key.run != runID {
-			continue
-		}
-		if f.cancel != nil {
-			f.cancel()
-		}
-		delete(r.futures, key)
-	}
-	r.order = slices.DeleteFunc(r.order, func(k specKey) bool { return k.run == runID })
-}
 
 // endRunFamily is endRun over runID and every per-tool-call child bucket
 // runID+"/"+id (the suffixed specRunID buckets a subagent child's nodes key

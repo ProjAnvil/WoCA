@@ -49,6 +49,11 @@ func (s SubagentRunState) terminal() bool {
 
 // SubagentRun is the snapshot vocabulary of one registry entry.
 type SubagentRun struct {
+	// baseTokens is the shared child Agent's usage total at this child's
+	// first node: same-def children share one Agent whose usage accumulates
+	// across siblings, so the exit node reports the delta (unexported, not
+	// part of the wire snapshot).
+	baseTokens int
 	// Def is the subagent definition's display name ("general" for default
 	// children); CallID is the parent's Task tool-call id; Session is the
 	// starting run's session id; Origin is the shell-owner form
@@ -81,6 +86,7 @@ type SubagentEvent struct {
 type subagentRuns struct {
 	mu       sync.Mutex
 	runs     map[string]*SubagentRun
+	bases    map[string]int
 	max      int
 	onChange func(session string)
 	onEvent  func(session string, ev SubagentEvent)
@@ -90,10 +96,28 @@ func newSubagentRuns(max int) *subagentRuns {
 	if max <= 0 {
 		max = defaultMaxSubagents
 	}
-	return &subagentRuns{runs: map[string]*SubagentRun{}, max: max}
+	return &subagentRuns{runs: map[string]*SubagentRun{}, bases: map[string]int{}, max: max}
 }
 
 func runKey(session, callID string) string { return session + "\x00" + callID }
+
+// seedTokenBase records the shared child Agent's usage total at a child's
+// first node (the per-child delta baseline; see SubagentRun.baseTokens).
+func (r *subagentRuns) seedTokenBase(session, callID string, base int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cur, ok := r.runs[runKey(session, callID)]; ok && !cur.State.terminal() {
+		return // an earlier lifetime of this child owns its baseline
+	}
+	r.bases[runKey(session, callID)] = base
+}
+
+// tokenBaseOf returns the seeded baseline (0 when none).
+func (r *subagentRuns) tokenBaseOf(session, callID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.bases[runKey(session, callID)]
+}
 
 // start registers a child's start, reporting whether this call performed the
 // registration. Idempotent: a paused-and-resumed child re-enters its nodes,
@@ -102,7 +126,7 @@ func runKey(session, callID string) string { return session + "\x00" + callID }
 func (r *subagentRuns) start(run SubagentRun) bool {
 	r.mu.Lock()
 	key := runKey(run.Session, run.CallID)
-	if cur, ok := r.runs[key]; ok {
+	if cur, ok := r.runs[key]; ok && !cur.State.terminal() {
 		resumed := cur.State == SubagentWaiting
 		if resumed {
 			cur.State = SubagentRunning
@@ -111,9 +135,16 @@ func (r *subagentRuns) start(run SubagentRun) bool {
 		r.mu.Unlock()
 		if resumed {
 			r.fire(ev)
+			r.change(run.Session)
 		}
 		return false
 	}
+	// A TERMINAL entry (or none) means the child is starting afresh: a
+	// cancelled-then-resumed run re-enters its child nodes after stopSession
+	// tore the registry down — re-register so the cap counts it and the
+	// SubagentStart/Stop hooks fire again for the resumed lifetime. The old
+	// record is replaced (its stopped verdict described the cancelled
+	// lifetime, not this one).
 	run.State = SubagentRunning
 	run.StartedAt = time.Now()
 	r.runs[key] = &run

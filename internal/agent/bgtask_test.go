@@ -492,6 +492,9 @@ func TestRunTaskForkUsesTranscript(t *testing.T) {
 	if !subModel.sawContext {
 		t.Fatal("forked child did not see the parent transcript context")
 	}
+	if !subModel.sawWrapper || subModel.sawSystem {
+		t.Fatalf("fork wrapper: task-fork wrapper seen=%v, leaked system prompt=%v (input %v)", subModel.sawWrapper, subModel.sawSystem, subModel.input)
+	}
 }
 
 // forkRecordingModel records whether the forked transcript reached the child
@@ -499,12 +502,22 @@ func TestRunTaskForkUsesTranscript(t *testing.T) {
 type forkRecordingModel struct {
 	reply      string
 	sawContext bool
+	sawWrapper bool
+	sawSystem  bool
+	input      []string
 }
 
 func (m *forkRecordingModel) Invoke(_ context.Context, input []messages.Message, _ ...runnables.Option) (messages.Message, error) {
 	for _, msg := range input {
+		m.input = append(m.input, string(msg.Role)+":"+msg.Content)
 		if msg.Role == messages.RoleHuman && strings.Contains(msg.Content, "earlier context") {
 			m.sawContext = true
+		}
+		if msg.Role == messages.RoleHuman && strings.Contains(msg.Content, "<task-fork>") {
+			m.sawWrapper = true
+		}
+		if msg.Role == messages.RoleSystem && strings.Contains(msg.Content, "parent system") {
+			m.sawSystem = true
 		}
 	}
 	return messages.AI(m.reply), nil

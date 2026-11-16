@@ -908,7 +908,7 @@ func TestSpeculativeEvictionKeepsHeldFutureAlive(t *testing.T) {
 	}
 	// Run-end still bounds every future the registry kept: the whole
 	// flood dies with the run and the registry empties.
-	r.endRun("run")
+	r.endRunFamily("run")
 	for i := range flood {
 		if flood[i].ctx.Err() == nil {
 			t.Fatalf("run-end did not cancel flood future %d", i+1)

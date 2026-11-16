@@ -24,7 +24,10 @@ import (
 	"github.com/projanvil/langchain-golang/core/schema"
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 
+	lgruntime "github.com/projanvil/langchain-golang/langgraph/runtime"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 	"github.com/projanvil/woca/internal/config"
+	"github.com/projanvil/woca/internal/platform/executor"
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -213,4 +216,260 @@ func TestReproN1ParallelChildApprovalsRouteByNS(t *testing.T) {
 	if misrouted > 0 {
 		t.Errorf("CONSENT MISROUTE: %d/%d iterations applied one child's answer to the other child", misrouted, iterations)
 	}
+}
+
+// TestSubgraphCapRejects: nine foreground Task calls in one batch — the
+// first defaultMaxSubagents fan out, the ninth is rejected with a tool-result
+// error naming the cap, never queued (design §3.2, D12).
+func TestSubgraphCapRejects(t *testing.T) {
+	workdir := t.TempDir()
+	parent := &manyTaskModel{n: defaultMaxSubagents + 1}
+	a, err := New(Config{
+		Model:          parent,
+		SubagentModel:  language.NewFakeChatModel(language.WithResponses(messages.AI("sub done"))),
+		Registry:       tools.NewRegistry(workdir),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeBypass,
+		WorkDir:        workdir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := runTaskViaGraphHist(t, a, "thread-cap-reject", messages.Human("go"))
+	reports, rejected := 0, 0
+	for _, m := range final {
+		if m.Role != messages.RoleTool {
+			continue
+		}
+		switch {
+		case m.Content == "sub done":
+			reports++
+		case strings.Contains(m.Content, fmt.Sprintf("subagent concurrency limit reached (%d)", defaultMaxSubagents)):
+			rejected++
+		default:
+			t.Fatalf("unexpected tool result %q", m.Content)
+		}
+	}
+	if reports != defaultMaxSubagents || rejected != 1 {
+		t.Fatalf("reports=%d rejected=%d, want %d/%d", reports, rejected, defaultMaxSubagents, 1)
+	}
+}
+
+// manyTaskModel emits n Task calls (ids t0..t(n-1)) until every one has a
+// tool result, then reports done.
+type manyTaskModel struct{ n int }
+
+func (m *manyTaskModel) pick(input []messages.Message) messages.Message {
+	answered := map[string]bool{}
+	for _, msg := range input {
+		if msg.Role == messages.RoleTool {
+			answered[msg.ToolCallID] = true
+		}
+	}
+	for i := range m.n {
+		if !answered[fmt.Sprintf("t%d", i)] {
+			calls := make([]messages.ToolCall, 0, m.n)
+			for j := range m.n {
+				calls = append(calls, messages.ToolCall{ID: fmt.Sprintf("t%d", j), Name: "Task", Args: map[string]any{"description": fmt.Sprintf("job %d", j)}})
+			}
+			return messages.Message{Role: messages.RoleAI, ToolCalls: calls}
+		}
+	}
+	return messages.AI("parent done")
+}
+
+func (m *manyTaskModel) Invoke(_ context.Context, input []messages.Message, _ ...runnables.Option) (messages.Message, error) {
+	return m.pick(input), nil
+}
+
+func (m *manyTaskModel) Batch(ctx context.Context, inputs [][]messages.Message, opts ...runnables.Option) ([]messages.Message, error) {
+	out := make([]messages.Message, len(inputs))
+	for i, in := range inputs {
+		out[i], _ = m.Invoke(ctx, in, opts...)
+	}
+	return out, nil
+}
+
+func (m *manyTaskModel) Stream(_ context.Context, input []messages.Message, _ ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	return runnables.NewSliceStream([]messages.Message{m.pick(input)}), nil
+}
+
+func (m *manyTaskModel) InputSchema() schema.Schema {
+	return schema.Schema{"type": "array", "description": "chat messages"}
+}
+func (m *manyTaskModel) OutputSchema() schema.Schema                            { return schema.Schema{"type": "object"} }
+func (m *manyTaskModel) BindTools([]coretools.Tool) (language.ChatModel, error) { return m, nil }
+func (m *manyTaskModel) Capabilities() language.ChatModelCapabilities {
+	return language.ChatModelCapabilities{ToolCalling: true, Streaming: true}
+}
+
+// TestSubagentShellOwnerAttribution: a background Bash started inside a
+// fanned-out child lands in the session-shared shell registry with the
+// child's origin as Owner (design §3.7).
+func TestSubagentShellOwnerAttribution(t *testing.T) {
+	workdir := t.TempDir()
+	child := &bgBashChildModel{}
+	a, err := New(Config{
+		Model:          &taskCallModel{args: taskArgs{Description: "start a server"}},
+		SubagentModel:  child,
+		Registry:       tools.NewRegistry(workdir),
+		Exec:           executor.NewLocal(),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeBypass,
+		WorkDir:        workdir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := runTaskViaGraph(t, a, "thread-shell-owner")
+	if res, ok := taskResultFor(final, "t0"); !ok || !strings.Contains(res.Content, "sub done") {
+		t.Fatalf("child did not finish: %v", final)
+	}
+	shells := a.registry.Background().ListFor(sessionFromCtx(t.Context()))
+	if len(shells) == 0 {
+		t.Fatal("child's background shell is not visible in the session registry")
+	}
+	for _, sh := range shells {
+		if sh.Owner == "" || sh.Owner == "main" {
+			t.Fatalf("shell %s owner = %q, want the child origin", sh.ID, sh.Owner)
+		}
+		if !strings.HasPrefix(sh.Owner, "subagent:") {
+			t.Fatalf("shell owner = %q, want subagent:<def>#<callID> form", sh.Owner)
+		}
+	}
+	a.registry.Background().KillAll(tools.StopByUser)
+}
+
+// bgBashChildModel starts one background Bash and then reports done.
+type bgBashChildModel struct{}
+
+func (m *bgBashChildModel) pick(input []messages.Message) messages.Message {
+	for _, msg := range input {
+		if msg.Role == messages.RoleTool {
+			return messages.AI("sub done")
+		}
+	}
+	return messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+		{ID: "bg1", Name: "Bash", Args: map[string]any{"command": "sleep 30", "run_in_background": true}},
+	}}
+}
+
+func (m *bgBashChildModel) Invoke(_ context.Context, input []messages.Message, _ ...runnables.Option) (messages.Message, error) {
+	return m.pick(input), nil
+}
+
+func (m *bgBashChildModel) Batch(ctx context.Context, inputs [][]messages.Message, opts ...runnables.Option) ([]messages.Message, error) {
+	out := make([]messages.Message, len(inputs))
+	for i, in := range inputs {
+		out[i], _ = m.Invoke(ctx, in, opts...)
+	}
+	return out, nil
+}
+
+func (m *bgBashChildModel) Stream(_ context.Context, input []messages.Message, _ ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	return runnables.NewSliceStream([]messages.Message{m.pick(input)}), nil
+}
+
+func (m *bgBashChildModel) InputSchema() schema.Schema {
+	return schema.Schema{"type": "array", "description": "chat messages"}
+}
+func (m *bgBashChildModel) OutputSchema() schema.Schema                            { return schema.Schema{"type": "object"} }
+func (m *bgBashChildModel) BindTools([]coretools.Tool) (language.ChatModel, error) { return m, nil }
+func (m *bgBashChildModel) Capabilities() language.ChatModelCapabilities {
+	return language.ChatModelCapabilities{ToolCalling: true, Streaming: true}
+}
+
+// TestStaleFanoutErrorsLoudly (white-box): a Fanout decision naming a node
+// that no longer resolves must convert into a loud tool-result error — the
+// Send never dispatched, so no result would ever arrive (design §3.2, the
+// dropped-Send path; snapshot lookup so a mid-round re-add cannot silently
+// drop the call).
+func TestStaleFanoutErrorsLoudly(t *testing.T) {
+	a, err := New(Config{
+		Model:          language.NewFakeChatModel(language.WithResponses(messages.AI("x"))),
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := map[string]any{
+		"messages": []messages.Message{messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+			{ID: "t9", Name: "Task", Args: map[string]any{"description": "ghost"}},
+		}}},
+		decisionsChannelName: decisionsState{PerCall: map[string]callDecision{
+			"t9": {Run: true, Fanout: "subagent:ghost-0000"},
+		}},
+	}
+	update, err := a.toolsNode()(lgruntime.NewRuntime(t.Context()), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := MessagesFrom(map[string]any{"messages": update.(map[string]any)["messages"]})
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Content, "subagent:ghost-0000") {
+		t.Fatalf("stale fanout must error naming the node; got %+v", msgs)
+	}
+}
+
+// TestReproR1RelayChildSpeculatedSiblingRunsOnce: the archived relay defect
+// R1, revived on the fan-out topology — a child batch [speculated read-only
+// Bash probe, gated Write] must execute the probe EXACTLY once across the
+// approval pause (the relay rebuilt the child and re-ran it; the subgraph
+// child persists across its own pause).
+func TestReproR1RelayChildSpeculatedSiblingRunsOnce(t *testing.T) {
+	workdir := t.TempDir()
+	exec := &relayProbeExec{Executor: executor.NewLocal()}
+	a, err := New(Config{
+		Model: &taskCallModel{args: taskArgs{Description: "probe", Prompt: "run the probe"}},
+		SubagentModel: &subReportModel{batch: messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+			{ID: "s1", Name: "Bash", Args: map[string]any{"command": "echo " + relaySiblingMarker}},
+			{ID: "w1", Name: "Write", Args: map[string]any{"file_path": "gated.txt", "content": "x"}},
+		}}},
+		Registry:       tools.NewRegistry(workdir),
+		Exec:           exec,
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeDefault,
+		WorkDir:        workdir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	thread := "thread-r1-subgraph"
+	intrs, _ := pumpStream(t, a.Stream(ctx, []messages.Message{messages.Human("do it")}, thread))
+	if len(intrs) != 1 {
+		t.Fatalf("pauses = %d, want 1 (the child's Write ask); got %#v", len(intrs), DecodeInterruptValue(intrs[0].Value))
+	}
+	waitProbeDone(t, exec, 1)
+	intrs2, finalMsgs := pumpStream(t, a.ResumeStream(ctx, thread, ApprovalAnswer{Decisions: map[string]AskDecision{
+		intrAskCallID(t, intrs[0]): {Outcome: OutcomeAllow},
+	}}))
+	if len(intrs2) != 0 {
+		t.Fatalf("re-paused: %#v", DecodeInterruptValue(intrs2[0].Value))
+	}
+	// The child's report must surface the probe result exactly once and the
+	// probe must have executed exactly once.
+	res, ok := taskResultFor(finalMsgs, "t0")
+	if !ok || !strings.Contains(res.Content, relaySiblingMarker) {
+		t.Fatalf("child report lacks the probe result: %v", finalMsgs)
+	}
+	after, killed := exec.stats()
+	if after != 1 || killed != 0 {
+		t.Fatalf("probe executed %d times (killed %d), want exactly 1", after, killed)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "gated.txt")); err != nil {
+		t.Fatalf("approved Write did not execute: %v", err)
+	}
+}
+
+// intrAskCallID extracts the single ask's call id from a paused child
+// ApprovalRequest.
+func intrAskCallID(t *testing.T, in lgtypes.Interrupt) string {
+	t.Helper()
+	req, ok := DecodeInterruptValue(in.Value).(ApprovalRequest)
+	if !ok || len(req.Asks) != 1 {
+		t.Fatalf("pause payload = %#v, want a one-ask ApprovalRequest", DecodeInterruptValue(in.Value))
+	}
+	return req.Asks[0].CallID
 }

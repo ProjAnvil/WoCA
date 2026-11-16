@@ -141,12 +141,11 @@ type PlanApprovalRequest struct {
 }
 
 // SubagentInterrupt wraps a foreground Task subagent's permission pause so
-// the parent graph surfaces it for approval. The answer semantics are the
-// inner permission's ("y"/"n"); ThreadID is the derived subagent checkpoint
-// thread used to resume the child after approval. Seq counts the resume
-// values the relay consumed before this pause — the fork's resume queue is
-// positional (persisted consumed prefix + fresh answer), so on re-entry the
-// relay fast-forwards past Seq replayed answers to reach the fresh one.
+// the parent graph surfaces it for approval — the interrupt-relay envelope
+// the 2026-09-12 design shipped. Task 7 replaced the relay with the Send
+// fan-out; this type survives ONLY so drivers can decode pre-upgrade paused
+// checkpoints, and resuming such a thread takes the interrupted-marker path
+// (the Task 5 legacy guard) rather than re-running the relay.
 type SubagentInterrupt struct {
 	Subagent   string            `json:"subagent"`
 	ToolCallID string            `json:"tool_call_id"`
@@ -1719,10 +1718,17 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		// so this node synthesizes the loud error instead.
 		exec := make([]messages.ToolCall, 0, len(calls))
 		execIdx := make(map[string]int, len(calls))
+		// A Fanout-marked call's result arrives from its Send. The mark is
+		// STALE when routeTools could not emit the Send (the def vanished
+		// between the approval and routing supersteps) — the call errors
+		// here. The check deliberately uses the registry SNAPSHOT without
+		// the routing path's flush: a def re-added mid-round takes effect
+		// next round, so this round's dropped call can never silently lose
+		// its result to a rebuilt registry.
 		staleFanouts := make(map[string]string)
 		for _, call := range calls {
 			if d, ok := ds.PerCall[call.ID]; ok && d.Fanout != "" {
-				if a.childForNode(d.Fanout) == nil {
+				if a.childReg().lookup(d.Fanout) == nil {
 					staleFanouts[call.ID] = d.Fanout
 				}
 				continue // results arrive from the Send (or the stale-mark error below)

@@ -416,6 +416,7 @@ func (a *Agent) beginChildRun(rt lgruntime.Runtime, meta subagentMeta) {
 		return
 	}
 	entry := SubagentRun{Def: meta.Def, CallID: meta.ParentCallID, Session: meta.Session, Origin: meta.Origin}
+	p.subagents.seedTokenBase(meta.Session, meta.ParentCallID, p.usage.snapshot().TotalTokens)
 	if p.subagents.start(entry) {
 		// The SubagentStart hook fires once per child (the relay-era
 		// runTask fired it at spawn; the fan-out fires it at first node).
@@ -458,10 +459,22 @@ func (a *Agent) childExitNode() lggraph.NodeFunc {
 		report = a.withSubagentStopFeedback(rt, meta.Def, report)
 		if p := a.runParent; p != nil {
 			p.recordTaskEvent(rt, meta.Def, meta.Description, report, nil)
+			// Failed vs done: the child model guard records terminal model
+			// failures on the child-error channel; they surface to the
+			// parent as the "Error: ..." report but the registry verdict is
+			// a failure (§3.7 vocabulary).
+			verdict := SubagentDone
+			if em, _ := state[childErrorChannel].(string); em != "" {
+				verdict = SubagentFailed
+			}
+			// Per-child tokens: same-def children share this Agent, whose
+			// usage accumulates across siblings and runs — report the delta
+			// since this child's first node seeded the registry baseline.
+			tokens := p.usage.snapshot().TotalTokens - p.subagents.tokenBaseOf(meta.Session, meta.ParentCallID)
 			p.subagents.finish(SubagentRun{
 				Def: meta.Def, CallID: meta.ParentCallID, Session: meta.Session,
-				Origin: meta.Origin, Tokens: a.usage.snapshot().TotalTokens, Report: report,
-			}, SubagentDone)
+				Origin: meta.Origin, Tokens: tokens, Report: report,
+			}, verdict)
 		}
 		return &lgtypes.Command{
 			Graph:  lgtypes.ParentGraph,
