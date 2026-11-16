@@ -62,7 +62,12 @@ func TestParkTimesOut(t *testing.T) {
 	r := &Run{id: "test", ctx: ctx, cancel: cancel, subs: map[*subscriber]struct{}{}}
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.park("permission", map[string]any{"tool_name": "Write"}) // no answer until timeout
+		cards := []parkedCard{{id: "p1", kind: "permission", payload: map[string]any{"tool_name": "Write"}}}
+		reply := make(chan any, 1)
+		r.mu.Lock()
+		r.pending = &interruptState{cards: cards, reply: reply}
+		r.mu.Unlock()
+		_, err := r.waitParked(cards, reply) // no answer until timeout
 		done <- err
 	}()
 	select {

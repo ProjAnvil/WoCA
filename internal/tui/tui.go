@@ -78,11 +78,14 @@ type todosMsg []tools.Todo
 // tree).
 type inFlightMsg []string
 
-// interruptMsg carries a run interrupt to the UI; the run goroutine blocks
+// interruptMsg carries a run pause to the UI; the run goroutine blocks
 // until the answer arrives on answerCh (then the runner resumes via
-// StreamResume).
+// StreamResume). cards holds every pending interrupt of the pause (one per
+// parallel child ask, or the main approval envelope); value is the card
+// currently awaiting a decision.
 type interruptMsg struct {
 	value    any
+	cards    []agent.PauseCard
 	answerCh chan any
 }
 
@@ -184,6 +187,12 @@ type Model struct {
 	// ask resolves the whole envelope with one ApprovalAnswer.
 	apprIdx int
 	apprDec map[string]agent.AskDecision
+	// cardIdx/cardAnswers walk a MULTI-card pause (several pending
+	// interrupts, e.g. parallel subagent approvals): one card at a time —
+	// the per-card machinery above drives each — until the last card
+	// resolves the pause with the NS-keyed map answer.
+	cardIdx     int
+	cardAnswers map[string]any
 	// blocks is the structured transcript behind the review overlay
 	// (ctrl+o): full tool args/results, reasoning, prompts, and command
 	// output, untruncated.
@@ -511,9 +520,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A run is paused awaiting this decision; park the composer draft so
 		// the decision keys can never swallow typing in progress, render the
 		// approval UI, and keep draining the run channel while the user
-		// decides.
+		// decides. A multi-card pause walks its cards one at a time.
 		m.holdDraft()
 		m.pending = &msg
+		m.cardIdx = 0
+		m.cardAnswers = nil
 		m.pendingBegin()
 		notify.Attention(os.Stdout, "woca: awaiting your decision")
 		if m.ch != nil {
@@ -781,16 +792,42 @@ func padRight(s string, width int) string {
 	return s + strings.Repeat(" ", width-len(s))
 }
 
-// resolvePending answers the pending interrupt and echoes the decision into
-// the transcript. The run goroutine unblocks and the runner resumes. Any
-// held composer draft returns to the input line.
+// resolvePending answers the pending card and echoes the decision into the
+// transcript. A multi-card pause records the card's answer and advances to
+// the next card; only the LAST card unblocks the run — with the NS-keyed
+// map when the pause carried several interrupts, the scalar otherwise. Any
+// held composer draft returns to the input line when the pause resolves.
 func (m *Model) resolvePending(answer any) {
 	p := m.pending
 	if p == nil {
 		return
 	}
+	echo := p.value
+	if len(p.cards) > 1 {
+		if m.cardAnswers == nil {
+			m.cardAnswers = map[string]any{}
+		}
+		m.cardAnswers[agent.CardKey(p.cards[m.cardIdx])] = answer
+		m.cardIdx++
+		if m.cardIdx < len(p.cards) {
+			// Advance to the next pending card; the decision UI restarts
+			// for it (the echo below fires per card).
+			m.echoCardDecision(echo, answer)
+			p.value = p.cards[m.cardIdx].Value
+			m.pendingBegin()
+			return
+		}
+		answer = m.cardAnswers
+	}
 	m.pending = nil
-	switch v := p.value.(type) {
+	m.echoCardDecision(echo, answer)
+	m.restoreDraft()
+	p.answerCh <- answer
+}
+
+// echoCardDecision writes the resolved card's verdict into the transcript.
+func (m *Model) echoCardDecision(value, answer any) {
+	switch v := value.(type) {
 	case agent.ApprovalRequest:
 		// The Task-5 ask envelope: echo every ask's verdict in order.
 		for _, ask := range v.Asks {
@@ -842,16 +879,17 @@ func (m *Model) resolvePending(answer any) {
 		}
 		m.write("\n" + dimStyle.Render("[question] answered by user: "+answers) + "\n")
 	}
-	m.restoreDraft()
-	p.answerCh <- answer
 }
 
-// interruptHandler surfaces run interrupts to the UI and blocks the run until
+// interruptHandler surfaces run pauses to the UI and blocks the run until
 // the user answers; the runner then resumes via StreamResume.
 func interruptHandler(ch chan<- tea.Msg) runner.InterruptHandler {
-	return func(value any) (any, error) {
+	return func(cards []agent.PauseCard) (any, error) {
+		if len(cards) == 0 {
+			return nil, fmt.Errorf("tui: pause carries no cards")
+		}
 		answerCh := make(chan any, 1)
-		ch <- interruptMsg{value: value, answerCh: answerCh}
+		ch <- interruptMsg{value: cards[0].Value, cards: cards, answerCh: answerCh}
 		return <-answerCh, nil
 	}
 }

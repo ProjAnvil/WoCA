@@ -201,7 +201,7 @@ func TestHandleInterruptParksEachKind(t *testing.T) {
 	// Unknown interrupt values are rejected outright.
 	r0, cancel0 := mkRun()
 	defer cancel0()
-	if _, err := r0.handleInterrupt(42); err == nil {
+	if _, err := r0.handleInterrupt([]agent.PauseCard{{ID: "i0", Value: 42}}); err == nil {
 		t.Fatal("unknown interrupt value should error")
 	}
 
@@ -219,7 +219,7 @@ func TestHandleInterruptParksEachKind(t *testing.T) {
 		r, cancel := mkRun()
 		got := make(chan any, 1)
 		go func() {
-			v, err := r.handleInterrupt(c.value)
+			v, err := r.handleInterrupt([]agent.PauseCard{{ID: "i1", Value: c.value}})
 			if err != nil {
 				got <- err
 			} else {
@@ -230,7 +230,7 @@ func TestHandleInterruptParksEachKind(t *testing.T) {
 
 		// The kind is recorded on the parked state.
 		r.mu.Lock()
-		kind, payload := r.pending.kind, r.pending.payload
+		kind, payload := r.pending.cards[0].kind, r.pending.cards[0].payload
 		r.mu.Unlock()
 		if kind != c.kind || payload == nil {
 			t.Fatalf("pending = %s %v, want kind %q", kind, payload, c.kind)
@@ -262,15 +262,15 @@ func TestHandleInterruptSubagentFlatPayload(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = r.handleInterrupt(agent.SubagentInterrupt{
+		_, _ = r.handleInterrupt([]agent.PauseCard{{ID: "i2", Value: agent.SubagentInterrupt{
 			Subagent: "reviewer",
 			Inner:    agent.PermissionRequest{ToolName: "Write", Reason: "edit", IsReadOnly: true},
-		})
+		}}})
 	}()
 	waitPending(t, r)
 
 	r.mu.Lock()
-	kind, payload := r.pending.kind, r.pending.payload
+	kind, payload := r.pending.cards[0].kind, r.pending.cards[0].payload
 	r.mu.Unlock()
 	if kind != "permission" {
 		t.Fatalf("kind = %q, want permission", kind)
@@ -320,13 +320,13 @@ func TestHandleInterruptApprovalEnvelope(t *testing.T) {
 		defer cancel()
 		got := make(chan any, 1)
 		go func() {
-			v, err := r.handleInterrupt(agent.ApprovalRequest{Asks: []agent.Ask{bashAsk}})
+			v, err := r.handleInterrupt([]agent.PauseCard{{ID: "c1", Value: agent.ApprovalRequest{Asks: []agent.Ask{bashAsk}}}})
 			got <- any(err)
 			_ = v
 		}()
 		waitPending(t, r)
 		r.mu.Lock()
-		kind, payload := r.pending.kind, r.pending.payload
+		kind, payload := r.pending.cards[0].kind, r.pending.cards[0].payload
 		r.mu.Unlock()
 		if kind != "permission" {
 			t.Fatalf("kind = %q, want permission", kind)
@@ -363,13 +363,13 @@ func TestHandleInterruptApprovalEnvelope(t *testing.T) {
 			r, cancel := mkRun()
 			got := make(chan any, 1)
 			go func() {
-				v, err := r.handleInterrupt(agent.ApprovalRequest{Asks: []agent.Ask{tc.ask}})
+				v, err := r.handleInterrupt([]agent.PauseCard{{ID: "c1", Value: agent.ApprovalRequest{Asks: []agent.Ask{tc.ask}}}})
 				got <- any(err)
 				_ = v
 			}()
 			waitPending(t, r)
 			r.mu.Lock()
-			kind := r.pending.kind
+			kind := r.pending.cards[0].kind
 			r.mu.Unlock()
 			if kind != tc.kind {
 				t.Fatalf("kind = %q, want %q", kind, tc.kind)
@@ -398,7 +398,7 @@ func TestHandleInterruptApprovalEnvelope(t *testing.T) {
 		defer cancel()
 		got := make(chan any, 1)
 		go func() {
-			v, err := r.handleInterrupt(agent.ApprovalRequest{Asks: []agent.Ask{bashAsk, planAsk}})
+			v, err := r.handleInterrupt([]agent.PauseCard{{ID: "c1", Value: agent.ApprovalRequest{Asks: []agent.Ask{bashAsk, planAsk}}}})
 			if err != nil {
 				got <- err
 			} else {
@@ -407,7 +407,7 @@ func TestHandleInterruptApprovalEnvelope(t *testing.T) {
 		}()
 		waitPending(t, r)
 		r.mu.Lock()
-		kind := r.pending.kind
+		kind := r.pending.cards[0].kind
 		r.mu.Unlock()
 		if kind != "approvals" {
 			t.Fatalf("kind = %q, want approvals", kind)
@@ -437,7 +437,7 @@ func TestHandleInterruptApprovalEnvelope(t *testing.T) {
 		defer cancel()
 		got := make(chan any, 1)
 		go func() {
-			v, err := r.handleInterrupt(agent.ApprovalRequest{Asks: []agent.Ask{bashAsk, planAsk}})
+			v, err := r.handleInterrupt([]agent.PauseCard{{ID: "c1", Value: agent.ApprovalRequest{Asks: []agent.Ask{bashAsk, planAsk}}}})
 			if err != nil {
 				got <- err
 			} else {

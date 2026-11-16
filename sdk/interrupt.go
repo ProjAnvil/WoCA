@@ -9,14 +9,17 @@ import (
 
 // Interrupt is the public view of a graph pause: Kind selects the payload.
 // "subagent_permission" sets Subagent plus the inner Permission;
-// "approvals" (Task 5's ask envelope) sets Approvals.
+// "approvals" (Task 5's ask envelope) sets Approvals; "multi" (Task 8)
+// sets Interrupts — every pending card of the pause, each with its NS key.
 type Interrupt struct {
-	Kind       string // permission | subagent_permission | ask_user | plan_approval | approvals
+	Kind       string // permission | subagent_permission | ask_user | plan_approval | approvals | multi
+	NS         string // the card's fork key: the map-answer address (multi pauses)
 	Subagent   string
 	Permission *PermissionInterrupt
 	AskUser    *AskUserInterrupt
 	Plan       *PlanInterrupt
 	Approvals  *ApprovalsInterrupt
+	Interrupts []Interrupt
 }
 
 type PermissionInterrupt struct {
@@ -71,46 +74,117 @@ type ApprovalAnswer struct{ Decisions map[string]AskDecisionView }
 // per question, in question order.
 type AskUserAnswer struct{ Answers []string }
 
+// CardAnswer answers one card of a multi-card pause: Key is the card's NS
+// (Interrupt.NS), Value its answer (ApprovalAnswer, AskUserAnswer, bool or
+// string per kind).
+type CardAnswer struct {
+	Key   string
+	Value any
+}
+
+// ListAnswer is the resume value for a multi-card pause: one entry per
+// answered card. Cards without an entry re-pause.
+type ListAnswer []CardAnswer
+
 // interruptHandler returns the runner handler: the caller's OnInterrupt when
 // set, else the headless default matching the CLI's non-interactive posture
-// (deny permissions, empty answers, reject plans).
+// (deny permissions, empty answers, reject plans). A pause's cards arrive
+// as ONE Interrupt (the aggregate view for several pending cards).
 func (o Options) interruptHandler() runner.InterruptHandler {
-	return func(value any) (any, error) {
+	return func(cards []agent.PauseCard) (any, error) {
+		if len(cards) == 0 {
+			return nil, fmt.Errorf("sdk: pause carries no interrupts")
+		}
+		for _, c := range cards {
+			switch c.Value.(type) {
+			case agent.PermissionRequest, agent.SubagentInterrupt, agent.PlanApprovalRequest, agent.AskUserRequest, agent.ApprovalRequest:
+			default:
+				return nil, fmt.Errorf("sdk: unknown interrupt value %T", c.Value)
+			}
+		}
 		if o.OnInterrupt != nil {
-			v, err := o.OnInterrupt(interruptFrom(value))
+			v, err := o.OnInterrupt(interruptFromCards(cards))
 			if err != nil {
 				return nil, err
 			}
 			switch ans := v.(type) {
-			case AskUserAnswer:
-				return agent.AskUserAnswer{Answers: ans.Answers}, nil
-			case ApprovalAnswer:
-				out := agent.ApprovalAnswer{Decisions: make(map[string]agent.AskDecision, len(ans.Decisions))}
-				for id, d := range ans.Decisions {
-					out.Decisions[id] = agent.AskDecision{Outcome: d.Outcome, Grant: d.Grant, Answers: d.Answers}
+			case ListAnswer:
+				out := make(map[string]any, len(ans))
+				for _, ca := range ans {
+					out[ca.Key] = translateAnswer(ca.Value)
 				}
 				return out, nil
+			case map[string]any:
+				out := make(map[string]any, len(ans))
+				for k, val := range ans {
+					out[k] = translateAnswer(val)
+				}
+				return out, nil
+			default:
+				return translateAnswer(v), nil
 			}
-			return v, nil
 		}
-		switch v := value.(type) {
-		case agent.PermissionRequest, agent.SubagentInterrupt:
-			return "n", nil
-		case agent.AskUserRequest:
-			return agent.AskUserAnswer{}, nil
-		case agent.PlanApprovalRequest:
-			return "n", nil
-		case agent.ApprovalRequest:
-			// Headless default: deny every ask (fail closed).
-			decisions := make(map[string]agent.AskDecision, len(v.Asks))
-			for _, ask := range v.Asks {
-				decisions[ask.CallID] = agent.AskDecision{Outcome: agent.OutcomeDeny}
-			}
-			return agent.ApprovalAnswer{Decisions: decisions}, nil
-		default:
-			return nil, fmt.Errorf("sdk: unknown interrupt value %T", value)
+		if len(cards) == 1 {
+			return headlessAnswer(cards[0]), nil
 		}
+		// Headless default: fail closed on every card of the pause.
+		out := make(map[string]any, len(cards))
+		for _, c := range cards {
+			out[agent.CardKey(c)] = headlessAnswer(c)
+		}
+		return out, nil
 	}
+}
+
+// translateAnswer maps sdk answer views onto the agent resume types;
+// anything else passes through (bools, strings, raw maps for passthrough
+// callers).
+func translateAnswer(v any) any {
+	switch ans := v.(type) {
+	case AskUserAnswer:
+		return agent.AskUserAnswer{Answers: ans.Answers}
+	case ApprovalAnswer:
+		out := agent.ApprovalAnswer{Decisions: make(map[string]agent.AskDecision, len(ans.Decisions))}
+		for id, d := range ans.Decisions {
+			out.Decisions[id] = agent.AskDecision{Outcome: d.Outcome, Grant: d.Grant, Answers: d.Answers}
+		}
+		return out
+	}
+	return v
+}
+
+// headlessAnswer is the fail-closed answer for one card.
+func headlessAnswer(card agent.PauseCard) any {
+	switch v := card.Value.(type) {
+	case agent.AskUserRequest:
+		return agent.AskUserAnswer{}
+	case agent.ApprovalRequest:
+		decisions := make(map[string]agent.AskDecision, len(v.Asks))
+		for _, ask := range v.Asks {
+			decisions[ask.CallID] = agent.AskDecision{Outcome: agent.OutcomeDeny}
+		}
+		return agent.ApprovalAnswer{Decisions: decisions}
+	default:
+		return "n"
+	}
+}
+
+// interruptFromCards builds the public Interrupt of a pause: the single
+// card's view (with its NS key) when one is pending, else the "multi"
+// aggregate carrying every card.
+func interruptFromCards(cards []agent.PauseCard) Interrupt {
+	if len(cards) == 1 {
+		i := interruptFrom(cards[0].Value)
+		i.NS = agent.CardKey(cards[0])
+		return i
+	}
+	agg := Interrupt{Kind: "multi"}
+	for _, c := range cards {
+		i := interruptFrom(c.Value)
+		i.NS = agent.CardKey(c)
+		agg.Interrupts = append(agg.Interrupts, i)
+	}
+	return agg
 }
 
 func interruptFrom(value any) Interrupt {

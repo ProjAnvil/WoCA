@@ -30,15 +30,33 @@ type subscriber struct {
 	ch chan Event
 }
 
-// interruptState holds a parked graph interrupt awaiting an HTTP answer.
-type interruptState struct {
+// parkedCard is one pending interrupt card of a parked pause: its answer
+// key (NS, or ID for legacy NS-less interrupts), its wire kind
+// (permission/ask/plan/approvals), its rendered payload, and — for
+// approvals cards — the envelope's asks so the answer path can translate
+// legacy {approve} bodies into per-ask ApprovalAnswers.
+type parkedCard struct {
+	id      string
+	ns      string
 	kind    string
 	payload any
-	reply   chan any
-	// asks carries the envelope's asks for "approvals"-kind parks, so the
-	// answer path can translate legacy {approve:true/false} bodies into a
-	// per-ask ApprovalAnswer.
-	asks []agent.Ask
+	asks    []agent.Ask
+}
+
+// key is the answer-map key addressing this card.
+func (c parkedCard) key() string {
+	if c.ns != "" {
+		return c.ns
+	}
+	return c.id
+}
+
+// interruptState holds a parked graph pause awaiting an HTTP answer: every
+// pending card of the pause (one per interrupt — the main approval
+// envelope and/or each paused child), answered together.
+type interruptState struct {
+	cards []parkedCard
+	reply chan any
 }
 
 // Run is one in-flight agent execution.
@@ -207,69 +225,92 @@ func (r *Run) renderMessage(m messages.Message) {
 	}
 }
 
-// handleInterrupt classifies a graph interrupt and parks it awaiting an answer.
-func (r *Run) handleInterrupt(value any) (any, error) {
-	switch v := value.(type) {
+// handleInterrupt classifies every card of a graph pause and parks the
+// whole list awaiting one HTTP answer (design §3.4, audit fix M1): the
+// interrupt event carries ALL pending cards; the answer body's per-card
+// entries build the resume value — the scalar for a single pending card,
+// the NS-keyed map for several (partial answers re-pause the remainder).
+func (r *Run) handleInterrupt(cards []agent.PauseCard) (any, error) {
+	parked := make([]parkedCard, 0, len(cards))
+	for _, c := range cards {
+		pc, err := classifyCard(c)
+		if err != nil {
+			return nil, err
+		}
+		parked = append(parked, pc)
+	}
+	reply := make(chan any, 1)
+	r.mu.Lock()
+	r.pending = &interruptState{cards: parked, reply: reply}
+	r.mu.Unlock()
+	return r.waitParked(parked, reply)
+}
+
+// classifyCard renders one pause card for the wire: its kind plus payload.
+func classifyCard(c agent.PauseCard) (parkedCard, error) {
+	out := parkedCard{id: c.ID, ns: c.NS}
+	switch v := c.Value.(type) {
 	case agent.ApprovalRequest:
-		return r.parkApproval(v)
+		out.asks = v.Asks
+		if len(v.Asks) == 1 {
+			// A single-ask envelope parks under the ask's LEGACY kind with
+			// the legacy flat payload — the current web InterruptModal keeps
+			// rendering and answering it unchanged — plus the envelope's
+			// asks for forward-compatible clients.
+			ask := v.Asks[0]
+			switch ask.ToolName {
+			case "AskUserQuestion":
+				out.kind = "ask"
+				out.payload = map[string]any{"questions": ask.Questions, "asks": v.Asks}
+			case "ExitPlanMode":
+				out.kind = "plan"
+				out.payload = map[string]any{"plan": ask.Plan, "asks": v.Asks}
+			default:
+				out.kind = "permission"
+				out.payload = map[string]any{
+					"tool_name":    ask.ToolName,
+					"tool_args":    ask.ToolArgs,
+					"reason":       ask.Reason,
+					"is_read_only": tools.IsReadOnly(ask.ToolName, ask.ToolArgs),
+					"asks":         v.Asks,
+				}
+			}
+			return out, nil
+		}
+		// Multi-ask envelope: the whole envelope is the payload (Task 11's
+		// HitlStack); the answer path fans legacy {approve} bodies out to
+		// every ask.
+		out.kind = "approvals"
+		out.payload = v
+		return out, nil
 	case agent.PermissionRequest:
-		return r.park("permission", v)
+		out.kind = "permission"
+		out.payload = v
+		return out, nil
 	case agent.SubagentInterrupt:
-		// Flat payload: the frontend renders the permission card from
-		// tool_name/tool_args/reason; the subagent name rides along.
-		return r.park("permission", map[string]any{
+		// Legacy relay-era child ask: flat payload — the frontend renders the
+		// permission card from tool_name/tool_args/reason; the subagent name
+		// rides along.
+		out.kind = "permission"
+		out.payload = map[string]any{
 			"subagent":     v.Subagent,
 			"tool_name":    v.Inner.ToolName,
 			"tool_args":    v.Inner.ToolArgs,
 			"reason":       v.Inner.Reason,
 			"is_read_only": v.Inner.IsReadOnly,
-		})
-	case agent.AskUserRequest:
-		return r.park("ask", v)
-	case agent.PlanApprovalRequest:
-		return r.park("plan", v)
-	default:
-		return nil, fmt.Errorf("server: unknown interrupt value %T", value)
-	}
-}
-
-// parkApproval parks the Task-5 single-interrupt ask envelope (design §3.4,
-// audit fix M1/M4). A single-ask envelope parks under the ask's LEGACY kind
-// with the legacy flat payload — the current web InterruptModal keeps
-// rendering and answering it unchanged — plus the envelope itself under
-// "asks" for forward-compatible clients. Multi-ask envelopes park as the new
-// "approvals" kind carrying the whole envelope (Task 11's HitlStack).
-func (r *Run) parkApproval(v agent.ApprovalRequest) (any, error) {
-	if len(v.Asks) == 1 {
-		ask := v.Asks[0]
-		switch ask.ToolName {
-		case "AskUserQuestion":
-			return r.park("ask", map[string]any{
-				"questions": ask.Questions,
-				"asks":      v.Asks,
-			})
-		case "ExitPlanMode":
-			return r.park("plan", map[string]any{
-				"plan": ask.Plan,
-				"asks": v.Asks,
-			})
-		default:
-			return r.park("permission", map[string]any{
-				"tool_name":    ask.ToolName,
-				"tool_args":    ask.ToolArgs,
-				"reason":       ask.Reason,
-				"is_read_only": tools.IsReadOnly(ask.ToolName, ask.ToolArgs),
-				"asks":         v.Asks,
-			})
 		}
+		return out, nil
+	case agent.AskUserRequest:
+		out.kind = "ask"
+		out.payload = v
+		return out, nil
+	case agent.PlanApprovalRequest:
+		out.kind = "plan"
+		out.payload = v
+		return out, nil
+	default:
+		return parkedCard{}, fmt.Errorf("server: unknown interrupt value %T", c.Value)
 	}
-	// Multi-ask: remember the asks so the answer path can fan a legacy
-	// {approve} body out to every ask.
-	reply := make(chan any, 1)
-	r.mu.Lock()
-	r.pending = &interruptState{kind: "approvals", payload: v, reply: reply, asks: v.Asks}
-	r.mu.Unlock()
-	return r.waitParked("approvals", reply)
 }
 
 // parkedRunTTL bounds how long a run may sit parked on an unanswered
@@ -277,25 +318,22 @@ func (r *Run) parkApproval(v agent.ApprovalRequest) (any, error) {
 // precedent; see spec §6.3).
 var parkedRunTTL = 2 * time.Hour
 
-// park records the pending interrupt, emits it to clients, and blocks until an
-// answer is posted or the run is cancelled. Unanswered interrupts are also
-// bounded by parkedRunTTL: the run emits a timeout event and is cancelled so a
-// forgotten ask cannot pin a session forever.
-func (r *Run) park(kind string, payload any) (any, error) {
-	reply := make(chan any, 1)
-	r.mu.Lock()
-	r.pending = &interruptState{kind: kind, payload: payload, reply: reply}
-	r.mu.Unlock()
-	return r.waitParked(kind, reply)
-}
-
-// waitParked emits the parked interrupt and blocks for its answer (the tail
-// every park variant shares).
-func (r *Run) waitParked(kind string, reply chan any) (any, error) {
-	r.mu.Lock()
-	payload := r.pending.payload
-	r.mu.Unlock()
-	r.emit(Event{Type: EventInterrupt, Data: interruptPayload{Kind: kind, Payload: payload}})
+// waitParked emits the parked pause (one card per pending interrupt) and
+// blocks until an answer is posted or the run is cancelled. Unanswered
+// interrupts are also bounded by parkedRunTTL: the run emits a timeout
+// event and is cancelled so a forgotten ask cannot pin a session forever.
+func (r *Run) waitParked(cards []parkedCard, reply chan any) (any, error) {
+	kind := "multi" // several pending cards: no single top-level payload
+	var payload any
+	if len(cards) == 1 {
+		kind = cards[0].kind
+		payload = cards[0].payload
+	}
+	events := make([]interruptCardEvent, len(cards))
+	for i, c := range cards {
+		events[i] = interruptCardEvent{ID: c.id, NS: c.ns, Kind: c.kind, Payload: c.payload}
+	}
+	r.emit(Event{Type: EventInterrupt, Data: interruptPayload{Kind: kind, Payload: payload, Cards: events}})
 	if r.onPark != nil {
 		r.onPark()
 	}
@@ -313,7 +351,46 @@ func (r *Run) waitParked(kind string, reply chan any) (any, error) {
 	}
 }
 
-// answer decodes an HTTP answer and resumes the parked interrupt.
+// cardAnswerEntry is one entry of the list-form answer body
+// {answers: [{key, value}]}: key addresses one pending card (its NS, or ID
+// for legacy NS-less interrupts); value is the per-kind answer object.
+type cardAnswerEntry struct {
+	Key   string          `json:"key"`
+	Value json.RawMessage `json:"value"`
+}
+
+// decodeCardAnswerList extracts the list-form entries of an answer body
+// {answers: [{key, value}]}: reporting false when "answers" is absent, an
+// empty list (ambiguous with the legacy empty ask-user answer), or carries
+// another shape (the legacy single-card forms — string lists, decision
+// maps).
+func decodeCardAnswerList(body []byte) ([]cardAnswerEntry, bool) {
+	var probe struct {
+		Answers json.RawMessage `json:"answers"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil || len(probe.Answers) == 0 {
+		return nil, false
+	}
+	var entries []cardAnswerEntry
+	if err := json.Unmarshal(probe.Answers, &entries); err != nil {
+		return nil, false
+	}
+	if len(entries) == 0 {
+		return nil, false
+	}
+	for _, e := range entries {
+		if e.Key == "" {
+			return nil, false
+		}
+	}
+	return entries, true
+}
+
+// answer decodes an HTTP answer and resumes the parked pause. The body is
+// either the list form {answers: [{key, value}]} (any card count; entries
+// may answer a subset — unanswered cards re-pause), or — for a single
+// pending card — the legacy flat forms ({approve}, {answers: [...]}, the
+// approvals decision map).
 func (r *Run) answer(body []byte) error {
 	r.mu.Lock()
 	p := r.pending
@@ -322,40 +399,43 @@ func (r *Run) answer(body []byte) error {
 		return errors.New("no pending interrupt")
 	}
 
+	entries, isList := decodeCardAnswerList(body)
 	var resume any
-	switch p.kind {
-	case "ask":
-		var req struct {
-			Answers []string `json:"answers"`
+	switch {
+	case isList:
+		byKey := make(map[string]parkedCard, len(p.cards))
+		for _, c := range p.cards {
+			byKey[c.key()] = c
 		}
-		if err := json.Unmarshal(body, &req); err != nil {
-			return fmt.Errorf("decode answer: %w", err)
+		answered := make(map[string]any, len(entries))
+		for _, e := range entries {
+			card, ok := byKey[e.Key]
+			if !ok {
+				return fmt.Errorf("answer key %q matches no pending interrupt card", e.Key)
+			}
+			value, err := cardAnswerValue(card, e.Value)
+			if err != nil {
+				return err
+			}
+			answered[e.Key] = value
 		}
-		resume = agent.AskUserAnswer{Answers: req.Answers}
-	case "approvals":
-		// The multi-card answer: per-ask decisions keyed by call id, with a
-		// legacy {approve:true|false} body fanned out to every ask of the
-		// parked envelope (old clients, and the interim modal's Allow/Deny).
-		var req struct {
-			Approve bool `json:"approve"`
-			Answers map[string]struct {
-				Outcome string   `json:"outcome"`
-				Grant   string   `json:"grant"`
-				Answers []string `json:"answers"`
-			} `json:"answers"`
+		if len(p.cards) == 1 {
+			// Single pending card: a scalar resume (keyed or not).
+			resume = answered[p.cards[0].key()]
+		} else {
+			// NS-keyed map; cards without an entry re-pause (fork-native
+			// partial semantics).
+			resume = answered
 		}
-		if err := json.Unmarshal(body, &req); err != nil {
-			return fmt.Errorf("decode answer: %w", err)
+	case len(p.cards) == 1:
+		// Legacy single-card body.
+		value, err := legacySingleCardAnswer(p.cards[0], body)
+		if err != nil {
+			return err
 		}
-		resume = approvalAnswerFromHTTP(p.asks, req.Approve, req.Answers)
-	default: // permission, plan
-		var req struct {
-			Approve bool `json:"approve"`
-		}
-		if err := json.Unmarshal(body, &req); err != nil {
-			return fmt.Errorf("decode answer: %w", err)
-		}
-		resume = req.Approve
+		resume = value
+	default:
+		return fmt.Errorf("decode answer: %d pending interrupt cards require {answers: [{key, value}]}", len(p.cards))
 	}
 
 	r.mu.Lock()
@@ -367,7 +447,11 @@ func (r *Run) answer(body []byte) error {
 	// The resolution is part of the event history: a client replaying the
 	// stream (page refresh, /api/events-driven reattach) must not resurrect
 	// the interrupt card this answer just satisfied.
-	r.emit(Event{Type: EventInterruptResolved, Data: map[string]any{"kind": p.kind}})
+	kind := "multi"
+	if len(p.cards) == 1 {
+		kind = p.cards[0].kind
+	}
+	r.emit(Event{Type: EventInterruptResolved, Data: map[string]any{"kind": kind}})
 	if r.onResume != nil {
 		r.onResume()
 	}
@@ -379,9 +463,87 @@ func (r *Run) answer(body []byte) error {
 	return nil
 }
 
-// approvalAnswerFromHTTP builds the resume value for an "approvals" park:
-// explicit per-ask decisions when the body carries an answers map, else the
-// legacy approve flag applied to every ask. Asks without an explicit entry
+// legacySingleCardAnswer decodes the legacy flat body for a one-card park:
+// ask → AskUserAnswer, approvals → ApprovalAnswer (per-ask decisions, with
+// {approve} fanned out to every ask), permission/plan → the approve flag.
+func legacySingleCardAnswer(card parkedCard, body []byte) (any, error) {
+	switch card.kind {
+	case "ask":
+		var req struct {
+			Answers []string `json:"answers"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			return nil, fmt.Errorf("decode answer: %w", err)
+		}
+		return agent.AskUserAnswer{Answers: req.Answers}, nil
+	case "approvals":
+		var req struct {
+			Approve bool `json:"approve"`
+			Answers map[string]struct {
+				Outcome string   `json:"outcome"`
+				Grant   string   `json:"grant"`
+				Answers []string `json:"answers"`
+			} `json:"answers"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			return nil, fmt.Errorf("decode answer: %w", err)
+		}
+		return approvalAnswerFromHTTP(card.asks, req.Approve, req.Answers), nil
+	default: // permission, plan
+		var req struct {
+			Approve bool `json:"approve"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			return nil, fmt.Errorf("decode answer: %w", err)
+		}
+		return req.Approve, nil
+	}
+}
+
+// cardAnswerValue decodes one card's answer value from the list form:
+// approvals cards take {decisions: {callID: ...}} or a {approve} fanout;
+// ask cards take {answers: [...]}; permission/plan cards take {approve}.
+func cardAnswerValue(card parkedCard, raw json.RawMessage) (any, error) {
+	switch card.kind {
+	case "approvals":
+		var v struct {
+			Approve   *bool `json:"approve"`
+			Decisions map[string]struct {
+				Outcome string   `json:"outcome"`
+				Grant   string   `json:"grant"`
+				Answers []string `json:"answers"`
+			} `json:"decisions"`
+		}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, fmt.Errorf("decode answer value: %w", err)
+		}
+		approve := false
+		if v.Approve != nil {
+			approve = *v.Approve
+		}
+		return approvalAnswerFromHTTP(card.asks, approve, v.Decisions), nil
+	case "ask":
+		var v struct {
+			Answers []string `json:"answers"`
+		}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, fmt.Errorf("decode answer value: %w", err)
+		}
+		return agent.AskUserAnswer{Answers: v.Answers}, nil
+	default: // permission, plan
+		var v struct {
+			Approve bool `json:"approve"`
+		}
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return nil, fmt.Errorf("decode answer value: %w", err)
+		}
+		return v.Approve, nil
+	}
+}
+
+// approvalAnswerFromHTTP builds the ApprovalAnswer for an approvals card:
+// explicit per-ask decisions when the body carries a decisions map, else
+// the approve flag applied to every ask. Asks without an explicit entry
 // fail closed (deny).
 func approvalAnswerFromHTTP(asks []agent.Ask, approve bool, answers map[string]struct {
 	Outcome string   `json:"outcome"`

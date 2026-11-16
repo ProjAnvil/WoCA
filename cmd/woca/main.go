@@ -911,15 +911,21 @@ func turnTokenBudgetFromEnv() int {
 	return n
 }
 
-// interruptHandler resolves graph interrupts in interactive mode and
-// auto-denies in one-shot mode.
+// interruptHandler resolves graph pauses in interactive mode and
+// auto-denies in one-shot mode. A pause carries one card per pending
+// interrupt (the main approval envelope and/or each paused subagent
+// child): one y/n exchange per card; several pending cards answer as one
+// NS-keyed map.
 func interruptHandler(stdin *bufio.Reader, interactive bool, stderr io.Writer) runner.InterruptHandler {
-	return func(value any) (any, error) {
-		switch v := value.(type) {
+	answerCard := func(card agent.PauseCard, header string) (any, error) {
+		switch v := card.Value.(type) {
 		case agent.ApprovalRequest:
 			// The Task-5 ask envelope: print each ask, answer per-ask, and
 			// build one ApprovalAnswer for the whole batch. Non-interactive
 			// runs fail closed (deny everything, empty ask_user answers).
+			if header != "" {
+				fmt.Fprintln(stderr, header)
+			}
 			decisions := make(map[string]agent.AskDecision, len(v.Asks))
 			for _, ask := range v.Asks {
 				switch ask.ToolName {
@@ -954,7 +960,11 @@ func interruptHandler(stdin *bufio.Reader, interactive bool, stderr io.Writer) r
 					fmt.Fprint(stderr, "  Approve plan? [y/N] ")
 					decisions[ask.CallID] = yesNoDecision(readYesNo(stdin))
 				default:
-					fmt.Fprintf(stderr, "\nPermission requested: %s — %s\n", ask.ToolName, ask.Reason)
+					origin := ""
+					if ask.Origin != agent.OriginMain {
+						origin = fmt.Sprintf(" (subagent %s)", ask.Origin)
+					}
+					fmt.Fprintf(stderr, "\nPermission requested%s: %s — %s\n", origin, ask.ToolName, ask.Reason)
 					if !interactive {
 						fmt.Fprintln(stderr, "  (non-interactive: denied; use --dangerously-skip-permissions or --accept-edits to allow)")
 						decisions[ask.CallID] = agent.AskDecision{Outcome: agent.OutcomeDeny}
@@ -1015,8 +1025,23 @@ func interruptHandler(stdin *bufio.Reader, interactive bool, stderr io.Writer) r
 			return readYesNo(stdin)
 
 		default:
-			return nil, fmt.Errorf("unknown interrupt value %T", value)
+			return nil, fmt.Errorf("unknown interrupt value %T", card.Value)
 		}
+	}
+	return func(cards []agent.PauseCard) (any, error) {
+		if len(cards) == 1 {
+			return answerCard(cards[0], "")
+		}
+		out := make(map[string]any, len(cards))
+		for i, card := range cards {
+			header := fmt.Sprintf("\n[approval %d/%d]", i+1, len(cards))
+			v, err := answerCard(card, header)
+			if err != nil {
+				return nil, err
+			}
+			out[agent.CardKey(card)] = v
+		}
+		return out, nil
 	}
 }
 

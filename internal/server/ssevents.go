@@ -44,9 +44,22 @@ type toolResultPayload struct {
 	ToolCallID string `json:"tool_call_id"`
 }
 
-// interruptPayload is the data of an interrupt event; Payload is the
-// parked request value (permission/ask/plan), whose shape depends on Kind.
+// interruptPayload is the data of an interrupt event. A pause with ONE
+// pending card keeps the legacy single-card shape (Kind selects the payload
+// renderer); Cards always carries every pending card of the pause — the
+// multi-card stack the Hitl UI renders — each with its answer key (NS, or
+// ID for legacy NS-less interrupts). Kind "multi" marks a pause with
+// several pending cards (no single top-level payload).
 type interruptPayload struct {
+	Kind    string               `json:"kind"`
+	Payload any                  `json:"payload,omitempty"`
+	Cards   []interruptCardEvent `json:"cards"`
+}
+
+// interruptCardEvent is one pending card of an interrupt event.
+type interruptCardEvent struct {
+	ID      string `json:"id"`
+	NS      string `json:"ns,omitempty"`
 	Kind    string `json:"kind"`
 	Payload any    `json:"payload"`
 }

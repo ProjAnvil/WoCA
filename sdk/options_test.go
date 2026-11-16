@@ -46,11 +46,11 @@ func TestBuildOptionsTranslatesFields(t *testing.T) {
 func TestDefaultInterruptHandlerAutoDenies(t *testing.T) {
 	h := (Options{}).interruptHandler()
 
-	v, err := h(agent.PermissionRequest{ToolName: "Bash", Reason: "r"})
+	v, err := h([]agent.PauseCard{{NS: "ns-t", Value: agent.PermissionRequest{ToolName: "Bash", Reason: "r"}}})
 	if err != nil || v != "n" {
 		t.Fatalf("permission: got %v, %v", v, err)
 	}
-	v, err = h(agent.AskUserRequest{})
+	v, err = h([]agent.PauseCard{{NS: "ns-t", Value: agent.AskUserRequest{}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,11 +58,11 @@ func TestDefaultInterruptHandlerAutoDenies(t *testing.T) {
 	if !ok || len(ans.Answers) != 0 {
 		t.Fatalf("ask-user: got %#v", v)
 	}
-	v, err = h(agent.PlanApprovalRequest{Plan: "p"})
+	v, err = h([]agent.PauseCard{{NS: "ns-t", Value: agent.PlanApprovalRequest{Plan: "p"}}})
 	if err != nil || v != "n" {
 		t.Fatalf("plan: got %v, %v", v, err)
 	}
-	_, err = h(struct{}{})
+	_, err = h([]agent.PauseCard{{NS: "ns-t", Value: struct{}{}}})
 	if err == nil {
 		t.Fatal("unknown interrupt type must error")
 	}
@@ -98,7 +98,7 @@ func TestInterruptFromApprovalEnvelope(t *testing.T) {
 	}
 
 	// Headless default: deny every ask.
-	v, err := (Options{}).interruptHandler()(in)
+	v, err := (Options{}).interruptHandler()([]agent.PauseCard{{NS: "ns-t", ID: "id-t", Value: in}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestInterruptFromApprovalEnvelope(t *testing.T) {
 			"e1": {Outcome: agent.OutcomeDeny},
 		}}, nil
 	}}
-	v, err = o.interruptHandler()(in)
+	v, err = o.interruptHandler()([]agent.PauseCard{{NS: "ns-t", ID: "id-t", Value: in}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestCustomInterruptHandlerWins(t *testing.T) {
 		}
 		return nil, sentinel
 	}}
-	_, err := o.interruptHandler()(agent.PermissionRequest{ToolName: "Bash"})
+	_, err := o.interruptHandler()([]agent.PauseCard{{NS: "ns-t", Value: agent.PermissionRequest{ToolName: "Bash"}}})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("got %v", err)
 	}
@@ -156,7 +156,7 @@ func TestCustomInterruptHandlerTranslatesAskUserAnswer(t *testing.T) {
 		}
 		return AskUserAnswer{Answers: []string{"a", "b"}}, nil
 	}}
-	v, err := o.interruptHandler()(agent.AskUserRequest{})
+	v, err := o.interruptHandler()([]agent.PauseCard{{NS: "ns-t", Value: agent.AskUserRequest{}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,8 +191,91 @@ func TestInterruptFromSubagentPermission(t *testing.T) {
 	}
 
 	// The default headless handler auto-denies subagent permission pauses.
-	v, err := (Options{}).interruptHandler()(in)
+	v, err := (Options{}).interruptHandler()([]agent.PauseCard{{NS: "ns-t", ID: "id-t", Value: in}})
 	if err != nil || v != "n" {
 		t.Fatalf("default handler = %v, %v", v, err)
+	}
+}
+
+// TestInterruptMultiCardAggregate: a several-card pause reaches OnInterrupt
+// as ONE "multi" Interrupt carrying every card with its NS key; a ListAnswer
+// translates into the NS-keyed map resume, and the headless default denies
+// every ask of every card.
+func TestInterruptMultiCardAggregate(t *testing.T) {
+	cards := []agent.PauseCard{
+		{NS: "approval:se1", ID: "i1", Value: agent.ApprovalRequest{Asks: []agent.Ask{
+			{CallID: "b1", ToolName: "Bash", Origin: agent.OriginMain},
+		}}},
+		{NS: "subagent:researcher-ad33:se2", ID: "i2", Value: agent.ApprovalRequest{Asks: []agent.Ask{
+			{CallID: "w1", ToolName: "Write", Origin: "researcher"},
+		}}},
+	}
+
+	// The aggregate view.
+	var seen Interrupt
+	o := Options{OnInterrupt: func(i Interrupt) (any, error) {
+		seen = i
+		return ListAnswer{
+			{Key: "approval:se1", Value: ApprovalAnswer{Decisions: map[string]AskDecisionView{
+				"b1": {Outcome: agent.OutcomeAllow, Grant: agent.GrantSession},
+			}}},
+			{Key: "subagent:researcher-ad33:se2", Value: ApprovalAnswer{Decisions: map[string]AskDecisionView{
+				"w1": {Outcome: agent.OutcomeDeny},
+			}}},
+		}, nil
+	}}
+	v, err := o.interruptHandler()(cards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen.Kind != "multi" || len(seen.Interrupts) != 2 {
+		t.Fatalf("aggregate = %+v", seen)
+	}
+	if seen.Interrupts[0].NS != "approval:se1" || seen.Interrupts[0].Approvals == nil {
+		t.Fatalf("card 1 view = %+v", seen.Interrupts[0])
+	}
+	if seen.Interrupts[1].NS != "subagent:researcher-ad33:se2" {
+		t.Fatalf("card 2 view = %+v", seen.Interrupts[1])
+	}
+	// The ListAnswer translated into the NS-keyed map.
+	mp, ok := v.(map[string]any)
+	if !ok || len(mp) != 2 {
+		t.Fatalf("resume value = %#v, want the two-entry NS map", v)
+	}
+	first, ok := mp["approval:se1"].(agent.ApprovalAnswer)
+	if !ok || first.Decisions["b1"].Outcome != agent.OutcomeAllow || first.Decisions["b1"].Grant != agent.GrantSession {
+		t.Fatalf("card 1 answer = %#v", mp["approval:se1"])
+	}
+	second, ok := mp["subagent:researcher-ad33:se2"].(agent.ApprovalAnswer)
+	if !ok || second.Decisions["w1"].Outcome != agent.OutcomeDeny {
+		t.Fatalf("card 2 answer = %#v", mp["subagent:researcher-ad33:se2"])
+	}
+
+	// A single card keeps the plain single-kind view, now with its NS.
+	v, err = o.interruptHandler()(cards[:1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = v
+
+	// Headless default: deny every ask of every card.
+	v, err = (Options{}).interruptHandler()(cards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp, ok = v.(map[string]any)
+	if !ok || len(mp) != 2 {
+		t.Fatalf("headless resume = %#v", v)
+	}
+	for _, key := range []string{"approval:se1", "subagent:researcher-ad33:se2"} {
+		ans, ok := mp[key].(agent.ApprovalAnswer)
+		if !ok {
+			t.Fatalf("headless %s = %#v, want ApprovalAnswer", key, mp[key])
+		}
+		for _, d := range ans.Decisions {
+			if d.Outcome != agent.OutcomeDeny {
+				t.Fatalf("headless decision = %+v, want deny", d)
+			}
+		}
 	}
 }

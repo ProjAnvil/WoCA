@@ -336,3 +336,63 @@ func TestPendingApprovalEnvelopeSingleAsk(t *testing.T) {
 		t.Fatal("pending not cleared")
 	}
 }
+
+// TestPendingMultiCardWalk: a pause with several pending cards (parallel
+// subagent approvals) walks one card at a time — each y/n answers ITS card
+// and advances; only the last reply unblocks the run, as the NS-keyed map.
+func TestPendingMultiCardWalk(t *testing.T) {
+	cards := []agent.PauseCard{
+		{NS: "subagent:researcher-ad33:se1", ID: "i1", Value: agent.ApprovalRequest{Asks: []agent.Ask{
+			{CallID: "w1", ToolName: "Write", Reason: "writes a.txt", Origin: "researcher"},
+		}}},
+		{NS: "subagent:coder-77aa:se2", ID: "i2", Value: agent.ApprovalRequest{Asks: []agent.Ask{
+			{CallID: "w2", ToolName: "Write", Reason: "writes b.txt", Origin: "coder"},
+		}}},
+	}
+	m := New(nil, nil, config.Config{})
+	answerCh := make(chan any, 1)
+	m.ch = make(chan tea.Msg, 1)
+	model, _ := m.Update(interruptMsg{value: cards[0].Value, cards: cards, answerCh: answerCh})
+	m = model.(*Model)
+	if m.pending == nil {
+		t.Fatal("multi-card pause did not become pending")
+	}
+	if v := m.View(); !strings.Contains(v, "writes a.txt") {
+		t.Fatalf("first card not rendered:\n%s", v)
+	}
+
+	// Answering the first card advances to the second without replying.
+	model, _ = m.Update(key("y"))
+	m = model.(*Model)
+	select {
+	case <-answerCh:
+		t.Fatal("run unblocked before the last card was answered")
+	default:
+	}
+	if m.pending == nil {
+		t.Fatal("pending cleared before the last card was answered")
+	}
+	if v := m.View(); !strings.Contains(v, "writes b.txt") {
+		t.Fatalf("second card not rendered after advance:\n%s", v)
+	}
+
+	// The last card replies with the NS-keyed map of both answers.
+	model, _ = m.Update(key("n"))
+	m = model.(*Model)
+	ans := <-answerCh
+	mp, ok := ans.(map[string]any)
+	if !ok || len(mp) != 2 {
+		t.Fatalf("answer = %#v, want the two-entry NS map", ans)
+	}
+	first, ok := mp["subagent:researcher-ad33:se1"].(agent.ApprovalAnswer)
+	if !ok || first.Decisions["w1"].Outcome != agent.OutcomeAllow {
+		t.Fatalf("card 1 answer = %#v, want allow", mp["subagent:researcher-ad33:se1"])
+	}
+	second, ok := mp["subagent:coder-77aa:se2"].(agent.ApprovalAnswer)
+	if !ok || second.Decisions["w2"].Outcome != agent.OutcomeDeny {
+		t.Fatalf("card 2 answer = %#v, want deny", mp["subagent:coder-77aa:se2"])
+	}
+	if m.pending != nil {
+		t.Fatal("pending not cleared after the last card")
+	}
+}

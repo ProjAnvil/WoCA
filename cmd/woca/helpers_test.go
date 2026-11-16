@@ -236,13 +236,13 @@ func TestInterruptHandler(t *testing.T) {
 	nonInteractive := interruptHandler(bufio.NewReader(strings.NewReader("")), false, &stderr)
 
 	// Permission, non-interactive: denied.
-	v, err := nonInteractive(agent.PermissionRequest{ToolName: "Bash", Reason: "runs stuff"})
+	v, err := nonInteractive([]agent.PauseCard{{NS: "ns-a", Value: agent.PermissionRequest{ToolName: "Bash", Reason: "runs stuff"}}})
 	if err != nil || v != "n" {
 		t.Fatalf("non-interactive permission = %v %v", v, err)
 	}
 
 	// AskUser, non-interactive: empty answers.
-	ans, err := nonInteractive(agent.AskUserRequest{Questions: []tools.Question{{Question: "q1"}, {Question: "q2", MultiSelect: true}}})
+	ans, err := nonInteractive([]agent.PauseCard{{NS: "ns-a", Value: agent.AskUserRequest{Questions: []tools.Question{{Question: "q1"}, {Question: "q2", MultiSelect: true}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,24 +251,24 @@ func TestInterruptHandler(t *testing.T) {
 	}
 
 	// Plan approval, non-interactive: denied.
-	v, err = nonInteractive(agent.PlanApprovalRequest{Plan: "do it"})
+	v, err = nonInteractive([]agent.PauseCard{{NS: "ns-a", Value: agent.PlanApprovalRequest{Plan: "do it"}}})
 	if err != nil || v != "n" {
 		t.Fatalf("non-interactive plan = %v %v", v, err)
 	}
 
 	// Unknown interrupt type.
-	if _, err := nonInteractive(42); err == nil {
+	if _, err := nonInteractive([]agent.PauseCard{{NS: "ns-a", Value: 42}}); err == nil {
 		t.Fatal("unknown interrupt should error")
 	}
 
 	interactive := interruptHandler(bufio.NewReader(strings.NewReader("y\n")), true, &stderr)
-	v, err = interactive(agent.PermissionRequest{ToolName: "Bash", Reason: "runs stuff"})
+	v, err = interactive([]agent.PauseCard{{NS: "ns-a", Value: agent.PermissionRequest{ToolName: "Bash", Reason: "runs stuff"}}})
 	if err != nil || v != "y" {
 		t.Fatalf("interactive permission = %v %v", v, err)
 	}
 
 	interactive = interruptHandler(bufio.NewReader(strings.NewReader("a\nb\n")), true, &stderr)
-	ans, err = interactive(agent.AskUserRequest{Questions: []tools.Question{{Question: "q1"}, {Question: "q2", MultiSelect: true}}})
+	ans, err = interactive([]agent.PauseCard{{NS: "ns-a", Value: agent.AskUserRequest{Questions: []tools.Question{{Question: "q1"}, {Question: "q2", MultiSelect: true}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestInterruptHandler(t *testing.T) {
 	}
 
 	interactive = interruptHandler(bufio.NewReader(strings.NewReader("")), true, &stderr)
-	v, err = interactive(agent.PlanApprovalRequest{Plan: "the plan"})
+	v, err = interactive([]agent.PauseCard{{NS: "ns-a", Value: agent.PlanApprovalRequest{Plan: "the plan"}}})
 	if err != nil || v != "n" {
 		t.Fatalf("interactive plan EOF = %v %v", v, err)
 	}
@@ -297,7 +297,7 @@ func TestInterruptHandlerApprovalEnvelope(t *testing.T) {
 
 	// Non-interactive: every permission/plan ask denied, ask_user empty.
 	nonInteractive := interruptHandler(bufio.NewReader(strings.NewReader("")), false, &stderr)
-	v, err := nonInteractive(envelope)
+	v, err := nonInteractive([]agent.PauseCard{{NS: "ns-a", Value: envelope}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,7 +317,7 @@ func TestInterruptHandlerApprovalEnvelope(t *testing.T) {
 
 	// Interactive: y for the Bash, n for the plan, free text for the ask.
 	interactive := interruptHandler(bufio.NewReader(strings.NewReader("y\nn\npick-one\n")), true, &stderr)
-	v, err = interactive(envelope)
+	v, err = interactive([]agent.PauseCard{{NS: "ns-a", Value: envelope}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,14 +345,14 @@ func TestInterruptHandlerSubagent(t *testing.T) {
 	// Non-interactive: denied, same posture as a plain permission.
 	var stderr bytes.Buffer
 	nonInteractive := interruptHandler(bufio.NewReader(strings.NewReader("")), false, &stderr)
-	v, err := nonInteractive(sub)
+	v, err := nonInteractive([]agent.PauseCard{{NS: "ns-a", Value: sub}})
 	if err != nil || v != "n" {
 		t.Fatalf("non-interactive subagent = %v %v", v, err)
 	}
 
 	// Interactive: "y" approves; the prompt names the subagent.
 	interactive := interruptHandler(bufio.NewReader(strings.NewReader("y\n")), true, &stderr)
-	v, err = interactive(sub)
+	v, err = interactive([]agent.PauseCard{{NS: "ns-a", Value: sub}})
 	if err != nil || v != "y" {
 		t.Fatalf("interactive subagent = %v %v", v, err)
 	}
@@ -518,7 +518,7 @@ func TestInterruptHandlerAskUserShortInput(t *testing.T) {
 	// Two questions but input for only one: the second read errors and the
 	// answer is appended empty.
 	h := interruptHandler(bufio.NewReader(strings.NewReader("one\n")), true, &stderr)
-	ans, err := h(agent.AskUserRequest{Questions: []tools.Question{{Question: "a"}, {Question: "b"}}})
+	ans, err := h([]agent.PauseCard{{NS: "ns-a", Value: agent.AskUserRequest{Questions: []tools.Question{{Question: "a"}, {Question: "b"}}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,5 +577,72 @@ func TestConfigOpenError(t *testing.T) {
 	t.Setenv("HOME", home)
 	if err := execCmd(t, "--db", filepath.Join(blocker, "woca.db"), "config", "list"); err == nil {
 		t.Fatal("expected settings open error")
+	}
+}
+
+// TestInterruptHandlerMultiCard: a pause with several pending cards (one
+// per parallel subagent ask) walks one y/n per card and answers as the
+// NS-keyed map; one card answers as the plain scalar.
+func TestInterruptHandlerMultiCard(t *testing.T) {
+	var stderr bytes.Buffer
+	cards := []agent.PauseCard{
+		{NS: "subagent:researcher-ad33:se1", Value: agent.ApprovalRequest{Asks: []agent.Ask{
+			{CallID: "w1", ToolName: "Write", Reason: "writes a.txt", Origin: "researcher"},
+		}}},
+		{NS: "subagent:coder-77aa:se2", Value: agent.ApprovalRequest{Asks: []agent.Ask{
+			{CallID: "w2", ToolName: "Write", Reason: "writes b.txt", Origin: "coder"},
+		}}},
+	}
+
+	// Interactive: y for the first card, n for the second.
+	h := interruptHandler(bufio.NewReader(strings.NewReader("y\nn\n")), true, &stderr)
+	v, err := h(cards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp, ok := v.(map[string]any)
+	if !ok || len(mp) != 2 {
+		t.Fatalf("resume value = %#v, want the two-entry NS map", v)
+	}
+	first, ok := mp["subagent:researcher-ad33:se1"].(agent.ApprovalAnswer)
+	if !ok || first.Decisions["w1"].Outcome != agent.OutcomeAllow {
+		t.Fatalf("card 1 = %#v, want allow", mp["subagent:researcher-ad33:se1"])
+	}
+	second, ok := mp["subagent:coder-77aa:se2"].(agent.ApprovalAnswer)
+	if !ok || second.Decisions["w2"].Outcome != agent.OutcomeDeny {
+		t.Fatalf("card 2 = %#v, want deny", mp["subagent:coder-77aa:se2"])
+	}
+
+	// Non-interactive: every card fails closed.
+	var stderr2 bytes.Buffer
+	h = interruptHandler(bufio.NewReader(strings.NewReader("")), false, &stderr2)
+	v, err = h(cards)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp, ok = v.(map[string]any)
+	if !ok || len(mp) != 2 {
+		t.Fatalf("non-interactive resume = %#v", v)
+	}
+	for key, val := range mp {
+		ans, ok := val.(agent.ApprovalAnswer)
+		if !ok {
+			t.Fatalf("card %s = %#v, want ApprovalAnswer", key, val)
+		}
+		for _, d := range ans.Decisions {
+			if d.Outcome != agent.OutcomeDeny {
+				t.Fatalf("card %s decision = %+v, want deny", key, d)
+			}
+		}
+	}
+
+	// Single card: the plain scalar answer.
+	h = interruptHandler(bufio.NewReader(strings.NewReader("y\n")), true, &stderr)
+	v, err = h(cards[:1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans, ok := v.(agent.ApprovalAnswer); !ok || ans.Decisions["w1"].Outcome != agent.OutcomeAllow {
+		t.Fatalf("single-card answer = %#v", v)
 	}
 }
