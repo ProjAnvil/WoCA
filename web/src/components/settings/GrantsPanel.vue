@@ -90,6 +90,7 @@ async function revoke(key: string) {
                 type="button"
                 :disabled="revoking === g.key"
                 :title="t('chat.revokeGrant')"
+                :aria-label="`${t('chat.revokeGrant')} ${g.key}`"
                 @click="revoke(g.key)"
               >
                 {{ t('chat.remove') }}

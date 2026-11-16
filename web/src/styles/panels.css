@@ -658,6 +658,16 @@ html.dark .shiki-host span {
     min-width: 44px;
     min-height: 44px;
   }
+  /* HITL stack + grants surfaces (graph-native HITL §4.2): the approval
+   * buttons, the fold toggle, the grants chip and per-row revokes are all
+   * primary touch targets on narrow screens. */
+  .interrupt-actions .btn,
+  .hitl-queue-more,
+  .grants-chip,
+  .grant-revoke {
+    min-width: 44px;
+    min-height: 44px;
+  }
 }
 
 /* -------------------------------------------------------------------------- */

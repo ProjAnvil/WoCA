@@ -3,7 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useSessionStore } from '../../stores/sessions'
 import { useFocusTrap } from '../../composables/useFocusTrap'
-import { hitlRequestId } from '../../lib/hitl'
+import { hitlOrigin, asksOf, hitlRequestId } from '../../lib/hitl'
 import { listGrants } from '../../api/client'
 import type { GrantInfo } from '../../types'
 import HitlCard from './HitlCard.vue'
@@ -48,7 +48,10 @@ watch(
     const prevSet = new Set((prev ?? '').split('|').filter(Boolean))
     const fresh = ids.split('|').filter((id) => id && !prevSet.has(id))
     if (!fresh.length) return
-    announcement.value = t('chat.pendingCount', { count: fresh.length })
+    const first = cards.value.find((c) => hitlRequestId(c) === fresh[0])
+    const who = first ? hitlOrigin(first) : ''
+    const what = first ? (asksOf(first)[0]?.tool_name ?? first.kind) : ''
+    announcement.value = [who, what, t('chat.pendingCount', { count: fresh.length })].filter(Boolean).join(' — ')
   },
   { immediate: true },
 )
@@ -96,19 +99,19 @@ onMounted(() => void refreshGrants())
           </button>
         </div>
 
-        <TransitionGroup name="hitl-settle" tag="div" class="hitl-stack-list" role="list">
+        <TransitionGroup name="hitl-settle" tag="div" class="hitl-stack-list">
           <HitlCard
             v-for="(c, i) in visible"
-            :key="`${c.ns || c.id}#${i}`"
+            :key="c.ns || c.id"
             :card="c"
             :now="now"
             :data-testid="`hitl-card-${hitlRequestId(c)}`"
           />
           <div v-if="hiddenCount" :key="'fold'" class="hitl-fold" :class="{ open: expanded }">
-            <div class="hitl-fold-inner">
+            <div class="hitl-fold-inner" :inert="expanded ? undefined : true" :aria-hidden="expanded ? undefined : `true`">
               <HitlCard
                 v-for="(c, i) in folded"
-                :key="`${c.ns || c.id}#${i}`"
+                :key="c.ns || c.id"
                 :card="c"
                 :now="now"
                 :data-testid="`hitl-card-${hitlRequestId(c)}`"
@@ -207,7 +210,15 @@ onMounted(() => void refreshGrants())
   color: var(--text);
   border-color: var(--muted);
 }
-/* Answered cards settle out one tier faster than the rise entrance. */
+/* New cards rise in (320ms, the spec's entrance tier); answered cards
+ * settle out one tier faster than the rise (leaves are always quicker). */
+.hitl-settle-enter-active {
+  transition: opacity 320ms var(--ease-out), transform 320ms var(--ease-out);
+}
+.hitl-settle-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
 .hitl-settle-leave-active {
   transition: opacity 120ms var(--ease-in-out), transform 120ms var(--ease-in-out);
 }
