@@ -15,7 +15,7 @@ require (
 	github.com/muesli/termenv v0.16.0
 	github.com/nats-io/nats-server/v2 v2.15.2
 	github.com/nats-io/nats.go v1.55.0
-	github.com/projanvil/langchain-golang v0.12.5
+	github.com/projanvil/langchain-golang v0.14.0
 	github.com/projanvil/langchain-golang/langgraph/checkpoint/postgres v0.3.9
 	github.com/projanvil/langchain-golang/langgraph/checkpoint/sqlite v0.3.9
 	github.com/prometheus/client_golang v1.25.0

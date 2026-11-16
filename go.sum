@@ -148,8 +148,8 @@ github.com/pgvector/pgvector-go v0.4.1/go.mod h1:4fSXyjl1TYAIdByAql6JazKWRr2s7J0
 github.com/pgvector/pgvector-go/pgx v0.4.1 h1:4ASHKHkHKon+x3TlKCVoH0znhFWTWRvAF4z3vnY6bKc=
 github.com/pgvector/pgvector-go/pgx v0.4.1/go.mod h1:uGpIdPvyX/FxvOljT15nW/NY166HSDCC05JIcJBAzK0=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/projanvil/langchain-golang v0.12.5 h1:jGAcna8ugtWN4LE5O/d7whErafExfsjsZhiDUMcZ9oc=
-github.com/projanvil/langchain-golang v0.12.5/go.mod h1:JGzZlwer2R1kcM5Ll6TFNbc5Z0txLBg1m/EEKmF0C/I=
+github.com/projanvil/langchain-golang v0.14.0 h1:d95pDQq+tRqAX3n2nqnekVfJHWxHWhXa/euKZIE845E=
+github.com/projanvil/langchain-golang v0.14.0/go.mod h1:JGzZlwer2R1kcM5Ll6TFNbc5Z0txLBg1m/EEKmF0C/I=
 github.com/projanvil/langchain-golang/langgraph/checkpoint/postgres v0.3.9 h1:dMcfG18qXbzK+clG8s9nhKzA24BwiUx/6x5C2DLrUEo=
 github.com/projanvil/langchain-golang/langgraph/checkpoint/postgres v0.3.9/go.mod h1:hA4ADpSDSTOtFTTDCw529hxemK7zMpQmmtVanI9X+dE=
 github.com/projanvil/langchain-golang/langgraph/checkpoint/sqlite v0.3.9 h1:Z+CDpe0WASrCGtljY7sZXVdAGKgAbwgJ4dJ9tOqdvbg=
