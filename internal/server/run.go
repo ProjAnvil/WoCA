@@ -408,6 +408,7 @@ func (r *Run) answer(body []byte) error {
 			byKey[c.key()] = c
 		}
 		answered := make(map[string]any, len(entries))
+		grantedKeys := map[string]bool{}
 		for _, e := range entries {
 			card, ok := byKey[e.Key]
 			if !ok {
@@ -418,6 +419,26 @@ func (r *Run) answer(body []byte) error {
 				return err
 			}
 			answered[e.Key] = value
+			// A session grant covers every OTHER pending ask of the same
+			// rule key: those asks were persisted by their child's hooks
+			// superstep before the grant existed, so they cannot re-evaluate
+			// it on resume — answering them here (allow-once semantics, the
+			// grant itself already covers the future) is the only point
+			// where the collapse can happen. Ask/plan cards never match a
+			// grant key and stay pending.
+			for _, rule := range grantedRuleKeys(card, e.Value) {
+				grantedKeys[rule] = true
+			}
+		}
+		if len(grantedKeys) > 0 {
+			for _, c := range p.cards {
+				if _, done := answered[c.key()]; done {
+					continue
+				}
+				if rule := cardGrantKey(c); rule != "" && grantedKeys[rule] {
+					answered[c.key()] = allowAnswerFor(c)
+				}
+			}
 		}
 		if len(p.cards) == 1 {
 			// Single pending card: a scalar resume (keyed or not).
@@ -461,6 +482,60 @@ func (r *Run) answer(body []byte) error {
 	default:
 	}
 	return nil
+}
+
+// grantedRuleKeys extracts the session-grant rule keys of one answer entry:
+// the approvals decision form carries per-ask {outcome, grant}; the rule key
+// itself names the ASK (the decision map is keyed by call id).
+func grantedRuleKeys(card parkedCard, raw json.RawMessage) []string {
+	var v struct {
+		Decisions map[string]struct {
+			Grant string `json:"grant"`
+		} `json:"decisions"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil
+	}
+	var keys []string
+	for callID, d := range v.Decisions {
+		if d.Grant != "session" {
+			continue
+		}
+		for _, ask := range card.asks {
+			if ask.CallID == callID && ask.SessionRuleKey != "" {
+				keys = append(keys, ask.SessionRuleKey)
+			}
+		}
+	}
+	return keys
+}
+
+// cardGrantKey returns the single session rule key a pending card's
+// permission asks share ("" for ask/plan cards, non-grantable asks, or
+// mixed-key cards — those stay pending for an explicit answer).
+func cardGrantKey(c parkedCard) string {
+	key := ""
+	for _, ask := range c.asks {
+		if ask.Questions != nil || ask.Plan != "" || ask.SessionRuleKey == "" {
+			return ""
+		}
+		if key != "" && key != ask.SessionRuleKey {
+			return ""
+		}
+		key = ask.SessionRuleKey
+	}
+	return key
+}
+
+// allowAnswerFor builds the allow-once resume value for a grant-covered
+// card (every permission ask allowed; the session grant already covers the
+// future, so no per-ask grant repeats).
+func allowAnswerFor(c parkedCard) any {
+	out := agent.ApprovalAnswer{Decisions: make(map[string]agent.AskDecision, len(c.asks))}
+	for _, ask := range c.asks {
+		out.Decisions[ask.CallID] = agent.AskDecision{Outcome: agent.OutcomeAllow}
+	}
+	return out
 }
 
 // legacySingleCardAnswer decodes the legacy flat body for a one-card park:
