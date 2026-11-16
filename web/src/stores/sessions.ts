@@ -15,7 +15,7 @@ import type {
 import * as api from '../api/client'
 import i18n from '../i18n'
 import { truncate, baseName } from '../lib/format'
-import { hitlCardKey } from '../lib/hitl'
+import { asksOf, hitlCardKey } from '../lib/hitl'
 import { isNoticeContent, messagesToItems, nid } from '../lib/transcript'
 import { useAgentStore, isPermissionMode, isThinkingLevel } from './agent'
 import { toErrorMessage } from '../lib/errors'
@@ -610,7 +610,25 @@ export const useSessionStore = defineStore('sessions', () => {
     try {
       await api.answerRun(rid, { answers: entries })
       const answered = new Set(entries.map((e) => e.key))
-      const rest = cards.filter((c) => !answered.has(hitlCardKey(c)))
+      // A session-grant entry collapses the server's same-rule-key siblings
+      // (their ask decisions predate the grant): mirror that here so the
+      // optimistic remainder matches what actually re-parks.
+      const grantedKeys = new Set<string>()
+      for (const e of entries) {
+        const dec = (e.value as { decisions?: Record<string, { grant?: string }> })?.decisions ?? {}
+        const card = cards.find((c) => hitlCardKey(c) === e.key)
+        for (const a of asksOf(card ?? ({ payload: {} } as never))) {
+          if (dec[a.call_id]?.grant === 'session' && a.session_rule_key) {
+            grantedKeys.add(a.session_rule_key)
+          }
+        }
+      }
+      const rest = cards.filter((c) => {
+        if (answered.has(hitlCardKey(c))) return false
+        if (!grantedKeys.size) return true
+        const asks = asksOf(c)
+        return !(asks.length && asks.every((a) => a.session_rule_key && grantedKeys.has(a.session_rule_key)))
+      })
       if (rest.length) {
         interrupt.value[sid] = rest
       } else {
