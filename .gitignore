@@ -52,3 +52,4 @@ coverage/
 # evaluation run outputs (reproducible; keep the repo clean)
 logs/
 eval/results/
+e2e/.runtime/regression/

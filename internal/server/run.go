@@ -452,6 +452,13 @@ func (r *Run) answer(body []byte) error {
 		r.mu.Lock()
 		r.buffered = append(r.buffered, entries...)
 		r.mu.Unlock()
+		// The buffered answer satisfies the pause the run is currently
+		// re-parking: without the resolution event a client watching the
+		// stream keeps rendering the previous park's cards until the next
+		// terminal event — the contract says interrupt_resolved fires on
+		// EVERY accepted answer, and a re-park (if any) re-emits its own
+		// interrupt right after.
+		r.emit(Event{Type: EventInterruptResolved, Data: map[string]any{"kind": "multi"}})
 		return nil
 	}
 

@@ -147,10 +147,12 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 	agentDefs := loadAgents(workdir, log)
 	// Plugin agents keep append semantics (no layered merge); Source is
 	// tagged for the /agents display.
+	var pluginAgents []agents.Definition
 	for _, pl := range pluginList {
 		for _, d := range pl.Agents {
 			d.Source = "plugin/" + pl.Manifest.Name
 			agentDefs = append(agentDefs, d)
+			pluginAgents = append(pluginAgents, d)
 		}
 	}
 	// MCP servers resolve as layers: --mcp flags (highest), the workspace
@@ -308,8 +310,31 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		CompactThreshold:   opts.CompactLimit,
 		Summarizer:         model,
 		Permissions:        loadPermissions(workdir),
-		Agents:             agentDefs,
-		AgentsFor:          func(ws string) []agents.Definition { return loadAgents(ws, log) },
+		Agents: agentDefs,
+		// The per-workspace loader must surface the PLUGIN agents too:
+		// serve-mode sessions resolve their def set through AgentsFor, so
+		// without the append a plugin's subagents never reach the @ list,
+		// the Task tool's advertised agents or the model's discovery —
+		// even though the child registry (defSites) includes them and an
+		// explicit subagent_type call would spawn fine. A workspace's
+		// own same-name definition shadows the plugin's (the workspace is
+		// the higher layer everywhere else).
+		AgentsFor: func(ws string) []agents.Definition {
+			defs := loadAgents(ws, log)
+			if len(pluginAgents) == 0 {
+				return defs
+			}
+			own := make(map[string]bool, len(defs))
+			for _, d := range defs {
+				own[d.Name] = true
+			}
+			for _, d := range pluginAgents {
+				if !own[d.Name] {
+					defs = append(defs, d)
+				}
+			}
+			return defs
+		},
 		CheckpointDir:      opts.CheckpointDir,
 		Checkpointer:       checkpointer,
 		BashPolicy:         tools.NewCommandPolicy(opts.AllowCommands, opts.DenyCommands),
