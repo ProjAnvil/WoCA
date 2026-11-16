@@ -473,3 +473,78 @@ func intrAskCallID(t *testing.T, in lgtypes.Interrupt) string {
 	}
 	return req.Asks[0].CallID
 }
+
+// dualRoleModel serves both graph roles by prompt marker: the parent turn
+// ("go") fans one Task out; every other prompt (the child's) answers with
+// the instance's tag. Swapping instances via SetModel must reach the CHILD
+// registry, not just the parent binding.
+type dualRoleModel struct{ tag string }
+
+func (m *dualRoleModel) pick(input []messages.Message) messages.Message {
+	lastHuman := ""
+	for _, msg := range input {
+		if msg.Role == messages.RoleHuman {
+			lastHuman = msg.Content
+		}
+		if msg.Role == messages.RoleTool {
+			return messages.AI(m.tag + " report")
+		}
+	}
+	if lastHuman == "go" {
+		return messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+			{ID: "t0", Name: "Task", Args: map[string]any{"description": "job"}},
+		}}
+	}
+	return messages.AI(m.tag + " report")
+}
+
+func (m *dualRoleModel) Invoke(_ context.Context, input []messages.Message, _ ...runnables.Option) (messages.Message, error) {
+	return m.pick(input), nil
+}
+
+func (m *dualRoleModel) Batch(ctx context.Context, inputs [][]messages.Message, opts ...runnables.Option) ([]messages.Message, error) {
+	out := make([]messages.Message, len(inputs))
+	for i, in := range inputs {
+		out[i], _ = m.Invoke(ctx, in, opts...)
+	}
+	return out, nil
+}
+
+func (m *dualRoleModel) Stream(_ context.Context, input []messages.Message, _ ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	return runnables.NewSliceStream([]messages.Message{m.pick(input)}), nil
+}
+
+func (m *dualRoleModel) InputSchema() schema.Schema {
+	return schema.Schema{"type": "array", "description": "chat messages"}
+}
+func (m *dualRoleModel) OutputSchema() schema.Schema                            { return schema.Schema{"type": "object"} }
+func (m *dualRoleModel) BindTools([]coretools.Tool) (language.ChatModel, error) { return m, nil }
+func (m *dualRoleModel) Capabilities() language.ChatModelCapabilities {
+	return language.ChatModelCapabilities{ToolCalling: true, Streaming: true}
+}
+
+// TestSetModelRefreshesSubagentChildren: SetModel (the settings hot-swap
+// entry) must refresh the subagent children too — the registry captures
+// cfg.Model at child build when SubagentModel is unset, and a live provider
+// switch that only rebinds the parent leaves every fan-out child on the
+// dead old provider (the e2e debug run caught exactly that: parent on the
+// scripted stand-in, children 401ing against the default provider).
+func TestSetModelRefreshesSubagentChildren(t *testing.T) {
+	a, err := New(Config{
+		Model:          &dualRoleModel{tag: "old"},
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetModel(&dualRoleModel{tag: "new"}); err != nil {
+		t.Fatal(err)
+	}
+	final := runTaskViaGraph(t, a, "thread-setmodel-children")
+	res, ok := taskResultFor(final, "t0")
+	if !ok || !strings.Contains(res.Content, "new report") {
+		t.Fatalf("child kept the pre-SetModel model; report = %q (transcript %v)", res.Content, final)
+	}
+}

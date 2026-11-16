@@ -307,7 +307,8 @@ type Agent struct {
 	mode           config.PermissionMode
 	workdir        string
 	recursionLimit int
-	subagentModel  language.ChatModel
+	subagentModel         language.ChatModel
+	subagentModelExplicit bool // SubagentModel was pinned in Config
 	graph          *lggraph.CompiledGraph
 	// children is the content-addressed subagent registry (subagents.go):
 	// one child agent per distinct def content, each registered as a graph
@@ -588,6 +589,9 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if a.subagentModel == nil {
 		a.subagentModel = cfg.Model
+		a.subagentModelExplicit = false
+	} else {
+		a.subagentModelExplicit = true
 	}
 
 	// Wrap in a retry/fallback router when configured.
@@ -1150,7 +1154,23 @@ func (a *Agent) SetModel(m language.ChatModel) error {
 	a.mu.Lock()
 	a.model = m
 	a.boundModel = bound
+	// The subagent children captured the previous model at their build (an
+	// unset SubagentModel inherits cfg.Model at New). A settings hot-swap
+	// that only rebinds the parent would leave every fan-out child on the
+	// dead old provider — refresh the inherited subagent model and rebuild
+	// the child registry so the next fan-out dispatches on the new one.
+	if !a.subagentModelExplicit {
+		a.subagentModel = m
+	}
 	a.mu.Unlock()
+	if !a.subagent && a.graph != nil {
+		// Synchronous, not debounced: a settings swap is rare, and the
+		// debounced rebuild would leave the still-registered old child
+		// serving lookups (childForNode only flushes on a miss) — the very
+		// staleness this fix exists to remove. Bare test agents (no graph)
+		// skip it.
+		a.flushGraphRebuild()
+	}
 	return nil
 }
 
