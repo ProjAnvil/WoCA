@@ -108,7 +108,7 @@ func (a *Agent) GoalStream(ctx context.Context, history []messages.Message) (ite
 	a.goal.graph = g
 	a.goal.thread = fmt.Sprintf("goal-%d-%d", run, time.Now().UnixNano())
 	a.goal.running = true
-	a.goal.pending = nil
+	a.goal.pendingValue = nil
 	a.goal.mu.Unlock()
 
 	// Capture the driver-supplied ctx as THE run context for speculative
@@ -181,7 +181,7 @@ func (a *Agent) AbandonGoalRun(run uint64) {
 		return
 	}
 	a.goal.running = false
-	a.goal.pending = nil
+	a.goal.pendingValue = nil
 	a.goal.graph = nil
 }
 
@@ -217,7 +217,7 @@ func (a *Agent) goalChunkStream(ctx context.Context, history []messages.Message,
 func (a *Agent) endGoalRun() {
 	a.goal.mu.Lock()
 	a.goal.running = false
-	a.goal.pending = nil
+	a.goal.pendingValue = nil
 	a.goal.graph = nil
 	a.goal.mu.Unlock()
 }
@@ -432,7 +432,8 @@ func (a *Agent) goalExecuteNode() lggraph.NodeFunc {
 		emit := streamWriter(rt)
 		a.goal.mu.Lock()
 		goal := a.goal.goal.clone()
-		pending := a.goal.pending
+		pending := a.goal.pendingValue != nil
+		pendingValue := a.goal.pendingValue
 		pendingThread := a.goal.innerThread
 		pendingTurns := a.goal.pendingTurns
 		pendingPrefix := a.goal.pendingPrefix
@@ -452,13 +453,13 @@ func (a *Agent) goalExecuteNode() lggraph.NodeFunc {
 		var prefix int
 		var turnsBefore int
 		budget := goalCycleStepBudget(a.recursionLimit)
-		if pending != nil {
+		if pending {
 			// Resume path: Interrupt returns the harness's answer on this
 			// re-entry (it paused the outer graph on the previous pass),
 			// which feeds the inner graph's resume. The cycle prompt and
 			// prefix are taken from the stash — they must not be rebuilt
 			// (compaction could re-summarize differently).
-			answer := lggraph.Interrupt(ctx, pending.Value)
+			answer := lggraph.Interrupt(ctx, pendingValue)
 			stream = a.resumeStreamWithBudget(ctx, pendingThread, answer, budget)
 			prefix = pendingPrefix
 			turnsBefore = pendingTurns
@@ -495,10 +496,22 @@ func (a *Agent) goalExecuteNode() lggraph.NodeFunc {
 					// Stash the inner pause and surface it on the outer
 					// graph: Interrupt panics GraphInterrupt on this pass
 					// (pausing the goal loop) and returns the harness's
-					// answer on the resumed pass.
-					inner := intrs[0]
-					a.goal.setPending(&inner, pendingThread, turnsBefore, prefix)
-					lggraph.Interrupt(ctx, inner.Value)
+					// answer on the resumed pass. The WHOLE interrupt list
+					// forwards (design §3.4/M2): a single inner interrupt
+					// passes through unchanged; several aggregate into one
+					// MultiInterrupt value so the driver still sees one
+					// outer card list, with each inner interrupt's fork NS
+					// preserved for the map answer.
+					value := intrs[0].Value
+					if len(intrs) > 1 {
+						cards := make([]PauseCard, len(intrs))
+						for i, inner := range intrs {
+							cards[i] = PauseCard{NS: inner.NS, ID: inner.ID, Value: inner.Value}
+						}
+						value = encodeInterruptPayload(MultiInterrupt{Interrupts: cards})
+					}
+					a.goal.setPending(value, pendingThread, turnsBefore, prefix)
+					lggraph.Interrupt(ctx, value)
 					return nil // unreachable: Interrupt panics
 				}
 				switch chunk.Mode {
@@ -758,9 +771,9 @@ func (a *Agent) goalRefreshTokens(base int64) {
 	a.goal.mu.Unlock()
 }
 
-func (m *goalManager) setPending(ie *lgtypes.Interrupt, innerThread string, turns, prefix int) {
+func (m *goalManager) setPending(value any, innerThread string, turns, prefix int) {
 	m.mu.Lock()
-	m.pending = ie
+	m.pendingValue = value
 	m.innerThread = innerThread
 	m.pendingTurns = turns
 	m.pendingPrefix = prefix

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
-	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 )
 
 // Goal mode, a graph-based persistent-objective loop: the user declares an
@@ -89,10 +88,12 @@ func (g *Goal) clone() *Goal {
 }
 
 // goalManager is the agent's goal state. running/graph/pending belong to the
-// in-flight goal loop; pending stashes the inner agent-graph interrupt while
-// its fresh copy is surfaced to the harness (the inner thread's checkpoint
-// must stay unmutated so the execute node can resume the inner graph on the
-// answer).
+// in-flight goal loop; pendingValue stashes the outer interrupt VALUE the
+// execute cycle raised to the harness (the inner pause's payload — one
+// interrupt's value, or the MultiInterrupt aggregate when the inner pause
+// carried several) while its fresh copy is surfaced to the harness (the
+// inner thread's checkpoint must stay unmutated so the execute node can
+// resume the inner graph on the answer).
 type goalManager struct {
 	mu      sync.Mutex
 	goal    *Goal
@@ -102,7 +103,7 @@ type goalManager struct {
 	// the inner agent-graph thread of the paused execute cycle.
 	thread        string
 	innerThread   string
-	pending       *lgtypes.Interrupt
+	pendingValue  any
 	pendingTurns  int
 	pendingPrefix int
 	subs          []func(*Goal)
@@ -141,7 +142,7 @@ func (a *Agent) SetGoal(objective, sessionID string, maxCycles int, maxTokens in
 		UpdatedAt: now,
 		usageBase: int64(a.usage.snapshot().TotalTokens),
 	}
-	a.goal.pending = nil
+	a.goal.pendingValue = nil
 	g := a.goal.goal.clone()
 	a.goal.mu.Unlock()
 	a.notifyGoal(g)
