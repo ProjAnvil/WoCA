@@ -67,8 +67,8 @@ langgraph 包，组装于 [`internal/agent`](internal/agent)。
 **代理运行时**
 
 - **显式代理图**：条件边、`add_messages` reducer、checkpoint 与
-  interrupt/resume —— 任意运行可在工具调用中间暂停，稍后继续，甚至跨进程
-  重启恢复。
+  interrupt/resume —— 因审批而暂停的运行可跨进程重启恢复；因崩溃而中断的
+  调用会被标记为 interrupted（结果未知），且绝不重新执行。
 - **token 级流式输出**：文本与工具调用增量经图流式传递；TUI 与 Web UI 在
   工具执行的同时实时渲染。
 - **流式工具执行**：只读调用在模型仍在输出时即被派发；受权限门约束的调用
@@ -541,6 +541,12 @@ $ woca config list
 | `--resume` | 恢复 transcript（或 `last`） |
 | `--db` | 设置数据库：sqlite 路径、`postgres://` DSN 或 `none` |
 | `--checkpoint-dir` | 持久化图 checkpoint 以跨进程恢复 |
+
+**暂停、崩溃与升级语义。** 因审批而暂停的运行可跨进程重启恢复。执行
+superstep 因崩溃中断的运行，恢复时受影响的工具调用会被标记为
+`interrupted`（该工具可能已执行也可能没有；重试前请先核实），且绝不会重新
+执行。由 relay 时代（fan-out 之前）构建暂停的线程也以同样方式恢复：标记为
+interrupted。
 
 ## 会话、记忆与撤销
 

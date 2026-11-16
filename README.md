@@ -70,8 +70,9 @@ every conversation is persisted as a resumable transcript.
 **Agent runtime**
 
 - **Explicit agent graph** with conditional edges, an `add_messages`
-  reducer, checkpoints, and interrupt/resume — pause any run mid-tool-call
-  and continue it later, even across process restarts.
+  reducer, checkpoints, and interrupt/resume — runs paused on an approval
+  resume across process restarts; calls interrupted by a crash are marked
+  interrupted (result unknown) and never re-run.
 - **Token-level streaming** of text and tool-call deltas through the graph;
   the TUI and web UI render output live while tools execute.
 - **Streaming tool execution**: read-only calls are dispatched while the
@@ -594,6 +595,13 @@ Important flags:
 | `--resume` | resume a transcript (or `last`) |
 | `--db` | settings database: sqlite path, `postgres://` DSN, or `none` |
 | `--checkpoint-dir` | persist graph checkpoints for cross-process resume |
+
+**Pause, crash and upgrade semantics.** Runs paused on an approval resume
+across process restarts. A run whose execution superstep was interrupted by
+a crash resumes with the affected tool calls marked `interrupted` — the tool
+may or may not have run; verify before retrying — and never re-executes
+them. Threads paused by relay-era (pre-fan-out) builds resume the same way:
+as interrupted markers.
 
 ## Sessions, memory & undo
 

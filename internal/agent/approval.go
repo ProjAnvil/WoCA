@@ -678,9 +678,5 @@ func missingDecision(ds decisionsState, calls []messages.ToolCall) bool {
 
 // legacyMarkers synthesizes interrupted tool results for a legacy batch.
 func legacyMarkers(calls []messages.ToolCall) []messages.Message {
-	out := make([]messages.Message, len(calls))
-	for i, call := range calls {
-		out[i] = messages.Tool(call.ID, legacyInterruptedMarker)
-	}
-	return out
+	return markerResults(calls, legacyInterruptedMarker)
 }

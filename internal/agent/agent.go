@@ -1235,10 +1235,20 @@ func (a *Agent) Resume(ctx context.Context, threadID string, resumeValue any) ([
 	// exists: the def was removed or edited under the pause, and falling
 	// through to re-execution is never acceptable (design §3.2).
 	_ = a.agentsFor(ctx)
+	g := a.currentGraph() // pin: see runTurn
+	// ε-min entry gate (design §3.5): a crashed execution superstep or a
+	// legacy relay-era pause closes the turn with interrupted markers
+	// instead of resuming into re-execution. The gate runs before the
+	// subagent pre-check on purpose — a diverted turn plans nothing on
+	// subagent nodes, so a vanished def cannot strand it.
+	if diverted, err := a.closeInterruptedTurn(ctx, g, threadID); err != nil {
+		return nil, err
+	} else if diverted {
+		return a.finishResumedTurn(ctx, g, threadID)
+	}
 	if err := a.checkResumableSubagents(ctx, threadID); err != nil {
 		return nil, err
 	}
-	g := a.currentGraph() // pin: see runTurn
 	res, err := g.InvokeWithOptions(ctx, nil, lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue)})
 	if err != nil {
 		return nil, err
@@ -1320,10 +1330,23 @@ func (a *Agent) resumeStreamWithBudget(ctx context.Context, threadID string, res
 	a.beginRunCtx(specRunID(ctx), ctx) // see streamWithBudget
 	a.lastThread.Store(threadID)       // see Resume
 	_ = a.agentsFor(ctx)               // warm the def cache (cross-process resume)
+	g := a.currentGraph()              // pin: see streamWithBudget
+	// ε-min entry gate (design §3.5), Resume's streaming twin: a crashed
+	// execution superstep or a legacy relay-era pause streams its closing
+	// model round over the synthesized markers instead of resuming into
+	// re-execution. Ahead of the subagent pre-check for the same reason as
+	// Resume.
+	if diverted, err := a.closeInterruptedTurn(ctx, g, threadID); err != nil {
+		return errorStream(err)
+	} else if diverted {
+		return g.Stream(ctx, nil, lggraph.StreamOptions{
+			Options: lggraph.Options{ThreadID: threadID, RecursionLimit: budget},
+			Modes:   streamModes,
+		})
+	}
 	if err := a.checkResumableSubagents(ctx, threadID); err != nil {
 		return errorStream(err)
 	}
-	g := a.currentGraph() // pin: see runTurn
 	return g.Stream(ctx, nil, lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue), RecursionLimit: budget},
 		Modes:   streamModes,
