@@ -104,7 +104,6 @@ export default {
   approveOnce: '允许一次',
   approveSession: '本会话内允许',
   denyRequest: '拒绝',
-  denyAndStopSubagent: '拒绝并停止子代理',
   sessionRuleKey: '会话规则 {key}',
   pendingCount: '还有 {count} 项待确认',
   requestCancelled: '取消',

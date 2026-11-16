@@ -771,8 +771,14 @@ func (r *Run) unsubscribe(sub *subscriber) {
 	r.mu.Unlock()
 }
 
-// cancelRun cancels the run's context.
+// cancelRun cancels the run's context and drops any parked interrupt: a
+// cancelled run will never consume an answer, so a late one must fail with
+// "no pending interrupt" instead of returning 200 and emitting a stray
+// resolution event into the replay history.
 func (r *Run) cancelRun() {
+	r.mu.Lock()
+	r.pending = nil
+	r.mu.Unlock()
 	if r.cancel != nil {
 		r.cancel()
 	}

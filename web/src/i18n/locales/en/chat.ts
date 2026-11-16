@@ -104,7 +104,6 @@ export default {
   approveOnce: 'Allow once',
   approveSession: 'Allow for session',
   denyRequest: 'Deny',
-  denyAndStopSubagent: 'Deny & stop subagent',
   sessionRuleKey: 'Session rule {key}',
   pendingCount: '{count} more pending',
   requestCancelled: 'Cancel',
