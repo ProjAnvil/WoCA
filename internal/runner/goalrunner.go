@@ -131,6 +131,14 @@ func goalResumeValue(paused []lgtypes.Interrupt, answer any) any {
 	if key == "" {
 		key = paused[0].ID
 	}
+	// Already-addressed answers pass through: a single-key map naming this
+	// goal interrupt is the cardResumeValue shape (the handler addressed the
+	// outer card); wrapping it again would double-nest the resume.
+	if inner, ok := answer.(map[string]any); ok && len(inner) == 1 {
+		if _, hit := inner[key]; hit {
+			return answer
+		}
+	}
 	return map[string]any{key: answer}
 }
 

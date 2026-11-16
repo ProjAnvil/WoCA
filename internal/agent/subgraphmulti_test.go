@@ -279,13 +279,15 @@ func countLogLines(t *testing.T, path, marker string) int {
 	return n
 }
 
-// TestCrossProcessSubgraphResume: agent A pauses on two gated children (plus
+// TestCrossInstanceSubgraphResume (a fair cross-process simulation: a fresh
+// Agent with its own saver handle over the same sqlite file; same binary,
+// so OS-level serialization is exercised only through the sqlite serde): agent A pauses on two gated children (plus
 // a third child that completes inside the same superstep) over a durable
 // sqlite saver; a NEW agent over the same database file resumes the pause
 // with the NS-keyed map. Coverage the fork itself lacks: the completed
 // sibling replays from its checkpoint writes (its probe never re-runs) and
 // each gated child executes exactly once across the two processes.
-func TestCrossProcessSubgraphResume(t *testing.T) {
+func TestCrossInstanceSubgraphResume(t *testing.T) {
 	workdir := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "crossproc.db")
 	ranLog := filepath.Join(workdir, "ran.log")

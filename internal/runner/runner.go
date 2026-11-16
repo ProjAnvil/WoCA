@@ -154,7 +154,16 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 		}
 		if len(paused) > 0 {
 			if r.handle == nil {
-				return nil, &lgtypes.GraphInterrupt{Interrupt: paused[0]}
+				// No handler: surface the pause. A single interrupt keeps
+				// the GraphInterrupt shape callers match on; a multi-card
+				// pause rides a MultiInterrupt value so no sibling card is
+				// silently dropped.
+				if len(paused) == 1 {
+					return nil, &lgtypes.GraphInterrupt{Interrupt: paused[0]}
+				}
+				return nil, &lgtypes.GraphInterrupt{Interrupt: lgtypes.Interrupt{
+					Value: agent.MultiInterrupt{Interrupts: agent.PauseCards(paused)},
+				}}
 			}
 			cards := agent.PauseCards(paused)
 			answer, err := r.handle(cards)

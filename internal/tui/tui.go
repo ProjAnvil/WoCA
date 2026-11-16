@@ -809,10 +809,10 @@ func (m *Model) resolvePending(answer any) {
 		}
 		m.cardAnswers[agent.CardKey(p.cards[m.cardIdx])] = answer
 		m.cardIdx++
+		m.echoCardDecision(echo, answer) // scalar verdict, before the map below replaces it
 		if m.cardIdx < len(p.cards) {
 			// Advance to the next pending card; the decision UI restarts
-			// for it (the echo below fires per card).
-			m.echoCardDecision(echo, answer)
+			// for it (the echo above fires per card).
 			p.value = p.cards[m.cardIdx].Value
 			m.pendingBegin()
 			return
@@ -820,7 +820,9 @@ func (m *Model) resolvePending(answer any) {
 		answer = m.cardAnswers
 	}
 	m.pending = nil
-	m.echoCardDecision(echo, answer)
+	if len(p.cards) <= 1 {
+		m.echoCardDecision(echo, answer) // single card: echo its scalar verdict
+	}
 	m.restoreDraft()
 	p.answerCh <- answer
 }
