@@ -89,16 +89,22 @@ func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) (final
 			if r.handle == nil {
 				return nil, fmt.Errorf("runner: goal paused with no interrupt handler")
 			}
-			answer, err := r.handle(agent.DecodeInterruptValue(paused[0].Value))
+			cards := agent.PauseCards(paused)
+			answer, err := r.handle(cards)
 			if err != nil {
 				return nil, err
+			}
+			if len(cards) > 1 {
+				if _, ok := answer.(map[string]any); !ok {
+					return nil, fmt.Errorf("runner: goal pause carries %d pending interrupts but the handler answered with %T; several pending cards require a map[string]any keyed by card NS", len(cards), answer)
+				}
 			}
 			if r.RenderSummary != nil {
 				for _, s := range r.agent.TakeReadyToolUseSummaries() {
 					r.RenderSummary(s)
 				}
 			}
-			stream, err = r.agent.GoalResume(ctx, answer)
+			stream, err = r.agent.GoalResume(ctx, goalResumeValue(paused, answer))
 			if err != nil {
 				return nil, err
 			}
@@ -107,6 +113,25 @@ func (r *Runner) RunGoal(ctx context.Context, history []messages.Message) (final
 		// Completed: values holds the final goal-graph state.
 		return agent.MessagesFrom(values), nil
 	}
+}
+
+// goalResumeValue addresses the outer goal graph's interrupt: the goal
+// relay surfaces the inner pause as ONE outer interrupt, so a map answer
+// (keyed by the inner NSes) must nest under the outer interrupt's own key
+// — a bare inner-keyed map would match nothing and the loop would re-pause
+// forever. Scalar answers pass through unchanged.
+func goalResumeValue(paused []lgtypes.Interrupt, answer any) any {
+	if len(paused) == 0 {
+		return answer
+	}
+	if _, ok := answer.(map[string]any); !ok {
+		return answer
+	}
+	key := paused[0].NS
+	if key == "" {
+		key = paused[0].ID
+	}
+	return map[string]any{key: answer}
 }
 
 // pumpGoal consumes one goal stream to its end, rendering as it goes. It

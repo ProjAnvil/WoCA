@@ -20,10 +20,16 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 )
 
-// InterruptHandler resolves a graph interrupt into a resume value. The value
-// is one of agent.PermissionRequest, agent.AskUserRequest, or
-// agent.PlanApprovalRequest (decoded from its envelope).
-type InterruptHandler func(value any) (any, error)
+// InterruptHandler resolves one graph pause into a resume answer. It
+// receives EVERY pending interrupt of the pause as a card (its fork NS/ID
+// plus the decoded value — one card per parallel child ask, or the main
+// graph's approval envelope; the goal relay's aggregate unwraps into the
+// inner pause's cards) and returns the scalar answering THE card when
+// exactly one is pending, or a map[string]any keyed by card NS (ID for
+// legacy NS-less interrupts) when several are pending. Partial maps are
+// allowed: unanswered cards re-pause and the handler runs again with only
+// the remainder.
+type InterruptHandler func(cards []agent.PauseCard) (any, error)
 
 // Renderer observes one stream chunk (used for live progress display).
 type Renderer func(chunk lggraph.StreamChunk)
@@ -150,7 +156,12 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 			if r.handle == nil {
 				return nil, &lgtypes.GraphInterrupt{Interrupt: paused[0]}
 			}
-			answer, err := r.handle(agent.DecodeInterruptValue(paused[0].Value))
+			cards := agent.PauseCards(paused)
+			answer, err := r.handle(cards)
+			if err != nil {
+				return nil, err
+			}
+			resume, err := cardResumeValue(cards, answer)
 			if err != nil {
 				return nil, err
 			}
@@ -159,7 +170,7 @@ func (r *Runner) Run(ctx context.Context, history []messages.Message) (final []m
 					r.RenderSummary(s)
 				}
 			}
-			stream = r.agent.ResumeStream(ctx, thread, answer)
+			stream = r.agent.ResumeStream(ctx, thread, resume)
 			continue
 		}
 		// Completed: values holds the final state.
@@ -259,6 +270,28 @@ func (r *Runner) pump(ctx context.Context, stream iter.Seq2[lggraph.StreamChunk,
 func valuesState(payload any) map[string]any {
 	state, _ := payload.(map[string]any)
 	return state
+}
+
+// cardResumeValue normalizes a handler answer into the graph resume value
+// (design §3.4): the scalar when exactly one card is pending (a single-key
+// map addressed to that card unwraps), the map itself when several are —
+// anything else with several pending is a contract violation (the fork
+// rejects scalar resumes of multi-interrupt pauses).
+func cardResumeValue(cards []agent.PauseCard, answer any) (any, error) {
+	if len(cards) <= 1 {
+		if len(cards) == 1 {
+			if m, ok := answer.(map[string]any); ok && len(m) == 1 {
+				if v, ok := m[agent.CardKey(cards[0])]; ok {
+					return v, nil
+				}
+			}
+		}
+		return answer, nil
+	}
+	if m, ok := answer.(map[string]any); ok {
+		return m, nil
+	}
+	return nil, fmt.Errorf("runner: pause carries %d pending interrupts but the handler answered with %T; several pending cards require a map[string]any keyed by card NS", len(cards), answer)
 }
 
 // historyFrom strips a leading system message from a transcript.

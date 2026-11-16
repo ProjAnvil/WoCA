@@ -60,7 +60,7 @@ func TestRunnerInterruptWithoutHandler(t *testing.T) {
 func TestRunnerInterruptHandlerError(t *testing.T) {
 	a := newWriteAgent(t)
 	boom := errors.New("user fled")
-	r := New(a, func(any) (any, error) { return nil, boom }, nil)
+	r := New(a, func([]agent.PauseCard) (any, error) { return nil, boom }, nil)
 	if _, err := r.Run(context.Background(), []messages.Message{messages.Human("write it")}); !errors.Is(err, boom) {
 		t.Fatalf("handler error should propagate, got %v", err)
 	}
@@ -70,7 +70,7 @@ func TestRunnerSummariesRenderedAroundInterrupt(t *testing.T) {
 	a := newWriteAgent(t)
 	var rendered strings.Builder
 	var summaries int
-	r := New(a, func(any) (any, error) { return "y", nil }, DefaultRenderer(&rendered))
+	r := New(a, func([]agent.PauseCard) (any, error) { return "y", nil }, DefaultRenderer(&rendered))
 	r.RenderSummary = func(s agent.ToolUseSummary) { summaries++ }
 	if _, err := r.Run(context.Background(), []messages.Message{messages.Human("write it")}); err != nil {
 		t.Fatal(err)

@@ -41,7 +41,7 @@ func TestRunGoalInterruptResume(t *testing.T) {
 
 	rendered := bytes.Buffer{}
 	summary := bytes.Buffer{}
-	r := New(a, func(v any) (any, error) { return "y", nil }, DefaultRenderer(&rendered))
+	r := New(a, func([]agent.PauseCard) (any, error) { return "y", nil }, DefaultRenderer(&rendered))
 	r.RenderSummary = DefaultSummaryRenderer(&summary)
 
 	if _, err := r.RunGoal(context.Background(), []messages.Message{messages.Human("go")}); err != nil {

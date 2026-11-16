@@ -45,10 +45,13 @@ func TestRunnerInterruptAndRender(t *testing.T) {
 
 	handled := 0
 	var rendered strings.Builder
-	r := New(a, func(value any) (any, error) {
-		req, ok := value.(agent.ApprovalRequest)
+	r := New(a, func(cards []agent.PauseCard) (any, error) {
+		if len(cards) != 1 {
+			t.Fatalf("pause carried %d cards, want 1", len(cards))
+		}
+		req, ok := cards[0].Value.(agent.ApprovalRequest)
 		if !ok {
-			t.Fatalf("interrupt value = %T", value)
+			t.Fatalf("interrupt value = %T", cards[0].Value)
 		}
 		if len(req.Asks) != 1 || req.Asks[0].ToolName != "Write" {
 			t.Fatalf("unexpected asks %+v", req.Asks)
