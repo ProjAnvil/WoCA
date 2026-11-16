@@ -278,7 +278,8 @@ reasoning-effort 映射走同一路由。
 不跨目录，`**` 跨目录），虚拟名 `FileWrite(...)`/`FileRead(...)` 覆盖
 写/读两类操作——`"deny": ["FileWrite(**/.env)"]` 拒绝一切对 `.env` 的
 写入，`"ask": ["FileWrite(secrets/**)"]` 让 `secrets/` 下的写入即使在
-`acceptEdits` 模式下也要询问。
+`acceptEdits` 模式下也要询问。搜索结果还不会跟随解析后逃出所搜目录的
+符号链接。
 
 **设计上仅同源（same-origin by design）。** HTTP API 不返回任何 CORS
 响应头：Web UI 由拥有 API 的同一源直接服务，远程或跨源客户端通过

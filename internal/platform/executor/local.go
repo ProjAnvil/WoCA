@@ -176,6 +176,16 @@ func (l *Local) Stat(ctx context.Context, path string) (fs.FileInfo, error) {
 	return os.Stat(path)
 }
 
+// Readlink resolves a symbolic link. Local is the only executor that
+// implements it: sandboxes do not need the capability — the container is
+// the boundary, nothing inside it can point outside (see tools.entryEscapesBase).
+func (l *Local) Readlink(ctx context.Context, path string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return os.Readlink(path)
+}
+
 // Glob returns paths matching pattern.
 func (l *Local) Glob(ctx context.Context, pattern string) ([]string, error) {
 	if err := ctx.Err(); err != nil {

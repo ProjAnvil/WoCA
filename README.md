@@ -303,7 +303,9 @@ path-shaped glob (`*` and `?` stay inside a segment, `**` spans
 directories), and the virtual names `FileWrite(...)`/`FileRead(...)` cover
 the write/read operation classes — `"deny": ["FileWrite(**/.env)"]` blocks
 every write to any `.env`, `"ask": ["FileWrite(secrets/**)"]` re-asks for
-writes under `secrets/` even in `acceptEdits` mode.
+writes under `secrets/` even in `acceptEdits` mode. Search results
+additionally never follow a symlink that resolves outside the searched
+directory.
 
 **Same-origin by design.** The HTTP API serves no CORS headers: the web UI
 is served by the same origin that owns the API, and remote or cross-origin

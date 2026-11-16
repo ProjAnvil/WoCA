@@ -43,7 +43,7 @@ func listDirTool(d *Dir, execFor func(context.Context) executor.Executor) coreto
 				return coretools.Result{}, fmt.Errorf("list %s: %w", a.Path, err)
 			}
 			var b strings.Builder
-			for _, name := range sortedEntries(listEntryNames(ctx, x, entries)) {
+			for _, name := range sortedEntries(listEntryNames(ctx, x, dir, entries)) {
 				b.WriteString(name)
 				b.WriteString("\n")
 			}
@@ -53,12 +53,17 @@ func listDirTool(d *Dir, execFor func(context.Context) executor.Executor) coreto
 }
 
 // listEntryNames maps one directory's globbed entries to display names,
-// suffixing directories with "/" via a Stat per entry.
-func listEntryNames(ctx context.Context, x executor.Executor, entries []string) []string {
+// suffixing directories with "/" via a Stat per entry. Entries behind a
+// symlink resolving outside dir are excluded (search-scope parity with
+// Glob/Grep).
+func listEntryNames(ctx context.Context, x executor.Executor, dir string, entries []string) []string {
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
 		fi, err := x.Stat(ctx, e)
 		if err != nil {
+			continue
+		}
+		if entryEscapesBase(ctx, x, dir, e) {
 			continue
 		}
 		name := filepath.Base(e)
@@ -123,12 +128,16 @@ func grepTool(d *Dir, execFor func(context.Context) executor.Executor) coretools
 			if err != nil {
 				return coretools.Result{}, fmt.Errorf("grep %s: %w", a.Path, err)
 			}
+			x := execFor(ctx)
 
 			var b strings.Builder
 			count := 0
 			for _, m := range matches {
 				if count >= maxSearchResults {
 					break
+				}
+				if entryEscapesBase(ctx, x, base, m.Path) {
+					continue // a symlink resolving outside the search scope
 				}
 				rel, rerr := filepath.Rel(base, m.Path)
 				if rerr != nil {
@@ -185,21 +194,24 @@ func walkMatches(ctx context.Context, execFor func(context.Context) executor.Exe
 	var files []string
 	var walk func(dir string)
 	walk = func(dir string) {
-		entries, err := x.Glob(ctx, filepath.Join(dir, "*"))
-		if err != nil {
-			return // skip unreadable directories (WalkDir parity)
-		}
-		for _, e := range entries {
-			fi, err := x.Stat(ctx, e)
+			entries, err := x.Glob(ctx, filepath.Join(dir, "*"))
 			if err != nil {
-				continue // skip unreadable entries (WalkDir parity)
+				return
 			}
-			if fi.IsDir() {
-				walk(e)
-				continue
+			for _, e := range entries {
+				fi, err := x.Stat(ctx, e)
+				if err != nil {
+					continue
+				}
+				if entryEscapesBase(ctx, x, base, e) {
+					continue // a symlink resolving outside the search scope
+				}
+				if fi.IsDir() {
+					walk(e)
+					continue
+				}
+				files = append(files, e)
 			}
-			files = append(files, e)
-		}
 	}
 	walk(base)
 	slices.Sort(files)
