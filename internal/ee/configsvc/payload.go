@@ -76,6 +76,12 @@ func (s *Service) bridgeConfig(_ context.Context, _ string) (string, map[string]
 			kv["builtin-plugins"] = string(raw)
 		}
 	}
+	// The subagent concurrency cap (D12): the loaded settings normalize 0
+	// to the default 8, so the key rides whenever a value resolves — the
+	// console default is itself a managed choice.
+	if cfg.SubagentsMaxConcurrent > 0 {
+		kv["subagents.max-concurrent"] = strconv.Itoa(cfg.SubagentsMaxConcurrent)
+	}
 	// The Langfuse observability plugin rides when the console enabled it
 	// (its secret travels via ManagedSecretKeys below).
 	if cfg.LangfuseEnabled {
@@ -230,6 +236,11 @@ type payload struct {
 	// server reports its own dispatch availability separately).
 	MsgPlaneAvailable bool `json:"msg_plane_available"`
 
+	// SubagentsMaxConcurrent is the foreground-subagent concurrency cap
+	// (graph-native HITL D12): a per-session limit on concurrently active
+	// Task children; the settings loader normalizes 0 to the default 8.
+	SubagentsMaxConcurrent int `json:"subagents_max_concurrent"`
+
 	// Langfuse observability plugin — enterprise-owned: configured here,
 	// delivered to business roles via the shared settings tables and to
 	// bridges via the config package.
@@ -300,6 +311,11 @@ type update struct {
 	MsgPlaneMode    *string `json:"msg_plane_mode"`
 	MsgPlaneNATSURL *string `json:"msg_plane_nats_url"`
 	MsgPlaneSubject *string `json:"msg_plane_subject"`
+
+	// SubagentsMaxConcurrent caps concurrently active foreground subagent
+	// children per session (D12). Present pins the value on managed
+	// machines; absent leaves it to the bridge's users.
+	SubagentsMaxConcurrent *int `json:"subagents_max_concurrent"`
 
 	// BuiltinPlugins pins the enterprise plugin set delivered to bridges
 	// (present = pin; absent = user-managed on each bridge).

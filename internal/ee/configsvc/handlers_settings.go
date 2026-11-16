@@ -88,6 +88,10 @@ func (s *Service) handleGet(w http.ResponseWriter, _ *http.Request) {
 		// dispatch state).
 		MsgPlaneAvailable: true,
 
+		// Foreground-subagent concurrency cap (graph-native HITL D12); the
+		// settings loader normalizes an unset value to the default 8.
+		SubagentsMaxConcurrent: cfg.SubagentsMaxConcurrent,
+
 		LangfuseEnabled:      cfg.LangfuseEnabled,
 		LangfuseBaseURL:      cfg.LangfuseBaseURL,
 		LangfusePublicKey:    cfg.LangfusePublicKey,

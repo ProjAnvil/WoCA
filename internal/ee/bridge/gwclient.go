@@ -962,6 +962,12 @@ func applyManaged(st *settings.Store, kv map[string]string) error {
 			cfg.BuiltinPlugins = list
 		}
 	})
+	// The subagent concurrency cap (graph-native HITL D12): a plain int
+	// under the settings key spelling; agent assembly reads it from the
+	// overlaid settings store.
+	set("subagents.max-concurrent", func(v string) {
+		_, _ = fmt.Sscanf(v, "%d", &cfg.SubagentsMaxConcurrent)
+	})
 	// The Langfuse observability plugin (enterprise-owned: the console
 	// enables it; the secret rides ManagedSecretKeys into the encrypted
 	// store, never the overlay struct).

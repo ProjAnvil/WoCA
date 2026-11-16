@@ -328,6 +328,9 @@ func (u *update) patches() []patch {
 		{settings.KeySearchCustomEndpoint, u.SearchCustomEndpoint},
 		{settings.KeySearchAllowedDomains, jsonListPtr(u.SearchAllowedDomains)},
 		{settings.KeySearchDeniedDomains, jsonListPtr(u.SearchDeniedDomains)},
+		// Subagent concurrency cap (graph-native HITL D12): console-managed;
+		// settings.Apply enforces the [1,64] range here.
+		{settings.KeySubagentsMaxConcurrent, intPtr(u.SubagentsMaxConcurrent)},
 	}
 	// The enterprise plugin set (a JSON array of enabled built-ins) rides
 	// as one settings key; present means "pin this set", absent leaves

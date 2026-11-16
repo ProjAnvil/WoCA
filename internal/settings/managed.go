@@ -110,6 +110,11 @@ func (m *managedState) applyOverlay(out *Settings) {
 	if o.LadyMSystem2Interval != 0 {
 		out.LadyMSystem2Interval = o.LadyMSystem2Interval
 	}
+	// Subagent concurrency cap (D12): console-managed in enterprise — the
+	// config pack delivers it; zero means "not managed".
+	if o.SubagentsMaxConcurrent != 0 {
+		out.SubagentsMaxConcurrent = o.SubagentsMaxConcurrent
+	}
 	// Private-cloud storage/memory wiring (product §3 storage domain): the
 	// config plane delivers the per-subsystem postgres coordinates and the
 	// remote ladyM endpoint so bridges checkpoint and remember against the
@@ -234,6 +239,9 @@ func (m *managedState) lockedFields() []string {
 	if o.Temperature != 0 {
 		out = append(out, KeyTemperature)
 	}
+	if o.SubagentsMaxConcurrent != 0 {
+		out = append(out, KeySubagentsMaxConcurrent)
+	}
 	return out
 }
 
@@ -293,6 +301,9 @@ func (m *managedState) checkWritable(cfg Settings) error {
 	}
 	if o.LadyMSystem2Interval != 0 && cfg.LadyMSystem2Interval != 0 && cfg.LadyMSystem2Interval != o.LadyMSystem2Interval {
 		return fmt.Errorf("%w: ladym_system2_interval (set to %d)", ErrManagedLocked, o.LadyMSystem2Interval)
+	}
+	if o.SubagentsMaxConcurrent != 0 && cfg.SubagentsMaxConcurrent != 0 && cfg.SubagentsMaxConcurrent != o.SubagentsMaxConcurrent {
+		return fmt.Errorf("%w: subagents.max-concurrent (set to %d)", ErrManagedLocked, o.SubagentsMaxConcurrent)
 	}
 	if len(o.BuiltinPlugins) > 0 && len(cfg.BuiltinPlugins) > 0 && !slices.Equal(o.BuiltinPlugins, cfg.BuiltinPlugins) {
 		return fmt.Errorf("%w: builtin-plugins (set to %v)", ErrManagedLocked, o.BuiltinPlugins)

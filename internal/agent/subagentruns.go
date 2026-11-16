@@ -20,9 +20,11 @@ import (
 )
 
 // defaultMaxSubagents caps concurrently active foreground subagent children
-// per session (spec decision D12). Hard-coded until Task 10 wires the
-// `subagents.max-concurrent` settings key; over-cap calls are REJECTED with
-// a reason, never queued.
+// per session (spec decision D12). It is the fallback for an unset or
+// invalid `subagents.max-concurrent` settings value (Task 10 wires the key
+// through agent.Config.MaxConcurrentSubagents; over-cap calls are REJECTED
+// with a reason, never queued) and mirrors
+// settings.DefaultSubagentsMaxConcurrent.
 const defaultMaxSubagents = 8
 
 // SubagentRunState is one child's lifecycle state.
@@ -266,7 +268,8 @@ func (r *subagentRuns) activeCount(session string) int {
 	return n
 }
 
-// capLimit reports the configured maximum (Task 10 wires the settings key).
+// capLimit reports the configured maximum (the subagents.max-concurrent
+// settings value the registry was seeded with at agent assembly).
 func (r *subagentRuns) capLimit() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

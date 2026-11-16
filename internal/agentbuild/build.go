@@ -337,6 +337,12 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		LoadSettings: st.Load,
 		MaxTurns:     opts.MaxTurns,
 		Obs:          obs,
+		// Foreground-subagent concurrency cap (graph-native HITL D12): the
+		// subagents.max-concurrent settings value, console-managed in
+		// enterprise (the config pack's managed overlay lands in the same
+		// settings store, and the settings-generation watcher rebuilds the
+		// agent). Zero/unset falls back to the agent's built-in default (8).
+		MaxConcurrentSubagents: dbSettings.SubagentsMaxConcurrent,
 	})
 	if err != nil {
 		return nil, err

@@ -154,6 +154,8 @@ export default {
     apply: 'Apply',
     imported: 'applied',
     debugLog: 'Debug log',
+    subagentsCap: 'Subagent concurrency cap',
+    subagentsCapHint: 'Max concurrently active foreground subagent children per session (1-64, default 8); over-cap calls are rejected, never queued.',
   },
   websearch: {
     intro:

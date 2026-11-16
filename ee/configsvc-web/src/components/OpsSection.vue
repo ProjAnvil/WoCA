@@ -117,5 +117,18 @@ async function doImport() {
       <label>{{ t('ops.debugLog') }}</label>
       <input type="checkbox" :checked="s?.debug_log" @change="save({ debug_log: ($event.target as HTMLInputElement).checked })" />
     </div>
+
+    <div class="row" style="margin-top: 8px">
+      <label>{{ t('ops.subagentsCap') }}</label>
+      <input
+        class="field"
+        type="number"
+        min="1"
+        max="64"
+        :value="s?.subagents_max_concurrent ?? 8"
+        @change="save({ subagents_max_concurrent: Number(($event.target as HTMLInputElement).value) || 8 })"
+      />
+    </div>
+    <p class="hint" style="margin: 2px 0 0">{{ t('ops.subagentsCapHint') }}</p>
   </section>
 </template>

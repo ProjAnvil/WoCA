@@ -10,6 +10,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/projanvil/langchain-golang/core/language"
+
 	"github.com/projanvil/woca/internal/tools"
 )
 
@@ -120,6 +122,33 @@ func TestSubagentRunsStopSession(t *testing.T) {
 	// Idempotent.
 	if n := r.stopSession("s1"); n != 0 {
 		t.Fatalf("second stopSession stopped %d, want 0", n)
+	}
+}
+
+// TestSubagentsCapFromConfig: the assembly-level wiring of D12 — agent.New
+// seeds the runs registry from Config.MaxConcurrentSubagents (the
+// subagents.max-concurrent settings value injected at assembly), falling
+// back to the hard default when unset.
+func TestSubagentsCapFromConfig(t *testing.T) {
+	m := language.NewFakeChatModel()
+	a, err := New(Config{
+		Model:                   m,
+		Registry:                tools.NewRegistry(t.TempDir()),
+		MaxConcurrentSubagents:  3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.SubagentsCap(); got != 3 {
+		t.Fatalf("SubagentsCap = %d, want 3 (the configured cap)", got)
+	}
+
+	b, err := New(Config{Model: m, Registry: tools.NewRegistry(t.TempDir())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := b.SubagentsCap(); got != defaultMaxSubagents {
+		t.Fatalf("default SubagentsCap = %d, want %d", got, defaultMaxSubagents)
 	}
 }
 

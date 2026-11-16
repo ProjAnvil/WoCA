@@ -283,6 +283,13 @@ type Config struct {
 	// carrier (WithSessionPolicy). Nil keeps the agent-global mode/planMode
 	// fields — the single-session behavior of the TUI, CLI and tests.
 	PolicySource SessionPolicySource
+	// MaxConcurrentSubagents caps the concurrently active foreground
+	// subagent children per session (graph-native HITL D12). It is the
+	// subagents.max-concurrent settings value injected at assembly
+	// (internal/agentbuild reads the settings store; enterprise bridges
+	// receive it through the config pack's managed overlay). Zero or
+	// negative keeps the built-in default (defaultMaxSubagents).
+	MaxConcurrentSubagents int
 }
 
 // Agent is the compiled coding-agent graph plus its runtime dependencies.
@@ -549,8 +556,11 @@ func New(cfg Config) (*Agent, error) {
 	a.wsAgents.onChange = func(string, []agents.Definition) { a.scheduleGraphRebuild() }
 	a.children = newChildRegistry()
 	// Session-scoped active-children registry (subagentruns.go): the
-	// fan-out cap's accounting and the Subagents activity surface.
-	a.subagents = newSubagentRuns(defaultMaxSubagents)
+	// fan-out cap's accounting and the Subagents activity surface. The cap
+	// comes from Config.MaxConcurrentSubagents (the subagents.max-concurrent
+	// settings key, D12); newSubagentRuns falls back to the built-in
+	// default for a zero/unset value.
+	a.subagents = newSubagentRuns(cfg.MaxConcurrentSubagents)
 	// The cron scheduler's only host dependency is the notification queue;
 	// the method value is safe to capture before the rest of the wiring
 	// because it is only invoked by the scheduler loop, never here. The
@@ -703,6 +713,12 @@ func (a *Agent) Graph() *lggraph.CompiledGraph { return a.currentGraph() }
 
 // Obs returns the observability store (nil when not wired).
 func (a *Agent) Obs() *obslog.Store { return a.obs }
+
+// SubagentsCap reports the configured foreground-subagent concurrency cap
+// (graph-native HITL D12): the subagents.max-concurrent settings value the
+// agent was assembled with (Config.MaxConcurrentSubagents), or the built-in
+// default when unset. Route2 rejects over-cap Task calls with this number.
+func (a *Agent) SubagentsCap() int { return a.subagents.capLimit() }
 
 // ActiveTeammateCount reports live teammates across the agent's team (0 when
 // no team exists). For /api/stats.

@@ -611,6 +611,54 @@ func TestStorageMemoryRidePackage(t *testing.T) {
 	}
 }
 
+// TestSubagentsMaxConcurrentConsoleAndPackage: the subagent concurrency cap
+// (graph-native HITL D12) is console-editable and rides the bridge config
+// package — a PUT persists it, GET reports it, and bridgeConfig delivers it
+// under the settings key spelling, defaulting to 8 when untouched.
+func TestSubagentsMaxConcurrentConsoleAndPackage(t *testing.T) {
+	f := newFixture(t)
+
+	// Default package: the console-managed default (8) rides.
+	payload, _ := fetchPayload(t, f.svc)
+	if payload["subagents.max-concurrent"] != "8" {
+		t.Fatalf("default package cap = %q, want 8", payload["subagents.max-concurrent"])
+	}
+
+	// Console edit path: PUT persists, GET reports, the package carries it.
+	resp := f.do("PUT", "/api/settings", "", map[string]any{"subagents_max_concurrent": 5})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("put = %d want 200", resp.StatusCode)
+	}
+	if got := f.st.Load().SubagentsMaxConcurrent; got != 5 {
+		t.Fatalf("store cap = %d, want 5", got)
+	}
+	get := f.do("GET", "/api/settings", "", nil)
+	defer get.Body.Close()
+	var out struct {
+		SubagentsMaxConcurrent int `json:"subagents_max_concurrent"`
+	}
+	if err := json.NewDecoder(get.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.SubagentsMaxConcurrent != 5 {
+		t.Fatalf("GET cap = %d, want 5", out.SubagentsMaxConcurrent)
+	}
+	payload, _ = fetchPayload(t, f.svc)
+	if payload["subagents.max-concurrent"] != "5" {
+		t.Fatalf("package cap = %q, want 5", payload["subagents.max-concurrent"])
+	}
+
+	// Out-of-range values are rejected by settings.Apply at the console too.
+	for _, bad := range []int{0, -1, 65} {
+		resp := f.do("PUT", "/api/settings", "", map[string]any{"subagents_max_concurrent": bad})
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("put %d = %d want 400", bad, resp.StatusCode)
+		}
+	}
+}
+
 // TestSandboxBackendsMigration: New provisions the sandbox_backends table
 // (design §4.2) — the management plane's sandbox backend inventory.
 func TestSandboxBackendsMigration(t *testing.T) {

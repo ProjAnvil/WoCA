@@ -128,6 +128,7 @@ func TestGatewayClientStorageMemoryDelivery(t *testing.T) {
 		"ladym-api-username":     "bridge",
 		"ladym-api-password":     "lm-secret",
 		"builtin-plugins":        `["browser","pdf"]`,
+		"subagents.max-concurrent": "4",
 		"langfuse-enabled":       "true",
 		"langfuse-base-url":      "https://lf.corp.example",
 		"langfuse-public-key":    "pk-lf",
@@ -165,6 +166,9 @@ func TestGatewayClientStorageMemoryDelivery(t *testing.T) {
 	if len(got.BuiltinPlugins) != 2 || got.BuiltinPlugins[0] != "browser" {
 		t.Fatalf("builtin plugins overlay = %v", got.BuiltinPlugins)
 	}
+	if got.SubagentsMaxConcurrent != 4 {
+		t.Fatalf("subagents cap overlay = %d, want 4", got.SubagentsMaxConcurrent)
+	}
 	if !got.LangfuseEnabled || got.LangfuseBaseURL != "https://lf.corp.example" || got.LangfusePublicKey != "pk-lf" {
 		t.Fatalf("langfuse overlay = %+v", got)
 	}
@@ -183,7 +187,7 @@ func TestGatewayClientStorageMemoryDelivery(t *testing.T) {
 	// secrets row changed between pulls.
 	if fields := st.ManagedFields(); !slices.Contains(fields, "checkpoint-pg-host") ||
 		!slices.Contains(fields, "ladym-endpoint") || !slices.Contains(fields, "builtin-plugins") ||
-		!slices.Contains(fields, "langfuse-enabled") {
+		!slices.Contains(fields, "langfuse-enabled") || !slices.Contains(fields, "subagents.max-concurrent") {
 		t.Fatalf("managed fields = %v", fields)
 	}
 	gen := st.Generation()

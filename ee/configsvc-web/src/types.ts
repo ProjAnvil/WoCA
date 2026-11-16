@@ -44,6 +44,7 @@ export interface Settings {
   msg_plane_nats_url: string
   msg_plane_subject: string
   msg_plane_available: boolean
+  subagents_max_concurrent: number
   langfuse_enabled: boolean
   langfuse_base_url: string
   langfuse_public_key: string

@@ -73,6 +73,10 @@ const (
 	// wake chain (a user-initiated run resets it).
 	KeyAutoWake      = "auto-wake"
 	KeyAutoWakeLimit = "auto-wake-limit"
+	// Subagent concurrency cap (graph-native HITL D12): the maximum
+	// concurrently active foreground subagent children per session; over-cap
+	// Task calls are rejected with a reason, never queued.
+	KeySubagentsMaxConcurrent = "subagents.max-concurrent"
 	// Web search. The provider list carries the enable/disable state: a
 	// backend is on when its id is present, so an enterprise overlay can
 	// pin the exact allowed set by listing it. The id vocabulary lives in
@@ -100,6 +104,16 @@ const DefaultMsgPlaneSubject = "runs.dispatch"
 // loads as 0 = unlimited.
 const DefaultAutoWakeLimit = 20
 
+// DefaultSubagentsMaxConcurrent is the default foreground-subagent
+// concurrency cap (graph-native HITL D12): 8 concurrently active children
+// per session. A stored 0 (or absent row) loads as this default.
+const DefaultSubagentsMaxConcurrent = 8
+
+// MaxSubagentsConcurrent bounds subagents.max-concurrent from above: each
+// active child is a full agent graph, so an unbounded cap would let one
+// session fan out without limit.
+const MaxSubagentsConcurrent = 64
+
 // KeyNames lists all settable keys in display order.
 func KeyNames() []string {
 	return []string{
@@ -120,6 +134,7 @@ func KeyNames() []string {
 		KeyLangfuseEnabled, KeyLangfuseBaseURL, KeyLangfusePublicKey, KeyLangfuseSecretKey,
 		KeySandboxArchiveMaxBytes,
 		KeyAutoWake, KeyAutoWakeLimit,
+		KeySubagentsMaxConcurrent,
 		KeySearchProviders, KeySearchSearXNGEndpoint, KeySearchCustomEndpoint,
 		KeySearchCustomKey, KeySearchAllowedDomains, KeySearchDeniedDomains,
 	}
@@ -286,6 +301,8 @@ func KeyHelp(key string) string {
 		return "start a run automatically when notifications arrive while idle: true | false"
 	case KeyAutoWakeLimit:
 		return "max chained auto-wake runs before capping (a user run resets the chain; set -1 for unlimited; default 20)"
+	case KeySubagentsMaxConcurrent:
+		return "max concurrently active foreground subagent children per session (1-64, default 8; over-cap calls are rejected, never queued)"
 	case KeySearchProviders:
 		return "web-search backends in failover order as a JSON array (ddg-html, ddg-lite, searxng, tavily, custom); a backend is enabled by being listed"
 	case KeySearchSearXNGEndpoint:
@@ -538,6 +555,12 @@ func Apply(cfg *Settings, key, value string) error {
 			return fmt.Errorf("auto-wake-limit must be an integer, got %q", value)
 		}
 		cfg.AutoWakeLimit = n
+	case KeySubagentsMaxConcurrent:
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1 || n > MaxSubagentsConcurrent {
+			return fmt.Errorf("subagents.max-concurrent must be an integer in [1,%d], got %q", MaxSubagentsConcurrent, value)
+		}
+		cfg.SubagentsMaxConcurrent = n
 	case KeySearchProviders:
 		list, err := ParseNameList(value)
 		if err != nil {
@@ -699,6 +722,7 @@ func Describe(cfg Settings, secretSet func(string) bool, dbPath string) string {
 	fmt.Fprintf(&b, "sandbox-archive-max-bytes: %s\n", orDefault(strconv.FormatInt(cfg.SandboxArchiveMaxBytes, 10), strconv.FormatInt(DefaultSandboxArchiveMaxBytes, 10)))
 	fmt.Fprintf(&b, "auto-wake: %s\n", strconv.FormatBool(cfg.AutoWake))
 	fmt.Fprintf(&b, "auto-wake-limit: %s\n", strconv.Itoa(cfg.AutoWakeLimit))
+	fmt.Fprintf(&b, "subagents.max-concurrent: %s\n", orDefault(strconv.Itoa(cfg.SubagentsMaxConcurrent), strconv.Itoa(DefaultSubagentsMaxConcurrent)))
 	return b.String()
 }
 
@@ -802,6 +826,8 @@ func KeyValue(cfg Settings, key string) string {
 		return strconv.FormatBool(cfg.AutoWake)
 	case KeyAutoWakeLimit:
 		return strconv.Itoa(cfg.AutoWakeLimit)
+	case KeySubagentsMaxConcurrent:
+		return strconv.Itoa(cfg.SubagentsMaxConcurrent)
 	case KeySearchProviders:
 		return FormatNameList(cfg.SearchProviders)
 	case KeySearchSearXNGEndpoint:

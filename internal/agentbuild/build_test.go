@@ -121,6 +121,40 @@ func TestBuildAgentDefaultsFromSettings(t *testing.T) {
 	}
 }
 
+// TestBuildAgentSubagentsCapFromSettings: the subagents.max-concurrent
+// settings key (graph-native HITL D12) is read at agent assembly and seeds
+// the agent's subagent concurrency cap; unset keeps the built-in default.
+func TestBuildAgentSubagentsCapFromSettings(t *testing.T) {
+	isolateEnv(t)
+	seedSettings(t,
+		[2]string{"memory-engine", "none"},
+		[2]string{"subagents.max-concurrent", "3"},
+	)
+	url := fakeOpenAI(t, "hi")
+	ap, err := BuildAgent(t.Context(), baseOpts(t, url), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap.PluginMgr.Close()
+	defer ap.Agent.Close()
+	if got := ap.Agent.SubagentsCap(); got != 3 {
+		t.Fatalf("SubagentsCap = %d, want 3 (from settings)", got)
+	}
+
+	// Unset: the default cap applies.
+	isolateEnv(t)
+	seedSettings(t, [2]string{"memory-engine", "none"})
+	ap2, err := BuildAgent(t.Context(), baseOpts(t, url), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ap2.PluginMgr.Close()
+	defer ap2.Agent.Close()
+	if got := ap2.Agent.SubagentsCap(); got != 8 {
+		t.Fatalf("default SubagentsCap = %d, want 8", got)
+	}
+}
+
 func TestBuildAgentInvalidProvider(t *testing.T) {
 	isolateEnv(t)
 	seedSettings(t, [2]string{"memory-engine", "none"})

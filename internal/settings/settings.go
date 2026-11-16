@@ -196,6 +196,12 @@ type Settings struct {
 	// when the key is unset or stored as 0.
 	AutoWake      bool `json:"auto_wake"`
 	AutoWakeLimit int  `json:"auto_wake_limit"`
+	// SubagentsMaxConcurrent caps the concurrently active foreground
+	// subagent children per session (graph-native HITL D12): over-cap Task
+	// calls are rejected with a reason, never queued. Read at agent
+	// assembly (internal/agentbuild seeds the agent's runs registry with
+	// it); zero loads as DefaultSubagentsMaxConcurrent.
+	SubagentsMaxConcurrent int `json:"subagents_max_concurrent"`
 }
 
 // Default returns the default settings: sqlite storage under ~/.woca.
@@ -204,14 +210,15 @@ type Settings struct {
 // default offline classifier a cycle costs no LLM calls.
 func Default() Settings {
 	return Settings{
-		Provider:          "anthropic",
-		CheckpointBackend: CheckpointSQLite,
-		MemoryBackend:     MemorySQLite,
-		MemoryEngine:      MemoryEngineLadyM,
-		LadyMAutoRetain:   true,
-		LadyMSystem2:      true,
-		AutoWake:          true,
-		AutoWakeLimit:     DefaultAutoWakeLimit,
+		Provider:               "anthropic",
+		CheckpointBackend:      CheckpointSQLite,
+		MemoryBackend:          MemorySQLite,
+		MemoryEngine:           MemoryEngineLadyM,
+		LadyMAutoRetain:        true,
+		LadyMSystem2:           true,
+		AutoWake:               true,
+		AutoWakeLimit:          DefaultAutoWakeLimit,
+		SubagentsMaxConcurrent: DefaultSubagentsMaxConcurrent,
 	}
 }
 
@@ -275,6 +282,9 @@ func (s Settings) Normalize() (Settings, error) {
 	}
 	if out.AutoWakeLimit < 0 {
 		out.AutoWakeLimit = 0 // a stored negative is the unlimited spelling
+	}
+	if out.SubagentsMaxConcurrent <= 0 {
+		out.SubagentsMaxConcurrent = DefaultSubagentsMaxConcurrent
 	}
 	return out, nil
 }
@@ -602,6 +612,11 @@ func applyPairs(out *Settings, pairs map[string]string) {
 			out.AutoWakeLimit = n
 		}
 	}
+	if v, ok := pairs["subagents_max_concurrent"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			out.SubagentsMaxConcurrent = n
+		}
+	}
 }
 
 // Save persists non-empty settings fields (empty fields are left unchanged so
@@ -729,6 +744,11 @@ func (s *Store) Save(cfg Settings) error {
 	fields = append(fields, field{"auto_wake", strconv.FormatBool(cfg.AutoWake)})
 	if cfg.AutoWakeLimit != 0 {
 		fields = append(fields, field{"auto_wake_limit", strconv.Itoa(cfg.AutoWakeLimit)})
+	}
+	// The subagent cap skips when zero so the default applies on load (the
+	// agent registry falls back to its built-in default for 0 regardless).
+	if cfg.SubagentsMaxConcurrent != 0 {
+		fields = append(fields, field{"subagents_max_concurrent", strconv.Itoa(cfg.SubagentsMaxConcurrent)})
 	}
 	for _, f := range fields {
 		if f.val == "" {

@@ -154,6 +154,8 @@ export default {
     apply: '应用',
     imported: '已应用',
     debugLog: '调试日志',
+    subagentsCap: '子代理并发上限',
+    subagentsCapHint: '每会话同时活跃的前台子代理上限（1-64，默认 8）；超限调用直接拒绝，不排队。',
   },
   websearch: {
     intro:
