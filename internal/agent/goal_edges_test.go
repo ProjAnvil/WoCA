@@ -400,19 +400,29 @@ func TestNewSubagentBuildError(t *testing.T) {
 // --- task.go gaps ---
 
 func TestRunTaskForegroundErrorAndTypedSubagent(t *testing.T) {
-	// Foreground error path: the subagent model fails.
-	failing := newBackgroundTaskAgent(t, erroringSubagentModel{language.NewFakeChatModel()})
-	if _, err := failing.runTask(t.Context(), taskArgs{Description: "boom"}); err == nil {
-		t.Fatal("foreground task error must propagate")
+	// Foreground error path: the subagent model fails. The child's model
+	// guard converts the failure into an "Error: ..." report so the parent
+	// turn survives and the Task call's tool result carries the error.
+	failing, err := New(Config{
+		Model:          &taskCallModel{args: taskArgs{Description: "boom"}},
+		SubagentModel:  erroringSubagentModel{language.NewFakeChatModel()},
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "t",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := runTaskViaGraph(t, failing, "thread-fg-err")
+	res, ok := taskResultFor(final, "t0")
+	if !ok || !strings.Contains(res.Content, "Error:") {
+		t.Fatalf("child model error must backfill as an Error report; got ok=%v %q (transcript %v)", ok, res.Content, final)
 	}
 
-	// A valid subagent_type resolves the definition and runs it.
-	sub := language.NewFakeChatModel(language.WithResponses(messages.AI("typed report")))
-	model := language.NewFakeChatModel(
-		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}))
+	// A valid subagent_type resolves the definition and fans out to it.
 	a, err := New(Config{
-		Model:          model,
-		SubagentModel:  sub,
+		Model:          &taskCallModel{args: taskArgs{Description: "explore", SubagentType: "explorer"}},
+		SubagentModel:  language.NewFakeChatModel(language.WithResponses(messages.AI("typed report"))),
 		Registry:       tools.NewRegistry(t.TempDir()),
 		SystemPrompt:   "t",
 		PermissionMode: config.ModeBypass,
@@ -421,9 +431,10 @@ func TestRunTaskForegroundErrorAndTypedSubagent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := a.runTask(t.Context(), taskArgs{Description: "explore", SubagentType: "explorer"})
-	if err != nil || res.Content != "typed report" {
-		t.Fatalf("typed task = %q, %v", res.Content, err)
+	final = runTaskViaGraph(t, a, "thread-fg-typed")
+	res, ok = taskResultFor(final, "t0")
+	if !ok || res.Content != "typed report" {
+		t.Fatalf("typed task = %q, %v (transcript %v)", res.Content, err, final)
 	}
 }
 

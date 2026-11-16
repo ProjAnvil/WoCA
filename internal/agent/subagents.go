@@ -19,6 +19,7 @@ package agent
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -28,17 +29,68 @@ import (
 	"sync"
 	"time"
 
+	"github.com/projanvil/langchain-golang/core/messages"
 	lgcheckpoint "github.com/projanvil/langchain-golang/langgraph/checkpoint"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
+	lgruntime "github.com/projanvil/langchain-golang/langgraph/runtime"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/runws"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 // subagentNodePrefix marks parent-graph nodes backed by subagent child
 // graphs. Persisted in checkpoints (planned task node names), so stable
 // across releases.
 const subagentNodePrefix = "subagent:"
+
+// subagentChannelName is the child graph state channel carrying the fan-out
+// meta (design §3.2): {"def", "parent_call_id", "session", "origin"} — the
+// child-side wrapper and terminal step read it. LastValue semantics.
+const subagentChannelName = "subagent"
+
+// nodeChildExit is the child-only terminal node: after the child's final AI
+// message (no tool calls) route1 routes here instead of END, and the node
+// returns the parent-targeted Command that backfills the report (audit fix
+// C2). Persisted in child checkpoints, so stable across releases.
+const nodeChildExit = "child_exit"
+
+// generalSubagentName backs foreground Task calls without subagent_type —
+// the historical "general" subagent — through the same content-addressed
+// child machinery (a synthetic empty def: no prompt override, full tool set).
+const generalSubagentName = "general"
+
+var generalSubagentDef = agents.Definition{Name: generalSubagentName}
+
+// subagentMeta is the subagent channel's value: everything the child needs
+// about its spawning call. Registered with cpserde so durable checkpoints
+// round-trip Send args carrying it.
+type subagentMeta struct {
+	// Def is the subagent definition's display name ("general" for default
+	// children).
+	Def string `json:"def"`
+	// ParentCallID is the parent's Task tool-call id — the backfill target
+	// of the child's report and the per-child run-key suffix (specRunID).
+	ParentCallID string `json:"parent_call_id"`
+	// Session is the starting run's session id (registry + events).
+	Session string `json:"session"`
+	// Origin is the initiator attribution, "subagent:<def>#<callID>" — the
+	// shell-owner form (§3.7).
+	Origin string `json:"origin"`
+	// Description is the Task call's description (the L1 episode label).
+	Description string `json:"description"`
+}
+
+// subagentMetaFrom extracts the meta from a child graph state (zero value
+// when absent — a child invoked directly, e.g. the background Task path).
+func subagentMetaFrom(state map[string]any) subagentMeta {
+	if state == nil {
+		return subagentMeta{}
+	}
+	meta, _ := state[subagentChannelName].(subagentMeta)
+	return meta
+}
 
 // graphRebuildDebounce collapses rapid successive def-set changes (a run
 // resolving several workspaces, an /agents manager save) into one parent
@@ -142,8 +194,9 @@ type defSite struct {
 // cached across workspaces (serve mode resolves per-workspace defs through
 // AgentsFor into the wsAgents cache) plus the startup set (TUI/CLI/tests
 // resolve through a.agentDefs when no loader is wired — leaving it out
-// would leave those deployments without subagent nodes). Sorted
-// deterministically so identical-content dedup picks a stable winner.
+// would leave those deployments without subagent nodes) plus the synthetic
+// general def (foreground Task calls without subagent_type fan out to it).
+// Sorted deterministically so identical-content dedup picks a stable winner.
 func (a *Agent) defSites() []defSite {
 	var sites []defSite
 	for ws, defs := range a.wsAgents.snapshot() {
@@ -158,6 +211,7 @@ func (a *Agent) defSites() []defSite {
 	for _, d := range startup {
 		sites = append(sites, defSite{ws: home, def: d})
 	}
+	sites = append(sites, defSite{ws: home, def: generalSubagentDef})
 	slices.SortFunc(sites, func(x, y defSite) int {
 		return cmp.Or(
 			cmp.Compare(x.def.Name, y.def.Name),
@@ -180,6 +234,12 @@ func (a *Agent) defSites() []defSite {
 // observability store when one is wired.
 func (a *Agent) buildChildRegistry() *childRegistry {
 	reg := newChildRegistry()
+	if a.subagent {
+		// Subagent children expose no Task tool, so nothing can ever fan
+		// out of them — and building grandchildren here would recurse
+		// forever (each New builds its registry at construction).
+		return reg
+	}
 	for _, site := range a.defSites() {
 		node := subagentNodeName(site.def)
 		if reg.lookup(node) != nil {
@@ -221,29 +281,79 @@ func (a *Agent) rebuildGraph() error {
 
 	reg := a.buildChildRegistry()
 
+	// Subagent children run their graph with the fan-out meta in state and
+	// every node wrapped (childNode): the wrapper installs the per-child
+	// ctx carriers (tool-call id for the run-key suffix, shell-owner
+	// attribution), feeds the runs registry, and seeds the child's run-ctx
+	// bucket from the parent's driver ctx. Root graphs wrap nothing.
+	wrap := func(fn lggraph.NodeFunc) lggraph.NodeFunc { return fn }
+	if a.subagent {
+		wrap = a.childNode
+	}
+
 	g := lggraph.NewStateGraph()
 	g.AddReducer("messages", messagesChannel)
 	g.AddReducer(decisionsChannelName, decisionsChannel)
-	g.AddNode(nodeModel, a.observedNode("agent", nodeModel, a.modelNode()))
+	if a.subagent {
+		g.AddReducer(subagentChannelName, decisionsChannel) // LastValue
+		g.AddReducer(childErrorChannel, decisionsChannel)   // LastValue
+	}
+	modelFn := a.modelNode()
+	if a.subagent {
+		// Child-only model guard: a subagent model failure must not kill the
+		// parent turn (the relay era surfaced it as the Task call's error
+		// result). Convert the error into a plain AI message so route1 sends
+		// the child to its exit node and the report backfills as
+		// "Error: ..." — the parent model can then react.
+		modelFn = func(rt lgruntime.Runtime, state map[string]any) (any, error) {
+			update, err := a.modelNode()(rt, state)
+			if err == nil {
+				return update, nil
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, err // cancellation still aborts the run
+			}
+			// The failure is recorded on the child-error channel (the
+			// background driver surfaces it as the run's error) and as a
+			// plain AI message so route1 sends the child to its exit node:
+			// the fan-out path then backfills "Error: ..." as the Task
+			// call's tool result instead of killing the parent turn.
+			return map[string]any{
+				"messages":       []messages.Message{messages.AI("Error: " + err.Error())},
+				childErrorChannel: err.Error(),
+			}, nil
+		}
+	}
+	g.AddNode(nodeModel, a.observedNode("agent", nodeModel, wrap(modelFn)))
 	if hasTools {
 		// Topology (design §3.1): model →(route1)→ hooks → approval →(route2)
 		// → tools → model. Gates/hooks live in the hooks superstep (never
 		// interrupts, so it never re-executes); every user ask is ONE
 		// interrupt in the approval superstep; the tools node executes
 		// purely from the persisted decisions channel.
-		g.AddNode(nodeHooks, a.observedNode("agent", nodeHooks, a.hooksNode()))
-		g.AddNode(nodeApproval, a.observedNode("agent", nodeApproval, a.approvalNode()))
-		g.AddNode(nodeTools, a.observedNode("agent", nodeTools, a.toolsNode()))
+		g.AddNode(nodeHooks, a.observedNode("agent", nodeHooks, wrap(a.hooksNode())))
+		g.AddNode(nodeApproval, a.observedNode("agent", nodeApproval, wrap(a.approvalNode())))
+		g.AddNode(nodeTools, a.observedNode("agent", nodeTools, wrap(a.toolsNode())))
 		g.AddEdge(nodeHooks, nodeApproval)
 		g.AddConditionalEdges(nodeApproval, a.routeTools)
 		g.AddEdge(nodeTools, nodeModel)
 	}
+	if a.subagent {
+		// Child-only terminal (audit fix C2): route1 sends a meta-carrying
+		// child's final no-tool-call round here; the node returns the
+		// parent-targeted Command carrying the report as the parent's tool
+		// result. The AddSubgraph wrapper in the parent turns the bubbled
+		// ParentCommandError into this node's result.
+		g.AddNode(nodeChildExit, a.observedNode("agent", nodeChildExit, wrap(a.childExitNode())))
+	}
 	// Content-addressed subagent children (design §3.2): one subgraph node
-	// per distinct def content. Task 7 fans foreground Task calls out to
-	// these via types.Send from route2; until then the nodes sit
-	// unreachable, changing nothing about execution.
+	// per distinct def content. route2 fans foreground Task calls out to
+	// these via types.Send; each child's parent-command backfill (or its
+	// interrupt) returns through the subgraph node's result, and the edge
+	// below loops the completed superstep back to the model.
 	for _, node := range reg.nodes() {
 		g.AddSubgraph(node, reg.lookup(node).Graph())
+		g.AddEdge(node, nodeModel)
 	}
 	g.AddConditionalEdges(nodeModel, a.route)
 	g.SetEntryPoint(nodeModel)
@@ -260,6 +370,104 @@ func (a *Agent) rebuildGraph() error {
 	a.graph = cg
 	a.mu.Unlock()
 	return nil
+}
+
+// childNode wraps one node of a subagent child graph (design §3.2). When the
+// state carries fan-out meta (a Send-driven task), the wrapper:
+//   - re-bases the node Runtime on a ctx carrying the PARENT's Task call id
+//     (the per-child specRunID suffix that isolates parallel same-def
+//     children's speculative/run-ctx buckets) and the shell-owner
+//     attribution (tools.WithShellOwner);
+//   - registers the child's start in the parent's session runs registry
+//     (idempotent across node entries; a waiting child flips back to
+//     running — the resume transition) and fires the SubagentStart hook
+//     exactly once;
+//   - seeds the child's run-ctx bucket from the PARENT's captured driver
+//     ctx, so speculative futures dispatched while the child streamed
+//     survive a parent pause (they may only die with the parent run).
+//
+// A child state without meta (the background Task path runs the child graph
+// directly) passes through unchanged.
+func (a *Agent) childNode(fn lggraph.NodeFunc) lggraph.NodeFunc {
+	return func(rt lgruntime.Runtime, state map[string]any) (any, error) {
+		meta := subagentMetaFrom(state)
+		if meta.ParentCallID == "" {
+			return fn(rt, state)
+		}
+		rt = childRuntime(rt, meta)
+		a.beginChildRun(rt, meta)
+		return fn(rt, state)
+	}
+}
+
+// childRuntime re-bases rt on a ctx carrying the fan-out carriers. The Merge
+// keeps every other Runtime field (stream writer, execution info) while the
+// backing ctx gains the parent call id and the shell-owner value.
+func childRuntime(rt lgruntime.Runtime, meta subagentMeta) lgruntime.Runtime {
+	ctx := context.WithValue(rt, toolCallIDKey{}, toolCallCtx{id: meta.ParentCallID})
+	ctx = tools.WithShellOwner(ctx, meta.Origin)
+	return rt.Merge(lgruntime.NewRuntime(ctx))
+}
+
+// beginChildRun feeds the registry and the run-ctx seed (see childNode).
+func (a *Agent) beginChildRun(rt lgruntime.Runtime, meta subagentMeta) {
+	p := a.runParent
+	if p == nil {
+		return
+	}
+	entry := SubagentRun{Def: meta.Def, CallID: meta.ParentCallID, Session: meta.Session, Origin: meta.Origin}
+	if p.subagents.start(entry) {
+		// The SubagentStart hook fires once per child (the relay-era
+		// runTask fired it at spawn; the fan-out fires it at first node).
+		_, _ = a.runSubagentStart(rt, meta.Def)
+	}
+	if dctx := p.driverRunCtx(baseRunID(rt)); dctx != nil {
+		a.beginRunCtx(specRunID(rt), dctx)
+	}
+}
+
+// driverRunCtx returns the run's captured driver ctx when one is still
+// alive, else nil (the child's seeding falls back to its node ctx).
+func (a *Agent) driverRunCtx(runID string) context.Context {
+	a.runCtxMu.Lock()
+	defer a.runCtxMu.Unlock()
+	if ctx, ok := a.runCtxs[runID]; ok && ctx.Err() == nil {
+		return ctx
+	}
+	return nil
+}
+
+// childExitNode is the child-only terminal step: it emits
+// Command{Graph: ParentGraph, Update: {"messages": [Tool(parentCallID,
+// report)]}} — the fork's AddSubgraph wrapper recovers the bubbled
+// ParentCommandError and returns the cleared command as the subgraph node's
+// result, so ONLY the report merges into the parent state; the child's own
+// transcript stays in its checkpoint namespace. The SubagentStop hook and
+// the L1 episode fire here (parent-side effects, exactly once — this node
+// runs once and never interrupts), and the runs registry closes the child.
+func (a *Agent) childExitNode() lggraph.NodeFunc {
+	return func(rt lgruntime.Runtime, state map[string]any) (any, error) {
+		meta := subagentMetaFrom(state)
+		if meta.ParentCallID == "" {
+			// Unreachable by routing (route1 only sends meta-carrying
+			// children here); end the run plainly if it ever happens.
+			return nil, nil
+		}
+		rt = childRuntime(rt, meta)
+		report := lastAIText(MessagesFrom(state))
+		report = a.withSubagentStopFeedback(rt, meta.Def, report)
+		if p := a.runParent; p != nil {
+			p.recordTaskEvent(rt, meta.Def, meta.Description, report, nil)
+			p.subagents.finish(SubagentRun{
+				Def: meta.Def, CallID: meta.ParentCallID, Session: meta.Session,
+				Origin: meta.Origin, Tokens: a.usage.snapshot().TotalTokens, Report: report,
+			}, SubagentDone)
+		}
+		return &lgtypes.Command{
+			Graph:  lgtypes.ParentGraph,
+			Update: map[string]any{"messages": []messages.Message{messages.Tool(meta.ParentCallID, report)}},
+		}, nil
+	}
 }
 
 // scheduleGraphRebuild arms (or resets) the def-set change debounce. Safe

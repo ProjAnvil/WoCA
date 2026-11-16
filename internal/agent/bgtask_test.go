@@ -15,6 +15,8 @@ import (
 	"github.com/projanvil/langchain-golang/core/language"
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/langchain-golang/core/runnables"
+	"github.com/projanvil/langchain-golang/core/schema"
+	coretools "github.com/projanvil/langchain-golang/core/tools"
 
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/bus"
@@ -467,13 +469,11 @@ func TestSubagentNameAndForkPrompt(t *testing.T) {
 }
 
 func TestRunTaskForkUsesTranscript(t *testing.T) {
-	subModel := language.NewFakeChatModel(language.WithResponses(messages.AI("forked report")))
-	model := language.NewFakeChatModel(
-		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
-		language.WithResponses(messages.AI("done")),
-	)
+	// fork transcript check: the child model must see the forked parent
+	// transcript (system stripped, task appended).
+	subModel := &forkRecordingModel{reply: "forked report"}
 	a, err := New(Config{
-		Model:          model,
+		Model:          &taskCallModel{args: taskArgs{Description: "continue in parallel", Fork: true}},
 		SubagentModel:  subModel,
 		Registry:       tools.NewRegistry(t.TempDir()),
 		SystemPrompt:   "test",
@@ -482,17 +482,54 @@ func TestRunTaskForkUsesTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.setTranscript([]messages.Message{
-		messages.System("parent system"),
+	final := runTaskViaGraphHist(t, a, "thread-fg-fork",
 		messages.Human("earlier context"),
-	})
-	res, err := a.runTask(t.Context(), taskArgs{Description: "continue in parallel", Fork: true})
-	if err != nil {
-		t.Fatal(err)
+		messages.Human("go"))
+	res, ok := taskResultFor(final, "t0")
+	if !ok || res.Content != "forked report" {
+		t.Fatalf("forked report = %q, ok=%v (transcript %v)", res.Content, ok, final)
 	}
-	if res.Content != "forked report" {
-		t.Fatalf("forked report = %q", res.Content)
+	if !subModel.sawContext {
+		t.Fatal("forked child did not see the parent transcript context")
 	}
+}
+
+// forkRecordingModel records whether the forked transcript reached the child
+// and always replies with a fixed report.
+type forkRecordingModel struct {
+	reply      string
+	sawContext bool
+}
+
+func (m *forkRecordingModel) Invoke(_ context.Context, input []messages.Message, _ ...runnables.Option) (messages.Message, error) {
+	for _, msg := range input {
+		if msg.Role == messages.RoleHuman && strings.Contains(msg.Content, "earlier context") {
+			m.sawContext = true
+		}
+	}
+	return messages.AI(m.reply), nil
+}
+
+func (m *forkRecordingModel) Batch(ctx context.Context, inputs [][]messages.Message, opts ...runnables.Option) ([]messages.Message, error) {
+	out := make([]messages.Message, len(inputs))
+	for i, in := range inputs {
+		out[i], _ = m.Invoke(ctx, in, opts...)
+	}
+	return out, nil
+}
+
+func (m *forkRecordingModel) Stream(ctx context.Context, input []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	msg, _ := m.Invoke(ctx, input, opts...)
+	return runnables.NewSliceStream([]messages.Message{msg}), nil
+}
+
+func (m *forkRecordingModel) InputSchema() schema.Schema {
+	return schema.Schema{"type": "array", "description": "chat messages"}
+}
+func (m *forkRecordingModel) OutputSchema() schema.Schema                            { return schema.Schema{"type": "object"} }
+func (m *forkRecordingModel) BindTools([]coretools.Tool) (language.ChatModel, error) { return m, nil }
+func (m *forkRecordingModel) Capabilities() language.ChatModelCapabilities {
+	return language.ChatModelCapabilities{ToolCalling: true, Streaming: true}
 }
 
 func TestRunTaskDefToolsRestriction(t *testing.T) {
@@ -669,13 +706,68 @@ func TestSendMessageViaBusWithoutTeam(t *testing.T) {
 }
 
 func TestRunTaskDescriptionFallsBackToPrompt(t *testing.T) {
-	subModel := language.NewFakeChatModel(language.WithResponses(messages.AI("report")))
-	a := newBackgroundTaskAgent(t, subModel)
-	// Prompt empty -> description becomes the prompt; no subagent_type.
-	res, err := a.runTask(t.Context(), taskArgs{Description: "only description"})
-	if err != nil || res.Content != "report" {
-		t.Fatalf("runTask = %q, %v", res.Content, err)
+	// Prompt empty -> description becomes the child's prompt; no
+	// subagent_type. The recording child model captures its input prompt.
+	subModel := &promptRecordingModel{reply: "report"}
+	a, err := New(Config{
+		Model:          &taskCallModel{args: taskArgs{Description: "only description"}},
+		SubagentModel:  subModel,
+		Registry:       tools.NewRegistry(t.TempDir()),
+		SystemPrompt:   "test",
+		PermissionMode: config.ModeBypass,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	final := runTaskViaGraph(t, a, "thread-fg-desc")
+	res, ok := taskResultFor(final, "t0")
+	if !ok || res.Content != "report" {
+		t.Fatalf("report = %q, ok=%v", res.Content, ok)
+	}
+	if subModel.prompt != "only description" {
+		t.Fatalf("child prompt = %q, want the description fallback", subModel.prompt)
+	}
+}
+
+// promptRecordingModel records the child's initial prompt and replies with a
+// fixed report.
+type promptRecordingModel struct {
+	reply  string
+	prompt string
+}
+
+func (m *promptRecordingModel) Invoke(_ context.Context, input []messages.Message, _ ...runnables.Option) (messages.Message, error) {
+	for _, msg := range input {
+		if msg.Role == messages.RoleTool {
+			return messages.AI(m.reply), nil
+		}
+		if msg.Role == messages.RoleHuman && m.prompt == "" {
+			m.prompt = msg.Content
+		}
+	}
+	return messages.AI(m.reply), nil
+}
+
+func (m *promptRecordingModel) Batch(ctx context.Context, inputs [][]messages.Message, opts ...runnables.Option) ([]messages.Message, error) {
+	out := make([]messages.Message, len(inputs))
+	for i, in := range inputs {
+		out[i], _ = m.Invoke(ctx, in, opts...)
+	}
+	return out, nil
+}
+
+func (m *promptRecordingModel) Stream(ctx context.Context, input []messages.Message, opts ...runnables.Option) (runnables.Stream[messages.Message], error) {
+	msg, _ := m.Invoke(ctx, input, opts...)
+	return runnables.NewSliceStream([]messages.Message{msg}), nil
+}
+
+func (m *promptRecordingModel) InputSchema() schema.Schema {
+	return schema.Schema{"type": "array", "description": "chat messages"}
+}
+func (m *promptRecordingModel) OutputSchema() schema.Schema                            { return schema.Schema{"type": "object"} }
+func (m *promptRecordingModel) BindTools([]coretools.Tool) (language.ChatModel, error) { return m, nil }
+func (m *promptRecordingModel) Capabilities() language.ChatModelCapabilities {
+	return language.ChatModelCapabilities{ToolCalling: true, Streaming: true}
 }
 
 func TestTaskManagerCap(t *testing.T) {

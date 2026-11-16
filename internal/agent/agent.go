@@ -68,6 +68,7 @@ func init() {
 	cpserde.RegisterType(ApprovalRequest{}, "woca.agent.ApprovalRequest")
 	cpserde.RegisterType(ApprovalAnswer{}, "woca.agent.ApprovalAnswer")
 	cpserde.RegisterType(decisionsState{}, "woca.agent.decisions")
+	cpserde.RegisterType(subagentMeta{}, "woca.agent.subagentMeta")
 	cpserde.RegisterType(GoalDelta{}, "woca.agent.GoalDelta")
 	cpserde.RegisterType(ReasoningDelta{}, "woca.agent.ReasoningDelta")
 }
@@ -378,25 +379,6 @@ type Agent struct {
 	// graph. Cleaned by EndRun on every run's terminal path.
 	runCtxMu sync.Mutex
 	runCtxs  map[string]context.Context
-	// batchMemo holds completed tool results of the in-flight call batch so
-	// an interrupt re-execution does not re-run tools that already executed
-	// (side effects). Keys are (run id, tool call id) — call ids are unique
-	// only per conversation, so a bare-id key would let a concurrent run
-	// consume a parked run's memoized result (and replay its resume
-	// consumption) for a same-id call; entries are deleted when the tools
-	// node returns normally, and dropped by EndRun (a run cancelled while
-	// parked never returns from its tools node).
-	//
-	// The memo is process-local: a cross-process resume (new process over a
-	// durable saver) loses it, so the interrupted batch's already-completed
-	// sibling tools re-execute once — including their gates, whose answers
-	// were consumed positionally and are NOT replayed (the memo's
-	// ReplayInterruptConsumption bookkeeping dies with the process), which
-	// can misalign the resume queue. Persisting the memo is a known
-	// follow-up. The foreground Task relay is unaffected for the child
-	// itself (its checkpoint thread is durable) but shares this gap for any
-	// sibling calls in the Task's batch.
-	batchMemo sync.Map // map[batchMemoKey]batchMemoEntry
 	// escalate rebuilds the model at the escalated output cap (optional).
 	escalate func() (language.ChatModel, error)
 	// toolBudget is the per-round tool-result character budget (0 disables).
@@ -1330,15 +1312,31 @@ func (a *Agent) streamWithBudget(ctx context.Context, history []messages.Message
 }
 
 // resumeStreamWithBudget is the interrupt-resume counterpart of
-// streamWithBudget, keeping the cycle's budget across a pause.
+// streamWithBudget, keeping the cycle's budget across a pause. It runs the
+// same subagent-node pre-check as Resume (carried Task-6 review ruling): the
+// runner's interactive resume enters through ResumeStream, and a paused plan
+// referencing a def that no longer exists must fail naming the def instead of
+// the executor's generic unknown-node error.
 func (a *Agent) resumeStreamWithBudget(ctx context.Context, threadID string, resumeValue any, budget int) iter.Seq2[lggraph.StreamChunk, error] {
 	a.beginRunCtx(specRunID(ctx), ctx) // see streamWithBudget
 	a.lastThread.Store(threadID)       // see Resume
-	g := a.currentGraph()              // pin: see runTurn
+	_ = a.agentsFor(ctx)               // warm the def cache (cross-process resume)
+	if err := a.checkResumableSubagents(ctx, threadID); err != nil {
+		return errorStream(err)
+	}
+	g := a.currentGraph() // pin: see runTurn
 	return g.Stream(ctx, nil, lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: threadID, Resume: encodeResumeValue(resumeValue), RecursionLimit: budget},
 		Modes:   streamModes,
 	})
+}
+
+// errorStream is a one-error chunk stream (resumeStreamWithBudget's
+// pre-check failure path).
+func errorStream(err error) iter.Seq2[lggraph.StreamChunk, error] {
+	return func(yield func(lggraph.StreamChunk, error) bool) {
+		yield(lggraph.StreamChunk{}, err)
+	}
 }
 
 // CompactHistory compacts history when auto-compaction is enabled and the
@@ -1666,34 +1664,14 @@ func (a *Agent) observedNode(graphName, nodeName string, fn lggraph.NodeFunc) lg
 	}
 }
 
-// batchMemoEntry is a memoized tool result plus the number of resume values
-// the call consumed via Interrupt — across both its gate and its execution —
-// in the execution that produced it. langgraph resume consumption is
-// positional (each re-execution's Interrupt calls consume the queued resume
-// values in call order), so a memo hit that skips both phases must replay
-// that consumption — otherwise the batch's remaining Interrupt calls shift
-// left onto answers meant for earlier calls.
-type batchMemoEntry struct {
-	msg      messages.Message
-	consumed int
-}
-
-// batchMemoKey scopes a memoized result to the run that produced it: tool
-// call ids are unique only per provider conversation, so concurrent runs on
-// one agent legally reuse them, and a bare-id key would let one run consume
-// (or delete) another run's parked memo (spec decision F1's isolation rule,
-// applied to the batch memo).
-type batchMemoKey struct {
-	run  string
-	call string
-}
-
 // toolsNode executes the batch's tool calls from the decisions the hooks and
 // approval supersteps committed to graph state. It runs NO gate logic and
-// raises NO gate interrupts; the only interrupts that can originate here are
-// EXECUTION-phase ones (the Task relay's re-entry and a tool's own
-// lggraph.Interrupt), which keep the GraphInterrupt re-panic machinery below
-// (the relay lives until Task 7).
+// raises NO interrupts of any kind (design §3.1: the pre-Task-7
+// execution-phase interrupts — the foreground Task relay and the batch memo
+// they needed — are gone; a tool calling lggraph.Interrupt mid-execution now
+// degrades to that call's error result). Fanout-marked calls are skipped:
+// their results arrive from the subagent subgraph tasks route2 dispatched
+// alongside this node.
 func (a *Agent) toolsNode() lggraph.NodeFunc {
 	return func(rt lgruntime.Runtime, state map[string]any) (any, error) {
 		ctx := rt
@@ -1735,78 +1713,63 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		// call ids are unique only per conversation, so a bare-id lookup
 		// would let a concurrent run consume a sibling's future.
 		specRun := specRunID(ctx)
-		// The run's thread rides the tool-call ctx (with the call ID) so the
-		// Task relay can address its child checkpoints without the
-		// agent-global LastThreadID, which concurrent sessions overwrite.
-		parentThread := ""
-		if ei := rt.ExecutionInfo; ei != nil {
-			parentThread = ei.ThreadID
-		}
-		futures := make([]*toolFuture, len(calls))
-		memoHits := make([]bool, len(calls))
-		results := make([]messages.Message, len(calls))
-
-		// Calls memoized by a previous execution of this batch (which then
-		// paused on an execution-phase interrupt) reuse their result and
-		// replay their resume consumption so the positional queue stays
-		// aligned under the calls that still interrupt (the relay).
-		for i, call := range calls {
-			if a.spec.get(specRun, call.ID) != nil {
-				continue // awaited below
+		// Fanout-marked calls produce no result here: the subgraph tasks of
+		// this superstep carry them. A STALE mark (its def vanished between
+		// the approval and routing supersteps — see routeTools) has no Send,
+		// so this node synthesizes the loud error instead.
+		exec := make([]messages.ToolCall, 0, len(calls))
+		execIdx := make(map[string]int, len(calls))
+		staleFanouts := make(map[string]string)
+		for _, call := range calls {
+			if d, ok := ds.PerCall[call.ID]; ok && d.Fanout != "" {
+				if a.childForNode(d.Fanout) == nil {
+					staleFanouts[call.ID] = d.Fanout
+				}
+				continue // results arrive from the Send (or the stale-mark error below)
 			}
-			if m, ok := a.batchMemo.Load(batchMemoKey{run: specRun, call: call.ID}); ok {
-				entry := m.(batchMemoEntry)
-				results[i] = entry.msg
-				memoHits[i] = true
-				lggraph.ReplayInterruptConsumption(ctx, entry.consumed)
-			}
+			execIdx[call.ID] = len(exec)
+			exec = append(exec, call)
 		}
 
+		// Per-index result slots: goroutines write only their own index, so
+		// the post-Wait reads are race-free (the historical pattern).
+		out := make([]messages.Message, len(exec))
+		var consumedFutures []string
 		var wg sync.WaitGroup
-		paused := make([]*lgtypes.GraphInterrupt, len(calls))
-		for i, call := range calls {
+		for i, call := range exec {
 			if f := a.spec.get(specRun, call.ID); f != nil {
-				futures[i] = f
-				results[i] = futures[i].wait()
-				continue
-			}
-			if memoHits[i] {
+				out[i] = f.wait()
+				consumedFutures = append(consumedFutures, call.ID)
 				continue
 			}
 			d := ds.PerCall[call.ID]
 			if d.Override != nil {
-				results[i] = messages.Tool(call.ID, d.Override.Content)
+				out[i] = messages.Tool(call.ID, d.Override.Content)
 				continue
 			}
 			if !d.Run {
-				results[i] = messages.Tool(call.ID, "Error: permission denied")
+				out[i] = messages.Tool(call.ID, "Error: permission denied")
 				continue
 			}
 			wg.Go(func() {
 				defer func() {
 					if rec := recover(); rec != nil {
-						// A GraphInterrupt panic (subagent HITL or a tool's own
-						// lggraph.Interrupt) must bubble out of the node: stash
-						// it in this call's slot; the node's goroutine re-panics
-						// it after wg.Wait. Each goroutine writes only its own
-						// index, so the post-Wait read is race-free.
+						// Execution-phase interrupts no longer exist: a tool
+						// panicking GraphInterrupt degrades to its error
+						// result (the gates own every legal pause).
 						if gi, ok := rec.(*lgtypes.GraphInterrupt); ok {
-							paused[i] = gi
+							out[i] = messages.Tool(call.ID,
+								fmt.Sprintf("Error: tool %q attempted an in-execution pause (%v); execution-phase interrupts are not supported — route the pause through a gate", call.Name, gi.Interrupt.Value))
 							return
 						}
 						stack := debug.Stack()
 						if len(stack) > 2048 {
 							stack = stack[:2048]
 						}
-						results[i] = messages.Tool(call.ID, fmt.Sprintf("Error: tool %q panicked: %v\n%s", call.Name, rec, stack))
+						out[i] = messages.Tool(call.ID, fmt.Sprintf("Error: tool %q panicked: %v\n%s", call.Name, rec, stack))
 					}
 				}()
-				tctx := withToolCallThread(ctx, call.ID, parentThread)
-				// Baseline for this call's execution-phase Interrupt
-				// consumption; the memo stores the per-call total so a memo
-				// hit replays it (gate consumption no longer exists — the
-				// gate lives in the hooks superstep).
-				execBase := lggraph.InterruptConsumeCount(tctx)
+				tctx := withToolCallID(ctx, call.ID)
 				res := a.execute(tctx, call.Name, call.Args)
 				content := res.Content
 				if d.PreFeedback != "" {
@@ -1822,41 +1785,27 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 						content += "\n" + p.Feedback
 					}
 				}
-				results[i] = toolMessageFromResult(call.ID, content, &res)
-				// Memoize so a later interrupt's re-execution of this batch
-				// reuses the result instead of re-running the tool; the
-				// call's total resume consumption goes along so the memo hit
-				// can replay it and keep the positional queue aligned.
-				// Concurrent goroutines can interleave their consumption, so
-				// the attribution is approximate when two calls interrupt at
-				// the same time — already an order-ambiguous case.
-				total := lggraph.InterruptConsumeCount(tctx) - execBase
-				a.batchMemo.Store(batchMemoKey{run: specRun, call: call.ID}, batchMemoEntry{msg: results[i], consumed: total})
+				out[i] = toolMessageFromResult(call.ID, content, &res)
 			})
 		}
 		wg.Wait()
-		// A tool interrupted mid-execution: re-panic the first GraphInterrupt
-		// on the node's goroutine so the graph executor converts it into a
-		// pause. Completed results stay in batchMemo for the re-execution.
-		for _, gi := range paused {
-			if gi != nil {
-				panic(gi)
-			}
-		}
-		// The batch finished without an interrupt: drop its memo entries
-		// (both return paths below — the MaxTurns cap and the normal return).
-		// Only this run's entries: a parked sibling run's memo must survive
-		// its own resume.
+		// Assemble the batch's messages in call order: executed results plus
+		// the stale-fanout errors in their calls' positions.
+		results := make([]messages.Message, 0, len(calls))
 		for _, call := range calls {
-			a.batchMemo.Delete(batchMemoKey{run: specRun, call: call.ID})
-		}
-		// Results are merged into state: retire the consumed futures. On the
-		// interrupt path above they remain for a same-process resume (their
-		// run ctx stays alive while the run is parked, so they complete).
-		for i := range calls {
-			if futures[i] != nil {
-				a.spec.consume(specRun, calls[i].ID)
+			if node, stale := staleFanouts[call.ID]; stale {
+				results = append(results, messages.Tool(call.ID,
+					fmt.Sprintf("Error: subagent node %q disappeared mid-run (definition removed or changed); the call did not run", node)))
+				continue
 			}
+			if ds.PerCall[call.ID].Fanout != "" {
+				continue // carried by the Send
+			}
+			results = append(results, out[execIdx[call.ID]])
+		}
+		// Results are merged into state: retire the consumed futures.
+		for _, id := range consumedFutures {
+			a.spec.consume(specRun, id)
 		}
 		// Mid-turn user input: anything queued while
 		// the tools ran is appended strictly after the result batch — the API
@@ -1886,7 +1835,9 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		a.maybeRefreshTools(ctx)
 		// MaxTurns: this tool round completes a model round; at
 		// the cap, append the marker and short-circuit to END — the tools
-		// node otherwise has an unconditional edge back to the model.
+		// node otherwise has an unconditional edge back to the model. A
+		// meta-carrying subagent child short-circuits to its child-exit
+		// terminal instead (the report must still backfill).
 		a.turns.mu.Lock()
 		a.turns.count++
 		atCap := a.maxTurns > 0 && a.turns.count >= a.maxTurns
@@ -1894,10 +1845,20 @@ func (a *Agent) toolsNode() lggraph.NodeFunc {
 		a.turns.mu.Unlock()
 		if atCap {
 			results = append(results, messages.Human(maxTurnsMarker(rounds)))
-			return &lgtypes.Command{Update: map[string]any{"messages": results}, Goto: []any{lgtypes.END}}, nil
+			return &lgtypes.Command{Update: map[string]any{"messages": results}, Goto: a.terminalGoto(state)}, nil
 		}
 		return map[string]any{"messages": results}, nil
 	}
+}
+
+// terminalGoto is the MaxTurns short-circuit destination: the child-exit
+// terminal for a meta-carrying subagent child (its report backfills through
+// the parent command), END everywhere else.
+func (a *Agent) terminalGoto(state map[string]any) []any {
+	if a.subagent && subagentMetaFrom(state).ParentCallID != "" {
+		return []any{nodeChildExit}
+	}
+	return []any{lgtypes.END}
 }
 
 // checkPermission is the direct-call permission seam (unit tests and
@@ -1937,7 +1898,12 @@ func (a *Agent) execute(ctx context.Context, name string, args map[string]any) c
 }
 
 // route is route1 (design §3.1): an AI message with tool calls enters the
-// gate supersteps (hooks → approval → tools); anything else ends the turn.
+// gate supersteps (hooks → approval → tools); anything else ends the turn —
+// except a meta-carrying subagent child (a Send-driven subgraph task), whose
+// final no-tool-call AI message routes to the child-exit terminal instead:
+// that node emits the parent-targeted Command backfilling the report
+// (design §3.2, audit fix C2). A router may only return node names and
+// Sends, so the Command itself is raised by the terminal NODE.
 func (a *Agent) route(rt lgruntime.Runtime, state map[string]any) ([]any, error) {
 	msgs := MessagesFrom(state)
 	if len(msgs) == 0 {
@@ -1949,6 +1915,9 @@ func (a *Agent) route(rt lgruntime.Runtime, state map[string]any) ([]any, error)
 	a.mu.Unlock()
 	if last.Role == messages.RoleAI && len(last.ToolCalls) > 0 && hasTools {
 		return []any{nodeHooks}, nil
+	}
+	if a.subagent && subagentMetaFrom(state).ParentCallID != "" {
+		return []any{nodeChildExit}, nil
 	}
 	return []any{lgtypes.END}, nil
 }

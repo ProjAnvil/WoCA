@@ -33,6 +33,7 @@ import (
 	coretools "github.com/projanvil/langchain-golang/core/tools"
 	lggraph "github.com/projanvil/langchain-golang/langgraph/graph"
 	lgruntime "github.com/projanvil/langchain-golang/langgraph/runtime"
+	lgtypes "github.com/projanvil/langchain-golang/langgraph/types"
 
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/tools"
@@ -127,11 +128,15 @@ type askInfo struct {
 //   - Ask != nil: waiting for the approval node (merged there).
 //   - Override != nil: do not execute; the override is the tool result.
 //   - Run: execute (PreFeedback is prepended to the result).
+//   - Fanout != "": the call was admitted to the Send fan-out — the tools
+//     node skips it and its result arrives from the subagent subgraph task
+//     (route2, design §3.1). Mutually exclusive with Override.
 type callDecision struct {
 	Run         bool              `json:"run"`
 	Override    *coretools.Result `json:"override,omitempty"`
 	PreFeedback string            `json:"pre_feedback,omitempty"`
 	Ask         *askInfo          `json:"ask,omitempty"`
+	Fanout      string            `json:"fanout,omitempty"`
 }
 
 // decisionsState is the `decisions` channel value: a struct wrapper so the
@@ -344,7 +349,13 @@ func (a *Agent) hooksAsk(ctx context.Context, call messages.ToolCall, guard bool
 // approvalNode surfaces every ask of the batch as ONE interrupt and merges
 // the answers into the decisions channel. Pure list-building before the
 // interrupt; grants and the plan-flag flip run only after the answer arrives
-// (exactly once, even though the node re-executes on resume).
+// (exactly once, even though the node re-executes on resume). It is also the
+// fan-out's single decision point: after the ask merge (or when there is
+// nothing to ask) it runs the Task-call admission pass — every admitted
+// foreground Task is marked Fanout (route2 turns the mark into a Send) and
+// every rejected one (unresolvable def, over the concurrency cap, malformed
+// args) gets an override error decision, so the tools node never executes a
+// call whose result the subgraph produces (and vice versa).
 func (a *Agent) approvalNode() lggraph.NodeFunc {
 	return func(rt lgruntime.Runtime, state map[string]any) (any, error) {
 		ctx := rt
@@ -368,7 +379,7 @@ func (a *Agent) approvalNode() lggraph.NodeFunc {
 				ToolName:       call.Name,
 				ArgsSummary:    argsSummary(call),
 				ToolArgs:       call.Args,
-				Origin:         OriginMain,
+				Origin:         a.askOrigin(state),
 				SessionRuleKey: GrantKey(call),
 			}
 			switch d.Ask.Kind {
@@ -391,45 +402,101 @@ func (a *Agent) approvalNode() lggraph.NodeFunc {
 			}
 			asks = append(asks, ask)
 		}
-		if len(asks) == 0 {
-			return nil, nil // nothing to ask: straight through to the tools
-		}
-		answer := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(ApprovalRequest{Asks: asks}))))
 		merged := decisionsState{PerCall: maps.Clone(ds.PerCall)}
 		if merged.PerCall == nil {
 			merged.PerCall = map[string]callDecision{}
 		}
-		for _, ask := range asks {
-			d := merged.PerCall[ask.CallID]
-			kind, guard := d.Ask.Kind, d.Ask.Guard
-			d.Ask = nil
-			dec := decisionFor(answer, ask)
-			allowed := dec.Outcome == OutcomeAllow
-			switch kind {
-			case askPermission:
-				if allowed {
-					d.Run = true
-					if dec.Grant == GrantSession {
-						a.applySessionGrant(ctx, ask.SessionRuleKey)
+		if len(asks) > 0 {
+			// A subagent child's ask: the registry entry flips to waiting
+			// before the pause (graph-native HITL §3.7 lifecycle events).
+			a.noteChildWaiting(state)
+			answer := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(ApprovalRequest{Asks: asks}))))
+			for _, ask := range asks {
+				d := merged.PerCall[ask.CallID]
+				kind, guard := d.Ask.Kind, d.Ask.Guard
+				d.Ask = nil
+				dec := decisionFor(answer, ask)
+				allowed := dec.Outcome == OutcomeAllow
+				switch kind {
+				case askPermission:
+					if allowed {
+						d.Run = true
+						if dec.Grant == GrantSession {
+							a.applySessionGrant(ctx, ask.SessionRuleKey)
+						}
+					} else if guard {
+						d.Run = false // plain denial text, guard-escalated ask
+					} else {
+						d.Override = &coretools.Result{Content: "Error: permission denied by user"}
 					}
-				} else if guard {
-					d.Run = false // plain denial text, guard-escalated ask
-				} else {
-					d.Override = &coretools.Result{Content: "Error: permission denied by user"}
+				case askPlan:
+					if allowed {
+						a.setPlanModeFor(ctx, false)
+						d.Override = &coretools.Result{Content: "Plan approved by the user. Proceeding with implementation."}
+					} else {
+						d.Override = &coretools.Result{Content: "Plan rejected by the user. Revise your plan based on their feedback and call ExitPlanMode again."}
+					}
+				case askUser:
+					d.Override = &coretools.Result{Content: formatAskUserAnswers(ask.Questions, dec.Answers)}
 				}
-			case askPlan:
-				if allowed {
-					a.setPlanModeFor(ctx, false)
-					d.Override = &coretools.Result{Content: "Plan approved by the user. Proceeding with implementation."}
-				} else {
-					d.Override = &coretools.Result{Content: "Plan rejected by the user. Revise your plan based on their feedback and call ExitPlanMode again."}
-				}
-			case askUser:
-				d.Override = &coretools.Result{Content: formatAskUserAnswers(ask.Questions, dec.Answers)}
+				merged.PerCall[ask.CallID] = d
 			}
-			merged.PerCall[ask.CallID] = d
+		}
+		changed := len(asks) > 0
+		// Task-call admission (route2's decisions, committed here — the only
+		// state-writing step between the gates and the fan-out). The pass is
+		// re-execution-safe: nothing a later superstep can change (the cap
+		// counts this batch's prospective children only, and they have not
+		// started — Sends dispatch after this node returns).
+		admitted := a.subagents.activeCount(sessionFromCtx(ctx))
+		for _, call := range last.ToolCalls {
+			d := merged.PerCall[call.ID]
+			if d.Fanout != "" || d.Override != nil || !d.Run || d.Ask != nil {
+				continue
+			}
+			send, reject := a.classifyTaskCall(ctx, call, &admitted)
+			switch {
+			case reject != nil:
+				d.Override = reject
+				merged.PerCall[call.ID] = d
+				changed = true
+			case send != nil:
+				d.Fanout = send.Node
+				merged.PerCall[call.ID] = d
+				changed = true
+			}
+		}
+		if !changed {
+			return nil, nil // nothing to ask and nothing to fan out or reject
 		}
 		return map[string]any{decisionsChannelName: merged}, nil
+	}
+}
+
+// askOrigin names the ask's origin for the envelope: the subagent def for a
+// meta-carrying child, OriginMain on the root graph (Task 7 adds the child
+// origins; Task 8 routes the cards).
+func (a *Agent) askOrigin(state map[string]any) string {
+	if a.subagent {
+		if meta := subagentMetaFrom(state); meta.ParentCallID != "" {
+			return meta.Def
+		}
+	}
+	return OriginMain
+}
+
+// noteChildWaiting flips the runs-registry entry of a meta-carrying child to
+// waiting before its approval interrupt (no-op on the root graph).
+func (a *Agent) noteChildWaiting(state map[string]any) {
+	if !a.subagent {
+		return
+	}
+	meta := subagentMetaFrom(state)
+	if meta.ParentCallID == "" {
+		return
+	}
+	if p := a.runParent; p != nil {
+		p.subagents.waiting(SubagentRun{Def: meta.Def, CallID: meta.ParentCallID, Session: meta.Session, Origin: meta.Origin})
 	}
 }
 
@@ -473,10 +540,57 @@ func (a *Agent) applySessionGrant(ctx context.Context, key string) {
 	a.PolicySource().AddGrant("", key)
 }
 
-// routeTools is route2: everything flows to the tools node as pre-decided
-// entries. Task 7 fans foreground Task calls out via types.Send here.
+// routeTools is route2 (design §3.1): the approval node has already
+// committed the fan-out decisions — every Fanout-marked foreground Task call
+// becomes a *types.Send to its content-addressed subagent node (Arg = the
+// child's initial state, sendArgs), and the tools node receives the batch
+// for everything else (non-Task calls, background Tasks, rejected Tasks with
+// override results). The tools destination is omitted when the whole batch
+// fanned out, so a pure-Task round never runs a no-op tools superstep.
+// A def vanishing between the approval and routing supersteps (def-set
+// rebuild under the run's pinned graph) drops only that Send: the tools node
+// then converts the stale Fanout mark into a loud error naming the node.
 func (a *Agent) routeTools(rt lgruntime.Runtime, state map[string]any) ([]any, error) {
-	return []any{nodeTools}, nil
+	msgs := MessagesFrom(state)
+	if len(msgs) == 0 {
+		return []any{nodeTools}, nil
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != messages.RoleAI || len(last.ToolCalls) == 0 {
+		return []any{nodeTools}, nil
+	}
+	ds := decisionsFrom(state)
+	ctx := rt
+	dests := make([]any, 0, len(last.ToolCalls)+1)
+	for _, call := range last.ToolCalls {
+		d, ok := ds.PerCall[call.ID]
+		if !ok || d.Fanout == "" {
+			continue
+		}
+		child := a.childForNode(d.Fanout)
+		if child == nil {
+			continue // dropped Send: the tools node reports the stale mark
+		}
+		dests = append(dests, &lgtypes.Send{Node: d.Fanout, Arg: a.sendArgs(ctx, child, call)})
+	}
+	if len(dests) == 0 {
+		return []any{nodeTools}, nil
+	}
+	if len(dests) < len(last.ToolCalls) {
+		dests = append(dests, nodeTools)
+	}
+	return dests, nil
+}
+
+// childForNode resolves a subagent node name to its registered child agent,
+// rebuilding once synchronously when the def-set change is still pending on
+// the debounce (a def that appeared this superstep).
+func (a *Agent) childForNode(node string) *Agent {
+	if child := a.childReg().lookup(node); child != nil {
+		return child
+	}
+	a.flushGraphRebuild()
+	return a.childReg().lookup(node)
 }
 
 // evalPermission is the pure permission evaluation shared by the hooks node

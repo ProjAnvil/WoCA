@@ -212,10 +212,10 @@ func (l *firingLog) snapshot() ([]string, []hooks.Event) {
 
 // newSubagentHookAgent builds a bypass agent whose subagent model answers
 // "report body", wired to the given hook configuration.
-func newSubagentHookAgent(t *testing.T, hookCfg hooks.Config, hr hooks.CommandRunner) *Agent {
+func newSubagentHookAgent(t *testing.T, hookCfg hooks.Config, hr hooks.CommandRunner, args taskArgs) *Agent {
 	t.Helper()
 	a, err := New(Config{
-		Model:          language.NewFakeChatModel(language.WithResponses(messages.AI("done"))),
+		Model:          &taskCallModel{args: args},
 		SubagentModel:  language.NewFakeChatModel(language.WithResponses(messages.AI("report body"))),
 		Registry:       tools.NewRegistry(t.TempDir()),
 		SystemPrompt:   "t",
@@ -236,12 +236,9 @@ func TestForegroundTaskFiresSubagentStartThenStop(t *testing.T) {
 	a := newSubagentHookAgent(t, hooks.Config{
 		SubagentStart: []hooks.Entry{{Matcher: "*", Hooks: []hooks.Hook{{Type: "command", Command: "on-start"}}}},
 		SubagentStop:  []hooks.Entry{{Matcher: "*", Hooks: []hooks.Hook{{Type: "command", Command: "on-stop"}}}},
-	}, log.runner())
+	}, log.runner(), taskArgs{Description: "hooked work"})
 
-	res, err := a.runTask(t.Context(), taskArgs{Description: "hooked work"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	final := runTaskViaGraph(t, a, "thread-hooks-startstop")
 	fired, events := log.snapshot()
 	if len(fired) != 2 || fired[0] != "on-start" || fired[1] != "on-stop" {
 		t.Fatalf("hook firing order = %v, want [on-start on-stop]", fired)
@@ -252,8 +249,9 @@ func TestForegroundTaskFiresSubagentStartThenStop(t *testing.T) {
 		}
 	}
 	// No exit-2 feedback: the report passes through unwrapped.
-	if res.Content != "report body" {
-		t.Fatalf("report = %q", res.Content)
+	res, ok := taskResultFor(final, "t0")
+	if !ok || res.Content != "report body" {
+		t.Fatalf("report = %q, ok=%v (transcript %v)", res.Content, ok, final)
 	}
 }
 
@@ -266,11 +264,12 @@ func TestSubagentStopFeedbackAppendedToReport(t *testing.T) {
 	}}
 	a := newSubagentHookAgent(t, hooks.Config{
 		SubagentStop: []hooks.Entry{{Matcher: "*", Hooks: []hooks.Hook{{Type: "command", Command: "on-stop"}}}},
-	}, log.runner())
+	}, log.runner(), taskArgs{Description: "checked work"})
 
-	res, err := a.runTask(t.Context(), taskArgs{Description: "checked work"})
-	if err != nil {
-		t.Fatal(err)
+	final := runTaskViaGraph(t, a, "thread-hooks-stopfeedback")
+	res, ok := taskResultFor(final, "t0")
+	if !ok {
+		t.Fatalf("task result missing (transcript %v)", final)
 	}
 	want := "report body\n<subagent-stop-feedback>\nverify the diff before trusting it\n</subagent-stop-feedback>"
 	if res.Content != want {

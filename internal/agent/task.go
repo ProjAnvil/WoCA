@@ -3,8 +3,6 @@ package agent
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
@@ -27,139 +25,24 @@ import (
 	"github.com/projanvil/woca/internal/tracing"
 )
 
-// toolCallIDKey carries the executing tool call's identity through ctx so the
-// Task tool can derive a stable subagent thread across interrupt
-// re-executions: the call ID plus the PARENT run's thread (injected by
-// toolsNode from the run's ExecutionInfo). The parent thread must travel on
-// ctx rather than via Agent.LastThreadID: a shared agent serves concurrent
-// sessions, and another session's turn would overwrite the global mid-relay.
+// toolCallIDKey carries the executing tool call's identity through ctx.
+// toolsNode installs it for every executed call; the subagent child node
+// wrapper installs the PARENT's Task call id (design §3.2) so the child's
+// per-run keys (specRunID suffix) and shell-owner attribution follow the
+// spawning call.
 type toolCallIDKey struct{}
 
 type toolCallCtx struct {
-	id     string
-	thread string
+	id string
 }
 
 func withToolCallID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, toolCallIDKey{}, toolCallCtx{id: id})
 }
 
-// withToolCallThread is withToolCallID plus the parent run's thread.
-func withToolCallThread(ctx context.Context, id, thread string) context.Context {
-	return context.WithValue(ctx, toolCallIDKey{}, toolCallCtx{id: id, thread: thread})
-}
-
 func toolCallIDFrom(ctx context.Context) string {
 	v, _ := ctx.Value(toolCallIDKey{}).(toolCallCtx)
 	return v.id
-}
-
-// parentThreadFrom returns the parent run's thread carried on the tool-call
-// ctx ("" when the caller was not dispatched from toolsNode).
-func parentThreadFrom(ctx context.Context) string {
-	v, _ := ctx.Value(toolCallIDKey{}).(toolCallCtx)
-	return v.thread
-}
-
-// deriveSubagentThread mints the subagent's checkpoint thread: stable across
-// the parent toolsNode's interrupt re-executions (same replayed tool call),
-// unique per call.
-func deriveSubagentThread(parentThread, callID, prompt string) string {
-	sum := sha256.Sum256([]byte(prompt))
-	digest := hex.EncodeToString(sum[:8])
-	if callID == "" {
-		return parentThread + "/sub-" + digest
-	}
-	return parentThread + "/sub-" + callID + "-" + digest
-}
-
-// subagentStarted reports whether the derived thread already has a
-// checkpoint on the shared saver — i.e. this handler execution is a
-// re-entry after a parent-graph resume, not a fresh spawn.
-func (a *Agent) subagentStarted(ctx context.Context, sub *Agent, thread string) bool {
-	snap, err := sub.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: thread})
-	if err != nil {
-		return false
-	}
-	return len(snap.Values) > 0 || len(snap.Interrupts) > 0
-}
-
-// subagentPendingPermission decodes the permission request the child is
-// paused on, so a re-entering relay can rebuild an accurate payload. Since
-// Task 5 the child pauses on an ApprovalRequest (its own approval superstep);
-// legacy PermissionRequest child pauses (pre-upgrade checkpoints) still
-// decode, and the new shape also returns the whole envelope so the relay can
-// answer every child ask.
-func subagentPendingPermission(ctx context.Context, sub *Agent, thread string) (req PermissionRequest, approval ApprovalRequest, ok bool) {
-	snap, err := sub.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: thread})
-	if err != nil || len(snap.Interrupts) == 0 {
-		return PermissionRequest{}, ApprovalRequest{}, false
-	}
-	switch v := decodeInterruptPayload(snap.Interrupts[0].Value).(type) {
-	case ApprovalRequest:
-		return permissionFromAsks(v), v, true
-	case PermissionRequest:
-		return v, ApprovalRequest{}, true
-	}
-	return PermissionRequest{}, ApprovalRequest{}, false
-}
-
-// subagentPendingApproval reports the child's paused ApprovalRequest
-// envelope, if its pause is the new shape.
-func subagentPendingApproval(ctx context.Context, sub *Agent, thread string) (ApprovalRequest, bool) {
-	_, approval, ok := subagentPendingPermission(ctx, sub, thread)
-	return approval, ok && len(approval.Asks) > 0
-}
-
-// permissionFromAsks projects an ApprovalRequest onto the legacy
-// PermissionRequest the relay's wire (SubagentInterrupt.Inner) carries: the
-// first ask's card. The relay is single-answer ("y"/"n" applies to every
-// child ask); Task 7's β topology replaces it with per-NS routing. It is
-// only valid for PLAIN permission envelopes — see nonPermissionAsk.
-func permissionFromAsks(req ApprovalRequest) PermissionRequest {
-	if len(req.Asks) == 0 {
-		return PermissionRequest{}
-	}
-	ask := req.Asks[0]
-	return PermissionRequest{
-		ToolName:   ask.ToolName,
-		ToolArgs:   ask.ToolArgs,
-		Reason:     ask.Reason,
-		IsReadOnly: tools.IsReadOnly(ask.ToolName, ask.ToolArgs),
-	}
-}
-
-// nonPermissionAsk returns the first ask of the envelope that is NOT a plain
-// permission ask (AskUserQuestion and ExitPlanMode asks carry questions/plan
-// text the relay has no way to surface), or nil. Such asks must fail closed:
-// projecting them onto a permission card would let a parent "y" approve an
-// unseen plan or hand AskUser an empty answer — the pre-Task-5 relay made
-// them fatal for the child, and this keeps that stance for the relay's
-// remaining lifetime.
-func nonPermissionAsk(req ApprovalRequest) *Ask {
-	for i := range req.Asks {
-		if req.Asks[i].ToolName == "AskUserQuestion" || req.Asks[i].ToolName == "ExitPlanMode" {
-			return &req.Asks[i]
-		}
-	}
-	return nil
-}
-
-// relayNoAnswerError is the fail-closed error for child asks the relay
-// cannot carry to the user (mirrors the background arm's "no one to answer"
-// semantics).
-func relayNoAnswerError(subagent, toolName string) error {
-	return fmt.Errorf("subagent %q paused (%s) while running in the foreground relay with no one to answer", subagent, toolName)
-}
-
-// approvalAnswerAll builds the child resume value applying one outcome to
-// every ask of the child's paused envelope.
-func approvalAnswerAll(req ApprovalRequest, outcome string) ApprovalAnswer {
-	decisions := make(map[string]AskDecision, len(req.Asks))
-	for _, ask := range req.Asks {
-		decisions[ask.CallID] = AskDecision{Outcome: outcome}
-	}
-	return ApprovalAnswer{Decisions: decisions}
 }
 
 // graphCarrierKey reports whether key is one of the named unexported
@@ -179,30 +62,14 @@ func graphCarrierKey(key any, names ...string) bool {
 	return false
 }
 
-// detachStreamCtx hides the fork's stream emitter from a nested graph run.
-// The emitter travels via an unexported context key, so a foreground
-// subagent invoked with the tool goroutine's ctx would otherwise emit its
-// chunks — including its RAW pause interrupts — into the parent run's
-// stream, ahead of the wrapped SubagentInterrupt the relay raises; the
-// harness surfaces the first interrupt chunk it sees, so the leak would
-// defeat the relay.
-type detachStreamCtx struct{ context.Context }
-
-func (d detachStreamCtx) Value(key any) any {
-	if graphCarrierKey(key, "streamEmitterKey") {
-		return nil
-	}
-	return d.Context.Value(key)
-}
-
 // detachRunMetaCtx hides the fork's execution-meta carrier from a background
 // subagent run. The run loop publishes its checkpoint position under
 // executionMetaKey as a *checkpoint.Config it keeps mutating in place
 // between supersteps (persist's `*currentCfg = cfg`), and a nested run's
 // staticNext reads it through the CALLER's ctx — for a background child on
-// its own goroutine that read races the parent's writes. The foreground
-// relay does not need the strip: its child runs synchronously inside the
-// parent's tools node, where the parent run loop cannot persist.
+// its own goroutine that read races the parent's writes. Foreground subgraph
+// children are covered by the fork's own subgraph machinery (their runs are
+// driven through the parent's executor).
 type detachRunMetaCtx struct{ context.Context }
 
 func (d detachRunMetaCtx) Value(key any) any {
@@ -774,6 +641,12 @@ type taskStopArgs struct {
 	TaskID string `json:"task_id"`
 }
 
+// childErrorChannel carries a subagent child's terminal model error (the
+// child model guard records it; see subagents.go). The background driver
+// surfaces it as the run's error, while the fan-out path's report backfill
+// already carries the "Error: ..." text.
+const childErrorChannel = "child_error"
+
 // taskTools builds the Task / TaskOutput / TaskStop tools, wired to the agent's
 // subagent runner and task manager.
 func (a *Agent) taskTools() []coretools.Tool {
@@ -801,8 +674,9 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 		def = &d
 	}
 	name := subagentName(def, args)
-	// SubagentStart fires once the task is validated and named, ahead of both
-	// the foreground and background runs. Its feedback is informational.
+	// SubagentStart fires once the task is validated and named, ahead of the
+	// background run (the fan-out path fires it at the child's first node).
+	// Its feedback is informational.
 	_, _ = a.runSubagentStart(ctx, name)
 
 	history := []messages.Message{messages.Human(prompt)}
@@ -864,13 +738,96 @@ func (a *Agent) runTask(ctx context.Context, args taskArgs) (coretools.Result, e
 		return coretools.Result{Content: fmt.Sprintf("Started background task %s: %s", t.ID, args.Description)}, nil
 	}
 
-	report, err := a.runForegroundTask(ctx, history, def, name, prompt)
-	if err != nil {
-		return coretools.Result{}, err
+	// Foreground Task calls never execute here: route2 fans them out as
+	// subgraph Sends (design §3.2) and rejected ones arrive at the tools node
+	// as override decisions. Reaching this arm means the routing table and
+	// the graph topology disagreed — fail loudly rather than silently
+	// running a child outside the fan-out machinery.
+	return coretools.Result{}, fmt.Errorf("foreground Task %q was routed to the tools node instead of the subagent fan-out; report this as a bug", name)
+}
+
+// classifyTaskCall is the fan-out's admission check for one already-allowed
+// Task call (design §3.2), shared by the approval node's decision pass. It
+// returns either a Send (node + child initial state) or a rejection override
+// result; (nil, nil) means the call is none of the fan-out's business (not a
+// Task, background, or already decided). admitted is the running admission
+// count (active children plus this batch's earlier admissions) — the cap
+// rejects, never queues.
+func (a *Agent) classifyTaskCall(ctx context.Context, call messages.ToolCall, admitted *int) (*lgtypes.Send, *coretools.Result) {
+	if call.Name != "Task" {
+		return nil, nil
 	}
-	report = a.withSubagentStopFeedback(ctx, name, report)
-	a.recordTaskEvent(ctx, name, args.Description, report, nil)
-	return coretools.Result{Content: report}, nil
+	var args taskArgs
+	if err := decodeArgs(call.Args, &args); err != nil {
+		return nil, &coretools.Result{Content: "Error: " + err.Error()}
+	}
+	if args.Description == "" && args.Prompt == "" {
+		return nil, &coretools.Result{Content: "Error: task requires a description or prompt"}
+	}
+	if args.RunInBackground {
+		return nil, nil // background Tasks execute through the tools node
+	}
+	def := generalSubagentDef
+	if args.SubagentType != "" {
+		d, ok := agents.Find(a.agentsFor(ctx), args.SubagentType)
+		if !ok {
+			return nil, &coretools.Result{Content: fmt.Sprintf("Error: unknown subagent_type %q", args.SubagentType)}
+		}
+		def = d
+	}
+	node := subagentNodeName(def)
+	child := a.childForNode(node)
+	if child == nil {
+		return nil, &coretools.Result{Content: fmt.Sprintf("Error: subagent %q could not be registered in this run's graph (its definition changed mid-run); retry in a new turn", def.Name)}
+	}
+	if admitted != nil {
+		if *admitted >= a.subagents.capLimit() {
+			return nil, &coretools.Result{Content: fmt.Sprintf("Error: subagent concurrency limit reached (%d); retry later or run in background", a.subagents.capLimit())}
+		}
+		*admitted++
+	}
+	return &lgtypes.Send{Node: node, Arg: a.sendArgs(ctx, child, call)}, nil
+}
+
+// sendArgs builds the child graph's initial state (the Send arg, design
+// §3.2): the child's system prompt plus the prompt history (or the forked
+// transcript), and the subagent meta on its own state channel. Unknown keys
+// on the child side fall back to LastValue, but the child registers the
+// subagent channel explicitly so durable checkpoints round-trip the meta.
+func (a *Agent) sendArgs(ctx context.Context, child *Agent, call messages.ToolCall) map[string]any {
+	var args taskArgs
+	_ = decodeArgs(call.Args, &args) // validated by classifyTaskCall
+	prompt := args.Prompt
+	if prompt == "" {
+		prompt = args.Description
+	}
+	var def *agents.Definition
+	if args.SubagentType != "" {
+		if d, ok := agents.Find(a.agentsFor(ctx), args.SubagentType); ok {
+			def = &d
+		}
+	}
+	name := subagentName(def, args)
+	history := []messages.Message{messages.Human(prompt)}
+	if args.Fork {
+		base := a.transcriptSnapshot()
+		for len(base) > 0 && base[0].Role == messages.RoleSystem {
+			base = base[1:]
+		}
+		history = append(append([]messages.Message(nil), base...), messages.Human(forkTaskPrompt(prompt)))
+	}
+	meta := subagentMeta{
+		Def:          name,
+		ParentCallID: call.ID,
+		Session:      sessionFromCtx(ctx),
+		Origin:       "subagent:" + name + "#" + call.ID,
+		Description:  args.Description,
+	}
+	msgs := append([]messages.Message{messages.System(child.systemPrompt)}, history...)
+	return map[string]any{
+		"messages":          msgs,
+		subagentChannelName: meta,
+	}
 }
 
 // withSubagentStopFeedback fires the SubagentStop hooks for a finished
@@ -978,6 +935,9 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 		if err != nil {
 			return "", err
 		}
+		if em := childErrorOf(msgs); em != "" {
+			return "", errors.New(em)
+		}
 		return lastAIText(msgs), nil
 	}
 
@@ -987,6 +947,7 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 	// run's execution-meta carrier (see detachRunMetaCtx).
 	ctx = detachRunMetaCtx{ctx}
 	final := ""
+	childErr := ""
 	for chunk, err := range sub.Graph().Stream(ctx, sub.NewState(ctx, history), lggraph.StreamOptions{
 		Options: lggraph.Options{ThreadID: NewThreadID()},
 		Modes:   []lggraph.StreamMode{lggraph.StreamUpdates, lggraph.StreamValues},
@@ -1000,7 +961,8 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 			if intrs, ok := updates[lgcheckpoint.ReservedInterrupt].([]lgtypes.Interrupt); ok && len(intrs) > 0 {
 				// A background subagent has no one to answer a pause: fail
 				// the task closed instead of completing with a silent empty
-				// report. (The foreground relay lives in runForegroundTask.)
+				// report. (Foreground children pause the parent natively:
+				// their interrupts bubble through the subgraph node.)
 				if req, ok := decodeInterruptPayload(intrs[0].Value).(PermissionRequest); ok && req.ToolName != "" {
 					return "", fmt.Errorf("subagent paused for a permission (%s) it cannot ask while running in the background", req.ToolName)
 				}
@@ -1021,154 +983,37 @@ func (a *Agent) runSubagent(ctx context.Context, history []messages.Message, onT
 				}
 			}
 		case lggraph.StreamValues:
-			final = lastAIText(MessagesFrom(valuesState(chunk.Payload)))
+			st := valuesState(chunk.Payload)
+			final = lastAIText(MessagesFrom(st))
+			if em, _ := st[childErrorChannel].(string); em != "" {
+				childErr = em
+			}
 		}
+	}
+	if childErr != "" {
+		return "", errors.New(childErr)
 	}
 	return final, nil
-}
-
-// parentThreadFor resolves the parent run's thread for relay addressing: the
-// tool-call ctx carrier first (injected by toolsNode from the run's
-// ExecutionInfo, race-free under concurrent sessions); the agent-global
-// LastThreadID is only a fallback for non-graph-driven invocations where the
-// carrier was never installed.
-func (a *Agent) parentThreadFor(ctx context.Context) string {
-	if t := parentThreadFrom(ctx); t != "" {
-		return t
-	}
-	return a.LastThreadID()
-}
-
-// relaySeq recovers how many resume values earlier re-executions of this
-// relay consumed, read back from the SubagentInterrupt pending on the parent
-// checkpoint. The fork's resume queue is positional — the persisted consumed
-// prefix followed by this resume's fresh answer — and the prefix length is
-// exactly the Seq the last surfaced SubagentInterrupt recorded. Missing or
-// undecodable state degrades to 0 (correct for the first re-entry).
-func (a *Agent) relaySeq(ctx context.Context, thread string) int {
-	snap, err := a.Graph().GetState(ctx, lgcheckpoint.Config{ThreadID: a.parentThreadFor(ctx)})
-	if err != nil {
-		return 0
-	}
-	for _, intr := range snap.Interrupts {
-		if si, ok := decodeInterruptPayload(intr.Value).(SubagentInterrupt); ok && si.ThreadID == thread {
-			return si.Seq
-		}
-	}
-	return 0
-}
-
-// runForegroundTask runs a foreground subagent with interrupt relay: a
-// permission pause inside the subagent re-interrupts the PARENT graph as a
-// SubagentInterrupt, so the user approves it on the main session; on resume
-// this handler re-executes, finds the child's checkpoint by its derived
-// thread, and resumes it with the answer.
-//
-// Durability note: the child's own checkpoint thread persists on the shared
-// saver, so a cross-process parent resume re-enters here and continues the
-// paused child — but the toolsNode batch memo is process-local (see
-// Agent.batchMemo), so sibling tool calls in the same batch re-execute once
-// after a process restart.
-func (a *Agent) runForegroundTask(ctx context.Context, history []messages.Message, def *agents.Definition, name, prompt string) (string, error) {
-	thread := deriveSubagentThread(a.parentThreadFor(ctx), toolCallIDFrom(ctx), prompt)
-	sub, err := a.newSubagent(ctx, def)
-	if err != nil {
-		return "", err
-	}
-	// The child runs detached from the parent stream's emitter so its chunks
-	// (above all its raw pause interrupts) never reach the harness; the relay
-	// surfaces pauses itself, wrapped as SubagentInterrupt. The ctx is also
-	// re-based onto the PARENT'S RUN ctx, not this per-superstep tool-call
-	// ctx: the child captures whatever it is handed as its own run ctx
-	// (beginRunCtx via Invoke/Resume), and its speculative siblings must
-	// follow the run's lifetime — survive the relay's pause (which suspends
-	// the parent graph and tears down its stream, cancelling the derived ctx
-	// tree) and die only with the parent run (spec decision F1).
-	subCtx := detachStreamCtx{a.runCtxFor(baseRunID(ctx), ctx)}
-	started := a.subagentStarted(ctx, sub, thread)
-	pending := SubagentInterrupt{Subagent: name, ToolCallID: toolCallIDFrom(ctx), ThreadID: thread}
-	seq := 0
-	if started {
-		// Re-entry after a parent resume: rebuild the payload from the
-		// child's paused checkpoint and fast-forward the positional resume
-		// queue past the answers earlier re-executions already consumed, so
-		// the loop's first Interrupt call reads THIS resume's answer. A
-		// parked envelope carrying a non-permission ask (only possible from
-		// a pre-fix checkpoint) fails closed here too.
-		if approval, isApproval := subagentPendingApproval(ctx, sub, thread); isApproval {
-			if bad := nonPermissionAsk(approval); bad != nil {
-				return "", relayNoAnswerError(name, bad.ToolName)
-			}
-		}
-		if req, _, ok := subagentPendingPermission(ctx, sub, thread); ok {
-			pending.Inner = req
-		}
-		seq = a.relaySeq(ctx, thread)
-		pending.Seq = seq
-		lggraph.ReplayInterruptConsumption(ctx, seq)
-	}
-	for {
-		var msgs []messages.Message
-		if !started {
-			msgs, err = sub.Invoke(subCtx, history, thread)
-			started = true
-		} else {
-			// Collect the queued answer to the pause that restarted us.
-			answer := decodeResumeValue(decodeInterruptPayload(lggraph.Interrupt(ctx, encodeInterruptPayload(pending))))
-			seq++
-			if !parseAnswer(answer) {
-				_ = a.saver.DeleteThread(context.WithoutCancel(ctx), thread)
-				return fmt.Sprintf("Subagent %q paused for a permission (%s) the user denied; the task was aborted.", name, pending.Inner.ToolName), nil
-			}
-			// The child's own pause is an ApprovalRequest since Task 5 (its
-			// approval superstep): the parent's single y/n applies to every
-			// child ask. Legacy child checkpoints pause on a bare
-			// PermissionRequest and keep the scalar "y" resume.
-			resumeValue := any("y")
-			if approval, isApproval := subagentPendingApproval(ctx, sub, thread); isApproval {
-				resumeValue = approvalAnswerAll(approval, OutcomeAllow)
-			}
-			msgs, err = sub.Resume(subCtx, thread, resumeValue)
-		}
-		gi, ok := errors.AsType[*lgtypes.GraphInterrupt](err)
-		if !ok {
-			if err == nil {
-				_ = a.saver.DeleteThread(context.WithoutCancel(ctx), thread)
-				return lastAIText(msgs), nil
-			}
-			return "", err
-		}
-		switch v := decodeInterruptPayload(gi.Interrupt.Value).(type) {
-		case ApprovalRequest:
-			// The child's approval superstep paused. Plain permission asks
-			// relay as the first ask's card (the legacy wire); anything the
-			// relay cannot carry (AskUser questions, plan approval) fails
-			// closed — the child aborts with an error instead of surfacing
-			// a blanket-approvable card.
-			if bad := nonPermissionAsk(v); bad != nil {
-				return "", relayNoAnswerError(name, bad.ToolName)
-			}
-			pending.Inner = permissionFromAsks(v)
-		case PermissionRequest:
-			// Legacy child checkpoint pause (pre-upgrade child thread).
-			pending.Inner = v
-		default:
-			// Non-permission pauses (AskUser etc.) stay fatal for subagents.
-			return "", err
-		}
-		pending.Seq = seq
-		// Pause the parent graph. On the pause pass this call never returns
-		// (panics GraphInterrupt); the re-execution restarts this function
-		// and takes the started==true branch above. The return value is
-		// deliberately unused: with one queued answer per resume, this call
-		// is always the one that pauses.
-		_ = lggraph.Interrupt(ctx, encodeInterruptPayload(pending))
-	}
 }
 
 func valuesState(payload any) map[string]any {
 	state, _ := payload.(map[string]any)
 	return state
+}
+
+// childErrorOf extracts a child's terminal model error from a final message
+// list (the Invoke path's flag read; the channel value rides the state, and
+// the error text is already the last AI message).
+func childErrorOf(msgs []messages.Message) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == messages.RoleAI {
+			if rest, ok := strings.CutPrefix(msgs[i].Content, "Error: "); ok && rest != "" {
+				return msgs[i].Content
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 // NewThreadID mints a fresh checkpoint thread identifier.

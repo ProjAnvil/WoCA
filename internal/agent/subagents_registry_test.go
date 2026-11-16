@@ -171,13 +171,15 @@ func TestRebuildDropsRemovedDefsKeepsOthersStable(t *testing.T) {
 	if a.childReg().lookup(nA2) == nil {
 		t.Fatalf("edited def's new node missing (have %v)", a.childReg().nodes())
 	}
-	// The surviving node set is exactly the current def set.
-	if got, want := strings.Join(a.childReg().nodes(), ","), nA2; got != want {
+	// The surviving node set is exactly the current def set plus the
+	// synthetic general def (foreground Task calls without subagent_type
+	// fan out to it; Task 7 semantics — always registered).
+	if got, want := strings.Join(a.childReg().nodes(), ","), nA2+","+subagentNodeName(generalSubagentDef); got != want {
 		t.Fatalf("node set after rebuild = %q, want %q", got, want)
 	}
 	// Repeated rebuilds keep node names stable (content addressing).
 	a.flushGraphRebuild()
-	if a.childReg().lookup(nA2) == nil || a.childReg().len() != 1 {
+	if a.childReg().lookup(nA2) == nil || a.childReg().len() != 2 {
 		t.Fatalf("rebuild not stable: %v", a.childReg().nodes())
 	}
 }
@@ -203,8 +205,13 @@ func TestWSAgentSetSchedulesDebouncedRebuild(t *testing.T) {
 
 func TestZeroDefsGraphCompilesAndRuns(t *testing.T) {
 	a := newRegistryAgent(t, nil)
-	if got := a.childReg().len(); got != 0 {
-		t.Fatalf("zero-def agent registered %d subagent nodes, want 0", got)
+	// Zero user defs still register the synthetic general def (Task 7:
+	// foreground Task calls without subagent_type fan out to it).
+	if got, want := a.childReg().len(), 1; got != want {
+		t.Fatalf("zero-def agent registered %d subagent nodes, want %d (synthetic general)", got, want)
+	}
+	if a.childReg().lookup(subagentNodeName(generalSubagentDef)) == nil {
+		t.Fatalf("synthetic general def not registered: %v", a.childReg().nodes())
 	}
 	out, err := a.Invoke(t.Context(), []messages.Message{messages.Human("hi")}, "t-zero-defs")
 	if err != nil {

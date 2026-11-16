@@ -340,12 +340,6 @@ func (a *Agent) runCtxFor(runID string, fallback context.Context) context.Contex
 func (a *Agent) EndRun(ctx context.Context) {
 	runID := baseRunID(ctx)
 	a.endRunFamily(runID)
-	a.batchMemo.Range(func(k, _ any) bool {
-		if key, ok := k.(batchMemoKey); ok && key.run == runID {
-			a.batchMemo.Delete(k)
-		}
-		return true
-	})
 	if ctx != nil && ctx.Err() != nil && a.subagents != nil {
 		a.subagents.stopSession(sessionFromCtx(ctx))
 	}
