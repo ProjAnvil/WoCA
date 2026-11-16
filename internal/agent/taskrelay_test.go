@@ -220,6 +220,7 @@ func TestResumePathsStoreLastThread(t *testing.T) {
 			Registry:       tools.NewRegistry(t.TempDir()),
 			SystemPrompt:   "t",
 			PermissionMode: config.ModeDefault,
+			WorkDir:        t.TempDir(),
 			Checkpointer:   saver,
 		})
 		if err != nil {
