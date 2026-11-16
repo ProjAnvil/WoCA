@@ -206,6 +206,7 @@ func (r *subagentRuns) finish(run SubagentRun, state SubagentRunState) bool {
 		}
 	}
 	session := cur.Session
+	delete(r.bases, key) // the lifetime that owned it is terminal
 	r.pruneFinishedLocked(session)
 	ev := SubagentEvent{Def: cur.Def, CallID: cur.CallID, Session: session, State: cur.State, Tokens: cur.Tokens, Report: cur.Report}
 	r.mu.Unlock()
