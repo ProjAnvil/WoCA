@@ -359,6 +359,39 @@ html.dark {
   --gate-glass: rgba(30, 30, 33, 0.52);
 }
 
+/* ---- mono-theme saturation exceptions ------------------------------------ *
+ * The woca theme is grayscale ink by design. Non-grayscale values are the
+ * exception, and the only allowed exception groups are (UI follow-ups F5,
+ * 2026-11-18):
+ *   1. the danger family (--danger* and its dark/gate-ink variants) —
+ *      existing, functional alarm semantics;
+ *   2. --link (light + dark) — existing, interactive affordance;
+ *   3. code highlight accents — the github-theme values registered below
+ *      (frozen from shiki's github-light/github-dark).
+ * The ok/warn/info status tints elsewhere in this file are pre-existing
+ * functional signal colors (Primer-calibrated), not a precedent. Any NEW
+ * saturated color requires token review before it lands here.            */
+
+/* ---- code accents (registration only — visual freeze) -------------------- *
+ * The colors shiki's github-light/github-dark themes actually render for
+ * the five top-frequency token families in Go/TS code (M6: exactly these
+ * five — keyword, string, comment, function, number; no more).
+ * highlight.ts consumes shiki's inline dual-theme styles directly; these
+ * commented entries are a registered reference, NOT consumed vars (OQ6
+ * ruling: no CSS-variable theme rewrite). VISUAL FREEZE: values are copied
+ * verbatim from the bundled themes (shiki 4.6.0 github-light/github-dark
+ * tokenColors). Changing them equals a deliberate re-theme decision, not
+ * routine token churn.
+ * Entries read: light (github-light) / dark (github-dark).
+ *   --code-accent-keyword:  #d73a49 / #f97583   keyword.*, storage.type.*
+ *   --code-accent-string:   #032f62 / #9ecbff   string.* (content + quotes)
+ *   --code-accent-comment:  #6a737d / #6a737d   comment.* (same in both)
+ *   --code-accent-function: #6f42c1 / #b392f0   entity.name.function.*
+ *   --code-accent-number:   #005cc5 / #79b8ff   constant.numeric.*
+ * Nested-scope overrides inside strings (Go import paths, format-verb
+ * placeholders, TS template interpolations) render with their own theme
+ * colors and are intentionally not registered.                           */
+
 /* Global reduced-motion waiver: streaming pulse degrades to a steady dot. */
 @media (prefers-reduced-motion: reduce) {
   *,
