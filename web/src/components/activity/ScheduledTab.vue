@@ -210,9 +210,9 @@ async function remove(entry: CronEntry): Promise<void> {
   color: var(--text-2);
   min-width: 0;
 }
-/* Label/value must not read as one sentence: the 提示词 label stays a muted
- * caption, the prompt itself is primary text and ellipsizes (title carries
- * the full text). */
+/* Label/value must not read as one sentence: the "prompt" label (zh:
+ * 提示词) stays a muted caption, the prompt itself is primary text and
+ * ellipsizes (title carries the full text). */
 .act-cron-prompt {
   flex: 1;
   color: var(--text);

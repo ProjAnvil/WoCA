@@ -675,8 +675,8 @@ func TestActivityShellOutputTail(t *testing.T) {
 	}
 }
 
-// Ownership (PM §5 "id 可猜"): a foreign or unknown item id answers 404
-// with byte-identical bodies (no existence oracle), and a foreign stop
+// Ownership (PM §5, guessable ids): a foreign or unknown item id answers
+// 404 with byte-identical bodies (no existence oracle), and a foreign stop
 // attempt changes nothing for the owning session.
 func TestActivityForeignItemIs404(t *testing.T) {
 	env := newActivityServer(t, 0, nil)

@@ -1,14 +1,15 @@
 import { test, expect } from '@playwright/test';
 import { PERSONAL, gate, nativeWizardTestids, pinLocale } from '../../fixtures/lab';
 
-// Form 1 — 个人内嵌 web（`woca serve`，真实二进制 + 隔离 WOCA_HOME）。
-// 形态契约：环回信任，无登录门；无原生向导；无 /api/status 能力面。
-test.describe('个人内嵌 web（woca serve）', () => {
+// Form 1 — personal embedded web (`woca serve`, the real binary with an
+// isolated WOCA_HOME). Form contract: loopback trust with no login gate,
+// no native wizard, no /api/status capability surface.
+test.describe('personal embedded web (woca serve)', () => {
   test.beforeEach(async ({ page }) => {
     await pinLocale(page);
   });
 
-  test('环回信任：不出现登录门，直接进入应用外壳', async ({ page }) => {
+  test('loopback trust: no login gate, straight into the app shell', async ({ page }) => {
     await page.goto(PERSONAL);
 
     await expect(page.locator(gate.overlay)).toHaveCount(0);
@@ -16,7 +17,7 @@ test.describe('个人内嵌 web（woca serve）', () => {
     await expect(page.locator('.chat-input')).toBeVisible();
   });
 
-  test('反混淆金丝雀：个人 web 不渲染任何原生连接向导卡片', async ({ page }) => {
+  test('anti-confusion canary: personal web renders no native connection-wizard cards', async ({ page }) => {
     await page.goto(PERSONAL);
     await expect(page.locator('aside.sidebar')).toBeVisible();
 
@@ -26,31 +27,35 @@ test.describe('个人内嵌 web（woca serve）', () => {
     await expect(page.locator('[data-testid="native-loading"]')).toHaveCount(0);
   });
 
-  test('个人版没有 bridge 能力面：侧栏不出现状态灯入口', async ({ page }) => {
+  test('personal has no bridge surface: the sidebar shows no status-lamp entry', async ({ page }) => {
     await page.goto(PERSONAL);
     await expect(page.locator('aside.sidebar')).toBeVisible();
 
     await expect(page.locator('.status-lamp')).toHaveCount(0);
   });
 
-  // 空会话居中问候 → 首条消息后 composer 沉底（FLIP 落定后无残留 transform）。
-  test('空会话居中问候：首条消息后 composer 沉底', async ({ page }) => {
+  // Empty session: centered greeting → after the first message the composer
+  // docks to the bottom (FLIP settled, no residual transform).
+  test('empty-session greeting: composer docks after the first message', async ({ page }) => {
     await page.goto(PERSONAL);
 
     await expect(page.locator('.chat-greeting-text')).toBeVisible();
+    // The greeting copies are pinned in zh-CN (pinLocale); the English arm
+    // covers the en locale fallback.
     await expect(page.locator('.chat-greeting-text')).toContainText(
       /从哪里开始|做点什么|帮你|搭把手|how can I help/i,
     );
     await expect(page.locator('.greeting-chip')).toHaveCount(3);
 
-    // chip 点击 → 填入 composer（fillPrompt 契约）。Force-click: the
-    // greeting view re-renders when other personal specs create sessions on
-    // the shared server mid-test, which detaches the chip between Playwright's
-    // stability checks.
+    // Chip click → fills the composer (the fillPrompt contract). Force-click:
+    // the greeting view re-renders when other personal specs create sessions
+    // on the shared server mid-test, which detaches the chip between
+    // Playwright's stability checks.
     await page.locator('.greeting-chip').first().click({ force: true });
     await expect(page.locator('.chat-input textarea')).not.toHaveValue('');
 
-    // 发送 → 离开问候态；FLIP 落定（含 400ms 兜底路径）后无残留 transform。
+    // Send → leaves the greeting state; the FLIP settles (including the
+    // 400ms fallback path) with no residual transform.
     await page.locator('.chat-input textarea').fill('hello from the greeting test');
     await page.keyboard.press('Enter');
     await expect(page.locator('.chat--greeting')).toHaveCount(0);
