@@ -41,6 +41,29 @@ function footerLabels(): string[] {
   )
 }
 
+// Mutable matchMedia stub (WorkspaceSidebar.test pattern): happy-dom's
+// real matchMedia is static, but the drawer shell must react to crossing
+// the 640px breakpoint live — tests flip `matches` and fire the
+// registered change listener to simulate a resize. Only the drawer query
+// gets the mutable mq (the i18n/theme layer also probes
+// prefers-color-scheme through the same global and must stay inert).
+function stubDrawerShell(initial: boolean) {
+  const drawerMq = {
+    matches: initial,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockImplementation((q: string) =>
+      q === '(max-width: 640px)'
+        ? drawerMq
+        : { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    ),
+  );
+  return drawerMq;
+}
+
 describe('Sidebar footer', () => {
   beforeEach(() => {
     i18n.global.locale.value = 'en'
@@ -77,13 +100,18 @@ describe('Sidebar footer', () => {
 })
 
 describe('Sidebar drawer (≤640px shells)', () => {
+  let mq: ReturnType<typeof stubDrawerShell>
   beforeEach(() => {
     i18n.global.locale.value = 'en'
     api.getStatus.mockReset()
+    // Drawer shells: the trap only engages ≤640px (happy-dom's own
+    // viewport is 1024, i.e. a wide shell).
+    mq = stubDrawerShell(true)
   })
   afterEach(() => {
     w?.unmount()
     w = null
+    vi.unstubAllGlobals()
   })
 
   it('is collapsed by default: no open modifier, no backdrop', async () => {
@@ -165,5 +193,44 @@ describe('Sidebar drawer (≤640px shells)', () => {
 
     expect(w?.find('.overlay .ws-dialog').exists()).toBe(false)
     expect(ui.sidebarOpen).toBe(true)
+  })
+
+  it('disengages the trap when the window grows past 640 while open', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    const ui = useUiStore()
+    ui.openSidebar()
+    await flushPromises()
+    const aside = document.getElementById('app-sidebar')!
+    expect(aside.contains(document.activeElement)).toBe(true)
+    expect(document.body.style.overflow).toBe('hidden')
+
+    // Live resize past the breakpoint: the query flips and fires its
+    // change listener. The drawer state survives (sidebarOpen stays
+    // set; only its styles are media-scoped) but the trap must let
+    // go — no scroll lock, no focus hold, no Tab confinement.
+    mq.matches = false
+    const onChange = mq.addEventListener.mock.calls.find((c) => c[0] === 'change')?.[1] as
+      | ((e: MediaQueryListEvent) => void)
+      | undefined
+    onChange?.({ matches: false } as MediaQueryListEvent)
+    await flushPromises()
+    // Exactly the drawer's own listener may be registered on this mq.
+    expect(mq.addEventListener).toHaveBeenCalledTimes(1)
+
+    expect(ui.sidebarOpen).toBe(true)
+    expect(document.body.style.overflow).toBe('')
+    expect(aside.contains(document.activeElement)).toBe(false)
+
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    outside.focus()
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    outside.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
   })
 })

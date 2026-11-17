@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Activity, FolderOpen, Plus, Settings, X } from 'lucide-vue-next'
 import FolderPicker from "./FolderPicker.vue";
@@ -22,10 +22,14 @@ const statusStore = useStatusStore();
 // desktop shells the class is inert — the drawer styles are media-scoped).
 const ui = useUiStore();
 
-// Drawer focus trap (Tab wrap, focus return, scroll lock, Esc). No width
-// sniffing: sidebarOpen is only ever true on drawer shells (the hamburger
-// that sets it is media-scoped — same stance as SessionList's
-// selectSession), so wide shells keep a static, untrapped sidebar. The
+// Drawer focus trap (Tab wrap, focus return, scroll lock, Esc). The
+// hamburger that sets sidebarOpen is media-scoped ≤640, but the state
+// survives a live resize wider — there the drawer CSS reverts to the
+// static desktop sidebar (layout.css) while an engaged trap would keep
+// the body scroll-locked and Tab confined, invisibly, on a normal layout.
+// So the breakpoint is tracked live (mirroring WorkspaceSidebar at 1100)
+// and the trap gates on open AND drawer shell; the stale sidebarOpen
+// flag itself is harmless (drawer classes/styles are media-scoped). The
 // trap's Esc replaces the former hand-mounted window listener; trapStack
 // layering makes trap-wired overlays above the drawer consume Esc first,
 // and WocaApp's global Esc routing no longer sees it (stopPropagation).
@@ -34,7 +38,19 @@ const ui = useUiStore();
 // yields while focus sits inside one — that overlay closes first, the
 // next Esc closes the drawer.
 const drawerEl = ref<HTMLElement | null>(null);
-useFocusTrap(drawerEl, computed(() => ui.sidebarOpen), {
+const drawerShell = ref(false);
+const onShellChange = (e: MediaQueryListEvent) => {
+  drawerShell.value = e.matches;
+};
+let shellMq: MediaQueryList | null = null;
+onMounted(() => {
+  if (typeof window.matchMedia !== "function") return;
+  shellMq = window.matchMedia("(max-width: 640px)");
+  drawerShell.value = shellMq.matches;
+  shellMq.addEventListener("change", onShellChange);
+});
+onBeforeUnmount(() => shellMq?.removeEventListener("change", onShellChange));
+useFocusTrap(drawerEl, computed(() => ui.sidebarOpen && drawerShell.value), {
   esc: () => {
     if (
       document.activeElement instanceof Element &&
