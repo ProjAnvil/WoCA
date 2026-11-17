@@ -29,7 +29,9 @@ let w: ReturnType<typeof mount> | null = null
 function mountSidebar() {
   const pinia = createPinia()
   setActivePinia(pinia)
-  w = mount(Sidebar, { global: { plugins: [i18n, pinia] } })
+  // attachTo: focus-trap assertions need the drawer in the document —
+  // happy-dom only tracks document.activeElement for attached trees.
+  w = mount(Sidebar, { global: { plugins: [i18n, pinia] }, attachTo: document.body })
   return w
 }
 
@@ -117,11 +119,51 @@ describe('Sidebar drawer (≤640px shells)', () => {
 
     const ui = useUiStore()
     ui.openSidebar()
-    await w?.vm.$nextTick()
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    await w?.vm.$nextTick()
+    await flushPromises()
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    await flushPromises()
 
     expect(ui.sidebarOpen).toBe(false)
     expect(w?.find('.sidebar-backdrop').exists()).toBe(false)
+  })
+
+  it('moves focus inside the drawer when it opens', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    const ui = useUiStore()
+    ui.openSidebar()
+    await flushPromises()
+
+    const aside = document.getElementById('app-sidebar')!
+    expect(aside.contains(document.activeElement)).toBe(true)
+  })
+
+  it('keeps the drawer open when Escape belongs to a hosted overlay', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    const ui = useUiStore()
+    ui.openSidebar()
+    await flushPromises()
+    // The workspaces "+" opens the new-workspace dialog (a hand-rolled
+    // .overlay without its own trap) and focuses its input: Esc there
+    // must close the dialog, not the drawer underneath.
+    await w?.findAll('.side-section-head .icon-btn')[0]!.trigger('click')
+    await flushPromises()
+    expect(w?.find('.overlay .ws-dialog').exists()).toBe(true)
+    expect(document.activeElement?.id).toBe('ws-path-input')
+
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    await flushPromises()
+
+    expect(w?.find('.overlay .ws-dialog').exists()).toBe(false)
+    expect(ui.sidebarOpen).toBe(true)
   })
 })

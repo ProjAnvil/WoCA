@@ -1,17 +1,43 @@
 <script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FileDiff, FileText, PanelRightClose, RefreshCw } from 'lucide-vue-next'
 import WorkspaceTree from './WorkspaceTree.vue'
 import FilePreview from './FilePreview.vue'
 import ChangesTab from './ChangesTab.vue'
 import { useWorkspaceStore } from '../stores/workspace'
+import { useFocusTrap } from '../composables/useFocusTrap'
 
 const { t } = useI18n()
 const store = useWorkspaceStore()
+
+// ≤1100px the panel turns from a static split pane into an overlay
+// drawer (panels.css @media 1100) and behaves modally: focus trap +
+// Esc-to-close. Wide shells keep the panel untrapped — it is layout, not
+// a dialog. The query mirrors the CSS breakpoint and is tracked live so
+// crossing the threshold while open re-evaluates the trap.
+const panel = ref<HTMLElement | null>(null)
+const drawerShell = ref(false)
+const onShellChange = (e: MediaQueryListEvent) => {
+  drawerShell.value = e.matches
+}
+let shellMq: MediaQueryList | null = null
+onMounted(() => {
+  if (typeof window.matchMedia !== 'function') return
+  shellMq = window.matchMedia('(max-width: 1100px)')
+  drawerShell.value = shellMq.matches
+  shellMq.addEventListener('change', onShellChange)
+})
+onBeforeUnmount(() => shellMq?.removeEventListener('change', onShellChange))
+
+useFocusTrap(panel, computed(() => store.panelOpen && drawerShell.value), {
+  esc: () => store.closePanel(),
+})
 </script>
 
 <template>
   <aside
+    ref="panel"
     class="right-sidebar"
     :class="{ open: store.panelOpen, dragging: store.dragging }"
     :style="store.width > 0 ? { '--ws-w': `${store.width}px` } : undefined"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Activity, FolderOpen, Plus, Settings, X } from 'lucide-vue-next'
 import FolderPicker from "./FolderPicker.vue";
@@ -11,6 +11,7 @@ import { useStatusStore } from "../stores/status";
 import { useUiStore } from "../stores/ui";
 import { usePolling } from "../lib/interval";
 import { baseName } from "../lib/format";
+import { useFocusTrap } from "../composables/useFocusTrap";
 
 const { t } = useI18n();
 const sessions = useSessionStore();
@@ -21,36 +22,29 @@ const statusStore = useStatusStore();
 // desktop shells the class is inert — the drawer styles are media-scoped).
 const ui = useUiStore();
 
-// Esc closes the drawer while it is open. Existing overlays close via
-// backdrop/buttons only, so this handler is drawer-only; WocaApp's global
-// Esc routing skips while the drawer is open (see its keydown handler).
-// Esc arising inside an overlay the drawer hosts (new-workspace dialog,
-// folder picker, status modal) belongs to that overlay — it closes first,
-// the next Esc closes the drawer.
-function onDrawerKeydown(e: KeyboardEvent) {
-  if (e.key !== "Escape" || e.isComposing) return;
-  const target = e.target;
-  if (
-    target instanceof Element &&
-    target.closest(".overlay, .modal-backdrop, .w-modal-backdrop")
-  ) {
-    return;
-  }
-  ui.closeSidebar();
-}
-
-watch(
-  () => ui.sidebarOpen,
-  (open) => {
-    if (open) window.addEventListener("keydown", onDrawerKeydown);
-    else window.removeEventListener("keydown", onDrawerKeydown);
+// Drawer focus trap (Tab wrap, focus return, scroll lock, Esc). No width
+// sniffing: sidebarOpen is only ever true on drawer shells (the hamburger
+// that sets it is media-scoped — same stance as SessionList's
+// selectSession), so wide shells keep a static, untrapped sidebar. The
+// trap's Esc replaces the former hand-mounted window listener; trapStack
+// layering makes trap-wired overlays above the drawer consume Esc first,
+// and WocaApp's global Esc routing no longer sees it (stopPropagation).
+// Hand-rolled overlays hosted here (new-workspace dialog, FolderPicker,
+// StatusModal) carry no trap of their own, so the esc callback still
+// yields while focus sits inside one — that overlay closes first, the
+// next Esc closes the drawer.
+const drawerEl = ref<HTMLElement | null>(null);
+useFocusTrap(drawerEl, computed(() => ui.sidebarOpen), {
+  esc: () => {
+    if (
+      document.activeElement instanceof Element &&
+      document.activeElement.closest(".overlay, .modal-backdrop, .w-modal-backdrop")
+    ) {
+      return;
+    }
+    ui.closeSidebar();
   },
-  // immediate: a remount while the drawer is open (store outlives the
-  // component) must re-attach the window listener.
-  { immediate: true }
-);
-
-onBeforeUnmount(() => window.removeEventListener("keydown", onDrawerKeydown));
+});
 
 // The header "+" adds a new workspace (a directory path; the workspace
 // materializes in the list via its first session). Adding a session to an
@@ -107,7 +101,7 @@ async function pickWorkspace(path: string) {
     aria-hidden="true"
     @click.self="ui.closeSidebar()"
   />
-  <aside id="app-sidebar" class="sidebar" :class="{ open: ui.sidebarOpen }">
+  <aside id="app-sidebar" ref="drawerEl" class="sidebar" :class="{ open: ui.sidebarOpen }">
     <div class="sidebar-brand">
       <div class="brand-mark">W</div>
       <span class="brand-name">woca</span>
