@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../api/client', () => ({ ...api }))
 
 import { useSessionStore } from './sessions'
+import i18n from '../i18n'
 
 type Handlers = Record<string, (...args: unknown[]) => void>
 
@@ -116,6 +117,45 @@ describe('live-block lifecycle', () => {
     handlers.onInterruptResolved()
     expect(store.activeInterrupt).toBeNull()
     expect(store.activeStatus).toBe('running')
+    void sent
+  })
+
+  it('a cancelled done parks the localized stop notice; a clean done parks none', async () => {
+    const store = seedStore()
+    const sent = store.send('go')
+    await vi.waitFor(() => expect(handlers.onDelta).toBeTruthy())
+    handlers.onDelta('partial')
+    handlers.onDone(true)
+    expect(store.activeStatus).toBe('done')
+    expect(store.activeItems.find((i) => i.kind === 'notice')).toMatchObject({
+      kind: 'notice',
+      content: i18n.global.t('chat.generationStopped'),
+    })
+
+    const clean = seedStore()
+    const sent2 = clean.send('go')
+    await vi.waitFor(() => expect(handlers.onDelta).toBeTruthy())
+    handlers.onDelta('full answer')
+    handlers.onDone(false)
+    expect(clean.activeItems.filter((i) => i.kind === 'notice')).toHaveLength(0)
+    void sent
+    void sent2
+  })
+
+  it('marks a stopped run once even when the stream done and a local cancel race', async () => {
+    api.cancelRun.mockReset().mockResolvedValue(undefined)
+    const store = seedStore()
+    const sent = store.send('go')
+    await vi.waitFor(() => expect(handlers.onDelta).toBeTruthy())
+    handlers.onDelta('partial')
+    // Stream path first (another tab's perspective replaying here)…
+    handlers.onDone(true)
+    // …then the cancelling tab's own confirmed stop for the same run.
+    store.cancel()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(store.activeItems.filter((i) => i.kind === 'notice')).toHaveLength(1)
+    expect(store.activeStatus).toBe('done')
     void sent
   })
 })

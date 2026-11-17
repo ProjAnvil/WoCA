@@ -36,6 +36,9 @@ export interface StreamDeps {
   // attach to — reattaching over them would reload the pre-run disk
   // snapshot and wipe the optimistic user bubble.
   sending: Set<string>
+  /** A run ended via the done event's cancelled flag (stopped run): the
+   * orchestrator parks its localized stop notice (guarded per run id). */
+  onRunCancelled: (sid: string, rid: string) => void
   loadSession: (id: string) => Promise<void>
   refreshContext: () => Promise<void>
 }
@@ -64,6 +67,7 @@ export function createRunStreams(deps: StreamDeps) {
     runAuto,
     items,
     sending,
+    onRunCancelled,
     loadSession,
     refreshContext,
   } = deps
@@ -272,7 +276,7 @@ export function createRunStreams(deps: StreamDeps) {
             reasoningId.value[sid] = null
           })
         },
-        onDone: () => {
+        onDone: (cancelled) => {
           closeStreaming(sid)
           closeReasoning(sid)
           closeGoalNote(sid)
@@ -283,6 +287,12 @@ export function createRunStreams(deps: StreamDeps) {
           delete queuePosition.value[sid]
           delete runAuto.value[sid]
           pendingSteers.value[sid] = []
+          // A cancelled run persists no assistant message server-side
+          // (finish passes final=nil), so the transcript alone shows no
+          // trace of the stop — park the localized marker here (other
+          // tabs, replays, reattach; the cancelling tab aborts its stream
+          // before this event and marks via cancel() instead).
+          if (cancelled) onRunCancelled(sid, rid)
           afterDone?.()
           // The terminal SSE event fires just before the server persists the
           // final transcript, so let the save land before re-reading it.

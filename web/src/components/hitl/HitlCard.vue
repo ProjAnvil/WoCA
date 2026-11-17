@@ -88,12 +88,18 @@ const argsText = computed(() => capArgs(primaryAsk.value?.args_summary || safeJs
 const argsOverflows = computed(() => estimateLines(argsText.value) > ARGS_COLLAPSED_LINES)
 const argsOpen = ref(false)
 
-function askArgsText(a: ApprovalAsk): string {
-  return capArgs(a.args_summary || safeJsonArgs(a.tool_args))
-}
-function askOverflows(a: ApprovalAsk): boolean {
-  return estimateLines(askArgsText(a)) > ARGS_COLLAPSED_LINES
-}
+// Per-ask args view model, keyed by call_id. Computed once per props change:
+// the stack's shared 1s elapsed tick re-renders every card each second, and
+// the helpers used to re-run capArgs/estimateLines (and JSON.stringify on
+// the args) per render — twice per ask — straight inside the template.
+const askArgs = computed<Record<string, { text: string; overflows: boolean }>>(() => {
+  const map: Record<string, { text: string; overflows: boolean }> = {}
+  for (const a of asks.value) {
+    const text = capArgs(a.args_summary || safeJsonArgs(a.tool_args))
+    map[a.call_id] = { text, overflows: estimateLines(text) > ARGS_COLLAPSED_LINES }
+  }
+  return map
+})
 const askArgsOpen = ref<Record<string, boolean>>({})
 
 // --- answering ---
@@ -155,6 +161,21 @@ async function cancelAsk() {
 const elapsed = computed(() => fmtDuration(props.now - mountedAt))
 
 const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.value}`
+
+// The rule key is a wildcard-truncated pattern (the server's GrantKey: first
+// two command words + "*", the url host, the top path segment); the tooltip
+// carries the FULL rule material — the owning ask's complete args — so hover
+// and assistive tech reveal exactly what a session grant would allowlist.
+const ruleKeyArgsText = computed(() => {
+  if (!ruleKey.value) return ''
+  const ask = asks.value.find((a) => a.session_rule_key)
+  const args = ask?.tool_args ?? toolArgs.value
+  return args ? safeJsonArgs(args) : ''
+})
+const ruleKeyTitle = computed(() => {
+  const base = t('chat.sessionRuleKey', { key: ruleKey.value })
+  return ruleKeyArgsText.value ? `${base}\n${ruleKeyArgsText.value}` : base
+})
 </script>
 
 <template>
@@ -228,9 +249,13 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
         <div v-else class="hitl-ask-rows" role="list">
           <div v-for="a in asks" :key="a.call_id" class="hitl-tool" role="listitem">
             <span class="hitl-tool-name">{{ a.tool_name }}</span>
-            <pre v-if="askArgsText(a)" class="hitl-tool-args" :class="{ 'is-collapsed': !askArgsOpen[a.call_id] }">{{ askArgsText(a) }}</pre>
+            <pre
+              v-if="askArgs[a.call_id]?.text"
+              class="hitl-tool-args"
+              :class="{ 'is-collapsed': !askArgsOpen[a.call_id] }"
+            >{{ askArgs[a.call_id].text }}</pre>
             <button
-              v-if="askOverflows(a)"
+              v-if="askArgs[a.call_id]?.overflows"
               class="hitl-args-toggle"
               type="button"
               :data-testid="`hitl-args-toggle-${a.call_id}`"
@@ -275,7 +300,7 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
           v-if="ruleKey"
           class="hitl-rule-key"
           :data-testid="`hitl-rule-key-${requestId}`"
-          :title="t('chat.sessionRuleKey', { key: ruleKey })"
+          :title="ruleKeyTitle"
         >{{ ruleKey }}</span>
         <button
           v-if="ruleKey"
@@ -350,7 +375,6 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
 }
 .hitl-tool-name {
   font-weight: 600;
-  flex-shrink: 0;
 }
 /* Args body: pre-wrap + overflow-wrap anywhere keeps every character
  * reachable at any viewport; collapsed it caps at 8 lines (lh-xs scale)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Bot, Paperclip, Send, Sparkles, Square } from 'lucide-vue-next'
 import QueueBadge from './QueueBadge.vue'
@@ -95,24 +95,39 @@ const { ac, acItems, updateAc, closeAc, onBlurCloseAc, acceptAc, onKeydown } = u
 // not always align with the viewport — the rendered left edge is clamped to
 // [12, innerWidth - width - 12] so nothing crosses either viewport edge.
 // Vertical behavior (opens above the input row) is unchanged; the shift is
-// re-measured whenever the popup reopens or its item set (width) changes.
+// re-measured whenever the popup reopens, its item set (width) changes, or
+// the window resizes while it is open.
 const acPopEl = ref<HTMLElement | null>(null)
 const acShift = ref(0)
+
+function measureAcShift() {
+  const el = acPopEl.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  const minLeft = 12
+  const maxLeft = Math.max(minLeft, window.innerWidth - r.width - 12)
+  if (r.left < minLeft || r.left > maxLeft) {
+    // Clamp to the NEAREST bound: a left overflow shifts right to minLeft,
+    // a right overflow shifts left to maxLeft.
+    acShift.value = r.left < minLeft ? minLeft - r.left : maxLeft - r.left
+  }
+}
 
 watch(
   () => [ac.value.open, acItems.value.length] as const,
   async ([open]) => {
     acShift.value = 0
+    window.removeEventListener('resize', measureAcShift)
     if (!open) return
     await nextTick()
-    const el = acPopEl.value
-    if (!el) return
-    const r = el.getBoundingClientRect()
-    const minLeft = 12
-    const maxLeft = Math.max(minLeft, window.innerWidth - r.width - 12)
-    if (r.left < minLeft || r.left > maxLeft) acShift.value = maxLeft - r.left
+    measureAcShift()
+    // Re-measure on viewport changes while the popup stays open (window
+    // resize, device rotation): the clamp must track the live viewport, not
+    // the one the popup opened under.
+    window.addEventListener('resize', measureAcShift)
   },
 )
+onUnmounted(() => window.removeEventListener('resize', measureAcShift))
 
 /* ---------------------------- mode cycling (Shift+Tab) --------------------- */
 

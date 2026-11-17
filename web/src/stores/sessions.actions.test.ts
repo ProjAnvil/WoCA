@@ -22,6 +22,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../api/client', () => ({ ...api }))
 
 import { useSessionStore } from './sessions'
+import i18n from '../i18n'
 import type { ChatItem } from '../types'
 
 function storeWithRun() {
@@ -128,6 +129,29 @@ describe('cancel', () => {
     await Promise.resolve()
     expect(store.activeStatus).toBe('error')
     expect(store.activeError).toContain('still live')
+  })
+
+  it('marks the stopped run with a notice after a confirmed cancel', async () => {
+    const store = storeWithRun()
+    api.cancelRun.mockResolvedValueOnce(undefined)
+    store.cancel()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(store.activeStatus).toBe('done')
+    expect(lastItem(store)).toMatchObject({
+      kind: 'notice',
+      content: i18n.global.t('chat.generationStopped'),
+    })
+  })
+
+  it('stamps no stop marker when the run already finished (click race)', async () => {
+    const store = storeWithRun()
+    store.status = { s1: 'done' }
+    api.cancelRun.mockResolvedValueOnce(undefined)
+    store.cancel()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(store.activeItems.filter((i) => i.kind === 'notice')).toHaveLength(0)
   })
 })
 

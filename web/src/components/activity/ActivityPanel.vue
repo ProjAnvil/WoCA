@@ -78,7 +78,14 @@ onMounted(() => {
   updateTabScroll()
   if (typeof ResizeObserver !== 'undefined') {
     tabResizeObserver = new ResizeObserver(() => updateTabScroll())
-    if (tablistEl.value) tabResizeObserver.observe(tablistEl.value)
+    if (tablistEl.value) {
+      tabResizeObserver.observe(tablistEl.value)
+      // The row box alone misses badge-driven growth: the row is the fixed-
+      // width scroll container, so a count arriving only moves its
+      // scrollWidth, not the observed box. Observing each tab button too
+      // catches that (a child size change fires the observer).
+      for (const el of tablistEl.value.querySelectorAll<HTMLElement>('.act-tab')) tabResizeObserver.observe(el)
+    }
   }
 })
 onUnmounted(() => {
@@ -147,9 +154,11 @@ function updateTabScroll(): void {
   tabScroll.value = atStart ? 'start' : atEnd ? 'end' : 'mid'
 }
 
-// Counts arrive asynchronously and can grow a tab past the fold; a
-// ResizeObserver on the row catches both viewport and content changes.
-// (Test DOMs may not implement it — degrade to the scroll handler alone.)
+// Counts arrive asynchronously and can grow a tab past the fold. The
+// ResizeObserver covers the row box (viewport-driven width changes) AND
+// each tab button (badge-driven content growth — the row's own box never
+// changes when only its scrollWidth moves). (Test DOMs may not implement
+// it — degrade to the scroll handler alone.)
 let tabResizeObserver: ResizeObserver | null = null
 </script>
 

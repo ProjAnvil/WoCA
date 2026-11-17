@@ -150,10 +150,11 @@ const toolResultContent = computed(() => {
 // Tool failures surface as result strings with a leading "Error:" (the
 // executor's convention, e.g. registry.go "Error: %v"). The collapsed header
 // encodes the tri-state with shape + fill, never color alone: spinner while
-// running, filled check on success, outlined X on failure.
+// running, filled check on success, outlined X on failure. Leading
+// whitespace must not defeat the test (results can arrive indented).
 const toolFailed = computed(() => {
   const it = props.item
-  return it.kind === 'tool_call' && it.result !== undefined && /^error:/i.test(String(it.result))
+  return it.kind === 'tool_call' && it.result !== undefined && /^error:/i.test(String(it.result).trimStart())
 })
 
 // Tool input and output both start collapsed (autoCollapseTools); toggle to
@@ -347,8 +348,16 @@ function copyDebugInfo() {
   >
     <template #icon>
       <Loader2 v-if="!toolHasResult" :size="13" class="spin tool-status tool-status-running" />
-      <Check v-else-if="!toolFailed" :size="13" class="tool-status tool-status-ok" aria-hidden="true" />
-      <X v-else :size="13" class="tool-status tool-status-err" aria-hidden="true" />
+      <!-- Collapsed terminal state must reach screen readers too (the running
+           card has meta text; the icons alone were aria-hidden). -->
+      <Check
+        v-else-if="!toolFailed"
+        :size="13"
+        class="tool-status tool-status-ok"
+        role="img"
+        :aria-label="t('chat.toolStatusOk')"
+      />
+      <X v-else :size="13" class="tool-status tool-status-err" role="img" :aria-label="t('chat.toolStatusErr')" />
     </template>
     <template v-if="!collapsed">
       <div class="tool-section-label">{{ t('chat.input') }}</div>

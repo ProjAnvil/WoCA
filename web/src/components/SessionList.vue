@@ -6,6 +6,7 @@ import { useSessionStore } from '../stores/sessions'
 import { useActivityStore } from '../stores/activity'
 import { useConfirmStore } from '../stores/confirm'
 import { useToastStore } from '../stores/toast'
+import { useUiStore } from '../stores/ui'
 import type { Session } from '../types'
 
 // Sessions grouped by workspace with per-group drawers (collapse/expand).
@@ -16,6 +17,16 @@ const toast = useToastStore()
 const store = useSessionStore()
 const activity = useActivityStore()
 const confirmDialog = useConfirmStore()
+const ui = useUiStore()
+
+// Picking a session closes the ≤640px drawer so the chat is visible again.
+// No width sniffing: sidebarOpen is only ever true on drawer shells (the
+// hamburger that sets it is media-scoped), so on wide shells the close is a
+// permanent no-op.
+function selectSession(s: Session) {
+  void store.setActive(s.id)
+  if (ui.sidebarOpen) ui.closeSidebar()
+}
 
 // Collapsed groups (default: expanded); switching the active session's
 // workspace re-expands that group.
@@ -126,7 +137,7 @@ async function removeSession(s: Session) {
           class="session-row"
           :class="{ active: s.id === store.activeId, awaiting: store.runStateOf(s.id) === 'awaiting' }"
         >
-          <button class="session-item" :class="{ active: s.id === store.activeId }" @click="store.setActive(s.id)">
+          <button class="session-item" :class="{ active: s.id === store.activeId }" @click="selectSession(s)">
             <Loader2
               v-if="store.runStateOf(s.id) === 'running'"
               :size="15"

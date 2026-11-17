@@ -546,5 +546,14 @@ onBeforeUnmount(() => {
   .settings-content {
     padding: 6px 14px 16px;
   }
+  /* Sticky footer (w320/w375 audit): the hint line is long localized text;
+     let it own its line(s) and keep the Save button visually separate on
+     the row below instead of crushing both onto one line. */
+  .settings-footer {
+    flex-wrap: wrap;
+  }
+  .settings-footer .row-hint {
+    flex-basis: 100%;
+  }
 }
 </style>

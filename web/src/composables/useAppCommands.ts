@@ -141,7 +141,16 @@ export function useAppCommands() {
         run: () => void sessions.cancel(),
       })
     }
-    const lastAssistant = [...sessions.activeItems].reverse().find((i) => i.kind === 'assistant')
+    // Last assistant item, searched back-to-front without copying the list.
+    // (Array.prototype.findLast is the ES2023 spelling; the tsconfig lib is
+    // ES2022, so a reverse loop provides the same semantics.)
+    let lastAssistant: (typeof sessions.activeItems)[number] | undefined
+    for (let i = sessions.activeItems.length - 1; i >= 0; i--) {
+      if (sessions.activeItems[i].kind === 'assistant') {
+        lastAssistant = sessions.activeItems[i]
+        break
+      }
+    }
     if (lastAssistant && lastAssistant.kind === 'assistant') {
       const text = lastAssistant.content
       cmds.push({

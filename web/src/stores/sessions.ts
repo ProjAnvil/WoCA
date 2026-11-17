@@ -93,6 +93,21 @@ export const useSessionStore = defineStore('sessions', () => {
   const mutations = createItemMutations({ items, streamingId, reasoningId, goalNoteId, runId })
   const { list, push, closeStreaming, closeReasoning, closeGoalNote } = mutations
 
+  // Stopped-run marker (audit): a stopped run leaves nothing in the
+  // transcript — cancelled runs persist no assistant message (the server's
+  // finish path hands onDone nil), so the assistant side shows no trace.
+  // Two live signals cover it: the SSE done event's cancelled flag (other
+  // tabs, replays, reattach) and cancel()'s own confirmed stop (the
+  // cancelling tab aborts its stream before done can arrive). Both route
+  // through this per-run-guarded notice push — one marker per run, never
+  // two when the paths race.
+  const stoppedRunNotices = new Set<string>()
+  function pushStoppedNotice(sid: string, rid: string) {
+    if (!rid || stoppedRunNotices.has(rid)) return
+    stoppedRunNotices.add(rid)
+    push(sid, { id: nid(), kind: 'notice', content: i18n.global.t('chat.generationStopped') })
+  }
+
   const { contextInfo, contextLoading, contextError, refreshContext } = createContextTracker({
     activeId,
     items,
@@ -124,6 +139,7 @@ export const useSessionStore = defineStore('sessions', () => {
     runAuto,
     items: mutations,
     sending,
+    onRunCancelled: (sid, rid) => pushStoppedNotice(sid, rid),
     loadSession: (id) => loadSession(id),
     refreshContext: () => refreshContext(),
   })
@@ -647,6 +663,10 @@ export const useSessionStore = defineStore('sessions', () => {
     const sid = activeId.value
     if (!sid) return
     const rid = runId.value[sid]
+    // Only a still-live run earns a stop marker: a click racing the run's
+    // own completion (the POST succeeds on a finished run too) must not
+    // stamp "stopped" over a cleanly persisted answer.
+    const wasBusy = ['running', 'awaiting', 'queued'].includes(status.value[sid] ?? 'idle')
     if (rid) abortRun(rid)
     closeStreaming(sid)
     closeReasoning(sid)
@@ -666,6 +686,10 @@ export const useSessionStore = defineStore('sessions', () => {
     api.cancelRun(rid).then(
       () => {
         status.value[sid] = 'done'
+        // The local stream was aborted above before the done(cancelled)
+        // event could arrive — mark the stopped run through the same
+        // guarded push the stream path uses.
+        if (wasBusy) pushStoppedNotice(sid, rid)
         if (steers && steers.length) void send(steers.join('\n'))
       },
       (e) => {

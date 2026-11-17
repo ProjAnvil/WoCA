@@ -92,7 +92,13 @@ onMounted(() => void refreshGrants())
         <div class="hitl-stack-head">
           <span class="hitl-stack-title">{{ t('chat.awaitingConfirm') }}</span>
           <span class="hitl-stack-meta">
-            <span class="hitl-stack-count" data-testid="hitl-stack-count">{{
+            <!-- "n of m" only means something with more than one pending
+                 card; a lone card shows just the title. -->
+            <span
+              v-if="cards.length > 1"
+              class="hitl-stack-count"
+              data-testid="hitl-stack-count"
+            >{{
               t('chat.cardPosition', { n: shownCount, m: cards.length })
             }}</span>
             <button

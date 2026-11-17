@@ -198,6 +198,32 @@ describe('collapsible cards', () => {
     expect(w.get('.tool-output').text()).toContain('orphan')
   })
 
+  it('tool status: terminal icons are labeled for screen readers (collapsed state)', () => {
+    const ok = mountItem({
+      id: 't2', kind: 'tool_call', toolCallId: 'tc2', name: 'Read', args: {}, result: 'file',
+    } as ChatItem)
+    const okIcon = ok.get('.tool-status-ok')
+    expect(okIcon.attributes('role')).toBe('img')
+    expect(okIcon.attributes('aria-label')).toBe(i18n.global.t('chat.toolStatusOk'))
+    expect(okIcon.attributes('aria-hidden')).toBeUndefined()
+
+    const err = mountItem({
+      id: 't3', kind: 'tool_call', toolCallId: 'tc3', name: 'Bash', args: {}, result: 'Error: exit 1',
+    } as ChatItem)
+    const errIcon = err.get('.tool-status-err')
+    expect(errIcon.attributes('role')).toBe('img')
+    expect(errIcon.attributes('aria-label')).toBe(i18n.global.t('chat.toolStatusErr'))
+    expect(errIcon.attributes('aria-hidden')).toBeUndefined()
+  })
+
+  it('tool failure detection survives leading whitespace in the result', () => {
+    const w = mountItem({
+      id: 't4', kind: 'tool_call', toolCallId: 'tc4', name: 'Bash', args: {}, result: '\n  Error: boom',
+    } as ChatItem)
+    expect(w.find('.tool-status-err').exists()).toBe(true)
+    expect(w.find('.tool-status-ok').exists()).toBe(false)
+  })
+
   it('reasoning: live block stays open and collapses when done', async () => {
     const w = mountItem({ id: 'r1', kind: 'reasoning', content: 'deep', streaming: true } as ChatItem)
     expect(w.get('.reasoning-body').text()).toContain('deep')

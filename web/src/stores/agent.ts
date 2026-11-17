@@ -131,6 +131,11 @@ export const useAgentStore = defineStore('agent', () => {
   const thinkingLevels = computed<string[]>(() => state.value?.thinking.levels ?? [])
   const thinkingNote = computed(() => state.value?.thinking.note ?? '')
 
+  // Boolean form of the quotaShort "shortNone" branch: the chip's
+  // placeholder swap (and any other logic) keys off the underlying quota
+  // state, never off comparing a rendered localized string.
+  const quotaNone = computed(() => quota.value?.quota?.available !== true)
+
   // Short summary for the quota chip: balance-type quotas show the amount
   // directly; plan-type quotas prefer the remaining 5h window.
   const quotaShort = computed(() => {
@@ -268,6 +273,7 @@ export const useAgentStore = defineStore('agent', () => {
     thinkingSupported,
     thinkingLevels,
     thinkingNote,
+    quotaNone,
     quotaShort,
     quotaText,
     load,

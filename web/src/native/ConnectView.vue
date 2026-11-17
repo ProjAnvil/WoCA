@@ -851,7 +851,7 @@ function backToForm() {
                     v-model="enrollKey"
                     data-testid="enroll-key"
                     type="password"
-                    autocomplete="off"
+                    autocomplete="current-password"
                     :placeholder="t('native.apiKeyPlaceholder')"
                   />
                 </span>
@@ -891,7 +891,7 @@ function backToForm() {
                     v-model="loginKey"
                     data-testid="enroll-login-key"
                     type="password"
-                    autocomplete="off"
+                    autocomplete="current-password"
                     :placeholder="t('native.apiKeyPlaceholder')"
                   />
                 </span>

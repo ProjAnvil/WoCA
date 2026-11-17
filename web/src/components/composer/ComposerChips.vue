@@ -258,10 +258,11 @@ function ctxCatPct(c: ContextCategory): string {
 
 const modeList = Object.entries(MODE_LABELS) as [PermissionMode, string][] as [PermissionMode, string][]
 
-// Quota chip: an unavailable quota (the store's shortNone branch renders a
-// dash label) shows the same "Not enabled" placeholder as the
-// context chip instead of a bare dash.
-const quotaNone = computed(() => agent.quotaShort === t('agent.quota.shortNone'))
+// Quota chip: an unavailable quota (the store's quotaNone flag — derived
+// from the underlying quota state, not from comparing the rendered label)
+// shows the same "Not enabled" placeholder as the context chip instead of a
+// bare dash.
+const quotaNone = computed(() => agent.quotaNone)
 const quotaLabel = computed(() => (quotaNone.value ? t('chat.statusDisabled') : agent.quotaShort))
 
 onMounted(() => {

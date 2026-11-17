@@ -9,6 +9,7 @@ import SessionList from './SessionList.vue'
 import { useSessionStore } from '../stores/sessions'
 import { useConfirmStore } from '../stores/confirm'
 import { useToastStore } from '../stores/toast'
+import { useUiStore } from '../stores/ui'
 
 // The delete flow reads pre-delete counts through the activity store; the
 // mock keeps these component tests off the network (the store's own
@@ -128,6 +129,28 @@ describe('session rows', () => {
     expect(del.attributes('aria-label')).toBe(i18n.global.t('sidebar.deleteSession'))
     expect(del.element.tagName).toBe('BUTTON')
     expect(del.element.closest('button.session-item')).toBeNull()
+  })
+
+  it('closes the drawer after picking a session (≤640px shell)', async () => {
+    const { w, store } = await mountSeeded([{ id: 'a' }, { id: 'b' }])
+    const setActive = vi.spyOn(store, 'setActive').mockResolvedValue(undefined)
+    const ui = useUiStore()
+    // Drawer shells keep sidebarOpen true while the list covers the chat.
+    ui.openSidebar()
+    await w.vm.$nextTick()
+    await w.findAll('.session-item')[1].trigger('click')
+    expect(setActive).toHaveBeenCalledWith('b')
+    expect(ui.sidebarOpen).toBe(false)
+  })
+
+  it('selection on wide shells is unchanged (the close is a no-op)', async () => {
+    const { w, store } = await mountSeeded([{ id: 'a' }, { id: 'b' }])
+    const setActive = vi.spyOn(store, 'setActive').mockResolvedValue(undefined)
+    const ui = useUiStore()
+    expect(ui.sidebarOpen).toBe(false) // wide shells never open the drawer
+    await w.findAll('.session-item')[0].trigger('click')
+    expect(setActive).toHaveBeenCalledWith('a')
+    expect(ui.sidebarOpen).toBe(false)
   })
 })
 

@@ -230,3 +230,62 @@ describe('approval readability fixes (375px audit)', () => {
     }
   })
 })
+
+describe('approval polish round 2', () => {
+  it('hides the "n of m" counter while only one card is pending', async () => {
+    const { w } = mountStack([permCard('call-aaaa', 'approval:se1')])
+    await flush(w)
+    // A lone approvals card renders without the position counter.
+    expect(w.find('[data-testid="hitl-stack-count"]').exists()).toBe(false)
+    expect(w.get('[data-testid="hitl-stack"]').text()).not.toContain(
+      i18n.global.t('chat.cardPosition', { n: 1, m: 1 }),
+    )
+  })
+
+  it('shows the counter again from two cards on', async () => {
+    const { w } = mountStack([permCard('call-aaaa', 'approval:se1'), permCard('call-bbbb', 'approval:se2')])
+    await flush(w)
+    expect(w.get('[data-testid="hitl-stack-count"]').text()).toBe(
+      i18n.global.t('chat.cardPosition', { n: 2, m: 2 }),
+    )
+  })
+
+  it('multi-ask envelope: per-ask args render with per-ask overflow toggles', async () => {
+    const longCommand = `sleep 6 && run_in_background ${'x'.repeat(400)}`
+    const card: InterruptCardData = {
+      id: 'env-1',
+      ns: '',
+      kind: 'approvals',
+      payload: {
+        asks: [
+          { call_id: 'call-aaaa', tool_name: 'Bash', tool_args: { command: longCommand }, reason: 'run', origin: 'main', session_rule_key: 'bash:sleep 6*' },
+          { call_id: 'call-bbbb', tool_name: 'Bash', tool_args: { command: 'git status' }, reason: 'run', origin: 'main', session_rule_key: 'bash:git status*' },
+        ],
+      },
+    }
+    const { w } = mountStack([card])
+    await flush(w)
+    // Both asks render their own args block from the per-call map.
+    const rows = w.findAll('.hitl-tool')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].get('pre.hitl-tool-args').text()).toContain('run_in_background')
+    expect(rows[0].get('pre.hitl-tool-args').classes()).toContain('is-collapsed')
+    expect(rows[1].get('pre.hitl-tool-args').text()).toContain('git status')
+    // Only the overflowing ask gets a toggle; it expands just that ask.
+    expect(w.find('[data-testid="hitl-args-toggle-call-bbbb"]').exists()).toBe(false)
+    const toggle = w.get('[data-testid="hitl-args-toggle-call-aaaa"]')
+    await toggle.trigger('click')
+    expect(rows[0].get('pre.hitl-tool-args').classes()).not.toContain('is-collapsed')
+    expect(rows[1].get('pre.hitl-tool-args').classes()).toContain('is-collapsed')
+  })
+
+  it('the rule-key tooltip carries the full rule material, not just the pattern', async () => {
+    const { w } = mountStack([permCard('call-aaaa', 'approval:se1', { tool_args: { command: 'git push --force origin main' }, session_rule_key: 'bash:git push*' })])
+    await flush(w)
+    const key = w.get('[data-testid="hitl-rule-key-call-aaaa"]')
+    expect(key.attributes('title')).toContain('bash:git push*')
+    // The wildcard pattern alone hides the actual command; the title spells
+    // out the full args that a session grant would allowlist.
+    expect(key.attributes('title')).toContain('git push --force origin main')
+  })
+})
