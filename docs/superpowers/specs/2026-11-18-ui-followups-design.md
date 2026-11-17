@@ -133,3 +133,11 @@ e2e(personal):1440/1800 视口断言 `.message` 与 `.chat-input-inner` 计算�
 - I1 goal 无 human 公式独立;I2 模型可见性裁定+runQuestion/historyForRun 排除;I4 渲染缝=ChatItemView 特判;I5 排队取消纳入;I6/F2 saveServer 表述更正+映射表新建+dirty 入仓;I3/F3 改档方案替代 min() 钳制;I7 九消费点经改档自动覆盖并列表防回归。
 - OQ1 dispatch 出范围;OQ3/OQ4/OQ5/OQ6 答案分别写入 F2/F3/F4/F5。
 - M1 stripSystem 沿用;M2 行号勘误(runs.go:572、cron.go:234);M3 reason 属性;M4 Clone 必要性注明;M5 补 composable 单测;M6 shiki 取舍标准。
+
+## 执行记录(2026-11-18 收尾回写)
+
+- **F2/T4 gate 未决**:双原型已交付 woca-internal-docs/settings-save-prototype/{prototype-a,prototype-b}.html;用户两轮未应答,按 plan 回退「Task 5 跳过并记录」。恢复路径:A/B 共用 store 层(区→键映射表+dirty 快照),仅 SettingsPanel 保存件形态不同。
+- **F6/T9 gate 未立项**:三视图已交付 woca-internal-docs/tablet-icon-rail-prototype/{icon-rail,expanded,current-280}.html;未获立项拍板,本轮零代码,维持 280px 侧栏现状。
+- **F5 勘误**:①「46 行存量 ALLOWED」过期——冻结时实扫 5 文件/14 行(misc.css 4、ConnectView 0、WebSearchSection 3 系 539b924e 起存量未豁免,check:tokens 基线本就 RED);按实扫重定基线冻结(评审裁定:唯一同时满足「冻结现状+新增零容忍」的选项)。②「每 token 内联 --shiki-light/--shiki-dark」与 shiki 4.6.0 实际输出(内联 plain `color:`)不符,系本文侧勘误。
+- **F1 前端锚点勘误**:e7c9143e 后 live 路径实际在 web/src/stores/sessions/stream.ts + sessions.ts(loadSession 去重接缝),非 web/src/lib/streaming.ts。
+- **F1 已知边界(评审 parked)**:排队中取消的派生 save 可能被在跑 run 的完成 save 覆盖(last-writer-wins);修法=推迟到 gate 释放,属重构,记后续跟进。
