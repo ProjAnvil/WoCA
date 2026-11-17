@@ -131,10 +131,8 @@ func TestStopNoticeReasonAttributes(t *testing.T) {
 	if got := stopNotice("run-9", StopReasonParkedTTL).Content; got != wantStopNotice("run-9", StopReasonParkedTTL) {
 		t.Fatalf("parked TTL notice = %q", got)
 	}
-	for _, m := range []messages.Message{stopNotice("r", StopReasonUser)} {
-		if m.Role != messages.RoleHuman {
-			t.Fatalf("notice role = %v, want Human (notification convention)", m.Role)
-		}
+	if m := stopNotice("r", StopReasonUser); m.Role != messages.RoleHuman {
+		t.Fatalf("notice role = %v, want Human (notification convention)", m.Role)
 	}
 }
 

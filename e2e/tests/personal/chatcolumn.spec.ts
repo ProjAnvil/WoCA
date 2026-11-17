@@ -10,7 +10,7 @@ import { repoRoot, runtimeDir } from '../../fixtures/paths';
 // Form 1 — the F3 wide-screen reading column against a REAL `woca serve`
 // binary. Pins the --chat-col tier change (plan task 6, spec I3 ruling):
 // >=1440 and >=1800 both serve a 760px column (the deliberate "wide
-// screens read narrow by design" cap; 860 at the 1440 crossing is the
+// screens read narrow by design" cap; 760 at the 1440 crossing is the
 // intended semantics, consistent with the 2026-11-17 audit P1-1
 // line-length criticism), while the 860px base tier and everything below
 // 1440 stay put — stopnotice.spec.ts pins the same 860 tier at 1024 from
@@ -85,12 +85,37 @@ function freePort(): Promise<number> {
   });
 }
 
+// Runtime hygiene (the posture the playwright webServer applies to
+// personal-home): home-*/ws-* dirs from previous runs accrete under
+// e2e/.runtime/chatcolumn. Entry names embed their creating worker's pid
+// (home-<pid>-<ts>), so "owner pid no longer alive" is exactly "left
+// over from a previous run". Only those are wiped at startup: sibling
+// workers of THIS run have live pids and unique names, so a blanket
+// subtree wipe would race them (the config runs fullyParallel across 4
+// workers, each spawning its own serve home here).
+function wipeStaleRuntimeDirs(): void {
+  const dir = path.join(runtimeDir, 'chatcolumn');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const entry of fs.readdirSync(dir)) {
+    const pid = Number(/^(?:home|ws)-(\d+)-\d+$/.exec(entry)?.[1]);
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
+    try {
+      process.kill(pid, 0); // owner still alive (or pid reused) — keep
+      continue;
+    } catch {
+      // dead owner: leftover from a previous run
+    }
+    fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+  }
+}
+
 /** Spawns the dedicated instance and waits for its /api/health to answer. */
 async function startServe(): Promise<{ child: ChildProcess; base: string }> {
   const bin = path.join(repoRoot, 'e2e', '.bin', 'woca');
   if (!fs.existsSync(bin)) {
     throw new Error(`${bin} missing — the playwright webServer builds it before tests run`);
   }
+  wipeStaleRuntimeDirs();
   const home = path.join(runtimeDir, 'chatcolumn', `home-${process.pid}-${Date.now()}`);
   fs.mkdirSync(home, { recursive: true });
   const port = await freePort();

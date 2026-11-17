@@ -86,12 +86,37 @@ function freePort(): Promise<number> {
   });
 }
 
+// Runtime hygiene (the posture the playwright webServer applies to
+// personal-home): home-*/ws-* dirs from previous runs accrete under
+// e2e/.runtime/stopnotice. Entry names embed their creating worker's pid
+// (home-<pid>-<ts>), so "owner pid no longer alive" is exactly "left
+// over from a previous run". Only those are wiped at startup: sibling
+// workers of THIS run have live pids and unique names, so a blanket
+// subtree wipe would race them (the config runs fullyParallel across 4
+// workers, each spawning its own serve home here).
+function wipeStaleRuntimeDirs(): void {
+  const dir = path.join(runtimeDir, 'stopnotice');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const entry of fs.readdirSync(dir)) {
+    const pid = Number(/^(?:home|ws)-(\d+)-\d+$/.exec(entry)?.[1]);
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
+    try {
+      process.kill(pid, 0); // owner still alive (or pid reused) — keep
+      continue;
+    } catch {
+      // dead owner: leftover from a previous run
+    }
+    fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+  }
+}
+
 /** Spawns the dedicated instance and waits for its /api/health to answer. */
 async function startServe(): Promise<{ child: ChildProcess; base: string }> {
   const bin = path.join(repoRoot, 'e2e', '.bin', 'woca');
   if (!fs.existsSync(bin)) {
     throw new Error(`${bin} missing — the playwright webServer builds it before tests run`);
   }
+  wipeStaleRuntimeDirs();
   const home = path.join(runtimeDir, 'stopnotice', `home-${process.pid}-${Date.now()}`);
   fs.mkdirSync(home, { recursive: true });
   const port = await freePort();
