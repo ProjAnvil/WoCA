@@ -538,6 +538,13 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 		if w != nil && !s.admission.wait(run.ctx, sid, w) {
 			// Cancelled while queued (cancelRun cancelled run.ctx) or shutdown.
 			run.finish(EventDone, map[string]any{"cancelled": true})
+			// The queued cancel never reaches the onDone below (the run never
+			// started), so its derived history persists here: the prompt plus
+			// the stop notice, through the same save posture (WithoutCancel —
+			// run.ctx is already done — and stripSystem).
+			history := s.sessions.load(context.WithoutCancel(run.ctx), sid)
+			derived := derivedCancelledHistory(history, &human, run.id, StopReasonUser)
+			_ = s.sessions.save(context.WithoutCancel(run.ctx), sid, stripSystem(derived), workspace)
 			return
 		}
 		// Externalized run state (Phase 2): the database row is created when
@@ -581,6 +588,13 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 				// keep the ctx values, drop the cancellation.
 				_ = s.sessions.save(context.WithoutCancel(run.ctx), sid, stripSystem(final), workspace)
 				s.logObsRunEnd(sid, run.id, workspace, final)
+			} else if reason, cancelled := run.cancelledReason(); cancelled {
+				// Cancelled round: persist the derived history (prompt + stop
+				// notice) through the same posture, so a reload keeps what the
+				// user typed and why the round ended. ranClean stays false and
+				// maybeWake below keeps its cancelled-run rule.
+				derived := derivedCancelledHistory(history, &human, run.id, reason)
+				_ = s.sessions.save(context.WithoutCancel(run.ctx), sid, stripSystem(derived), workspace)
 			}
 			// Correctness core: the session gate is released only after
 			// onDone (including persistence) returns, so when the next

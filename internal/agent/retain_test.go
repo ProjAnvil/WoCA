@@ -323,6 +323,24 @@ func TestSystem2RespectsIntervalSetting(t *testing.T) {
 // system2Due throttles per workspace; the pending set itself is the engine's
 // consolidated_at mark (see RetainRun's since=0), so only the interval is
 // tested here.
+// A persisted stop notice (`<run-stopped .../>`, appended by the server when
+// a run is cancelled) is a machine tag, not the round's question: the episode
+// question must fall back to the previous real human message.
+func TestRunQuestionSkipsStopNoticeTag(t *testing.T) {
+	msgs := []messages.Message{
+		messages.Human("summarize the migration"),
+		messages.AI("partial work"),
+		messages.Human(`<run-stopped run="run-9" reason="user_stop"/>`),
+	}
+	if q := runQuestion(msgs); q != "summarize the migration" {
+		t.Fatalf("runQuestion = %q, want the human before the stop notice", q)
+	}
+	// A stop notice with no earlier human yields no question at all.
+	if q := runQuestion([]messages.Message{messages.Human(`<run-stopped run="run-9" reason="parked_ttl"/>`)}); q != "" {
+		t.Fatalf("runQuestion over a lone stop notice = %q, want empty", q)
+	}
+}
+
 func TestSystem2DueThrottle(t *testing.T) {
 	m := memoryRuntime{}
 	if !m.system2Due("w", 60) {

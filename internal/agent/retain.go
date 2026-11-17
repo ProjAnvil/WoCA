@@ -229,6 +229,7 @@ func runQuestion(msgs []messages.Message) string {
 		if c == "" || strings.HasPrefix(c, "<relevant-memory>") ||
 			strings.HasPrefix(c, "<queued-user-input") ||
 			strings.HasPrefix(c, "<stop-hook>") ||
+			strings.HasPrefix(c, "<run-stopped") ||
 			strings.HasPrefix(c, "<task-fork>") {
 			continue
 		}

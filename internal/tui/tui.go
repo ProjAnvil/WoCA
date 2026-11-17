@@ -1325,12 +1325,33 @@ func (m *Model) submit(text string) tea.Cmd {
 	return m.runWithHistory(runHistory)
 }
 
+// stopNoticePrefix is the persisted stop-notice machine tag (built by the
+// server's stopNotice when a run is cancelled): the terminal Human of a
+// cancelled round. It must never fold into a run's prompt.
+const stopNoticePrefix = "<run-stopped"
+
 func (m *Model) historyForRun() ([]messages.Message, error) {
 	if len(m.history) == 0 {
 		return nil, nil
 	}
 	last := len(m.history) - 1
 	if m.history[last].Role != messages.RoleHuman {
+		return append([]messages.Message(nil), m.history...), nil
+	}
+	if strings.HasPrefix(strings.TrimSpace(m.history[last].Content), stopNoticePrefix) {
+		// The last Human is the stop notice, a machine tag rather than a
+		// prompt: fold the previous real Human instead. With none, there is
+		// no prompt to expand — pass the history through unchanged.
+		for i := last - 1; i >= 0; i-- {
+			if m.history[i].Role != messages.RoleHuman {
+				continue
+			}
+			if strings.HasPrefix(strings.TrimSpace(m.history[i].Content), stopNoticePrefix) {
+				continue
+			}
+			base := append([]messages.Message(nil), m.history[:i]...)
+			return m.historyForPromptWithBase(base, m.history[i].Content)
+		}
 		return append([]messages.Message(nil), m.history...), nil
 	}
 	base := append([]messages.Message(nil), m.history[:last]...)

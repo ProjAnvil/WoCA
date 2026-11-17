@@ -427,6 +427,11 @@ func cancelParkedGoalRun(t *testing.T, base, runID string, sc *bufio.Scanner) {
 func TestGoalCommandLifecycleWhileRunning(t *testing.T) {
 	s, ts, _ := newGoalLifecycleServer(t)
 	sid := "sess-goal-life"
+	// Each cancelled parked loop persists its derived stop-notice history
+	// after its done event (F1); draining the saves keeps the async disk
+	// write from racing the session dir's TempDir cleanup.
+	saved := make(chan string, 8)
+	s.sessions.testAfterSave = func(id string) { saved <- id }
 
 	// Malformed command bodies are 400s.
 	badResp, err := http.Post(ts.URL+"/api/sessions/"+sid+"/goal", "application/json", strings.NewReader(`{bad`))
@@ -494,6 +499,15 @@ func TestGoalCommandLifecycleWhileRunning(t *testing.T) {
 	resp3, sc3 := waitForRunInterrupt(t, ts.URL, runID3)
 	defer resp3.Body.Close()
 	cancelParkedGoalRun(t, ts.URL, runID3, sc3)
+
+	// Three cancelled loops, three derived stop-notice saves.
+	for i := 0; i < 3; i++ {
+		select {
+		case <-saved:
+		case <-time.After(10 * time.Second):
+			t.Fatal("transcript save not completed")
+		}
+	}
 }
 
 func TestGoalResumeAfterRestart(t *testing.T) {

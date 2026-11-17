@@ -86,6 +86,10 @@ type Run struct {
 	// a cancellation. The wake driver skips cancelled (and errored) runs
 	// when deciding whether to re-check the session's queue — see ranClean.
 	finishCancelled bool
+	// stopReason, under mu, distinguishes cancelled runs for the persisted
+	// stop notice: waitParked's TTL timer marks parked timeouts; every other
+	// cancellation is a user stop. Empty while the run has not stopped.
+	stopReason string
 	// mirror, when set, persists every emitted event to the run ledger's
 	// run_events stream (cross-instance SSE replay). Failures are the
 	// caller's to log; they never block the live stream.
@@ -385,6 +389,11 @@ func (r *Run) waitParked(cards []parkedCard, reply chan any) (any, error) {
 	}
 
 	timer := time.AfterFunc(parkedRunTTL, func() {
+		// Mark the stop reason before cancelling: the completion path reads
+		// it (under mu) to stamp the persisted stop notice's reason.
+		r.mu.Lock()
+		r.stopReason = StopReasonParkedTTL
+		r.mu.Unlock()
 		r.emit(Event{Type: EventTimeout, Data: map[string]any{"kind": kind, "reason": "parked_ttl"}})
 		r.cancelRun()
 	})
@@ -786,6 +795,23 @@ func (r *Run) ranClean() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.finishKind == EventDone && !r.finishCancelled
+}
+
+// cancelledReason reports whether the run ended cancelled and, if so, why:
+// StopReasonParkedTTL when the parked-interrupt TTL fired, StopReasonUser
+// otherwise. Cancelled=false covers clean finishes and errors — runs with no
+// stop notice to persist. Callers read it from the completion path, after
+// finish recorded the terminal state.
+func (r *Run) cancelledReason() (reason string, cancelled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.finishKind != EventDone || !r.finishCancelled {
+		return "", false
+	}
+	if r.stopReason == StopReasonParkedTTL {
+		return StopReasonParkedTTL, true
+	}
+	return StopReasonUser, true
 }
 
 // isDone reports whether the run already emitted its terminal event.

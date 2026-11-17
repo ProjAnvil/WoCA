@@ -163,6 +163,55 @@ func TestHistoryForRunExpandsFileReferencesWithoutChangingDisplayHistory(t *test
 	}
 }
 
+// A persisted stop notice (`<run-stopped .../>`) is a machine tag, not a
+// prompt: when it is the last Human, the fold must take the previous real
+// Human as the prompt and keep the tag out of the run history.
+func TestHistoryForRunFoldsPromptBeforeStopNotice(t *testing.T) {
+	model := New(nil, nil, config.Config{WorkDir: t.TempDir()})
+	model.history = []messages.Message{
+		messages.Human("first question"),
+		messages.AI("first answer"),
+		messages.Human("cancelled question"),
+		messages.Human(`<run-stopped run="run-1" reason="user_stop"/>`),
+	}
+
+	runHistory, err := model.historyForRun()
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := runHistory[len(runHistory)-1]
+	if last.Role != messages.RoleHuman || last.Content != "cancelled question" {
+		t.Fatalf("folded prompt = %+v, want the human before the stop notice", last)
+	}
+	for _, m := range runHistory {
+		if strings.HasPrefix(m.Content, "<run-stopped") {
+			t.Fatalf("stop notice leaked into the run history: %+v", runHistory)
+		}
+	}
+	if len(model.history) != 4 {
+		t.Fatalf("display history changed: %+v", model.history)
+	}
+}
+
+// A stop notice with no earlier Human leaves nothing to expand: the history
+// passes through unchanged (no prompt folding).
+func TestHistoryForRunStopNoticeWithoutEarlierHuman(t *testing.T) {
+	model := New(nil, nil, config.Config{WorkDir: t.TempDir()})
+	model.history = []messages.Message{
+		messages.AI("stale reply"),
+		messages.Human(`<run-stopped run="run-2" reason="parked_ttl"/>`),
+	}
+
+	runHistory, err := model.historyForRun()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runHistory) != 2 || runHistory[0].Content != "stale reply" ||
+		runHistory[1].Content != `<run-stopped run="run-2" reason="parked_ttl"/>` {
+		t.Fatalf("run history = %+v, want the unchanged passthrough", runHistory)
+	}
+}
+
 func TestInvalidFileReferenceKeepsDraftWithoutAppendingTranscript(t *testing.T) {
 	workspace := t.TempDir()
 	outside := filepath.Join(filepath.Dir(workspace), "outside.txt")

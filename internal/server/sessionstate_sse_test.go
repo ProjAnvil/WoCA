@@ -255,9 +255,10 @@ func TestSSELastEventIDReplayAndGap(t *testing.T) {
 func TestCancelWhileQueued(t *testing.T) {
 	a := newScriptedAgent(t, "first-reply")
 	s, srv, _ := newLedgerServer(t, a)
-	// Deviation note: same cleanup race as above — run1's transcript save
-	// fires after its done event (the cancelled queued run2 never persists,
-	// so exactly one save is expected).
+	// Deviation note: same cleanup race as above — saves trail their done
+	// events. Both runs persist now: run1's completed transcript AND the
+	// cancelled queued run2's derived stop-notice history (F1), so exactly
+	// two saves are expected and drained.
 	saved := make(chan string, 4)
 	s.sessions.testAfterSave = func(id string) { saved <- id }
 
@@ -277,10 +278,12 @@ func TestCancelWhileQueued(t *testing.T) {
 	}
 
 	waitRunDone(t, srv.URL, run1)
-	select {
-	case <-saved:
-	case <-time.After(10 * time.Second):
-		t.Fatal("transcript save not completed")
+	for i := 0; i < 2; i++ {
+		select {
+		case <-saved:
+		case <-time.After(10 * time.Second):
+			t.Fatal("transcript save not completed")
+		}
 	}
 	types := streamSince(t, srv.URL, run2, "", true)
 	if len(types) == 0 {
