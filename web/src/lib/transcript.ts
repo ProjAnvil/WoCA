@@ -7,14 +7,16 @@ let seq = 0
 export const nid = () => `i${Date.now().toString(36)}${(seq++).toString(36)}`
 
 // Harness-injected notification wrappers: background-shell/task completions,
-// cron-fired scheduled prompts, and input queued while a run was busy. Human
-// messages that start with one of these tags are machine notifications for
-// the model, never user speech — they render as dim system notices. The
-// prefixes stop at the tag name (no closing >) so wrappers carrying
-// attributes match too — the same tolerance the Go retain filter
+// cron-fired scheduled prompts, input queued while a run was busy, and the
+// derived stop notice a cancelled run persists (<run-stopped …/>,
+// stopmark.go). Human messages that start with one of these tags are machine
+// notifications for the model, never user speech — they render as dim system
+// notices. The prefixes stop at the tag name (no closing >) so wrappers
+// carrying attributes match too — the same tolerance the Go retain filter
 // (runQuestion) applies to these tags.
 // Canonical producer of the <tag> wrappers: Format in internal/agent/queue (Go).
-const NOTICE_TAGS = ['<background-task-completed', '<scheduled-task', '<queued-user-input']
+const RUN_STOPPED_TAG = '<run-stopped'
+const NOTICE_TAGS = ['<background-task-completed', '<scheduled-task', '<queued-user-input', RUN_STOPPED_TAG]
 
 // isNoticeContent reports whether a Human message's content is one of the
 // harness-injected notification wrappers (raw content, tags included).
@@ -22,6 +24,24 @@ const NOTICE_TAGS = ['<background-task-completed', '<scheduled-task', '<queued-u
 // sessions store's optimistic push) so both render them identically.
 export function isNoticeContent(content: string): boolean {
   return NOTICE_TAGS.some((tag) => content.startsWith(tag))
+}
+
+// isRunStoppedNotice reports whether notice content is a persisted
+// <run-stopped run="…" reason="…"/> wrapper — the stop notice the server
+// derives for a cancelled run. Shared by the reload path's dedup seeding
+// (the sessions store) and the notice card's copy routing (ChatItemView).
+export function isRunStoppedNotice(content: string): boolean {
+  return content.startsWith(RUN_STOPPED_TAG)
+}
+
+// parseRunStopped defensively extracts the run id and reason from a
+// persisted stop tag. The format is fixed by the server (fmt Sprintf with
+// double-quoted attributes), but a malformed or missing reason degrades to
+// 'user_stop' — the common cancel case — instead of surfacing raw.
+export function parseRunStopped(content: string): { run: string; reason: 'user_stop' | 'parked_ttl' } {
+  const run = /run="([^"]*)"/.exec(content)?.[1] ?? ''
+  const reason = /reason="([^"]*)"/.exec(content)?.[1] ?? ''
+  return { run, reason: reason === 'parked_ttl' ? 'parked_ttl' : 'user_stop' }
 }
 
 // Rebuild the UI item list from the backend's transcript (messages.Message
@@ -60,9 +80,10 @@ export function messagesToItems(msgs: TranscriptMessage[]): ChatItem[] {
         }
         if (isNoticeContent(content)) {
           // Harness-injected notification (background completion, scheduled
-          // task, queued input): a dim system notice, not a user bubble. Like
-          // the harness messages above it does not end a goal segment — the
-          // loop keeps narrating past it until the unified reply.
+          // task, queued input, persisted run stop): a dim system notice,
+          // not a user bubble. Like the harness messages above it does not
+          // end a goal segment — the loop keeps narrating past it until the
+          // unified reply.
           out.push({ id: nid(), kind: 'notice', content })
           break
         }

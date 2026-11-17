@@ -91,6 +91,7 @@ export default {
   toolStatusOk: 'Succeeded',
   toolStatusErr: 'Failed',
   generationStopped: 'Generation stopped',
+  runTimedOut: 'Stopped after waiting too long for approval',
   input: 'Input',
   output: 'Output',
   toolOutput: 'Tool output',

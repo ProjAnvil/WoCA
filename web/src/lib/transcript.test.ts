@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { messagesToItems, stripGoalReport } from './transcript'
+import { isNoticeContent, isRunStoppedNotice, messagesToItems, parseRunStopped, stripGoalReport } from './transcript'
 import type { TranscriptMessage } from '../types'
 
 function msg(over: Partial<TranscriptMessage>): TranscriptMessage {
@@ -112,6 +112,27 @@ describe('messagesToItems', () => {
     expect(items.filter((i) => i.kind === 'user')).toEqual([])
   })
 
+  it('renders a persisted run-stopped stop notice as a notice, not a user bubble', () => {
+    const items = messagesToItems([
+      msg({ role: 'user', content: 'go' }),
+      msg({ role: 'user', content: '<run-stopped run="run-9" reason="user_stop"/>' }),
+      msg({ role: 'user', content: 'again' }),
+    ])
+    // The stop tag is a machine notification: the user bubbles stay real
+    // speech, the tag becomes the one notice.
+    expect(items.filter((i) => i.kind === 'user').map((i) => i.content)).toEqual(['go', 'again'])
+    expect(items.filter((i) => i.kind === 'notice')).toEqual([
+      expect.objectContaining({ content: '<run-stopped run="run-9" reason="user_stop"/>' }),
+    ])
+  })
+
+  it('recognizes the run-stopped prefix via isNoticeContent', () => {
+    expect(isNoticeContent('<run-stopped run="run-9" reason="parked_ttl"/>')).toBe(true)
+    expect(isNoticeContent('<run-stop')).toBe(false)
+    expect(isRunStoppedNotice('<run-stopped run="run-9" reason="parked_ttl"/>')).toBe(true)
+    expect(isRunStoppedNotice('<queued-user-input>\nx\n</queued-user-input>')).toBe(false)
+  })
+
   it('folds a coalesced multi-block notification into one notice', () => {
     // CoalesceQueuedInputs joins several tagged blocks with a blank line.
     const content =
@@ -157,5 +178,24 @@ describe('stripGoalReport', () => {
   it('removes exactly the wrapping markers', () => {
     expect(stripGoalReport('<goal-report>\nbody\n</goal-report>')).toBe('body')
     expect(stripGoalReport('no markers')).toBe('no markers')
+  })
+})
+
+describe('parseRunStopped', () => {
+  it('extracts the run id and both reason variants', () => {
+    expect(parseRunStopped('<run-stopped run="run-9" reason="user_stop"/>')).toEqual({
+      run: 'run-9',
+      reason: 'user_stop',
+    })
+    expect(parseRunStopped('<run-stopped run="r1" reason="parked_ttl"/>')).toEqual({
+      run: 'r1',
+      reason: 'parked_ttl',
+    })
+  })
+
+  it('treats a malformed or missing reason attribute as a user stop', () => {
+    expect(parseRunStopped('<run-stopped run="r1"/>').reason).toBe('user_stop')
+    expect(parseRunStopped('<run-stopped reason="garbled"/>')).toEqual({ run: '', reason: 'user_stop' })
+    expect(parseRunStopped('<run-stopped/>').reason).toBe('user_stop')
   })
 })

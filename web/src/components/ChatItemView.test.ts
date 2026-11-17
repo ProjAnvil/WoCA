@@ -245,3 +245,40 @@ describe('collapsible cards', () => {
     expect(w.find('[inert]').exists()).toBe(true)
   })
 })
+
+describe('notice card content routing', () => {
+  const notice = (content: string): ChatItem => ({ id: 'n1', kind: 'notice', content }) as ChatItem
+
+  async function openNotice(w: ReturnType<typeof mountItem>) {
+    await w.get('.w-collapse-head').trigger('click')
+  }
+
+  it('renders a persisted parked_ttl stop as the timeout copy, not the raw tag', async () => {
+    const w = mountItem(notice('<run-stopped run="run-9" reason="parked_ttl"/>'))
+    await openNotice(w)
+    const text = w.get('.tool-output').text()
+    expect(text).toContain(i18n.global.t('chat.runTimedOut'))
+    expect(text).not.toContain('run-stopped')
+  })
+
+  it('renders a persisted user_stop stop as the stopped copy', async () => {
+    const w = mountItem(notice('<run-stopped run="run-9" reason="user_stop"/>'))
+    await openNotice(w)
+    const text = w.get('.tool-output').text()
+    expect(text).toContain(i18n.global.t('chat.generationStopped'))
+    expect(text).not.toContain('run-stopped')
+  })
+
+  it('treats a malformed stop tag as a user stop', async () => {
+    const w = mountItem(notice('<run-stopped/>'))
+    await openNotice(w)
+    expect(w.get('.tool-output').text()).toContain(i18n.global.t('chat.generationStopped'))
+  })
+
+  it('keeps rendering other notices raw', async () => {
+    const raw = '<queued-user-input>\ntyped while busy\n</queued-user-input>'
+    const w = mountItem(notice(raw))
+    await openNotice(w)
+    expect(w.get('.tool-output').text()).toContain(raw)
+  })
+})

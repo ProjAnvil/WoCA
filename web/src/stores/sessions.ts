@@ -16,7 +16,7 @@ import * as api from '../api/client'
 import i18n from '../i18n'
 import { truncate, baseName } from '../lib/format'
 import { asksOf, hitlCardKey } from '../lib/hitl'
-import { isNoticeContent, messagesToItems, nid } from '../lib/transcript'
+import { isNoticeContent, isRunStoppedNotice, messagesToItems, nid, parseRunStopped } from '../lib/transcript'
 import { useAgentStore, isPermissionMode, isThinkingLevel } from './agent'
 import { toErrorMessage } from '../lib/errors'
 import { useActivityStore } from './activity'
@@ -93,14 +93,15 @@ export const useSessionStore = defineStore('sessions', () => {
   const mutations = createItemMutations({ items, streamingId, reasoningId, goalNoteId, runId })
   const { list, push, closeStreaming, closeReasoning, closeGoalNote } = mutations
 
-  // Stopped-run marker (audit): a stopped run leaves nothing in the
-  // transcript — cancelled runs persist no assistant message (the server's
-  // finish path hands onDone nil), so the assistant side shows no trace.
-  // Two live signals cover it: the SSE done event's cancelled flag (other
-  // tabs, replays, reattach) and cancel()'s own confirmed stop (the
-  // cancelling tab aborts its stream before done can arrive). Both route
-  // through this per-run-guarded notice push — one marker per run, never
-  // two when the paths race.
+  // Stopped-run marker (audit): a stopped run's trace is covered by a live
+  // signal and a persisted one. Live: the SSE done event's cancelled flag
+  // (other tabs, replays, reattach) and cancel()'s own confirmed stop (the
+  // cancelling tab aborts its stream before done can arrive). Persisted: the
+  // <run-stopped …/> tag a cancelled run's derived history ends with, which
+  // the reload path (loadSession → messagesToItems) rebuilds as a notice.
+  // All routes funnel through this per-run-guarded notice push — one marker
+  // per run, never two when the paths race; the reload path seeds the guard
+  // from the persisted tags' run ids (the run attribute is the live key).
   const stoppedRunNotices = new Set<string>()
   function pushStoppedNotice(sid: string, rid: string) {
     if (!rid || stoppedRunNotices.has(rid)) return
@@ -303,7 +304,17 @@ export const useSessionStore = defineStore('sessions', () => {
       historyLoading.value = true
       try {
         const { messages } = await api.getSession(id)
-        items.value[id] = messagesToItems(messages)
+        const built = messagesToItems(messages)
+        items.value[id] = built
+        // Persisted stop notices claim their run ids in the stopped-run
+        // guard so a later live cancelled-done for the same run (reattach
+        // replay racing the reloaded history) cannot double-card it.
+        for (const it of built) {
+          if (it.kind === 'notice' && isRunStoppedNotice(it.content)) {
+            const rid = parseRunStopped(it.content).run
+            if (rid) stoppedRunNotices.add(rid)
+          }
+        }
         s.loaded = true
       } catch {
         items.value[id] = []

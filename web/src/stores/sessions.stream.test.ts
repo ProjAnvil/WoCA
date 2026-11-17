@@ -158,6 +158,35 @@ describe('live-block lifecycle', () => {
     expect(store.activeStatus).toBe('done')
     void sent
   })
+
+  it('a reloaded persisted stop notice suppresses the live cancelled-done card for the same run', async () => {
+    // Cancelled runs persist a derived history ending in the stop tag; a
+    // reload rebuilds it as a notice while the run's stream can still
+    // replay its cancelled done (reattach race) — items must keep exactly
+    // one notice for that run id.
+    api.getSession.mockReset().mockResolvedValue({
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'user', content: '<run-stopped run="run-1" reason="user_stop"/>' },
+      ],
+    })
+    const store = seedStore()
+    const s = store.sessions.find((x) => x.id === 'session-1')
+    if (s) s.loaded = false
+    await store.loadSession('session-1')
+    expect(store.activeItems.filter((i) => i.kind === 'notice')).toEqual([
+      expect.objectContaining({ content: '<run-stopped run="run-1" reason="user_stop"/>' }),
+    ])
+
+    // The same run's stream lands its cancelled done afterwards — the
+    // persisted notice already claimed the run id, so no second card.
+    const sent = store.send('again')
+    await vi.waitFor(() => expect(handlers.onDelta).toBeTruthy())
+    handlers.onDelta('partial')
+    handlers.onDone(true)
+    expect(store.activeItems.filter((i) => i.kind === 'notice')).toHaveLength(1)
+    void sent
+  })
 })
 
 describe('queue admission and promotion', () => {

@@ -5,6 +5,7 @@ import { Bell, Brain, Bug, Check, ChevronDown, Copy, Loader2, Target, X } from '
 import type { ChatItem } from '../types'
 import { renderMarkdown, markdownToPlain } from '../lib/markdown'
 import { decorateCodeBlocks, highlightCodeBlocks } from '../lib/codeBlocks'
+import { isRunStoppedNotice, parseRunStopped } from '../lib/transcript'
 import { useSmoothStream } from '../composables/useSmoothStream'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
@@ -125,6 +126,17 @@ watch(goalNoteStreaming, (live) => {
 const noticeContent = computed(() => {
   const it = props.item
   return it.kind === 'notice' ? it.content : ''
+})
+// Persisted stop tags (<run-stopped …/>) route to localized copy instead of
+// the raw machine tag: an approval-wait timeout (parked_ttl) reads as a
+// timeout, anything else — malformed or missing reason included — as a
+// plain stop. Every other notice keeps rendering its raw content.
+const noticeBody = computed(() => {
+  const content = noticeContent.value
+  if (isRunStoppedNotice(content)) {
+    return parseRunStopped(content).reason === 'parked_ttl' ? t('chat.runTimedOut') : t('chat.generationStopped')
+  }
+  return content
 })
 // Notices are static (harness-injected, never streamed): start collapsed.
 const noticeOpen = ref(false)
@@ -328,12 +340,12 @@ function copyDebugInfo() {
   </WCollapseCard>
 
   <!-- harness notification (background completion / scheduled task / queued
-       input): compact dim system notice — collapsed monospace card, no avatar,
-       never a user bubble -->
+       input / persisted run stop): compact dim system notice — collapsed
+       monospace card, no avatar, never a user bubble -->
   <WCollapseCard class="stream-card" v-else-if="item.kind === 'notice'" :title="t('chat.notice')" :open="noticeOpen" @update:open="noticeOpen = $event">
     <template #icon><Bell :size="13" /></template>
     <template v-if="noticeOpen">
-      <pre class="tool-output">{{ noticeContent }}</pre>
+      <pre class="tool-output">{{ noticeBody }}</pre>
     </template>
   </WCollapseCard>
 

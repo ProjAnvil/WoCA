@@ -91,6 +91,7 @@ export default {
   toolStatusOk: '成功',
   toolStatusErr: '出错',
   generationStopped: '已停止生成',
+  runTimedOut: '等待审批超时已停止',
   input: '输入',
   output: '输出',
   toolOutput: '工具输出',
