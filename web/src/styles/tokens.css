@@ -263,20 +263,29 @@ html.theme-anim {
   --gate-ink-ok: #57c973;
   --gate-ink-glass: rgba(32, 32, 36, 0.5);
 
-  /* Chat column (messages + tool cards). Widens by display size below so
-     wide monitors get more room for content. */
+  /* Chat column (messages + tool cards). Base tier; wide screens read
+     narrow by design — see the tier-change note below. */
   --chat-col: 860px;
 }
 
-/* Wider chat content on larger displays. */
+/* Wide screens read narrow by design (UI follow-ups F3, 2026-11-18):
+   >=1440 NARROWS the column 860 -> 760 and >=1800 caps it at 760. The
+   crossing at 1440 is deliberate semantics (the 2026-11-17 audit P1-1
+   line-length criticism), a tier CHANGE rather than a min() clamp.
+   Anti-regression: --chat-col is one variable consumed by nine aligned
+   surfaces — .message (chat.css), .stream-card (panels.css),
+   .msg-skeleton-wrap (base.css), .stream-liveness (overlays.css),
+   .queue-badge (chat.css), .chat-input-inner, .input-toolbar,
+   .attach-tray, .ac-popup (composer.css). A tier edit here realigns all
+   nine with zero selector changes; never narrow one consumer alone. */
 @media (min-width: 1440px) {
   :root {
-    --chat-col: 960px;
+    --chat-col: 760px;
   }
 }
 @media (min-width: 1800px) {
   :root {
-    --chat-col: 1100px;
+    --chat-col: 760px;
   }
 }
 
