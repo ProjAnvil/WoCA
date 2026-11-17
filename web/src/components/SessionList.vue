@@ -145,11 +145,12 @@ async function removeSession(s: Session) {
           </button>
           <button
             class="session-del"
+            type="button"
             :title="t('sidebar.deleteSession')"
             :aria-label="t('sidebar.deleteSession')"
             @click="removeSession(s)"
           >
-            <Trash2 :size="12" />
+            <Trash2 :size="12" aria-hidden="true" />
           </button>
           </div>
         </div>
@@ -157,3 +158,24 @@ async function removeSession(s: Session) {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Touch-target fixes (w320 audit) layered over the shared row styles in
+   styles/layout.css (owned by another workstream — scoped selectors here
+   win the cascade without touching that file). */
+/* The shared rule sizes the delete affordance at 22px; 24px is the minimum
+   reliable hit target. */
+.session-del {
+  width: 24px;
+  height: 24px;
+}
+/* Hover-only reveal leaves keyboard users a hidden target: surface it as
+   soon as anything inside the row takes focus, and keep it fully visible
+   while it is the focused element. */
+.session-row:focus-within .session-del {
+  opacity: 0.55;
+}
+.session-del:focus-visible {
+  opacity: 1;
+}
+</style>

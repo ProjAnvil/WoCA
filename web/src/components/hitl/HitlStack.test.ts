@@ -121,7 +121,7 @@ describe('card answering', () => {
     })
   })
 
-  it('allow-for-session posts the session grant and the button previews the rule key', async () => {
+  it('allow-for-session posts the session grant and the card previews the rule key', async () => {
     const { w } = mountStack([permCard('call-aaaa', 'approval:se1')])
     await flush(w)
     expect(w.get('[data-testid="hitl-rule-key-call-aaaa"]').text()).toContain('bash:git call-aaaa*')
@@ -179,5 +179,54 @@ describe('grants footnote', () => {
     expect(chip.text()).toContain('2')
     await chip.trigger('click')
     expect(w.findComponent({ name: 'GrantsPanel' }).exists()).toBe(true)
+  })
+})
+
+describe('approval readability fixes (375px audit)', () => {
+  it('renders the head counter: last visible index over total, fold included', async () => {
+    const cards = ['aaaa', 'bbbb', 'cccc', 'dddd', 'eeee'].map((n, i) => permCard(`call-${n}`, `approval:se${i + 1}`))
+    const { w } = mountStack(cards)
+    await flush(w)
+    const count = w.get('[data-testid="hitl-stack-count"]')
+    // Collapsed: three cards in view of five pending.
+    expect(count.text()).toBe(i18n.global.t('chat.cardPosition', { n: 3, m: 5 }))
+    await w.get('[data-testid="hitl-queue-more"]').trigger('click')
+    // The fold reveal counts: every card is now in view.
+    expect(count.text()).toBe(i18n.global.t('chat.cardPosition', { n: 5, m: 5 }))
+  })
+
+  it('wraps long args in a capped pre with an expand toggle; short args get none', async () => {
+    const longCommand = `sleep 6 && run_in_background ${'x'.repeat(400)}`
+    const { w } = mountStack([permCard('call-aaaa', 'approval:se1', { tool_args: { command: longCommand } })])
+    await flush(w)
+    const card = w.get('[data-testid="hitl-card-call-aaaa"]')
+    const pre = card.get('pre.hitl-tool-args')
+    // Collapsed by default; the full command text is in the DOM.
+    expect(pre.classes()).toContain('is-collapsed')
+    expect(pre.text()).toContain('run_in_background')
+    const toggle = w.get('[data-testid="hitl-args-toggle-call-aaaa"]')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    await toggle.trigger('click')
+    expect(w.get('[data-testid="hitl-args-toggle-call-aaaa"]').attributes('aria-expanded')).toBe('true')
+    expect(card.get('pre.hitl-tool-args').classes()).not.toContain('is-collapsed')
+    // Short args never overflow the 8-line cap: no toggle noise.
+    const { w: short } = mountStack([permCard('call-bbbb', 'approval:se2')])
+    await flush(short)
+    expect(short.find('[data-testid="hitl-args-toggle-call-bbbb"]').exists()).toBe(false)
+  })
+
+  it('renders the rule key as its own line outside the session button; testids survive', async () => {
+    const { w } = mountStack([permCard('call-aaaa', 'approval:se1')])
+    await flush(w)
+    const session = w.get('[data-testid="hitl-grant-session-call-aaaa"]')
+    const key = w.get('[data-testid="hitl-rule-key-call-aaaa"]')
+    expect(key.text()).toContain('bash:git call-aaaa*')
+    // The button keeps just its label; the key lives outside any button.
+    expect(session.text().trim()).toBe(i18n.global.t('chat.approveSession'))
+    expect(key.element.closest('button')).toBe(null)
+    // The three action testids (e2e contract) are unchanged.
+    for (const tid of ['hitl-deny-call-aaaa', 'hitl-grant-session-call-aaaa', 'hitl-allow-call-aaaa']) {
+      expect(w.find(`[data-testid="${tid}"]`).exists()).toBe(true)
+    }
   })
 })

@@ -90,6 +90,7 @@ function onConfirm() {
 }
 .w-confirm-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-3);
 }

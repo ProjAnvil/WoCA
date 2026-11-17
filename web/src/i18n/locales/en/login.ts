@@ -1,6 +1,6 @@
 export default {
   tagline: 'Your AI agent workspace',
-  pairQR: 'Sign in on your phone',
+  pairQR: 'Scan to sign in',
   pairQRHint: 'Scan to open this page on your phone, then enter the same API key.',
   revoked: 'Your key has been revoked by your organization. Contact your administrator to get a new one.',
   hint: 'Sign in with the API key your administrator gave you',

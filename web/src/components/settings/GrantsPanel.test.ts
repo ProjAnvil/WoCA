@@ -61,4 +61,15 @@ describe('grants panel', () => {
     await w.get('.hitl-grants-scrim').trigger('click')
     expect(w.emitted('close')).toBeTruthy()
   })
+
+  it('closes from the lucide X icon button (labelled, no text glyph)', async () => {
+    const w = mountPanel()
+    await flush(w)
+    const close = w.get('.card-head .icon-btn')
+    expect(close.attributes('aria-label')).toBe(i18n.global.t('common.close'))
+    expect(close.find('svg').exists()).toBe(true)
+    expect(close.text()).not.toContain('✕')
+    await close.trigger('click')
+    expect(w.emitted('close')).toBeTruthy()
+  })
 })

@@ -112,8 +112,8 @@ function toggleLayer(layer: string) {
           {{ t('memory.title') }}
           <span class="mem-ws">{{ memory.workspaceName || t('memory.defaultWorkspace') }}</span>
         </span>
-        <button class="icon-btn" @click="memory.close()">
-          <X :size="16" />
+        <button class="icon-btn" type="button" :aria-label="t('common.close')" @click="memory.close()">
+          <X :size="16" aria-hidden="true" />
         </button>
       </div>
 
@@ -177,8 +177,14 @@ function toggleLayer(layer: string) {
             <div class="mem-item-head">
               <span class="mem-badge" :class="m.layer">{{ label(m) }}</span>
               <span class="mem-time">{{ fmtTime(m.updated_at) }}</span>
-              <button class="mem-del" :title="t('memory.forget')" @click="removeItem(m)">
-                <Trash2 :size="12" />
+              <button
+                class="mem-del"
+                type="button"
+                :title="t('memory.forget')"
+                :aria-label="t('memory.forget')"
+                @click="removeItem(m)"
+              >
+                <Trash2 :size="14" aria-hidden="true" />
               </button>
             </div>
             <div class="mem-summary">{{ m.summary }}</div>
@@ -192,8 +198,14 @@ function toggleLayer(layer: string) {
             <div class="mem-item-head">
               <span class="mem-badge" :class="m.layer">{{ label(m) }}</span>
               <span class="mem-time">{{ fmtTime(m.updated_at) }}</span>
-              <button class="mem-del" :title="t('memory.forget')" @click="removeItem(m)">
-                <Trash2 :size="12" />
+              <button
+                class="mem-del"
+                type="button"
+                :title="t('memory.forget')"
+                :aria-label="t('memory.forget')"
+                @click="removeItem(m)"
+              >
+                <Trash2 :size="14" aria-hidden="true" />
               </button>
             </div>
             <div class="mem-summary">{{ m.summary }}</div>

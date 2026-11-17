@@ -123,6 +123,31 @@ describe('ActivityTrigger open/close', () => {
     w.unmount()
   })
 
+  it('positions against the card\'s measured width, not a hardcoded 400 (w375 audit)', async () => {
+    const w = mountAttached()
+    // A trigger flush to the right edge: the popover clamps to vw - w - 8.
+    vi.spyOn(triggerButton(), 'getBoundingClientRect').mockReturnValue({
+      x: 1900,
+      y: 0,
+      left: 1900,
+      top: 0,
+      right: 2000,
+      bottom: 10,
+      width: 100,
+      height: 10,
+      toJSON: () => ({}),
+    } as DOMRect)
+    // Test DOMs do no layout: give the rendered card its real 440px width.
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(440)
+    await w.get('button').trigger('click')
+    await flush()
+    const pop = popover() as HTMLElement
+    // vw(1024) - 440 - 8 = 576. The old hardcoded w=400 produced 616px —
+    // 40px adrift of the 440px card's true right edge.
+    expect(pop.style.left).toBe('576px')
+    w.unmount()
+  })
+
   it('closes on Esc and returns focus to the trigger button', async () => {
     const w = mountAttached()
     await w.get('button').trigger('click')

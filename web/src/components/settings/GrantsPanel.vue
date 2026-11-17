@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { X } from 'lucide-vue-next'
 import { useFocusTrap } from '../../composables/useFocusTrap'
 import { toErrorMessage } from '../../lib/errors'
 import { listGrants, revokeGrant } from '../../api/client'
@@ -70,7 +71,9 @@ async function revoke(key: string) {
       <div ref="panel" class="card hitl-grants-card" role="dialog" aria-modal="true" :aria-label="t('chat.grantedRules', { count: grants.length })" tabindex="-1">
         <div class="card-head">
           <span class="card-title">{{ t('chat.grantedRules', { count: grants.length }) }}</span>
-          <button class="icon-btn" type="button" :aria-label="t('common.close')" @click="emit('close')">✕</button>
+          <button class="icon-btn" type="button" :aria-label="t('common.close')" @click="emit('close')">
+            <X :size="14" aria-hidden="true" />
+          </button>
         </div>
         <div class="card-body">
           <div v-if="error" class="hitl-grants-error" role="alert">{{ error }}</div>

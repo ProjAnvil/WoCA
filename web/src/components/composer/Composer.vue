@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Bot, Paperclip, Send, Sparkles, Square } from 'lucide-vue-next'
 import QueueBadge from './QueueBadge.vue'
@@ -89,6 +89,31 @@ const { ac, acItems, updateAc, closeAc, onBlurCloseAc, acceptAc, onKeydown } = u
   onEnter: send,
 })
 
+/* --------------------- autocomplete popup clamping ------------------------- */
+
+// Audit 14/15: the popup is CSS-anchored to the composer column, which does
+// not always align with the viewport — the rendered left edge is clamped to
+// [12, innerWidth - width - 12] so nothing crosses either viewport edge.
+// Vertical behavior (opens above the input row) is unchanged; the shift is
+// re-measured whenever the popup reopens or its item set (width) changes.
+const acPopEl = ref<HTMLElement | null>(null)
+const acShift = ref(0)
+
+watch(
+  () => [ac.value.open, acItems.value.length] as const,
+  async ([open]) => {
+    acShift.value = 0
+    if (!open) return
+    await nextTick()
+    const el = acPopEl.value
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const minLeft = 12
+    const maxLeft = Math.max(minLeft, window.innerWidth - r.width - 12)
+    if (r.left < minLeft || r.left > maxLeft) acShift.value = maxLeft - r.left
+  },
+)
+
 /* ---------------------------- mode cycling (Shift+Tab) --------------------- */
 
 // Shift+Tab cycles the permission mode right in the composer (Cursor /
@@ -176,8 +201,16 @@ defineExpose({ fillPrompt, focus })
 
     <ComposerChips />
 
-    <!-- autocomplete popup: / for skills, @ for subagents -->
-    <div v-if="ac.open && acItems.length" class="ac-popup">
+    <!-- autocomplete popup: / for skills, @ for subagents. The anchor is the
+         chat column, so on narrow shells the CSS left can fall outside the
+         viewport — acShift (measured by the watcher above) translates the
+         card back inside a 12px guard band. -->
+    <div
+      v-if="ac.open && acItems.length"
+      ref="acPopEl"
+      class="ac-popup"
+      :style="acShift ? { transform: `translateX(${acShift}px)` } : undefined"
+    >
       <div class="ac-header">
         {{ ac.kind === 'skill' ? t('chat.acSkills') : t('chat.acAgents') }}
       </div>

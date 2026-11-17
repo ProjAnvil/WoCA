@@ -143,18 +143,32 @@
   font-size: 11px;
   opacity: 0.5;
 }
+/* Forget button: 20px visual (14px glyph + padding) with a 40px invisible
+   hit surface (w320 audit — 16px with no label missed on touch). */
 .mem-del {
+  position: relative;
   border: none;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
   opacity: 0.45;
   cursor: pointer;
-  padding: 2px;
+  padding: 3px;
   display: inline-flex;
+}
+.mem-del::after {
+  content: '';
+  position: absolute;
+  inset: -10px;
 }
 .mem-del:hover {
   opacity: 1;
   color: var(--danger);
+}
+.mem-del:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 .mem-summary {
   font-size: 13px;

@@ -15,7 +15,9 @@ vi.mock('../api/client', async (importOriginal) => {
 
 import SettingsPanel from './SettingsPanel.vue'
 import { useAuthStore } from '../stores/auth'
+import { useServerSettingsStore } from '../stores/serverSettings'
 import type { BridgeStatus } from '../api/client'
+import type { AppSettings } from '../types'
 
 function bridgeStatus(over: Partial<BridgeStatus> = {}): BridgeStatus {
   return {
@@ -87,6 +89,75 @@ describe('SettingsPanel', () => {
     expect(nav.join('|')).not.toContain('Access point')
     expect(nav.join('|')).not.toContain('Administration')
     expect(q('.nav-logout')).toBeNull()
+  })
+
+  it('labels the card close button (audit: icon-only, no accessible name)', async () => {
+    mountPanel()
+    await flushPromises()
+    // The header X carried no aria-label — screen readers announced an
+    // unnamed button in every settings section.
+    const close = q('.card-head .icon-btn')
+    expect(close).not.toBeNull()
+    expect(close!.getAttribute('aria-label')).toBe(i18n.global.t('common.close'))
+  })
+
+  // The nav renders localized labels; mapping each id through the same
+  // message catalog the template uses keeps the assertion id-exact without
+  // pinning English copy in the test.
+  function navLabelsFor(ids: string[]): string[] {
+    return ids.map((id) => i18n.global.t(`settings.nav.${id}`))
+  }
+
+  it('renders the section nav as a real navigation list in the exact base order', async () => {
+    mountPanel()
+    await flushPromises()
+    const nav = q('.settings-nav')
+    expect(nav).not.toBeNull()
+    // The responsive chip-row restyle keys off this element + its items.
+    // Personal edition without the message plane: the ten base entries in
+    // order — storage must be reachable and msgplane absent.
+    const ids = [
+      'appearance',
+      'preferences',
+      'provider',
+      'claudeenv',
+      'plugins',
+      'websearch',
+      'storage',
+      'memory',
+      'model',
+      'stats',
+    ]
+    const items = all('.settings-nav .settings-nav-item:not(.nav-logout)')
+    expect(items.length).toBe(ids.length)
+    for (const item of items) {
+      expect(item.tagName).toBe('BUTTON')
+    }
+    expect(navLabels()).toEqual(navLabelsFor(ids))
+  })
+
+  it('inserts msgplane exactly once between storage and memory when the plane is available', async () => {
+    mountPanel()
+    const serverSettings = useServerSettingsStore()
+    serverSettings.server = { msg_plane_available: true } as AppSettings
+    await flushPromises()
+    // Enterprise posture: same base order with the message-plane entry
+    // wedged between storage and memory — exactly once (a duplicate insert
+    // would also duplicate the v-for :key).
+    const ids = [
+      'appearance',
+      'preferences',
+      'provider',
+      'claudeenv',
+      'plugins',
+      'websearch',
+      'storage',
+      'msgplane',
+      'memory',
+      'model',
+      'stats',
+    ]
+    expect(navLabels()).toEqual(navLabelsFor(ids))
   })
 
   it('shows the bridge surfaces for an enrolled admin', async () => {

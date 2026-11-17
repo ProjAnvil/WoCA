@@ -93,7 +93,11 @@ function place(): void {
   const r = btn.getBoundingClientRect()
   const vw = window.innerWidth
   const vh = window.innerHeight
-  const w = Math.min(400, vw - 16)
+  // Measure the card instead of guessing its width: the card's CSS is
+  // min(440px, 100vw - 16px) and a hardcoded 400 left the right-aligned
+  // popover 40px off the trigger's edge. Fallback matches the CSS
+  // expression for the not-yet-laid-out (test DOM) case.
+  const w = card.offsetWidth || Math.min(440, vw - 16)
   const h = card.offsetHeight || 320
   const left = Math.max(8, Math.min(r.right - w, vw - w - 8))
   const roomBelow = r.bottom + 8 + h <= vh

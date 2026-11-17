@@ -17,6 +17,47 @@
   border-right: 1px solid var(--border);
 }
 
+/* ≤640px: the sidebar stops being a flex column and becomes an overlay
+   drawer (default collapsed; the hamburger in the chat header opens it —
+   see stores/ui.ts). Same idiom as the right-sidebar overlay in
+   panels.css: absolutely positioned over the shell + shadow. Deliberately
+   no transform-based slide: a transformed ancestor would become the
+   containing block for the fixed-position dialogs rendered inside the
+   sidebar (.overlay / FolderPicker / StatusModal) and break their
+   viewport anchoring. z sits above the right-sidebar overlay (30) so the
+   most recently opened drawer wins, and below modal overlays (40). */
+@media (max-width: 640px) {
+  .main {
+    min-width: 0;
+  }
+  .sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 35;
+    width: min(280px, 86vw);
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar:not(.open) {
+    display: none;
+  }
+  .sidebar-backdrop {
+    display: block;
+  }
+}
+
+/* Drawer veil: the .overlay backdrop idiom (panels.css) reused, shown only
+   while the drawer is open on a ≤640px shell. */
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 34;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(2px);
+}
+
 .sidebar-body {
   flex: 1;
   overflow-y: auto;
@@ -207,6 +248,22 @@ body.ws-resizing {
 .ws-dialog {
   width: 440px;
   max-width: 100%;
+  /* Short/narrow viewports (w320 audit): the centered card used to tower
+     past the viewport and clip its action row. Cap the height, keep the
+     chrome rows pinned and scroll the body instead. */
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.ws-dialog .card-head,
+.ws-dialog .interrupt-actions {
+  flex: 0 0 auto;
+}
+.ws-dialog .card-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .ws-dialog-hint {
   margin: 8px 0 0;

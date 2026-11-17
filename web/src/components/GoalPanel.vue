@@ -57,8 +57,8 @@ async function setGoal() {
           <Target :size="15" />
           {{ t('goal.title') }}
         </span>
-        <button class="icon-btn" @click="close()">
-          <X :size="16" />
+        <button class="icon-btn" type="button" :aria-label="t('common.close')" @click="close()">
+          <X :size="16" aria-hidden="true" />
         </button>
       </div>
 

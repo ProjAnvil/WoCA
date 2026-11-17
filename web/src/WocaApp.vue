@@ -21,6 +21,7 @@ import { useSettingsStore } from './stores/settings'
 import { useServerSettingsStore } from './stores/serverSettings'
 import { useWorkspaceStore } from './stores/workspace'
 import { useSessionStore } from './stores/sessions'
+import { useUiStore } from './stores/ui'
 import { useMemoryStore } from './stores/memory'
 import { useCompletionsStore } from './stores/completions'
 
@@ -29,6 +30,7 @@ const settings = useSettingsStore()
 const serverSettings = useServerSettingsStore()
 const workspace = useWorkspaceStore()
 const sessions = useSessionStore()
+const ui = useUiStore()
 const memory = useMemoryStore()
 const completions = useCompletionsStore()
 const auth = useAuthStore()
@@ -40,7 +42,10 @@ const commands = useAppCommands()
 // ⌘K toggles the palette (the everything-else fallback), ⌘J toggles the
 // workspace panel. Double-Esc (<300ms) interrupts the active run — but Esc
 // inside the composer belongs to autocomplete close, and while the palette
-// is open it belongs to the palette, so both contexts are excluded.
+// is open it belongs to the palette, so both contexts are excluded. The
+// ≤640px sidebar drawer also owns Esc while open (its handler in
+// Sidebar.vue closes it); skipping here keeps a quick double-press from
+// closing the drawer AND cancelling a live run in one gesture.
 let lastEsc = 0
 
 function onGlobalKeydown(e: KeyboardEvent) {
@@ -57,6 +62,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
   }
   if (e.key === 'Escape' && !e.isComposing) {
     if (palette.open) return
+    if (ui.sidebarOpen) return
     if (document.activeElement instanceof HTMLTextAreaElement) return
     const now = Date.now()
     if (now - lastEsc < 300 && ['running', 'awaiting', 'queued'].includes(sessions.activeStatus)) {

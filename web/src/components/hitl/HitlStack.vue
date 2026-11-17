@@ -33,6 +33,9 @@ const expanded = ref(false)
 const visible = computed(() => cards.value.slice(0, FOLD_AT))
 const folded = computed(() => cards.value.slice(FOLD_AT))
 const hiddenCount = computed(() => Math.max(0, cards.value.length - FOLD_AT))
+// Head counter "item n of m": the 1-based index of the last card in view
+// (the fold reveal counts too) over the total pending.
+const shownCount = computed(() => (expanded.value ? cards.value.length : visible.value.length))
 
 // Modal semantics (WModal precedent): dialog role + focus trap; the
 // announcer node lives INSIDE the scrim so live regions are never inert.
@@ -88,15 +91,20 @@ onMounted(() => void refreshGrants())
 
         <div class="hitl-stack-head">
           <span class="hitl-stack-title">{{ t('chat.awaitingConfirm') }}</span>
-          <button
-            v-if="grants.length"
-            class="hitl-grants-chip"
-            type="button"
-            data-testid="grants-chip"
-            @click="grantsOpen = true"
-          >
-            {{ t('chat.grantedRules', { count: grants.length }) }}
-          </button>
+          <span class="hitl-stack-meta">
+            <span class="hitl-stack-count" data-testid="hitl-stack-count">{{
+              t('chat.cardPosition', { n: shownCount, m: cards.length })
+            }}</span>
+            <button
+              v-if="grants.length"
+              class="hitl-grants-chip"
+              type="button"
+              data-testid="grants-chip"
+              @click="grantsOpen = true"
+            >
+              {{ t('chat.grantedRules', { count: grants.length }) }}
+            </button>
+          </span>
         </div>
 
         <TransitionGroup name="hitl-settle" tag="div" class="hitl-stack-list">
@@ -161,6 +169,17 @@ onMounted(() => void refreshGrants())
 .hitl-stack-title {
   font-weight: 600;
   color: var(--text);
+}
+.hitl-stack-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.hitl-stack-count {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 .hitl-grants-chip {
   background: none;

@@ -16,6 +16,8 @@ export default {
   memoryTitle: '查看这个工作区的记忆',
   collapseWorkspace: '收起工作区文件',
   expandWorkspace: '展开工作区文件',
+  toggleSessions: '会话列表',
+  statusDisabled: '未启用',
   permissionMode: '权限模式',
   switchModeTitle: '切换权限模式',
   thinkingLabel: '思考',
@@ -108,6 +110,9 @@ export default {
   pendingCount: '还有 {count} 项待确认',
   requestCancelled: '取消',
   requestTimedOut: '已超时',
+  cardPosition: '第 {n} / 共 {m} 项',
+  expandArgs: '展开完整命令',
+  collapseArgs: '收起',
   sourceMain: '主代理',
   grantedRules: '{count} 项会话授权 · 管理',
   // 面板所需的少量补充键（§4.1 清单之外的最小集）

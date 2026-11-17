@@ -80,11 +80,11 @@ const sections = computed(() => [
   ...(statusInfo.value?.edition === 'bridge'
     ? [{ id: 'managed', label: 'settings.nav.managed', icon: CloudDownload }]
     : []),
-  ...baseSections.slice(4, 6), // plugins, storage
+  ...baseSections.slice(4, 7), // plugins, websearch, storage
   ...(server.server?.msg_plane_available
     ? [{ id: 'msgplane', label: 'settings.nav.msgplane', icon: Radio }]
     : []),
-  ...baseSections.slice(7), // memory, model, stats
+  ...baseSections.slice(8), // memory, model, stats
   // The bridge switcher (access point) appears only behind an edge access
   // point — the probe answers null on direct-bridge and personal
   // origins, so nothing else changes shape.
@@ -219,8 +219,8 @@ onBeforeUnmount(() => {
     <div class="card settings-card">
       <div class="card-head">
         <span class="card-title">{{ t('settings.title') }}</span>
-        <button class="icon-btn" @click="settings.closePanel()">
-          <X :size="16" />
+        <button class="icon-btn" type="button" :aria-label="t('common.close')" @click="settings.closePanel()">
+          <X :size="16" aria-hidden="true" />
         </button>
       </div>
 
@@ -334,7 +334,10 @@ onBeforeUnmount(() => {
 <style scoped>
 .settings-card {
   width: min(880px, 94vw);
-  height: min(640px, 86vh);
+  /* Content-sized, viewport-capped (w320 audit): a short section no longer
+     pads the card to a fixed 640px, and long sections scroll inside. */
+  height: fit-content;
+  max-height: 86vh;
   max-width: 100%;
   display: flex;
   flex-direction: column;
@@ -434,6 +437,16 @@ onBeforeUnmount(() => {
   padding: 6px 24px 16px;
 }
 
+/* Switch rows inside the sections: the shared pill (panels.css) is 36×20 —
+   under the 24px minimum hit target (w320 audit). The visual pill stays
+   untouched; an invisible ::before grows the button's hit surface to
+   44×24. Scoped to the settings content so the rule cannot leak. */
+.settings-content :deep(.switch)::before {
+  content: '';
+  position: absolute;
+  inset: -2px -4px;
+}
+
 /* Managed-domains banner: lock + who manages it + where to look. */
 .managed-banner {
   display: flex;
@@ -478,5 +491,60 @@ onBeforeUnmount(() => {
   padding: 12px 20px;
   border-top: 1px solid var(--border);
   background: var(--surface);
+}
+
+/* Narrow viewports (w320/w375 audit): the 168px sidebar column starves the
+   content pane (~83px at w320). The nav becomes a horizontally scrolling
+   chip row above the content; the selected chip keeps the token accent
+   (black on white / inverted in dark) — no new colors. */
+@media (max-width: 768px) {
+  .settings-layout {
+    flex-direction: column;
+  }
+  .settings-nav {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 12px 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .settings-nav-item {
+    flex: 0 0 auto;
+    display: inline-flex;
+    padding: 5px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .settings-nav-item.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+    box-shadow: none;
+  }
+  .settings-nav-footer {
+    /* The identity/logout block rides along at the row's end. */
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    margin-top: 0;
+    margin-left: auto;
+    padding-top: 0;
+    padding-left: 10px;
+    border-top: none;
+  }
+  .nav-identity {
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 0 4px;
+  }
+  .settings-content {
+    padding: 6px 14px 16px;
+  }
 }
 </style>

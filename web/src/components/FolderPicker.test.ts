@@ -53,6 +53,21 @@ describe('folder picker', () => {
     expect(w.emitted('select')?.[0]).toEqual(['/home/u/proj'])
   })
 
+  it('pick is a real, labeled, focusable button that picks without navigating (audit)', async () => {
+    const w = mountPicker()
+    await settled(w)
+    const pick = w.get('.fp-pick')
+    // Was an opacity-0 SVG with @click — mouse-only and unannounced.
+    expect(pick.element.tagName).toBe('BUTTON')
+    expect(pick.attributes('aria-label')).toBe(i18n.global.t('fs.pick'))
+    expect(pick.attributes('tabindex')).toBeUndefined() // keyboard reachable
+    api.fsList.mockClear()
+    await pick.trigger('click')
+    expect(w.emitted('select')?.[0]).toEqual(['/home/u/proj'])
+    // Picking must not also drill into the directory (no sibling bubbling).
+    expect(api.fsList).not.toHaveBeenCalled()
+  })
+
   it('navigates up via the parent button and refreshes via the toolbar', async () => {
     const w = mountPicker()
     await settled(w)

@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { AlertTriangle, CheckCircle2, Info, XCircle } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from 'lucide-vue-next'
 import { useToastStore } from '../stores/toast'
 
-// The single toast renderer (mounted at the app root). Auto-expires; a
-// click dismisses early; an action button runs its handler instead.
+// The single toast renderer (mounted at the app root). Auto-expires; an
+// explicit labeled close button dismisses early (the whole-toast click
+// target was an unlabeled, keyboard-unreachable affordance); an action
+// button runs its handler instead.
+const { t } = useI18n()
 const toast = useToastStore()
 
 const ICONS = {
@@ -22,23 +26,27 @@ function runAction(id: number, run: () => void) {
 <template>
   <div v-if="toast.toasts.length" class="toast-stack" aria-live="polite">
     <TransitionGroup name="rise">
+      <!-- Loop var is `item` on purpose: the i18n `t` from useI18n must not
+           be shadowed inside the row. -->
       <div
-        v-for="t in toast.toasts"
-        :key="t.id"
+        v-for="item in toast.toasts"
+        :key="item.id"
         class="toast"
-        :class="`toast-${t.kind}`"
+        :class="`toast-${item.kind}`"
         role="status"
-        @click="toast.dismiss(t.id)"
       >
-      <component :is="ICONS[t.kind]" :size="15" class="toast-icon" aria-hidden="true" />
-      <span class="toast-message">{{ t.message }}</span>
+      <component :is="ICONS[item.kind]" :size="15" class="toast-icon" aria-hidden="true" />
+      <span class="toast-message">{{ item.message }}</span>
       <button
-        v-if="t.action"
+        v-if="item.action"
         class="toast-action"
         type="button"
-        @click.stop="runAction(t.id, t.action.run)"
+        @click.stop="runAction(item.id, item.action.run)"
       >
-        {{ t.action.label }}
+        {{ item.action.label }}
+      </button>
+      <button class="toast-close" type="button" :aria-label="t('common.close')" @click="toast.dismiss(item.id)">
+        <X :size="13" aria-hidden="true" />
       </button>
       </div>
     </TransitionGroup>
@@ -74,7 +82,6 @@ function runAction(id: number, run: () => void) {
   color: var(--text);
   font-size: var(--text-sm);
   box-shadow: var(--shadow-md);
-  cursor: pointer;
   overflow-wrap: anywhere;
 }
 .toast-icon {
@@ -99,6 +106,28 @@ function runAction(id: number, run: () => void) {
   color: var(--text);
 }
 .toast-action:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+/* Explicit dismiss: 24px hit target, labeled (common.close). */
+.toast-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.toast-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.toast-close:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
 }

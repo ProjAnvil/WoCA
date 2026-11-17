@@ -1,8 +1,7 @@
 export default {
   title: 'Workspace Memory',
   defaultWorkspace: 'Default workspace',
-  tagline:
-    'woca remembers decisions, preferences and code knowledge for this workspace — the more you use it, the better it knows your project.',
+  tagline: 'woca remembers your decisions and preferences for this workspace.',
   searchPlaceholder: 'Search memories…',
   engineDisabled: 'Memory engine is disabled (Settings → Memory).',
   empty: 'No memories yet. Chat with woca for a bit and it will automatically remember the important things.',

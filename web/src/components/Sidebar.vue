@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Activity, FolderOpen, Plus, Settings, X } from 'lucide-vue-next'
 import FolderPicker from "./FolderPicker.vue";
@@ -8,6 +8,7 @@ import SessionList from "./SessionList.vue";
 import { useSessionStore } from "../stores/sessions";
 import { useSettingsStore } from "../stores/settings";
 import { useStatusStore } from "../stores/status";
+import { useUiStore } from "../stores/ui";
 import { usePolling } from "../lib/interval";
 import { baseName } from "../lib/format";
 
@@ -15,6 +16,41 @@ const { t } = useI18n();
 const sessions = useSessionStore();
 const settings = useSettingsStore();
 const statusStore = useStatusStore();
+
+// ≤640px drawer state (hamburger in ChatPanel's header toggles it; on
+// desktop shells the class is inert — the drawer styles are media-scoped).
+const ui = useUiStore();
+
+// Esc closes the drawer while it is open. Existing overlays close via
+// backdrop/buttons only, so this handler is drawer-only; WocaApp's global
+// Esc routing skips while the drawer is open (see its keydown handler).
+// Esc arising inside an overlay the drawer hosts (new-workspace dialog,
+// folder picker, status modal) belongs to that overlay — it closes first,
+// the next Esc closes the drawer.
+function onDrawerKeydown(e: KeyboardEvent) {
+  if (e.key !== "Escape" || e.isComposing) return;
+  const target = e.target;
+  if (
+    target instanceof Element &&
+    target.closest(".overlay, .modal-backdrop, .w-modal-backdrop")
+  ) {
+    return;
+  }
+  ui.closeSidebar();
+}
+
+watch(
+  () => ui.sidebarOpen,
+  (open) => {
+    if (open) window.addEventListener("keydown", onDrawerKeydown);
+    else window.removeEventListener("keydown", onDrawerKeydown);
+  },
+  // immediate: a remount while the drawer is open (store outlives the
+  // component) must re-attach the window listener.
+  { immediate: true }
+);
+
+onBeforeUnmount(() => window.removeEventListener("keydown", onDrawerKeydown));
 
 // The header "+" adds a new workspace (a directory path; the workspace
 // materializes in the list via its first session). Adding a session to an
@@ -63,7 +99,15 @@ async function pickWorkspace(path: string) {
 </script>
 
 <template>
-  <aside class="sidebar">
+  <!-- Drawer veil for the ≤640px sidebar drawer (hidden by CSS on wider
+       shells); sits before the aside so the drawer paints above it. -->
+  <div
+    v-if="ui.sidebarOpen"
+    class="sidebar-backdrop"
+    aria-hidden="true"
+    @click.self="ui.closeSidebar()"
+  />
+  <aside id="app-sidebar" class="sidebar" :class="{ open: ui.sidebarOpen }">
     <div class="sidebar-brand">
       <div class="brand-mark">W</div>
       <span class="brand-name">woca</span>

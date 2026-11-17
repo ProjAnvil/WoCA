@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../i18n'
 import ChatPanel from './ChatPanel.vue'
 import { useSessionStore } from '../stores/sessions'
+import { useUiStore } from '../stores/ui'
 import { useActivityStore } from '../stores/activity'
 import { greetingSlot } from '../lib/greeting'
 
@@ -49,11 +50,38 @@ describe('ChatPanel message submission', () => {
   })
 })
 
-describe('ChatPanel greeting state', () => {
+describe('ChatPanel sidebar drawer toggle (≤640px shells)', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
   })
 
+  it('renders the hamburger as the first header control with drawer a11y state', () => {
+    const wrapper = mountPanel()
+    const header = wrapper.get('.chat-header').element
+    // First control on the left; visibility itself is CSS-gated (≤640px).
+    expect(header.firstElementChild?.classList.contains('nav-toggle')).toBe(true)
+    const btn = wrapper.get('.nav-toggle')
+    expect(btn.attributes('aria-label')).toBe(i18n.global.t('chat.toggleSessions'))
+    expect(btn.attributes('aria-expanded')).toBe('false')
+    expect(btn.attributes('aria-controls')).toBe('app-sidebar')
+  })
+
+  it('toggles the drawer and mirrors the state in aria-expanded', async () => {
+    const wrapper = mountPanel()
+    const ui = useUiStore()
+    await wrapper.get('.nav-toggle').trigger('click')
+    expect(ui.sidebarOpen).toBe(true)
+    expect(wrapper.get('.nav-toggle').attributes('aria-expanded')).toBe('true')
+    await wrapper.get('.nav-toggle').trigger('click')
+    expect(ui.sidebarOpen).toBe(false)
+    expect(wrapper.get('.nav-toggle').attributes('aria-expanded')).toBe('false')
+  })
+})
+
+describe('ChatPanel greeting state', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
   it('shows the centered greeting state on an empty session', () => {
     const wrapper = mountPanel()
     expect(wrapper.get('.chat').classes()).toContain('chat--greeting')

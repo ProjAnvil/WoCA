@@ -119,6 +119,16 @@ describe('session rows', () => {
     expect(times[3]).toBe(i18n.global.t('sidebar.daysAgo', { days: 3 }))
     expect(times[4]).toBe('') // unparseable stamps stay empty, never NaN text
   })
+
+  it('keeps the delete affordance labeled and outside the row button (audit)', async () => {
+    const { w } = await mountSeeded([{ id: 'a', title: 'Named' }])
+    const del = w.get('.session-del')
+    // Named for assistive tech (the 22px hover-only glyph missed both
+    // criteria) and a sibling of the session button, never nested in it.
+    expect(del.attributes('aria-label')).toBe(i18n.global.t('sidebar.deleteSession'))
+    expect(del.element.tagName).toBe('BUTTON')
+    expect(del.element.closest('button.session-item')).toBeNull()
+  })
 })
 
 describe('delete flow', () => {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CalendarClock, CircleSlash, ListChecks, Terminal, TriangleAlert, Users, X } from 'lucide-vue-next'
 import { useActivityStore } from '../../stores/activity'
@@ -75,6 +75,15 @@ function markViewed(): void {
 onMounted(() => {
   ensureLoaded()
   markViewed()
+  updateTabScroll()
+  if (typeof ResizeObserver !== 'undefined') {
+    tabResizeObserver = new ResizeObserver(() => updateTabScroll())
+    if (tablistEl.value) tabResizeObserver.observe(tablistEl.value)
+  }
+})
+onUnmounted(() => {
+  tabResizeObserver?.disconnect()
+  tabResizeObserver = null
 })
 watch(() => props.sid, () => {
   ensureLoaded()
@@ -115,6 +124,33 @@ function onTablistKeydown(e: KeyboardEvent): void {
       ?.focus()
   })
 }
+
+/* --------------------------- tab row overflow ------------------------------ */
+
+// The tab row scrolls horizontally once the four labels stop fitting (the
+// w375 audit caught en "Subagents" squashed to "Subagen" — tabs are
+// flex children and used to shrink instead of overflowing). The end masks
+// only render on the sides that actually have content beyond the edge:
+// data-scroll is 'none' | 'start' | 'mid' | 'end'.
+const tabScroll = ref<'none' | 'start' | 'mid' | 'end'>('none')
+
+function updateTabScroll(): void {
+  const el = tablistEl.value
+  if (!el) return
+  const overflow = el.scrollWidth - el.clientWidth
+  if (overflow <= 1) {
+    tabScroll.value = 'none'
+    return
+  }
+  const atStart = el.scrollLeft <= 1
+  const atEnd = el.scrollLeft >= overflow - 1
+  tabScroll.value = atStart ? 'start' : atEnd ? 'end' : 'mid'
+}
+
+// Counts arrive asynchronously and can grow a tab past the fold; a
+// ResizeObserver on the row catches both viewport and content changes.
+// (Test DOMs may not implement it — degrade to the scroll handler alone.)
+let tabResizeObserver: ResizeObserver | null = null
 </script>
 
 <template>
@@ -124,8 +160,10 @@ function onTablistKeydown(e: KeyboardEvent): void {
         ref="tablistEl"
         class="act-tabs"
         role="tablist"
+        :data-scroll="tabScroll"
         :aria-label="t('activity.title')"
         @keydown="onTablistKeydown"
+        @scroll.passive="updateTabScroll"
       >
         <button
           v-for="tb in TABS"
@@ -253,9 +291,16 @@ function onTablistKeydown(e: KeyboardEvent): void {
   flex: 1;
   min-width: 0;
   overflow-x: auto;
+  /* End masks are pure alpha fades (no colors): each side only masks while
+   * content actually extends past it — see the data-scroll rules below. */
+  scrollbar-width: thin;
 }
 /* rs-tab visual language (WorkspaceSidebar precedent) with counts. */
 .act-tab {
+  /* Never shrink (w375 audit): flex children used to compress mid-word —
+   * "Subagents" rendered as "Subagen". Tabs keep their natural width and
+   * the row scrolls instead. */
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -268,6 +313,53 @@ function onTablistKeydown(e: KeyboardEvent): void {
   font-size: var(--text-xs);
   white-space: nowrap;
   cursor: pointer;
+}
+/* Overflow affordances: fade the side(s) that can scroll further. Mask
+   gradients only use the color's alpha channel, so an opaque token
+   (var(--accent)) drives the mask without a bare hex. */
+.act-tabs[data-scroll='start'] {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    var(--accent) 0,
+    var(--accent) calc(100% - 18px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    var(--accent) 0,
+    var(--accent) calc(100% - 18px),
+    transparent 100%
+  );
+}
+.act-tabs[data-scroll='mid'] {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    var(--accent) 18px,
+    var(--accent) calc(100% - 18px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    var(--accent) 18px,
+    var(--accent) calc(100% - 18px),
+    transparent 100%
+  );
+}
+.act-tabs[data-scroll='end'] {
+  -webkit-mask-image: linear-gradient(
+    to left,
+    var(--accent) 0,
+    var(--accent) calc(100% - 18px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to left,
+    var(--accent) 0,
+    var(--accent) calc(100% - 18px),
+    transparent 100%
+  );
 }
 .act-tab.active {
   color: var(--text);

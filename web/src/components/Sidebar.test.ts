@@ -12,6 +12,7 @@ vi.mock('../api/client', async (importOriginal) => {
 })
 
 import Sidebar from './Sidebar.vue'
+import { useUiStore } from '../stores/ui'
 import type { BridgeStatus } from '../api/client'
 
 function bridgeStatus(over: Partial<BridgeStatus> = {}): BridgeStatus {
@@ -70,5 +71,57 @@ describe('Sidebar footer', () => {
 
     expect(footerLabels()).toEqual(['Status', 'Settings'])
     expect(w?.find('.status-lamp').exists()).toBe(true)
+  })
+})
+
+describe('Sidebar drawer (≤640px shells)', () => {
+  beforeEach(() => {
+    i18n.global.locale.value = 'en'
+    api.getStatus.mockReset()
+  })
+  afterEach(() => {
+    w?.unmount()
+    w = null
+  })
+
+  it('is collapsed by default: no open modifier, no backdrop', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    expect(w?.get('#app-sidebar.sidebar').classes()).not.toContain('open')
+    expect(w?.find('.sidebar-backdrop').exists()).toBe(false)
+  })
+
+  it('opens with the open modifier + backdrop; backdrop click closes', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    const ui = useUiStore()
+    ui.openSidebar()
+    await w?.vm.$nextTick()
+
+    expect(w?.get('#app-sidebar.sidebar').classes()).toContain('open')
+    const backdrop = w?.get('.sidebar-backdrop')
+    expect(backdrop).toBeTruthy()
+    await backdrop!.trigger('click')
+    expect(ui.sidebarOpen).toBe(false)
+    expect(w?.find('.sidebar-backdrop').exists()).toBe(false)
+  })
+
+  it('closes on Escape while open', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    const ui = useUiStore()
+    ui.openSidebar()
+    await w?.vm.$nextTick()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await w?.vm.$nextTick()
+
+    expect(ui.sidebarOpen).toBe(false)
+    expect(w?.find('.sidebar-backdrop').exists()).toBe(false)
   })
 })

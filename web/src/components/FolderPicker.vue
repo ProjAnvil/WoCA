@@ -95,16 +95,25 @@ function choose(path: string) {
         </div>
         <div v-else-if="error" class="fp-empty fp-error">{{ error }}</div>
         <div v-else-if="!listing?.dirs.length" class="fp-empty">{{ t('fs.empty') }}</div>
-        <button
-          v-for="d in listing?.dirs ?? []"
-          :key="d.path"
-          class="fp-row"
-          @click="load(d.path)"
-          @dblclick="choose(d.path)"
-        >
-          <span class="fp-name">📁 {{ d.name }}</span>
-          <Check :size="15" class="fp-pick" :title="t('fs.pick')" @click.stop="choose(d.path)" />
-        </button>
+        <div v-for="d in listing?.dirs ?? []" :key="d.path" class="fp-row-wrap">
+          <button class="fp-row" type="button" @click="load(d.path)" @dblclick="choose(d.path)">
+            <span class="fp-name">📁 {{ d.name }}</span>
+          </button>
+          <!-- Sibling, not child: .fp-row is itself a button and nested
+               buttons are invalid HTML. A real button makes the pick
+               keyboard-focusable and announced (fs.pick), revealed on row
+               hover AND focus-within (w320 audit — it used to be an
+               opacity-0 SVG reachable by mouse hover only). -->
+          <button
+            class="fp-pick"
+            type="button"
+            :title="t('fs.pick')"
+            :aria-label="t('fs.pick')"
+            @click="choose(d.path)"
+          >
+            <Check :size="15" aria-hidden="true" />
+          </button>
+        </div>
       </div>
 
       <div class="fp-mkdir">
@@ -179,12 +188,16 @@ function choose(path: string) {
   font-size: 13px;
 }
 .fp-error { color: var(--danger); opacity: 1; }
+.fp-row-wrap {
+  position: relative;
+}
 .fp-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* Clearance for the overlapping pick button so names ellipsize first. */
   width: 100%;
-  padding: 7px 10px;
+  padding: 7px 38px 7px 10px;
   background: none;
   border: none;
   color: inherit;
@@ -194,8 +207,37 @@ function choose(path: string) {
 }
 .fp-row:hover { background: rgba(255, 255, 255, 0.05); }
 .fp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fp-pick { opacity: 0; }
-.fp-row:hover .fp-pick { opacity: 0.8; }
+/* Pick affordance: 24px hit target, revealed on row hover or keyboard
+   focus inside the row wrapper (focus-within covers the pick itself). */
+.fp-pick {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  opacity: 0;
+}
+.fp-row-wrap:hover .fp-pick,
+.fp-row-wrap:focus-within .fp-pick {
+  opacity: 0.8;
+}
+.fp-pick:hover,
+.fp-pick:focus-visible {
+  opacity: 1;
+}
+.fp-pick:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
 .fp-mkdir, .fp-manual {
   display: flex;
   gap: 8px;

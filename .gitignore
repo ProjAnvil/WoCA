@@ -53,3 +53,6 @@ coverage/
 logs/
 eval/results/
 e2e/.runtime/regression/
+
+# SDD plan workspaces (superpowers scratch)
+.superpowers/

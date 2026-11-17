@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Bot, Gauge, Layers, Lightbulb, ShieldCheck } from 'lucide-vue-next'
 import { useAgentStore, MODE_DESCRIPTIONS, MODE_LABELS, THINKING_BUDGETS, THINKING_LABELS } from '../../stores/agent'
@@ -23,12 +23,67 @@ const toast = useToastStore()
 type CtlPop = '' | 'mode' | 'thinking' | 'quota' | 'model'
 const pop = ref<CtlPop>('')
 
+/* ------------------------- single-line scroll row -------------------------- */
+
+// Audit 07: the toolbar must be one horizontal scroll row (wrapped chips
+// stacked over the transcript on narrow shells). The fade mask only makes
+// sense when the row actually overflows, so .scrollable is toggled here —
+// chip labels are reactive (mode/model/quota/context), so every wrap is
+// observed, not just the toolbar's own box.
+const toolbarEl = ref<HTMLElement | null>(null)
+const scrollable = ref(false)
+let chipsRO: ResizeObserver | undefined
+
+function syncScrollable() {
+  const el = toolbarEl.value
+  scrollable.value = !!el && el.scrollWidth - el.clientWidth > 1
+}
+
+/* --------------------------- popover anchoring ----------------------------- */
+
+// Popovers anchor fixed above their chip (WDropdown idiom): the chip row is
+// a scroll container, and a scroll container clips absolutely positioned
+// children — including popovers opening above it. The chip is measured when
+// its popover opens (chips cannot move while one is open: the shared
+// backdrop covers the row), and the rendered width re-clamps the left edge
+// so nothing crosses the viewport (12px guard both sides).
+const popStyle = ref<Record<string, string>>({})
+const ctxStyle = ref<Record<string, string>>({})
+const popEl = ref<HTMLElement | null>(null)
+const ctxEl = ref<HTMLElement | null>(null)
+
+function wrapOf(e: Event): HTMLElement | null {
+  return (e.currentTarget as HTMLElement | null)?.closest('.ctl-wrap') ?? null
+}
+
+async function placePop(
+  wrap: HTMLElement | null,
+  style: typeof popStyle,
+  card: typeof popEl,
+): Promise<void> {
+  if (!wrap) return
+  const r = wrap.getBoundingClientRect()
+  const left = Math.max(12, Math.min(r.left, window.innerWidth - 12))
+  style.value = {
+    position: 'fixed',
+    left: `${left}px`,
+    bottom: `${window.innerHeight - r.top + 6}px`,
+  }
+  await nextTick()
+  const w = card.value?.offsetWidth ?? 0
+  if (w && left + w > window.innerWidth - 12) {
+    style.value = { ...style.value, left: `${Math.max(12, window.innerWidth - w - 12)}px` }
+  }
+}
+
 // Polite announcement of mode switches (§4.2): no toast — switches are
 // frequent; failures keep the existing toast.error path below.
 const modeAnnouncement = ref('')
 
-function togglePop(which: CtlPop) {
-  pop.value = pop.value === which ? '' : which
+function togglePop(which: CtlPop, e?: Event) {
+  const closing = pop.value === which
+  pop.value = closing ? '' : which
+  if (!closing && e) void placePop(wrapOf(e), popStyle, popEl)
 }
 
 /* ----------------------- preferred model (catalog pick) ------------------ */
@@ -90,12 +145,13 @@ async function pickThinking(level: ThinkingLevel) {
 }
 
 // Refresh the quota once before expanding the chip's popover.
-async function openQuota() {
+async function openQuota(e: Event) {
   if (pop.value === 'quota') {
     pop.value = ''
     return
   }
   pop.value = 'quota'
+  void placePop(wrapOf(e), popStyle, popEl)
   void agent.refreshQuota()
 }
 
@@ -110,8 +166,9 @@ let ctxFetchedAt = 0
 
 const ctxAvailable = computed(() => store.activeItems.length > 0)
 
-function ctxEnter() {
+function ctxEnter(e: Event) {
   if (!ctxAvailable.value) return
+  const wrap = wrapOf(e)
   window.clearTimeout(ctxLeaveTimer)
   // 300ms dwell before the popover opens; the usage request itself is
   // throttled to once per 30s so sweeping the toolbar cannot fan out a
@@ -119,6 +176,7 @@ function ctxEnter() {
   window.clearTimeout(ctxOpenTimer)
   ctxOpenTimer = window.setTimeout(() => {
     ctxHover.value = true
+    void placePop(wrap, ctxStyle, ctxEl)
     if (!store.contextLoading && Date.now() - ctxFetchedAt > 30_000) {
       ctxFetchedAt = Date.now()
       void store.refreshContext()
@@ -133,13 +191,14 @@ function ctxLeave() {
 
 // Click pins the popover open (keyboard/touch parity with hover), fires the
 // throttled refreshes, and the next click (or Esc / backdrop) closes it.
-function toggleCtx() {
+function toggleCtx(e: Event) {
   if (!ctxAvailable.value) return
   if (ctxPinned.value) {
     ctxPinned.value = false
     return
   }
   ctxPinned.value = true
+  void placePop(wrapOf(e), ctxStyle, ctxEl)
   if (!store.contextLoading && Date.now() - ctxFetchedAt > 30_000) {
     ctxFetchedAt = Date.now()
     void store.refreshContext()
@@ -174,7 +233,9 @@ const ctxExact = computed(() => {
 })
 
 const ctxShort = computed(() => {
-  if (!store.contextInfo) return store.contextLoading ? '…' : '—'
+  // The empty value reads as "Not enabled" instead of a bare dash (audit 07:
+  // the dash placeholder was unreadable as a status).
+  if (!store.contextInfo) return store.contextLoading ? '…' : t('chat.statusDisabled')
   return ctxExact.value ? fmtTokens(ctxExact.value) : `~${fmtTokens(store.contextInfo.estimated_total)}`
 })
 
@@ -197,19 +258,42 @@ function ctxCatPct(c: ContextCategory): string {
 
 const modeList = Object.entries(MODE_LABELS) as [PermissionMode, string][] as [PermissionMode, string][]
 
+// Quota chip: an unavailable quota (the store's shortNone branch renders a
+// dash label) shows the same "Not enabled" placeholder as the
+// context chip instead of a bare dash.
+const quotaNone = computed(() => agent.quotaShort === t('agent.quota.shortNone'))
+const quotaLabel = computed(() => (quotaNone.value ? t('chat.statusDisabled') : agent.quotaShort))
+
 onMounted(() => {
   if (!preferredId.value && catalog.models.length) {
     preferredId.value = catalog.models[0].id
   }
+  if (typeof ResizeObserver !== 'undefined') {
+    chipsRO = new ResizeObserver(syncScrollable)
+    if (toolbarEl.value) {
+      chipsRO.observe(toolbarEl.value)
+      for (const el of toolbarEl.value.querySelectorAll<HTMLElement>('.ctl-wrap')) chipsRO.observe(el)
+    }
+  }
+  syncScrollable()
   void agent.load()
   void agent.refreshQuota()
   void catalog.ensureModels()
 })
+
+onBeforeUnmount(() => chipsRO?.disconnect())
 </script>
 
 <template>
-  <!-- Chat-input toolbar: permission mode / thinking level / remaining quota -->
-  <div class="input-toolbar">
+  <!-- Chat-input toolbar: permission mode / thinking level / remaining quota.
+       The overflow fade mask is dropped while any popover is open: masks
+       paint fixed-position descendants too, and the popovers anchor fixed
+       above their chip (placePop). -->
+  <div
+    ref="toolbarEl"
+    class="input-toolbar"
+    :class="{ scrollable: scrollable && !pop && !ctxOpen }"
+  >
     <div class="ctl-wrap">
       <button
         class="ctl-chip"
@@ -217,7 +301,7 @@ onMounted(() => {
         :title="t('chat.switchModeTitle')"
         :aria-expanded="pop === 'mode'"
         data-testid="mode-chip"
-        @click="togglePop('mode')"
+        @click="togglePop('mode', $event)"
       >
         <ShieldCheck :size="13" />
         <!-- Keyed label: the fade transition cross-fades mode switches (240ms). -->
@@ -227,7 +311,7 @@ onMounted(() => {
       </button>
       <!-- Polite switch announcements live next to the chip they describe. -->
       <span class="sr-only" aria-live="polite">{{ modeAnnouncement }}</span>
-      <div v-if="pop === 'mode'" class="ctl-pop">
+      <div v-if="pop === 'mode'" ref="popEl" class="ctl-pop" :style="popStyle">
         <div class="ctl-pop-header">{{ t('chat.permissionMode') }}</div>
         <div class="ctl-pop-note-line" data-testid="mode-session-note">{{ t('chat.modeSessionNote') }}</div>
         <button
@@ -252,12 +336,12 @@ onMounted(() => {
         :class="{ open: pop === 'model' }"
         :title="t('chat.modelChange')"
         :aria-expanded="pop === 'model'"
-        @click="togglePop('model')"
+        @click="togglePop('model', $event)"
       >
         <Bot :size="13" />
         <span>{{ currentModelName }}</span>
       </button>
-      <div v-if="pop === 'model'" class="ctl-pop">
+      <div v-if="pop === 'model'" ref="popEl" class="ctl-pop" :style="popStyle">
         <div class="ctl-pop-header">{{ t('chat.modelPick') }}</div>
         <button
           v-for="m in catalog.models"
@@ -284,12 +368,12 @@ onMounted(() => {
         "
         :aria-expanded="pop === 'thinking'"
         :disabled="!agent.thinkingSupported"
-        @click="agent.thinkingSupported && togglePop('thinking')"
+        @click="agent.thinkingSupported && togglePop('thinking', $event)"
       >
         <Lightbulb :size="13" />
         <span>{{ t('chat.thinkingLabel') }}·{{ agent.thinkingSupported ? agent.thinkingLabel : t('chat.unsupported') }}</span>
       </button>
-      <div v-if="pop === 'thinking'" class="ctl-pop">
+      <div v-if="pop === 'thinking'" ref="popEl" class="ctl-pop" :style="popStyle">
         <div class="ctl-pop-header">
           {{ t('chat.thinkingLevel') }}
           <span v-if="agent.thinkingNote" class="ctl-pop-note">{{ agent.thinkingNote }}</span>
@@ -326,12 +410,19 @@ onMounted(() => {
         :aria-expanded="ctxOpen"
         aria-haspopup="dialog"
         :disabled="!ctxAvailable"
-        @click="toggleCtx"
+        @click="toggleCtx($event)"
       >
         <Layers :size="13" />
-        <span>{{ t('chat.context') }} {{ ctxAvailable ? ctxShort : '—' }}</span>
+        <span>{{ t('chat.context') }} {{ ctxAvailable ? ctxShort : t('chat.statusDisabled') }}</span>
       </button>
-      <div v-if="ctxOpen" class="ctl-pop ctx-pop" @mouseenter="ctxEnter" @mouseleave="ctxLeave">
+      <div
+        v-if="ctxOpen"
+        ref="ctxEl"
+        class="ctl-pop ctx-pop"
+        :style="ctxStyle"
+        @mouseenter="ctxEnter"
+        @mouseleave="ctxLeave"
+      >
         <div class="ctl-pop-header">
           {{ t('chat.ctxBreakdown') }}
           <span v-if="store.contextInfo?.model" class="ctl-pop-note">{{ store.contextInfo.model }}</span>
@@ -434,14 +525,14 @@ onMounted(() => {
       <button
         class="ctl-chip"
         :class="{ open: pop === 'quota' }"
-        :title="agent.quotaShort === t('agent.quota.shortNone') ? t('chat.viewQuota') : agent.quotaShort"
+        :title="quotaNone ? t('chat.viewQuota') : agent.quotaShort"
         :aria-expanded="pop === 'quota'"
-        @click="openQuota"
+        @click="openQuota($event)"
       >
         <Gauge :size="13" />
-        <span>{{ agent.quotaLoading ? t('chat.querying') : agent.quotaShort }}</span>
+        <span>{{ agent.quotaLoading ? t('chat.querying') : quotaLabel }}</span>
       </button>
-      <div v-if="pop === 'quota'" class="ctl-pop quota-pop">
+      <div v-if="pop === 'quota'" ref="popEl" class="ctl-pop quota-pop" :style="popStyle">
         <div class="ctl-pop-header">
           {{ t('chat.quota') }}
           <button class="ctl-refresh" type="button" @click="agent.refreshQuota()">{{ t('common.refresh') }}</button>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Bell, Brain, Bug, Check, ChevronDown, Copy, Target, Wrench } from 'lucide-vue-next'
+import { Bell, Brain, Bug, Check, ChevronDown, Copy, Loader2, Target, X } from 'lucide-vue-next'
 import type { ChatItem } from '../types'
 import { renderMarkdown, markdownToPlain } from '../lib/markdown'
 import { decorateCodeBlocks, highlightCodeBlocks } from '../lib/codeBlocks'
@@ -146,6 +146,14 @@ const toolHasResult = computed(() => {
 const toolResultContent = computed(() => {
   const it = props.item
   return it.kind === 'tool_call' ? (it.result ?? '') : it.kind === 'tool_result' ? it.content : ''
+})
+// Tool failures surface as result strings with a leading "Error:" (the
+// executor's convention, e.g. registry.go "Error: %v"). The collapsed header
+// encodes the tri-state with shape + fill, never color alone: spinner while
+// running, filled check on success, outlined X on failure.
+const toolFailed = computed(() => {
+  const it = props.item
+  return it.kind === 'tool_call' && it.result !== undefined && /^error:/i.test(String(it.result))
 })
 
 // Tool input and output both start collapsed (autoCollapseTools); toggle to
@@ -337,7 +345,11 @@ function copyDebugInfo() {
     :open="!collapsed"
     @update:open="collapsed = !$event"
   >
-    <template #icon><Wrench :size="13" /></template>
+    <template #icon>
+      <Loader2 v-if="!toolHasResult" :size="13" class="spin tool-status tool-status-running" />
+      <Check v-else-if="!toolFailed" :size="13" class="tool-status tool-status-ok" aria-hidden="true" />
+      <X v-else :size="13" class="tool-status tool-status-err" aria-hidden="true" />
+    </template>
     <template v-if="!collapsed">
       <div class="tool-section-label">{{ t('chat.input') }}</div>
       <pre class="tool-args tool-io">{{ toolArgs }}</pre>

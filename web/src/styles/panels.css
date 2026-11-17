@@ -302,15 +302,22 @@
   border-radius: var(--radius);
 }
 
-/* On narrow screens the sidebar overlays instead of squeezing the chat. */
-@media (max-width: 860px) {
+/* On narrow screens the sidebar overlays instead of squeezing the chat.
+   Threshold 1100 (was 860): at 861–1100px (w1024 audit) the inline panel
+   still overflowed the viewport, so those widths take the overlay branch
+   too. The parent width override now applies to the OPEN state only — the
+   closed panel keeps the base width 0; the previous closed-state width
+   made the collapsed panel occupy min(420px, 62vw) of the row and crush
+   the chat (w320/w768 audit). The inner keeps its width in both states so
+   the open/close width animation never reflows the panes (it is clipped
+   by the parent's overflow while collapsing). */
+@media (max-width: 1100px) {
   .main {
     min-width: 0;
   }
   .split-handle {
     display: none;
   }
-  .right-sidebar,
   .right-sidebar.open,
   .right-sidebar-inner {
     width: min(420px, 62vw);
@@ -445,6 +452,17 @@ html.dark .shiki-host span {
   border-radius: var(--radius-full);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  /* Long pills must not push the chat header past the viewport on narrow
+     shells. The pill itself is inline-flex, so text-overflow cannot reach
+     its anonymous text item — the label span (.pill-text) carries the
+     ellipsis trio and the pill only caps the width. */
+  max-width: 100%;
+}
+.task-pill .pill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pill-dot {
   width: 7px;
@@ -510,6 +528,17 @@ html.dark .shiki-host span {
 .stream-card {
   max-width: var(--chat-col);
   margin: 0 auto 16px;
+}
+
+/* Collapsed tool-call header status (shape + fill, never color alone):
+   spinner while running (.spin from misc.css), filled check on success,
+   outlined X on failure. Failure keeps the mono-gray theme — the only
+   chromatic exception is the existing danger text token. */
+.tool-status-ok {
+  fill: currentColor;
+}
+.tool-status-err {
+  color: var(--danger-text);
 }
 
 .tool-section-label {
@@ -741,6 +770,7 @@ html.dark .shiki-host span {
 
 .interrupt-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
   padding: 14px 20px;

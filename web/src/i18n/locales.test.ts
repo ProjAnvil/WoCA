@@ -41,3 +41,21 @@ describe('locale structure', () => {
     expect(keyPaths(zhCN).sort()).toEqual(keyPaths(en).sort())
   })
 })
+
+// Copy-fix contract (ui-audit 2026-11-17): the QR entry label and the
+// memory tagline overran their slots (login card, memory panel header row).
+describe('audit copy fixes', () => {
+  it('keeps the scan-to-sign-in entry to the agreed two-word labels', () => {
+    expect(zhCN.login.pairQR).toBe('扫码登录')
+    expect(en.login.pairQR).toBe('Scan to sign in')
+  })
+
+  it('keeps the memory tagline a single line in both locales', () => {
+    // zh ≤ 20 chars, en ≤ 70 chars, never wrapping into the toolbar.
+    expect(zhCN.memory.tagline.length).toBeLessThanOrEqual(20)
+    expect(en.memory.tagline.length).toBeLessThanOrEqual(70)
+    for (const locale of [zhCN, en]) {
+      expect(locale.memory.tagline).not.toMatch(/\n/)
+    }
+  })
+})

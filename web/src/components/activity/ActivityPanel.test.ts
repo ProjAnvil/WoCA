@@ -260,3 +260,45 @@ describe('ActivityPanel data states', () => {
     )
   })
 })
+
+// The tab row scrolls instead of squashing labels (w375 audit: en
+// "Subagents" clipped to "Subagen"). The end masks key off data-scroll,
+// which must track the row's real overflow state.
+describe('ActivityPanel tab row overflow', () => {
+  const overflowBy = (el: HTMLElement, over: number, left: number) => {
+    Object.defineProperty(el, 'clientWidth', { value: 300, configurable: true })
+    Object.defineProperty(el, 'scrollWidth', { value: 300 + over, configurable: true })
+    Object.defineProperty(el, 'scrollLeft', { value: left, configurable: true })
+  }
+
+  it('drives the mask state from the row scroll position', async () => {
+    activity.setDemo(true)
+    const w = mountPanel('s1', true)
+    try {
+      await flush()
+      const row = w.get('.act-tabs')
+      // happy-dom reports no layout: the row reads as non-scrollable.
+      expect(row.attributes('data-scroll')).toBe('none')
+
+      const el = row.element as HTMLElement
+      overflowBy(el, 100, 0) // content past the right edge only
+      await row.trigger('scroll')
+      expect(row.attributes('data-scroll')).toBe('start')
+
+      overflowBy(el, 100, 50) // scrolled into the middle
+      await row.trigger('scroll')
+      expect(row.attributes('data-scroll')).toBe('mid')
+
+      overflowBy(el, 100, 100) // flush against the end
+      await row.trigger('scroll')
+      expect(row.attributes('data-scroll')).toBe('end')
+
+      overflowBy(el, 0, 0) // everything fits again
+      await row.trigger('scroll')
+      expect(row.attributes('data-scroll')).toBe('none')
+    } finally {
+      w.unmount()
+      document.body.innerHTML = ''
+    }
+  })
+})

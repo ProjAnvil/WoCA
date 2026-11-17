@@ -42,17 +42,34 @@
   color: var(--faint);
 }
 
-/* Chat-input toolbar: permission mode / thinking level / quota chips */
+/* Chat-input toolbar: permission mode / thinking level / quota chips.
+   Single horizontal scroll row docked above the input (audit 07: wrapped
+   chips stacked into a floating column over the transcript). The native
+   scrollbar is hidden — the right-edge fade mask (.scrollable, toggled from
+   ComposerChips when the row actually overflows) is the overflow affordance. */
 .input-toolbar {
   max-width: var(--chat-col);
   margin: 0 auto 8px;
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.input-toolbar::-webkit-scrollbar {
+  display: none;
+}
+/* Alpha mask, not a color: only the gradient's alpha channel paints, so the
+   last chips dissolve instead of meeting the column edge. */
+.input-toolbar.scrollable {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
 .ctl-wrap {
   position: relative;
+  flex-shrink: 0;
 }
 .ctl-chip {
   display: inline-flex;
@@ -100,11 +117,14 @@
   inset: 0;
   z-index: 19;
 }
+/* Viewport-anchored (WDropdown idiom): the chip row is a scroll container
+   and would clip absolutely positioned children, so popovers open above
+   their chip via fixed positioning — ComposerChips measures the chip at open
+   time and clamps the left edge inside [12, innerWidth - width - 12]. */
 .ctl-pop {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
+  position: fixed;
   min-width: 260px;
+  max-width: calc(100vw - 24px);
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
@@ -130,7 +150,10 @@
   color: var(--focus);
   font-size: 11px;
   cursor: pointer;
-  padding: 0;
+  min-height: 24px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
   letter-spacing: normal;
   text-transform: none;
 }
@@ -167,9 +190,11 @@
   font-size: 12px;
   color: var(--faint);
 }
+/* Viewport clamps: the popover min width can exceed a phone viewport
+   (320/340 vs 375), so both bounds fold against 100vw - 40px. */
 .quota-pop {
-  min-width: 320px;
-  max-width: 420px;
+  min-width: min(320px, calc(100vw - 40px));
+  max-width: min(420px, calc(100vw - 40px));
 }
 .quota-body {
   padding: 10px 12px;
@@ -182,8 +207,8 @@
 
 /* Context indicator (hover-driven breakdown next to the quota chip) */
 .ctx-pop {
-  min-width: 340px;
-  max-width: 440px;
+  min-width: min(340px, calc(100vw - 40px));
+  max-width: min(440px, calc(100vw - 40px));
 }
 .ctx-body {
   padding: 10px 12px;
@@ -460,13 +485,15 @@
   background: var(--surface-2);
 }
 
-/* Autocomplete popup (/ skills, @ subagents) */
+/* Autocomplete popup (/ skills, @ subagents). Anchored to the composer
+   column; Composer additionally viewport-clamps the rendered left edge
+   (audit 14/15) and the width cap keeps ultra-narrow shells in bounds. */
 .ac-popup {
   position: absolute;
   bottom: calc(100% - 4px);
   left: 20px;
   right: 20px;
-  max-width: calc(var(--chat-col) - 40px);
+  max-width: min(calc(var(--chat-col) - 40px), calc(100vw - 24px));
   max-height: 360px;
   margin: 0 auto 8px;
   display: flex;

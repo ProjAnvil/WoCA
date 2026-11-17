@@ -39,6 +39,24 @@
   border: 1px solid var(--border);
 }
 
+/* Header icon buttons keep a floor under their 26×26 box so a squeezed
+   header (narrow shells) never shrinks the hit target below 24×24. */
+.chat-header .icon-btn {
+  min-width: 24px;
+  min-height: 24px;
+}
+
+/* Hamburger for the ≤640px sidebar drawer (stores/ui.ts): the first header
+   control, rendered only on shells where the sidebar is a drawer. */
+.chat-header .nav-toggle {
+  display: none;
+}
+@media (max-width: 640px) {
+  .chat-header .nav-toggle {
+    display: grid;
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Chat bubbles + avatars                                                      */
 /* -------------------------------------------------------------------------- */
@@ -77,6 +95,10 @@
   box-shadow: var(--shadow-md);
   cursor: pointer;
   z-index: 5;
+  /* Anchored inside the chat column (the .chat-stream box tracks the chat
+     scroll container), never reaching past it onto a sidebar: the pill
+     caps at the column width and the label ellipsizes. */
+  max-width: calc(100% - 48px);
 }
 .jump-latest:hover {
   background: var(--surface-hover);
@@ -96,6 +118,20 @@
   font-size: 11px;
   line-height: 18px;
   text-align: center;
+}
+.jump-latest-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Defensive: while the chat column can still collapse on ≤640px shells
+   (composer fixes land in T2), the floating pill can hang off the crushed
+   column — hide it there. */
+@media (max-width: 640px) {
+  .jump-latest {
+    display: none;
+  }
 }
 .jump-latest-enter-active,
 .jump-latest-leave-active {
@@ -122,7 +158,18 @@
   border-top-color: transparent;
   background: transparent;
 }
+/* Squeeze safety (audit 01: greeting sliced mid-glyph on short columns): the
+   greeting centers via auto block margins inside the messages box instead of
+   a centered flex line — auto margins collapse to zero before the content
+   overflows, so a squeezed column keeps the top of the greeting at the
+   scroll origin (overflow-y on .chat-messages) rather than clipping both
+   ends around the middle. No-op when the column has room. */
+.chat--greeting .chat-messages {
+  display: flex;
+  flex-direction: column;
+}
 .chat-greeting {
+  margin-block: auto;
   text-align: center;
   padding-bottom: var(--space-7);
 }
@@ -135,13 +182,16 @@
   color: var(--text);
 }
 
-/* Two-tier suggestion cards under the composer (greeting state only). */
+/* Two-tier suggestion cards under the composer (greeting state only). Kept
+   clear of the input row via the margin; the bordered surface container is
+   what makes the cards read as cards against the page background (audit 01
+   rendered them as ghost text). */
 .greeting-chips {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: var(--space-3);
-  margin-top: var(--space-4);
+  margin-top: var(--space-5);
   max-width: 640px;
   margin-inline: auto;
 }
@@ -153,7 +203,7 @@
   text-align: left;
   min-height: 44px;
   padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
   font-family: inherit;
@@ -165,7 +215,7 @@
 }
 .greeting-chip:hover {
   background: var(--surface-hover);
-  border-color: color-mix(in srgb, var(--brand) 45%, var(--border));
+  border-color: color-mix(in srgb, var(--brand) 45%, var(--border-strong));
 }
 .greeting-chip:focus-visible {
   outline: 2px solid var(--focus);
@@ -180,9 +230,11 @@
   font-weight: 600;
   color: var(--text);
 }
+/* AA body floor (4.5:1): --muted misses it on --surface in both themes;
+   the quieter look stays carried by size, not lightness. */
 .greeting-chip-desc {
   font-size: var(--text-xs);
-  color: var(--muted);
+  color: var(--text-2);
 }
 
 /* Parked next message (sent automatically when the current run ends). */
@@ -199,8 +251,14 @@
   color: var(--brand-text);
   font-size: var(--text-sm);
 }
+/* Label + message both carry the ellipsis trio (.pill-text pattern): the
+   badge is a flex row capped at the column width, and on narrow shells the
+   long localized label must truncate instead of pushing the buttons out. */
 .queue-badge-text {
-  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .queue-badge-msg {
   flex: 1;

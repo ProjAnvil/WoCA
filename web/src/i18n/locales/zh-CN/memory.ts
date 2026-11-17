@@ -1,7 +1,7 @@
 export default {
   title: '工作区记忆',
   defaultWorkspace: '默认工作区',
-  tagline: 'woca 会记住这个工作区的决策、偏好与代码知识——越用越懂你的项目。',
+  tagline: '记住这个工作区的决策与偏好，越用越懂你',
   searchPlaceholder: '搜索记忆…',
   engineDisabled: '记忆引擎未启用（设置 → 记忆）。',
   empty: '还没有记忆。和 woca 聊几句，它会自动记住重要的东西。',

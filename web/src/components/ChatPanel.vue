@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ArrowDown, Brain, Check, PanelRight, Target, Zap } from 'lucide-vue-next'
+import { ArrowDown, Brain, Check, Menu, PanelRight, Target, Zap } from 'lucide-vue-next'
 import ChatItemView from './ChatItemView.vue'
 import Composer from './composer/Composer.vue'
 import ActivityTrigger from './activity/ActivityTrigger.vue'
@@ -9,6 +9,7 @@ import WSkeleton from './ui/WSkeleton.vue'
 import { useSessionStore } from '../stores/sessions'
 import { useWorkspaceStore } from '../stores/workspace'
 import { useMemoryStore } from '../stores/memory'
+import { useUiStore } from '../stores/ui'
 import { useStickToBottom } from '../composables/useStickToBottom'
 import { toolEventSummary } from '../lib/toolEvent'
 import { greetingSlot } from '../lib/greeting'
@@ -22,6 +23,8 @@ const store = useSessionStore()
 const workspace = useWorkspaceStore()
 const memory = useMemoryStore()
 const workspaceStore = useWorkspaceStore()
+// ≤640px shell: the left sidebar is a drawer; this header owns its toggle.
+const ui = useUiStore()
 
 const busy = computed(() => ['running', 'awaiting', 'queued'].includes(store.activeStatus))
 
@@ -162,11 +165,25 @@ const latestEvent = computed(() => {
 <template>
   <div class="chat" :class="{ 'chat--greeting': isGreeting }">
     <header class="chat-header">
+      <!-- Hamburger opening the ≤640px sidebar drawer (stores/ui.ts); CSS
+           shows it only on drawer shells. aria-controls points at the
+           sidebar element; aria-expanded tracks the drawer state. -->
+      <button
+        class="icon-btn nav-toggle"
+        type="button"
+        :title="t('chat.toggleSessions')"
+        :aria-label="t('chat.toggleSessions')"
+        :aria-expanded="ui.sidebarOpen"
+        aria-controls="app-sidebar"
+        @click="ui.toggleSidebar()"
+      >
+        <Menu :size="17" />
+      </button>
       <div class="chat-title-wrap">
         <span class="chat-title">{{ store.activeSession?.title ?? 'woca' }}</span>
         <span v-if="store.activeStatus === 'queued'" class="task-pill pill-queued">
           <span class="pill-dot" aria-hidden="true" />
-          {{ t('chat.queued', { position: store.queuePosition[store.activeId] ?? 1 }) }}
+          <span class="pill-text">{{ t('chat.queued', { position: store.queuePosition[store.activeId] ?? 1 }) }}</span>
         </span>
         <span v-else-if="running" class="task-pill pill-running" role="status">
           <span class="pill-dot" aria-hidden="true" />
@@ -176,11 +193,11 @@ const latestEvent = computed(() => {
             <Zap :size="12" aria-hidden="true" />
             <span class="pill-auto">{{ t('chat.autoRun') }}</span>
           </template>
-          {{ t('chat.runningFor', { time: elapsedLabel }) }}
+          <span class="pill-text">{{ t('chat.runningFor', { time: elapsedLabel }) }}</span>
         </span>
         <span v-else-if="store.activeStatus === 'awaiting'" class="task-pill pill-awaiting">
           <span class="pill-dot" aria-hidden="true" />
-          {{ t('chat.awaitingConfirm') }}
+          <span class="pill-text">{{ t('chat.awaitingConfirm') }}</span>
         </span>
         <button
           v-else-if="store.activeStatus === 'done' && workspaceStore.changes.length"
@@ -190,7 +207,7 @@ const latestEvent = computed(() => {
           @click="workspaceStore.openChangesTab()"
         >
           <Check :size="12" aria-hidden="true" />
-          {{ t('chat.doneChanges', { count: workspaceStore.changes.length }) }}
+          <span class="pill-text">{{ t('chat.doneChanges', { count: workspaceStore.changes.length }) }}</span>
         </button>
         <button
           v-if="store.activeGoal"

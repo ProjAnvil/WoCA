@@ -59,18 +59,42 @@ const questions = computed(() => {
   return Array.isArray(q) ? q : []
 })
 
-// One-line args summary; JSON over 2KB collapses (title keeps the full text).
+// Args body: a wrapping `pre` (pre-wrap + overflow-wrap anywhere) keeps every
+// character reachable on any viewport; over 2KB the tail is cut (payload
+// safety). Collapsed it caps at ARGS_COLLAPSED_LINES until the toggle
+// expands it — the toggle only appears when the wrapped-line estimate
+// (28 mono chars/line) exceeds the cap. The estimate is deliberately
+// conservative: under-estimating capacity merely shows a harmless no-op
+// toggle, while over-estimating it would clip text with no toggle.
 const ARGS_LIMIT = 2048
-const argsFull = computed(() => {
-  const summary = primaryAsk.value?.args_summary
-  if (summary) return summary
+const ARGS_COLLAPSED_LINES = 8
+const ARGS_CHARS_PER_LINE = 28
+
+function safeJsonArgs(v: unknown): string {
   try {
-    return JSON.stringify(toolArgs.value ?? {}, null, 2)
+    return JSON.stringify(v ?? {}, null, 2)
   } catch {
     return ''
   }
-})
-const argsLine = computed(() => (argsFull.value.length > ARGS_LIMIT ? `${argsFull.value.slice(0, ARGS_LIMIT)}…` : argsFull.value))
+}
+function capArgs(text: string): string {
+  return text.length > ARGS_LIMIT ? `${text.slice(0, ARGS_LIMIT)}…` : text
+}
+function estimateLines(text: string): number {
+  return text.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(line.length / ARGS_CHARS_PER_LINE)), 0)
+}
+
+const argsText = computed(() => capArgs(primaryAsk.value?.args_summary || safeJsonArgs(toolArgs.value)))
+const argsOverflows = computed(() => estimateLines(argsText.value) > ARGS_COLLAPSED_LINES)
+const argsOpen = ref(false)
+
+function askArgsText(a: ApprovalAsk): string {
+  return capArgs(a.args_summary || safeJsonArgs(a.tool_args))
+}
+function askOverflows(a: ApprovalAsk): boolean {
+  return estimateLines(askArgsText(a)) > ARGS_COLLAPSED_LINES
+}
+const askArgsOpen = ref<Record<string, boolean>>({})
 
 // --- answering ---
 type Phase = 'pending' | 'answering' | 'resolved' | 'error'
@@ -186,17 +210,35 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
       <template v-else>
         <p v-if="reason" class="intr-reason">{{ reason }}</p>
         <!-- single ask (or legacy flat card): the classic one-tool card -->
-        <div v-if="primaryAsk || asks.length === 0" class="hitl-tool-line">
+        <div v-if="primaryAsk || asks.length === 0" class="hitl-tool">
           <span :id="`hitl-tool-${requestId}`" class="hitl-tool-name">{{ toolName }}</span>
-          <span v-if="argsLine" class="hitl-tool-args" :title="argsFull">{{ argsLine }}</span>
+          <pre v-if="argsText" class="hitl-tool-args" :class="{ 'is-collapsed': !argsOpen }">{{ argsText }}</pre>
+          <button
+            v-if="argsOverflows"
+            class="hitl-args-toggle"
+            type="button"
+            :data-testid="`hitl-args-toggle-${requestId}`"
+            :aria-expanded="argsOpen ? 'true' : 'false'"
+            @click="argsOpen = !argsOpen"
+          >
+            {{ argsOpen ? t('chat.collapseArgs') : t('chat.expandArgs') }}
+          </button>
         </div>
-        <!-- multi-ask envelope: one row per ask, buttons fan out -->
+        <!-- multi-ask envelope: one block per ask, buttons fan out -->
         <div v-else class="hitl-ask-rows" role="list">
-          <div v-for="a in asks" :key="a.call_id" class="hitl-tool-line" role="listitem">
+          <div v-for="a in asks" :key="a.call_id" class="hitl-tool" role="listitem">
             <span class="hitl-tool-name">{{ a.tool_name }}</span>
-            <span class="hitl-tool-args" :title="a.args_summary || JSON.stringify(a.tool_args ?? {})">{{
-              (a.args_summary || JSON.stringify(a.tool_args ?? {})).slice(0, ARGS_LIMIT)
-            }}</span>
+            <pre v-if="askArgsText(a)" class="hitl-tool-args" :class="{ 'is-collapsed': !askArgsOpen[a.call_id] }">{{ askArgsText(a) }}</pre>
+            <button
+              v-if="askOverflows(a)"
+              class="hitl-args-toggle"
+              type="button"
+              :data-testid="`hitl-args-toggle-${a.call_id}`"
+              :aria-expanded="askArgsOpen[a.call_id] ? 'true' : 'false'"
+              @click="askArgsOpen[a.call_id] = !askArgsOpen[a.call_id]"
+            >
+              {{ askArgsOpen[a.call_id] ? t('chat.collapseArgs') : t('chat.expandArgs') }}
+            </button>
           </div>
         </div>
       </template>
@@ -213,10 +255,11 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
         <button class="btn" type="button" :disabled="busy" @click="cancelAsk">{{ t('chat.requestCancelled') }}</button>
         <button class="btn btn-primary" type="button" :disabled="busy" @click="submitAsk">{{ t('chat.submit') }}</button>
       </template>
-      <!-- permission / plan / approvals cards -->
+      <!-- permission / plan / approvals cards: deny = outlined secondary,
+           allow-for-session = ghost, allow-once = filled primary. -->
       <template v-else>
         <button
-          class="btn"
+          class="btn hitl-btn-deny"
           type="button"
           :disabled="busy"
           :data-testid="`hitl-deny-${requestId}`"
@@ -225,9 +268,18 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
         >
           {{ t('chat.denyRequest') }}
         </button>
+        <!-- The rule key a session answer creates: its own readable line
+             directly above the session button it belongs to (never a chip
+             inside the button). -->
+        <span
+          v-if="ruleKey"
+          class="hitl-rule-key"
+          :data-testid="`hitl-rule-key-${requestId}`"
+          :title="t('chat.sessionRuleKey', { key: ruleKey })"
+        >{{ ruleKey }}</span>
         <button
           v-if="ruleKey"
-          class="btn"
+          class="btn hitl-btn-ghost hitl-btn-session"
           type="button"
           :disabled="busy"
           :data-testid="`hitl-grant-session-${requestId}`"
@@ -235,12 +287,9 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
           @click="answer('allow', 'session')"
         >
           {{ t('chat.approveSession') }}
-          <span class="hitl-rule-key" :data-testid="`hitl-rule-key-${requestId}`" :title="t('chat.sessionRuleKey', { key: ruleKey })">{{
-            ruleKey
-          }}</span>
         </button>
         <button
-          class="btn btn-primary"
+          class="btn btn-primary hitl-btn-allow"
           type="button"
           :disabled="busy"
           :data-testid="`hitl-allow-${requestId}`"
@@ -292,9 +341,10 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
 .hitl-card-body {
   padding: 10px 20px;
 }
-.hitl-tool-line {
+.hitl-tool {
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  align-items: flex-start;
   gap: var(--space-2);
   min-width: 0;
 }
@@ -302,15 +352,39 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
   font-weight: 600;
   flex-shrink: 0;
 }
+/* Args body: pre-wrap + overflow-wrap anywhere keeps every character
+ * reachable at any viewport; collapsed it caps at 8 lines (lh-xs scale)
+ * until the toggle beneath expands it. */
 .hitl-tool-args {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-3);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--muted);
+  line-height: var(--lh-xs);
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+}
+.hitl-tool-args.is-collapsed {
+  max-height: calc(var(--lh-xs) * 8 + var(--space-3) * 2);
+}
+.hitl-args-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: var(--text-xs);
+  color: var(--link);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.hitl-args-toggle:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 .hitl-ask-rows {
   display: flex;
@@ -344,14 +418,38 @@ const actionLabel = (what: string) => `${what} · ${origin.value} · ${toolName.
   cursor: pointer;
   font: inherit;
 }
-/* The session button inlines the rule key it will create (mono on warn-soft). */
+/* Rule key: its own readable line (mono, wraps anywhere) directly above
+ * the session button it belongs to — no longer a chip inside the button. */
 .hitl-rule-key {
-  margin-inline-start: 6px;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--warn-soft);
-  color: var(--warn-text);
+  flex-basis: 100%;
+  text-align: end;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  color: var(--warn-text);
+  overflow-wrap: anywhere;
+}
+/* Allow-for-session = ghost tier (WButton's w-btn--ghost grammar): the
+ * filled primary stays with allow-once, deny keeps the outlined default. */
+.hitl-btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-2);
+}
+.hitl-btn-ghost:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+/* ≤480: the row stacks — deny full-width on its own line above, the two
+ * allow actions share the line below (the rule-key line sits between). */
+@media (max-width: 480px) {
+  .hitl-btn-deny {
+    flex-basis: 100%;
+  }
+  .hitl-btn-session,
+  .hitl-btn-allow {
+    flex: 1 1 0;
+    min-width: 0;
+  }
 }
 </style>

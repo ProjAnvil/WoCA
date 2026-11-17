@@ -16,6 +16,8 @@ export default {
   memoryTitle: 'View memory for this workspace',
   collapseWorkspace: 'Hide workspace files',
   expandWorkspace: 'Show workspace files',
+  toggleSessions: 'Toggle sessions',
+  statusDisabled: 'Not enabled',
   permissionMode: 'Permission mode',
   switchModeTitle: 'Switch permission mode',
   thinkingLabel: 'Thinking',
@@ -108,6 +110,9 @@ export default {
   pendingCount: '{count} more pending',
   requestCancelled: 'Cancel',
   requestTimedOut: 'Timed out',
+  cardPosition: 'Item {n} of {m}',
+  expandArgs: 'Show full command',
+  collapseArgs: 'Collapse',
   sourceMain: 'main',
   grantedRules: '{count} granted · manage',
   // Minimal additions beyond the §4.1 list the panels require
