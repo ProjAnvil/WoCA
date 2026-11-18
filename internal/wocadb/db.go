@@ -306,14 +306,6 @@ func (d *DB) migrate() error {
 		// ALTER above.
 		stmts = append(stmts, `CREATE UNIQUE INDEX IF NOT EXISTS one_running_run_per_workspace
 			ON runs(workspace_id) WHERE status='running' AND workspace_id<>''`)
-		// The lgcp ownership policies (below) judge "which tenant owns this
-		// checkpoint thread" by querying runs; that subquery must see rows of
-		// every tenant, so runs must not FORCE its policy onto the table
-		// owner (the role non-tenant connections run as). Tenant-scoped
-		// paths still wrap their own queries in SET LOCAL transactions
-		// (store.begin, runstate.begin), so this widens only policy
-		// subqueries, not application reads.
-		stmts = append(stmts, `ALTER TABLE runs NO FORCE ROW LEVEL SECURITY`)
 		for _, table := range []string{"settings", "secrets", "checkpoints", "memory", "session_state", "runs", "run_events"} {
 			stmts = append(stmts,
 				`ALTER TABLE `+table+` ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT `+tenantGUCDefault,
@@ -339,6 +331,20 @@ func (d *DB) migrate() error {
 					END IF;
 				END $$;`)
 		}
+		// runs must NOT keep the FORCE flag the loop above set: the table
+		// owner (the role every gateway and worker connects as) is the queue
+		// operator — Claim, ReapExpired and the session lookups must see
+		// queued and running rows of EVERY tenant, or a tenant-tagged run
+		// (T6 tenant propagation) sits queued forever behind a policy its
+		// claimer cannot read. The run's content stays isolated where it
+		// lives: run_events keeps FORCE, so only the owning tenant's replay
+		// (serveLedgerRunEvents, runstate.begin) ever sees event bodies.
+		// This statement must run AFTER the per-table loop — an earlier
+		// build placed it before, the loop's FORCE won, and the owner was
+		// silently subject to the policy. Tenant-tagged writes still scope
+		// themselves through SET LOCAL transactions (store.begin,
+		// runstate.begin), so un-forcing widens only the operator paths.
+		stmts = append(stmts, `ALTER TABLE runs NO FORCE ROW LEVEL SECURITY`)
 		// Checkpoint tenant ownership (design §6.3.4 / 2026-08-20 decision): the
 		// upstream langgraph/checkpoint/postgres saver's tables are pre-created
 		// here in a dedicated schema (they share the name "checkpoints" with

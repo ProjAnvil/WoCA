@@ -10,6 +10,7 @@ import (
 
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/platform/eventbus"
+	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/tracing"
 	"github.com/projanvil/woca/internal/wocadb"
@@ -147,6 +148,12 @@ func (w *Worker) Step(ctx context.Context) error {
 func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 	w.log.Info().Str("run", run.RunID).Str("session", run.SessionID).Msg("worker claimed run")
 	started := time.Now()
+	// Tenant restoration: the claimed run carries the tenant it was
+	// enqueued under (runs.tenant_id); scope the execution context to it so
+	// every ledger write below — Append's run_events inserts above all —
+	// applies the tenant GUC and stays visible to the owning tenant's
+	// readers instead of defaulting to 'local'.
+	ctx = withRunTenant(ctx, run)
 
 	// Heartbeat the lease while executing; stop when done.
 	hbCtx, hbCancel := context.WithCancel(ctx)
@@ -231,6 +238,20 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 		w.states.Clear(run.SessionID, run.RunID)
 	}
 	return w.ledger.Finish(ctx, run.RunID, w.id, "done")
+}
+
+// withRunTenant restores the claimed run's tenant identity into the
+// execution context. tenancy.NewContext is the canonical injection (the
+// gateway does the same at request ingress); with the tenant present, the
+// ledger's tenant-transaction prologue applies the app.tenant_id GUC so the
+// run's events INSERT under the owning tenant. Runs that carry no tenant
+// (sqlite ledgers, 'local' rows) keep the context untouched — one code path
+// for every edition, the tenant is data, not a mode.
+func withRunTenant(ctx context.Context, run *runstate.Run) context.Context {
+	if run == nil || run.TenantID == "" {
+		return ctx
+	}
+	return tenancy.NewContext(ctx, tenancy.Context{TenantID: run.TenantID})
 }
 
 // emitAndMirror appends one event to run_events (the SSE id sequence).

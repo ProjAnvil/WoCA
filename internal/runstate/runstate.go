@@ -45,8 +45,17 @@ type Run struct {
 	// reads to route tool execution — session metadata never carries it
 	// across the queue. Empty on personal-edition runs.
 	WorkspaceID string
-	CreatedAt   int64
-	UpdatedAt   int64
+	// TenantID is the tenant the run row belongs to (its RLS ownership on
+	// postgres). Enqueue stamps it from the enqueueing context's tenant
+	// (the gateway injects the originating request's identity), and Claim
+	// returns it so the worker can restore the tenant into its execution
+	// context — every run_events write of the run then lands under the
+	// owning tenant and stays visible to its readers. Empty on sqlite
+	// ledgers (single-tenant by design) and on rows enqueued without a
+	// tenant (they keep the 'local' default).
+	TenantID  string
+	CreatedAt int64
+	UpdatedAt int64
 }
 
 // Event is one immutable fact in a run's event stream (seq is assigned by
@@ -86,7 +95,9 @@ func New(db *wocadb.DB) (*Ledger, error) {
 // postgres run inside a transaction carrying SET LOCAL app.tenant_id (the
 // GUC the runs/run_events RLS policies compare against), mirroring the
 // store package's Phase-1 pattern; sqlite and the local tenant use the
-// shared pool.
+// shared pool. Every row-writing call (Enqueue, Start, PutEvent, Append)
+// routes through it, so a context carrying the originating request's tenant
+// tags its rows with that tenant instead of the 'local' default.
 func (l *Ledger) begin(ctx context.Context) (querier, func(bool) error, error) {
 	tc, _ := tenancy.FromContext(ctx)
 	if tc.TenantID == "" || tc.TenantID == "local" || l.dialect != wocadb.DialectPostgres {
@@ -153,28 +164,50 @@ func (l *Ledger) nowMilli() int64 { return l.now().UnixMilli() }
 // Enqueue inserts a queued run. A second active run for the same session is
 // rejected by the one_active_run_per_session partial unique index; the
 // run's workspace identity (when present) rides the row for the executor.
+// The insert runs through begin, so a context carrying the originating
+// request's tenant tags the row with that tenant (Claim hands it back to
+// the worker).
 func (l *Ledger) Enqueue(ctx context.Context, run Run) error {
 	if run.RunID == "" || run.SessionID == "" {
 		return errors.New("runstate: run id and session id are required")
 	}
 	now := l.nowMilli()
-	_, err := l.db.DB.ExecContext(ctx,
+	q, finish, err := l.begin(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx,
 		`INSERT INTO runs (run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, workspace_id, created_at, updated_at)
 		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusQueued+`', '', 0, `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`, `+l.ph(6)+`)`,
 		run.RunID, run.SessionID, run.ThreadID, run.ConfigSnapshot, run.WorkspaceID, now, now)
-	if err != nil && isUniqueViolation(err) {
-		if !isSessionConstraint(err) {
-			return fmt.Errorf("runstate: run id %s already exists (cross-process id collision)", run.RunID)
+	if err != nil {
+		_ = finish(false)
+		if isUniqueViolation(err) {
+			if !isSessionConstraint(err) {
+				return fmt.Errorf("runstate: run id %s already exists (cross-process id collision)", run.RunID)
+			}
+			return fmt.Errorf("%w (session %s)", ErrActiveRun, run.SessionID)
 		}
-		return fmt.Errorf("%w (session %s)", ErrActiveRun, run.SessionID)
+		return err
 	}
-	return err
+	return finish(true)
 }
 
-// claimColumns is the run projection a claim returns (the postgres branch
-// RETURNs it, the sqlite branch SELECTs it) — workspace_id rides along so
-// the worker's Run.WorkspaceID has an execution-side source.
-const claimColumns = `run_id, session_id, thread_id, config_snapshot, workspace_id, created_at`
+// claimColumns returns the run projection a claim returns (the postgres
+// branch RETURNs it, the sqlite branch SELECTs it) — workspace_id rides
+// along so the worker's Run.WorkspaceID has an execution-side source, and
+// on postgres tenant_id does too: the claimed run carries the tenant it was
+// enqueued under, the identity the worker restores into its execution
+// context so the run's event writes land under the owning tenant. Sqlite
+// has no tenant column (single-tenant by design), so its projection
+// substitutes an empty literal and claims report no tenant.
+func (l *Ledger) claimColumns() string {
+	cols := `run_id, session_id, thread_id, config_snapshot, workspace_id`
+	if l.dialect == wocadb.DialectPostgres {
+		return cols + `, tenant_id, created_at`
+	}
+	return cols + `, '' AS tenant_id, created_at`
+}
 
 // claimWorkspaceMutex is the per-workspace mutual-exclusion predicate every
 // claim candidate selection applies (EE sandbox plane): a queued run whose
@@ -200,7 +233,7 @@ func (l *Ledger) claimUpdateSQL() string {
 		` WHERE run_id = (SELECT run_id FROM runs WHERE status = '` + StatusQueued + `'` +
 		claimWorkspaceMutex +
 		` ORDER BY updated_at, created_at LIMIT 1) AND status = '` + StatusQueued +
-		`' RETURNING ` + claimColumns
+		`' RETURNING ` + l.claimColumns()
 }
 
 // claimSelectSQL builds the sqlite branch's candidate selection (no
@@ -208,7 +241,7 @@ func (l *Ledger) claimUpdateSQL() string {
 // inside a transaction is equivalent because the whole ledger is a single
 // database with its own locking). The same per-workspace mutex applies.
 func (l *Ledger) claimSelectSQL() string {
-	return `SELECT ` + claimColumns + ` FROM runs WHERE status = '` + StatusQueued + `'` +
+	return `SELECT ` + l.claimColumns() + ` FROM runs WHERE status = '` + StatusQueued + `'` +
 		claimWorkspaceMutex + ` ORDER BY updated_at, created_at LIMIT 1`
 }
 
@@ -227,7 +260,7 @@ func (l *Ledger) Claim(ctx context.Context, workerID string, lease time.Duration
 	}
 	var run Run
 	err := l.db.DB.QueryRowContext(ctx, l.claimUpdateSQL(), workerID, expires, now).
-		Scan(&run.RunID, &run.SessionID, &run.ThreadID, &run.ConfigSnapshot, &run.WorkspaceID, &run.CreatedAt)
+		Scan(&run.RunID, &run.SessionID, &run.ThreadID, &run.ConfigSnapshot, &run.WorkspaceID, &run.TenantID, &run.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -249,7 +282,7 @@ func (l *Ledger) claimSQLite(ctx context.Context, workerID string, expires, now 
 	defer func() { _ = tx.Rollback() }()
 	var run Run
 	err = tx.QueryRowContext(ctx, l.claimSelectSQL()).
-		Scan(&run.RunID, &run.SessionID, &run.ThreadID, &run.ConfigSnapshot, &run.WorkspaceID, &run.CreatedAt)
+		Scan(&run.RunID, &run.SessionID, &run.ThreadID, &run.ConfigSnapshot, &run.WorkspaceID, &run.TenantID, &run.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -345,33 +378,46 @@ func (l *Ledger) ReapExpired(ctx context.Context) ([]string, error) {
 }
 
 // Append adds one event to a run's stream, assigning the next per-run seq.
+// Each attempt runs through begin, so a context carrying the run's tenant
+// (the worker restores it from the claimed row) inserts the event under
+// that tenant instead of the 'local' default.
 func (l *Ledger) Append(ctx context.Context, runID string, ev Event) (int64, error) {
 	if ev.Kind == "" {
 		return 0, errors.New("runstate: event kind is required")
 	}
 	for attempt := range 5 {
-		var next int64
-		err := l.db.DB.QueryRowContext(ctx,
-			`SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = `+l.ph(0), runID).Scan(&next)
+		q, finish, err := l.begin(ctx)
 		if err != nil {
 			return 0, err
 		}
+		var next int64
+		if err := q.QueryRowContext(ctx,
+			`SELECT COALESCE(MAX(seq), 0) + 1 FROM run_events WHERE run_id = `+l.ph(0), runID).Scan(&next); err != nil {
+			_ = finish(false)
+			return 0, err
+		}
 		var exists bool
-		if err := l.db.DB.QueryRowContext(ctx,
+		if err := q.QueryRowContext(ctx,
 			`SELECT EXISTS(SELECT 1 FROM runs WHERE run_id = `+l.ph(0)+`)`, runID).Scan(&exists); err != nil {
+			_ = finish(false)
 			return 0, err
 		}
 		if !exists {
+			_ = finish(false)
 			return 0, fmt.Errorf("runstate: unknown run %s", runID)
 		}
-		_, err = l.db.DB.ExecContext(ctx,
+		_, err = q.ExecContext(ctx,
 			`INSERT INTO run_events (run_id, seq, kind, payload, at) VALUES (`+
 				l.ph(0)+`, `+l.ph(1)+`, `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`)`,
 			runID, next, ev.Kind, ev.Payload, l.nowMilli())
 		if err != nil {
+			_ = finish(false)
 			if isUniqueViolation(err) && attempt < 4 {
 				continue // concurrent append won the seq; retry with the next
 			}
+			return 0, err
+		}
+		if err := finish(true); err != nil {
 			return 0, err
 		}
 		return next, nil
@@ -461,21 +507,30 @@ func (l *Ledger) Row(ctx context.Context, runID string) (Run, bool, error) {
 // Start registers a run this caller executes itself: the row is born
 // running under workerID's lease (the one_active_run_per_session constraint
 // still applies). Workers that pick runs up from a queue use Enqueue/Claim
-// instead.
+// instead. Like Enqueue, the insert runs through begin so a tenant-carrying
+// context tags the row with that tenant.
 func (l *Ledger) Start(ctx context.Context, run Run, workerID string, lease time.Duration) error {
 	if run.RunID == "" || run.SessionID == "" {
 		return errors.New("runstate: run id and session id are required")
 	}
 	now := l.nowMilli()
-	_, err := l.db.DB.ExecContext(ctx,
+	q, finish, err := l.begin(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = q.ExecContext(ctx,
 		`INSERT INTO runs (run_id, session_id, status, owner, lease_expires_at, thread_id, config_snapshot, workspace_id, created_at, updated_at)
 		 VALUES (`+l.ph(0)+`, `+l.ph(1)+`, '`+StatusRunning+`', `+l.ph(2)+`, `+l.ph(3)+`, `+l.ph(4)+`, `+l.ph(5)+`, `+l.ph(6)+`, `+l.ph(7)+`, `+l.ph(8)+`)`,
 		run.RunID, run.SessionID, workerID, now+lease.Milliseconds(), run.ThreadID, run.ConfigSnapshot, run.WorkspaceID, now, now)
-	if err != nil && isUniqueViolation(err) {
-		if !isSessionConstraint(err) {
-			return fmt.Errorf("runstate: run id %s already exists (cross-process id collision)", run.RunID)
+	if err != nil {
+		_ = finish(false)
+		if isUniqueViolation(err) {
+			if !isSessionConstraint(err) {
+				return fmt.Errorf("runstate: run id %s already exists (cross-process id collision)", run.RunID)
+			}
+			return fmt.Errorf("%w (session %s)", ErrActiveRun, run.SessionID)
 		}
-		return fmt.Errorf("%w (session %s)", ErrActiveRun, run.SessionID)
+		return err
 	}
-	return err
+	return finish(true)
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -169,6 +170,122 @@ func TestRacingClaimsOnPostgres(t *testing.T) {
 	}
 }
 
+// TestTenantPropagationOnPostgres is the T6 regression: a run enqueued
+// under a tenant-carrying context is tagged with that tenant, a tenantless
+// worker Claim hands the tenant back on the run, events appended under the
+// restored tenant land tenant-scoped, and the RLS policy keeps them visible
+// only to that tenant's readers (a foreign tenant — or the tenantless
+// default — sees nothing). Pre-fix, the enqueue defaulted to 'local' and
+// the tenant's own SSE replay came back empty.
+//
+// RLS only binds a non-superuser owner, so the ledger runs as a dedicated
+// NOBYPASSRLS app role over its own throwaway database — the same shape
+// wocadb's rls_pg_test provisions (a plain superuser connection bypasses
+// the policies entirely and would vacuously pass).
+func TestTenantPropagationOnPostgres(t *testing.T) {
+	baseDSN := os.Getenv("WOCA_PG_TEST_DSN")
+	if baseDSN == "" {
+		t.Skip("WOCA_PG_TEST_DSN not set")
+	}
+	ctx := context.Background()
+	admin, err := sql.Open("pgx", baseDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName := fmt.Sprintf("woca_rl_tenant_%d", os.Getpid())
+	role, pass := dbName+"_app", "tenant-test"
+	if _, err := admin.ExecContext(ctx, `DROP DATABASE IF EXISTS `+dbName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `CREATE DATABASE `+dbName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `DROP ROLE IF EXISTS `+role); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD '%s' NOBYPASSRLS`, role, pass)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `GRANT ALL ON DATABASE `+dbName+` TO `+role); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(ctx, `DROP DATABASE IF EXISTS `+dbName+` WITH (FORCE)`)
+		_, _ = admin.ExecContext(ctx, `DROP ROLE IF EXISTS `+role)
+	})
+	defer admin.Close()
+
+	// PG 15+ keeps CREATE on public from ordinary roles; grant it before
+	// the migrations run as the app role.
+	grant, err := sql.Open("pgx", dsnForDatabase(baseDSN, dbName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := grant.ExecContext(ctx, `GRANT CREATE ON SCHEMA public TO `+role); err != nil {
+		_ = grant.Close()
+		t.Fatal(err)
+	}
+	_ = grant.Close()
+
+	appDSN := rewriteUserPassword(dsnForDatabase(baseDSN, dbName), role, pass)
+	db, err := wocadb.Open("pg:" + appDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	l, err := New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Enqueue carries the tenant: the gateway-side request context tags
+	// the runs row with the originating tenant.
+	gwCtx := tenancy.NewContext(ctx, tenancy.Context{TenantID: "acme", UserID: "u1"})
+	if err := l.Enqueue(gwCtx, Run{RunID: "t-1", SessionID: "st", ThreadID: "th"}); err != nil {
+		t.Fatal(err)
+	}
+	var tenantID string
+	if err := db.QueryRowContext(ctx, `SELECT tenant_id FROM runs WHERE run_id = 't-1'`).Scan(&tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if tenantID != "acme" {
+		t.Fatalf("runs.tenant_id = %q, want acme (enqueue dropped the request tenant)", tenantID)
+	}
+
+	// 2. The worker claims without any tenant in its context; the claimed
+	// run carries the tenant it was enqueued under.
+	claimed, err := l.Claim(ctx, "w-tenant", time.Minute)
+	if err != nil || claimed == nil || claimed.RunID != "t-1" {
+		t.Fatalf("claim = %+v err=%v", claimed, err)
+	}
+	if claimed.TenantID != "acme" {
+		t.Fatalf("claimed run TenantID = %q, want acme", claimed.TenantID)
+	}
+
+	// 3. Worker-side events append under the restored tenant and stay
+	// visible to the owning tenant's replay — the SSE read path.
+	wCtx := tenancy.NewContext(ctx, tenancy.Context{TenantID: claimed.TenantID})
+	if _, err := l.Append(wCtx, "t-1", Event{Kind: "delta", Payload: `{"text":"hi"}`}); err != nil {
+		t.Fatal(err)
+	}
+	own, err := l.Replay(gwCtx, "t-1", 0, 10)
+	if err != nil || len(own) != 1 {
+		t.Fatalf("tenant replay = %v err=%v (worker events invisible to their own tenant)", own, err)
+	}
+
+	// 4. RLS isolation: a different tenant — and the tenantless default
+	// that pre-fix received the row — see none of the tenant's events.
+	other := tenancy.NewContext(ctx, tenancy.Context{TenantID: "other"})
+	foreign, err := l.Replay(other, "t-1", 0, 10)
+	if err != nil || len(foreign) != 0 {
+		t.Fatalf("foreign tenant replay = %v err=%v, want isolation", foreign, err)
+	}
+	local, err := l.Replay(ctx, "t-1", 0, 10)
+	if err != nil || len(local) != 0 {
+		t.Fatalf("local replay = %v err=%v, want isolation", local, err)
+	}
+}
+
 // dsnForDatabase swaps the database name in the test DSN so the live tests
 // run against any deployment form (host-published base stack, or an
 // in-network address like woca-pg-primary:5432).
@@ -178,5 +295,20 @@ func dsnForDatabase(baseDSN, dbName string) string {
 		return fmt.Sprintf("postgres://woca:woca-enterprise-dev@127.0.0.1:35432/%s?sslmode=disable", dbName)
 	}
 	u.Path = "/" + dbName
+	return u.String()
+}
+
+// rewriteUserPassword swaps the user:password in a URL DSN (the app-role
+// connection the tenant test migrates and runs as).
+func rewriteUserPassword(dsn, user, pass string) string {
+	u, err := neturl.Parse(dsn)
+	if err != nil {
+		return dsn
+	}
+	if u.User == nil {
+		u.User = neturl.UserPassword(user, pass)
+		return u.String()
+	}
+	u.User = neturl.UserPassword(user, pass)
 	return u.String()
 }

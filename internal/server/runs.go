@@ -19,6 +19,7 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/tracing"
 	"github.com/projanvil/woca/internal/wocadb"
@@ -700,8 +701,18 @@ func (s *Server) enqueueRun(ctx context.Context, sessionID string, human message
 	}
 	// The queued run's context derives from the server lifecycle (rootCtx),
 	// not the triggering request: a dispatched run must outlive its HTTP
-	// request but still end at server shutdown.
+	// request but still end at server shutdown. The request's tenant
+	// identity is plain context data, so it crosses that seam (values only —
+	// the liveness parent stays rootCtx): Enqueue under this context tags
+	// the runs row with the originating tenant, and the worker restores the
+	// tenant from the claimed row so its event writes land in the same
+	// scope. Without it, tenant-authenticated runs default to the 'local'
+	// tenant and their worker-side events become invisible to the tenant's
+	// readers (RLS tenant_isolation).
 	runCtx, runCancel := context.WithCancel(s.rootCtx)
+	if tc, ok := tenancy.FromContext(ctx); ok && !tc.IsZero() {
+		runCtx = tenancy.NewContext(runCtx, tc)
+	}
 	run := newRun(newRunID(), s.agent, runCtx, runCancel)
 	thread := agent.NewThreadID()
 	run.mu.Lock()

@@ -11,6 +11,7 @@ import (
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/platform/eventbus"
+	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/tools"
 	"github.com/projanvil/woca/internal/wocadb"
@@ -177,5 +178,34 @@ func TestWorkerHeartbeatDuringExecution(t *testing.T) {
 	row, _, _ := ledger.Row(t.Context(), "r1")
 	if row.LeaseExpiresAt != 0 {
 		t.Fatalf("lease not released at finish: %+v", row)
+	}
+}
+
+// TestWithRunTenantRestoresClaimedTenant: the claimed run's tenant is
+// restored into the execution context via the canonical extraction pair
+// (tenancy.NewContext / tenancy.FromContext) — the identity the ledger's
+// tenant prologue reads to scope run_events writes. Runs without a tenant
+// (sqlite claims, 'local' rows) leave the context untouched.
+func TestWithRunTenantRestoresClaimedTenant(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		run        *runstate.Run
+		wantTenant string
+		wantOK     bool
+	}{
+		{"claimed tenant run", &runstate.Run{RunID: "r1", TenantID: "acme"}, "acme", true},
+		{"no tenant on row", &runstate.Run{RunID: "r2"}, "", false},
+		{"nil run", nil, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := withRunTenant(t.Context(), tc.run)
+			got, ok := tenancy.FromContext(ctx)
+			if ok != tc.wantOK {
+				t.Fatalf("tenancy.FromContext ok = %v, want %v", ok, tc.wantOK)
+			}
+			if got.TenantID != tc.wantTenant {
+				t.Fatalf("restored tenant = %q, want %q", got.TenantID, tc.wantTenant)
+			}
+		})
 	}
 }
