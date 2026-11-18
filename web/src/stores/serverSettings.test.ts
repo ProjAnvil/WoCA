@@ -354,3 +354,72 @@ describe('serverSettings toggleDebugLog draft preservation', () => {
     expect(s.sectionDirty('storage')).toBe(true)
   })
 })
+
+// ---------------------------------------------------------------------------
+// loadServer: edits made while a reload fetch is in flight (and unsaved
+// drafts sitting in the form when a reload lands, e.g. a settings-panel
+// reopen) are never silently reverted.
+// ---------------------------------------------------------------------------
+
+describe('serverSettings loadServer in-flight edit preservation', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    for (const fn of Object.values(api)) fn.mockReset()
+    api.getSettings.mockResolvedValue(settingsDoc())
+    api.updateSettings.mockResolvedValue({ ok: true, restart_required: false })
+  })
+
+  it('keeps edits typed while the fetch is in flight, and flags the section dirty', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    let resolveGet!: (v: unknown) => void
+    api.getSettings.mockReturnValueOnce(new Promise((r) => (resolveGet = r)))
+    const loading = s.loadServer()
+    // Typed while the fetch is in flight — the response would clobber it.
+    s.checkpointBackend = 'postgres'
+    resolveGet(settingsDoc({ provider: 'glm' }))
+    await loading
+    await flushPromises()
+    expect(s.checkpointBackend).toBe('postgres')
+    expect(s.sectionDirty('storage')).toBe(true)
+    // Untouched sections still take the server's truth verbatim.
+    expect(s.provider).toBe('glm')
+    expect(s.sectionDirty('provider')).toBe(false)
+  })
+
+  it('keeps edits typed during the FIRST load, before any snapshot exists', async () => {
+    const s = useServerSettingsStore()
+    let resolveGet!: (v: unknown) => void
+    api.getSettings.mockReturnValueOnce(new Promise((r) => (resolveGet = r)))
+    const loading = s.loadServer()
+    s.serverModel = 'glm-5'
+    resolveGet(settingsDoc({ model: 'claude-sonnet-4-5' }))
+    await loading
+    await flushPromises()
+    expect(s.serverModel).toBe('glm-5')
+    expect(s.sectionDirty('provider')).toBe(true)
+  })
+
+  it('keeps a section across a reload even when its edit predates the fetch', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    s.serverModel = 'glm-5'
+    // e.g. the settings panel reopening with unsaved work in the form.
+    await s.loadServer()
+    await flushPromises()
+    expect(s.serverModel).toBe('glm-5')
+    expect(s.sectionDirty('provider')).toBe(true)
+  })
+
+  it('reflects server truth for untouched sections and ends clean', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    api.getSettings.mockResolvedValue(settingsDoc({ checkpoint_backend: 'postgres', provider: 'glm' }))
+    await s.loadServer()
+    await flushPromises()
+    expect(s.checkpointBackend).toBe('postgres')
+    expect(s.provider).toBe('glm')
+    expect(s.sectionDirty('storage')).toBe(false)
+    expect(s.sectionDirty('provider')).toBe(false)
+  })
+})

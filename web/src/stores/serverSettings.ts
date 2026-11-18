@@ -223,10 +223,39 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
   const msgPlaneAvailable = computed(() => Boolean(server.value?.msg_plane_available))
   const langfuseSecretSet = computed(() => Boolean(server.value?.langfuse_secret_key_set))
 
-  async function loadServer() {
+  // `preserveDrafts: false` (used by the store's own save paths) skips the
+  // unsaved-draft preservation below — those callers run their own, more
+  // precise preservation around the reload (the saving section's secrets
+  // must reset to '' on refresh). Every other caller keeps the default:
+  // user edits are never silently reverted by a landing response.
+  async function loadServer(opts?: { preserveDrafts?: boolean }) {
     serverError.value = ''
+    // Dispatch-time baseline of every section draft. On a first load there
+    // is no snapshot yet, so edits made during the fetch can only be
+    // detected against the drafts as this call received them.
+    const baseline: Record<string, Prim> = {}
+    for (const id of Object.keys(SECTION_KEYS) as SectionId[]) {
+      for (const key of SECTION_KEYS[id]) baseline[key] = draftValue(key)
+    }
     try {
       const s = await getSettings()
+      // Capture the user's unsaved work BEFORE the response overwrites the
+      // drafts: every section dirty against the current snapshot (edits
+      // from before or DURING the fetch) plus, for sections with no
+      // snapshot yet, drift past the dispatch baseline. Re-applied after
+      // the refresh, differing sections correctly end dirty; untouched
+      // sections take the server's truth verbatim.
+      const preserve: Record<string, Prim> = {}
+      if (opts?.preserveDrafts !== false) {
+        Object.assign(preserve, captureUnsavedDrafts())
+        for (const id of Object.keys(SECTION_KEYS) as SectionId[]) {
+          if (sectionSnapshots.value[id]) continue // covered by the capture
+          for (const key of SECTION_KEYS[id]) {
+            const v = draftValue(key)
+            if (!Object.is(v, baseline[key])) preserve[key] = v
+          }
+        }
+      }
       server.value = s
       provider.value = (s.provider as ProviderName) ?? 'anthropic'
       serverModel.value = s.model
@@ -260,6 +289,7 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
       langfusePublicKey.value = s.langfuse_public_key ?? ''
       langfuseSecret.value = ''
       snapshotSections()
+      for (const [key, v] of Object.entries(preserve)) draftAccessors[key]?.set(v)
     } catch (e) {
       serverError.value = toErrorMessage(e)
     }
@@ -497,7 +527,10 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
         const v = draftValue(key)
         if (!Object.is(v, sentDrafts[key])) inFlightEdits[key] = v
       }
-      await loadServer()
+      // Clobber-reload: this path's own captures (other sections + the
+      // mid-flight drift, and the saving section's secret reset) must stay
+      // authoritative — loadServer's generic preservation is opt-out here.
+      await loadServer({ preserveDrafts: false })
       for (const [key, v] of Object.entries(unsaved)) draftAccessors[key]?.set(v)
       for (const [key, v] of Object.entries(inFlightEdits)) draftAccessors[key]?.set(v)
       // Provider/model changes may flip the thinking drawer's support state.
@@ -520,7 +553,9 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
       // this captures everything dirty — explicitly, not by excluding a
       // section that merely happens to be empty today.
       const unsaved = captureUnsavedDrafts()
-      await loadServer()
+      // Clobber-reload: the capture above (taken after the PUT settled) is
+      // the authoritative preservation for this path.
+      await loadServer({ preserveDrafts: false })
       for (const [key, v] of Object.entries(unsaved)) draftAccessors[key]?.set(v)
     } catch (e) {
       serverError.value = toErrorMessage(e)
