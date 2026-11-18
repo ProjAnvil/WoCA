@@ -10,6 +10,8 @@ package server
 // parked-interrupt TTL timeout.
 
 import (
+	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -123,13 +125,13 @@ func TestDerivedCancelledHistoryGoalFormulaWithoutHuman(t *testing.T) {
 	}
 }
 
-// Case 3: the notice tag carries both reason attributes verbatim.
+// Case 3: the notice tag carries every stop cause's reason attribute
+// verbatim — the closed cause set round-trips through StopNotice.
 func TestStopNoticeReasonAttributes(t *testing.T) {
-	if got := stopNotice("run-9", StopReasonUser).Content; got != wantStopNotice("run-9", StopReasonUser) {
-		t.Fatalf("user stop notice = %q", got)
-	}
-	if got := stopNotice("run-9", StopReasonParkedTTL).Content; got != wantStopNotice("run-9", StopReasonParkedTTL) {
-		t.Fatalf("parked TTL notice = %q", got)
+	for _, cause := range []string{StopReasonUser, StopReasonParkedTTL, StopReasonServerStop, StopReasonLeaseLost} {
+		if got := stopNotice("run-9", cause).Content; got != wantStopNotice("run-9", cause) {
+			t.Fatalf("%s notice = %q", cause, got)
+		}
 	}
 	if m := stopNotice("r", StopReasonUser); m.Role != messages.RoleHuman {
 		t.Fatalf("notice role = %v, want Human (notification convention)", m.Role)
@@ -137,7 +139,9 @@ func TestStopNoticeReasonAttributes(t *testing.T) {
 }
 
 // Case 4 (user stop, main run): cancelling an in-flight run persists the
-// prompt plus the notice tag with reason=user_stop; no partial reply.
+// prompt plus the notice tag with reason=user_stop; no partial reply. The
+// done event carries the same cause (live UI gap 2: the SSE payload, not
+// the reload, tells the frontend why the run stopped).
 func TestUserCancelledRunPersistsStopNotice(t *testing.T) {
 	a := newWakeAgent(t, 2*time.Second, messages.AI("late reply")) // model call held open for the cancel
 	s, ts := newWakeServer(t, a, nil)
@@ -165,40 +169,53 @@ func TestUserCancelledRunPersistsStopNotice(t *testing.T) {
 			t.Fatalf("cancelled round persisted a partial reply: %+v", msgs)
 		}
 	}
+	// The done payload carries the cause next to cancelled:true.
+	for _, f := range replayRunEvents(t, ts.URL, runID) {
+		if f.event != EventDone {
+			continue
+		}
+		if !strings.Contains(f.data, `"cancelled":true`) || !strings.Contains(f.data, `"reason":"`+StopReasonUser+`"`) {
+			t.Fatalf("done payload = %s, want cancelled:true reason user_stop", f.data)
+		}
+	}
 }
 
-// Case 4 (queued run): a run cancelled while waiting on the session gate
-// never reaches onDone; its prompt plus notice must persist from the queued
-// branch. The gate is held by a synthetic holder so no other run's save can
-// race the assertion.
-func TestQueuedCancelledRunPersistsStopNotice(t *testing.T) {
-	a := newWakeAgent(t, 0, messages.AI("never started"))
+// Case 4 (queued run, clobber regression — cancel-semantics gap 1): a run
+// cancelled while waiting on the session gate never reaches onDone; its
+// prompt plus notice must persist — AND survive the in-flight holder's
+// completion save. The holder's save is a full overwrite built from the
+// history it loaded at start, so an immediate queued-cancel save (written
+// outside the admission window) was clobbered by it. The queued cancel is
+// therefore deferred: the holder's completion drains it between its own
+// save and the gate release, so BOTH transcripts persist, in order.
+func TestQueuedCancelWhileHolderRunsPersistsBoth(t *testing.T) {
+	a := newWakeAgent(t, 2*time.Second, messages.AI("holder reply")) // holder's model call held open across the cancel
 	s, ts := newWakeServer(t, a, nil)
 	saved := trackSaves(s)
 	const sid = "s1"
 
-	if w, pos, ok := s.admission.enter(sid, nil); w != nil || pos != 0 || !ok {
-		t.Fatalf("synthetic holder enter = waiter %v pos %d ok %v", w != nil, pos, ok)
+	runA, _, posA := postRun(t, ts.URL, sid, "holder prompt")
+	if posA != 0 {
+		t.Fatalf("holder position = %d, want 0 (runs immediately)", posA)
 	}
-	t.Cleanup(func() { s.admission.release(sid) })
-
-	runID, _, pos := postRun(t, ts.URL, sid, "queued prompt")
-	if pos != 1 {
-		t.Fatalf("queue position = %d, want 1 (queued behind the holder)", pos)
+	runB, _, posB := postRun(t, ts.URL, sid, "queued prompt")
+	if posB != 1 {
+		t.Fatalf("queued position = %d, want 1 (queued behind the holder)", posB)
 	}
-	if err := postJSON(t, ts.URL+"/api/runs/"+runID+"/cancel", ""); err != nil {
+	if err := postJSON(t, ts.URL+"/api/runs/"+runB+"/cancel", ""); err != nil {
 		t.Fatal(err)
 	}
-	waitRunDoneInProc(t, s, runID)
-	awaitSave(t, saved, 1)
+	waitRunDoneInProc(t, s, runB)
+	waitRunDoneInProc(t, s, runA)
+	awaitSave(t, saved, 2) // holder's final transcript + the drained queued-cancel save
 
-	waitForTranscript(t, ts.URL, sid, "stop notice after queued cancel", func(msgs []messages.Message) bool {
-		return lastStopNotice(msgs) == wantStopNotice(runID, StopReasonUser)
+	waitForTranscript(t, ts.URL, sid, "holder reply AND queued prompt+notice", func(msgs []messages.Message) bool {
+		return len(msgs) == 4 &&
+			msgs[0].Content == "holder prompt" &&
+			msgs[1].Role == messages.RoleAI && msgs[1].Content == "holder reply" &&
+			msgs[2].Content == "queued prompt" &&
+			lastStopNotice(msgs) == wantStopNotice(runB, StopReasonUser)
 	})
-	msgs := sessionMessages(t, ts.URL, sid)
-	if len(msgs) != 2 || msgs[0].Content != "queued prompt" {
-		t.Fatalf("transcript = %+v, want exactly [queued prompt, notice]", msgs)
-	}
 }
 
 // Case 4 (parked TTL, run.go's waitParked timer): a run parked on an
@@ -224,6 +241,15 @@ func TestParkedTTLRunPersistsStopNoticeWithParkedReason(t *testing.T) {
 	msgs := sessionMessages(t, ts.URL, sid)
 	if len(msgs) != 2 || msgs[0].Content != "awaiting an answer" {
 		t.Fatalf("transcript = %+v, want exactly [prompt, notice]", msgs)
+	}
+	// The done payload carries parked_ttl, not the generic user_stop.
+	for _, f := range replayRunEvents(t, ts.URL, runID) {
+		if f.event != EventDone {
+			continue
+		}
+		if !strings.Contains(f.data, `"reason":"`+StopReasonParkedTTL+`"`) {
+			t.Fatalf("done payload = %s, want reason parked_ttl", f.data)
+		}
 	}
 }
 
@@ -285,30 +311,122 @@ func TestGoalCancelledRunPersistsStopNoticeWithoutHuman(t *testing.T) {
 	}
 }
 
-// Goal cancel while queued: same derivation, no human turn, straight from the
-// queued branch (onDone never runs).
-func TestGoalQueuedCancelledRunPersistsStopNotice(t *testing.T) {
-	s, ts := newStopmarkGoalServer(t, 0)
+// Multiple queued cancels drain in FIFO order: both cancelled runs' prompts
+// and notices persist after the holder's transcript, in cancel order, each
+// finalizer rebasing on the previous writes.
+func TestMultipleQueuedCancelsDrainInOrder(t *testing.T) {
+	a := newWakeAgent(t, 2*time.Second, messages.AI("holder reply"))
+	s, ts := newWakeServer(t, a, nil)
+	saved := trackSaves(s)
+	const sid = "s1"
+
+	runA, _, _ := postRun(t, ts.URL, sid, "holder prompt")
+	runB1, _, posB1 := postRun(t, ts.URL, sid, "queued one")
+	runB2, _, posB2 := postRun(t, ts.URL, sid, "queued two")
+	if posB1 != 1 || posB2 != 2 {
+		t.Fatalf("queue positions = %d/%d, want 1/2", posB1, posB2)
+	}
+	for _, id := range []string{runB1, runB2} {
+		if err := postJSON(t, ts.URL+"/api/runs/"+id+"/cancel", ""); err != nil {
+			t.Fatal(err)
+		}
+		waitRunDoneInProc(t, s, id)
+	}
+	waitRunDoneInProc(t, s, runA)
+	awaitSave(t, saved, 3) // holder's final + two drained finalizers
+
+	waitForTranscript(t, ts.URL, sid, "holder reply, both prompts+notices in order", func(msgs []messages.Message) bool {
+		return len(msgs) == 6 &&
+			msgs[1].Content == "holder reply" &&
+			msgs[2].Content == "queued one" &&
+			lastStopNotice(msgs[:4]) == wantStopNotice(runB1, StopReasonUser) &&
+			msgs[4].Content == "queued two" &&
+			lastStopNotice(msgs) == wantStopNotice(runB2, StopReasonUser)
+	})
+}
+
+// Goal cancel while queued (clobber regression, goal twin): the goal run
+// queued behind an ordinary in-flight run on the same session is cancelled;
+// its notice (no human turn) must persist after the holder's own transcript,
+// through the same deferred finalizer drain.
+func TestGoalQueuedCancelBehindHolderPersistsBoth(t *testing.T) {
+	s, ts := newStopmarkGoalServer(t, 2*time.Second) // holder's model call held open across the cancel
 	saved := trackSaves(s)
 	const sid = "s-goal-q"
 
+	// The gate holder is an ordinary run (a second goal loop cannot start —
+	// the agent-level goal claim refuses it — so goal runs queue only behind
+	// normal runs).
+	runA, _, posA := postRun(t, ts.URL, sid, "holder prompt")
+	if posA != 0 {
+		t.Fatalf("holder position = %d, want 0 (runs immediately)", posA)
+	}
+	_, runB, output := postGoal(t, ts.URL, sid, "set make the feature work")
+	if runB == "" {
+		t.Fatalf("goal set output = %q, want a queued goal run", output)
+	}
+	if err := postJSON(t, ts.URL+"/api/runs/"+runB+"/cancel", ""); err != nil {
+		t.Fatal(err)
+	}
+	waitRunDoneInProc(t, s, runB)
+	waitRunDoneInProc(t, s, runA)
+	awaitSave(t, saved, 2) // holder's final transcript + the drained goal queued-cancel save
+
+	waitForTranscript(t, ts.URL, sid, "holder reply AND goal notice", func(msgs []messages.Message) bool {
+		return len(msgs) == 3 &&
+			msgs[0].Content == "holder prompt" &&
+			msgs[1].Role == messages.RoleAI &&
+			lastStopNotice(msgs) == wantStopNotice(runB, StopReasonUser)
+	})
+}
+
+// Shutdown abort (server_stop): admission.stop() aborts queued waiters with
+// the server_stop cause — not user_stop — and the shutdown flush persists
+// their derived history (no holder will drain the finalizer queue; in-flight
+// runs are not cancelled at shutdown). The done event carries the same
+// cause as the persisted tag.
+func TestShutdownAbortedQueuedRunPersistsServerStop(t *testing.T) {
+	a := newWakeAgent(t, 0, messages.AI("unused"))
+	s, ts := newWakeServer(t, a, nil)
+	saved := trackSaves(s)
+	const sid = "s1"
+
+	// A synthetic holder keeps the gate busy so the second run queues (and
+	// stays queued — nothing cancels the holder here).
 	if w, pos, ok := s.admission.enter(sid, nil); w != nil || pos != 0 || !ok {
 		t.Fatalf("synthetic holder enter = waiter %v pos %d ok %v", w != nil, pos, ok)
 	}
 	t.Cleanup(func() { s.admission.release(sid) })
 
-	_, runID, _ := postGoal(t, ts.URL, sid, "set make the feature work")
-	if err := postJSON(t, ts.URL+"/api/runs/"+runID+"/cancel", ""); err != nil {
-		t.Fatal(err)
+	runID, _, pos := postRun(t, ts.URL, sid, "queued prompt")
+	if pos != 1 {
+		t.Fatalf("queue position = %d, want 1 (queued behind the holder)", pos)
 	}
+
+	// Server shutdown: ServeStarted stops admission (aborting the queued
+	// waiter) and flushes the finalizer queue.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := s.ServeStarted(ctx, &http.Server{}, nil); err != nil {
+		t.Fatalf("ServeStarted after cancel = %v, want nil", err)
+	}
+
 	waitRunDoneInProc(t, s, runID)
 	awaitSave(t, saved, 1)
-
-	waitForTranscript(t, ts.URL, sid, "queued goal stop notice", func(msgs []messages.Message) bool {
-		return lastStopNotice(msgs) == wantStopNotice(runID, StopReasonUser)
+	waitForTranscript(t, ts.URL, sid, "server_stop notice after shutdown", func(msgs []messages.Message) bool {
+		return lastStopNotice(msgs) == wantStopNotice(runID, StopReasonServerStop)
 	})
-	if msgs := sessionMessages(t, ts.URL, sid); len(msgs) != 1 {
-		t.Fatalf("transcript = %+v, want exactly [notice]", msgs)
+	msgs := sessionMessages(t, ts.URL, sid)
+	if len(msgs) != 2 || msgs[0].Content != "queued prompt" {
+		t.Fatalf("transcript = %+v, want exactly [queued prompt, notice]", msgs)
+	}
+	for _, f := range replayRunEvents(t, ts.URL, runID) {
+		if f.event != EventDone {
+			continue
+		}
+		if !strings.Contains(f.data, `"cancelled":true`) || !strings.Contains(f.data, `"reason":"`+StopReasonServerStop+`"`) {
+			t.Fatalf("done payload = %s, want cancelled:true reason server_stop", f.data)
+		}
 	}
 }
 

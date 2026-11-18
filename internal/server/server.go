@@ -282,6 +282,15 @@ type Server struct {
 	// queue runs) derive from it. rootCancel fires in shutdown.
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
+
+	// cancelMu guards pendingCancelFinalizers/cancelFinalizersClosed
+	// (cancel-semantics gap 1): the per-session FIFO of queued-cancel
+	// persistence finalizers. The mutex covers only map bookkeeping — never
+	// I/O; the finalizers themselves run inside the holder's completion
+	// window (see finalizer.go).
+	cancelMu                sync.Mutex
+	pendingCancelFinalizers map[string][]func()
+	cancelFinalizersClosed  bool
 }
 
 var (
@@ -328,54 +337,55 @@ func New(cfg Config) *Server {
 		fsSvc = volumeFS(cfg.WorkspaceRoot)
 	}
 	s := &Server{
-		agent:           cfg.Agent,
-		static:          cfg.Static,
-		log:             cfg.Logger,
-		auth:            auth,
-		obsManaged:      cfg.ObservabilityConsoleManaged,
-		authz:           authorizer,
-		nativeAuth:      cfg.NativeAuth,
-		anonymousAPI:    cfg.AnonymousAPIPaths,
-		hostGateExempt:  cfg.HostGateExemptPrefixes,
-		streamReauth:    cfg.StreamReauth,
-		fs:              fsSvc,
-		extras:          cfg.Extras,
-		audit:           cfg.Audit,
-		ledger:          cfg.RunLedger,
-		msgplane:        cfg.MsgPlane,
-		workerID:        newWorkerID(),
-		dispatch:        cfg.DispatchToQueue && cfg.RunLedger != nil,
-		runsOffHost:     cfg.RunsOffHost,
-		sandboxEnabled:  cfg.SandboxEnabled,
-		sandboxEndpoint: cfg.SandboxEndpoint,
-		workspaceRoot:   cfg.WorkspaceRoot,
-		ackDB:           stateDB,
-		runs:            map[string]*Run{},
-		sessions:        store,
-		admission:       newAdmission(),
-		state:           state,
-		owner:           newStateOwner(),
-		hub:             eventbus.NewLocalWithRetention(1024),
-		workdir:         cfg.WorkDir,
-		grafanaURL:      cfg.GrafanaURL,
-		settings:        cfg.Settings,
-		memory:          cfg.Memory,
-		memEngine:       cfg.MemoryEngine,
-		rebuildMemory:   cfg.RebuildMemory,
-		rebuildModel:    cfg.RebuildModel,
-		modelCatalog:    cfg.ModelCatalog,
-		resolveModel:    cfg.ResolveModel,
-		cfgLive:         cfg.CfgLive,
-		setThinking:     cfg.SetThinkingBudget,
-		quotaFetch:      cfg.Quota,
-		applyClaudeEnv:  cfg.ApplyClaudeEnv,
-		plugins:         cfg.Plugins,
-		installPlugin:   cfg.InstallPlugin,
-		activityAPI:     cfg.ActivityAPI,
-		wakeChain:       map[string]int{},
-		wakeStalled:     map[string]bool{},
-		rootCtx:         rootCtx,
-		rootCancel:      rootCancel,
+		agent:                   cfg.Agent,
+		static:                  cfg.Static,
+		log:                     cfg.Logger,
+		auth:                    auth,
+		obsManaged:              cfg.ObservabilityConsoleManaged,
+		authz:                   authorizer,
+		nativeAuth:              cfg.NativeAuth,
+		anonymousAPI:            cfg.AnonymousAPIPaths,
+		hostGateExempt:          cfg.HostGateExemptPrefixes,
+		streamReauth:            cfg.StreamReauth,
+		fs:                      fsSvc,
+		extras:                  cfg.Extras,
+		audit:                   cfg.Audit,
+		ledger:                  cfg.RunLedger,
+		msgplane:                cfg.MsgPlane,
+		workerID:                newWorkerID(),
+		dispatch:                cfg.DispatchToQueue && cfg.RunLedger != nil,
+		runsOffHost:             cfg.RunsOffHost,
+		sandboxEnabled:          cfg.SandboxEnabled,
+		sandboxEndpoint:         cfg.SandboxEndpoint,
+		workspaceRoot:           cfg.WorkspaceRoot,
+		ackDB:                   stateDB,
+		runs:                    map[string]*Run{},
+		sessions:                store,
+		admission:               newAdmission(),
+		state:                   state,
+		owner:                   newStateOwner(),
+		hub:                     eventbus.NewLocalWithRetention(1024),
+		workdir:                 cfg.WorkDir,
+		grafanaURL:              cfg.GrafanaURL,
+		settings:                cfg.Settings,
+		memory:                  cfg.Memory,
+		memEngine:               cfg.MemoryEngine,
+		rebuildMemory:           cfg.RebuildMemory,
+		rebuildModel:            cfg.RebuildModel,
+		modelCatalog:            cfg.ModelCatalog,
+		resolveModel:            cfg.ResolveModel,
+		cfgLive:                 cfg.CfgLive,
+		setThinking:             cfg.SetThinkingBudget,
+		quotaFetch:              cfg.Quota,
+		applyClaudeEnv:          cfg.ApplyClaudeEnv,
+		plugins:                 cfg.Plugins,
+		installPlugin:           cfg.InstallPlugin,
+		activityAPI:             cfg.ActivityAPI,
+		wakeChain:               map[string]int{},
+		wakeStalled:             map[string]bool{},
+		rootCtx:                 rootCtx,
+		rootCancel:              rootCancel,
+		pendingCancelFinalizers: map[string][]func(){},
 	}
 	// A nil SandboxEnabled counts as "no sandbox" (fail-closed), never as
 	// a nil-func panic on the request path.
@@ -586,6 +596,11 @@ func (s *Server) ServeStarted(ctx context.Context, srv *http.Server, serveErr <-
 		return err
 	case <-ctx.Done():
 		s.admission.stop()
+		// Shutdown flush (cancel-semantics gap 1): aborting the queue left
+		// queued-cancel finalizers that no holder will drain (in-flight runs
+		// are not cancelled; the process is exiting) — run them best-effort
+		// and close the registry so late pushes self-execute.
+		s.flushCancelFinalizers()
 		s.rootCancel() // server lifecycle over: queue-dispatched run contexts end too
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()

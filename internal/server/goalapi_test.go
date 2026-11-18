@@ -419,6 +419,11 @@ func cancelParkedGoalRun(t *testing.T, base, runID string, sc *bufio.Scanner) {
 			if !strings.Contains(ev.Data, `"cancelled":true`) {
 				t.Fatalf("done payload = %s, want cancelled:true", ev.Data)
 			}
+			// The done payload carries the stop cause (gap 2): a user stop
+			// of a parked goal loop reports user_stop, not a bare flag.
+			if !strings.Contains(ev.Data, `"reason":"`+StopReasonUser+`"`) {
+				t.Fatalf("done payload = %s, want reason user_stop", ev.Data)
+			}
 			return
 		}
 	}

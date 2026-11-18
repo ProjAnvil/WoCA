@@ -41,14 +41,21 @@ type runCompletion struct {
 //     same save posture (WithoutCancel — the run ctx is already dead but
 //     its values must survive — and stripSystem). Errored runs persist
 //     nothing.
-//  2. release the admission gate, so the next promoted run is guaranteed to
-//     see this run's writes (a queued run is promoted only after the
-//     holder's transcript has been persisted).
-//  3. re-check wake (lost-wakeup R4): onFinish — and with it
-//     wakeAfterRun — fires BEFORE this release, so a notification queued in
-//     between saw admission.busy and returned without waking. Re-check now
-//     that the gate is open; the ranClean gate keeps the cancelled/errored
-//     rule (never restart over what the user just stopped).
+//  2. drain the session's queued-cancel finalizers (cancel-semantics gap
+//     1): each deferred save re-loads the history just persisted here and
+//     appends its own prompt + stop notice, so it lands inside this
+//     holder's window instead of being clobbered by the full-overwrite
+//     save above.
+//  3. release the admission gate, so the next promoted run is guaranteed
+//     to see this run's writes — including the drained finalizers' (a
+//     queued run is promoted only after the holder's transcript, and every
+//     other write, has been persisted).
+//  4. re-check wake (lost-wakeup R4): onFinish — and with it
+//     wakeAfterRun — fires BEFORE this release, so a notification queued
+//     in between saw admission.busy and returned without waking. Re-check
+//     now that the gate is open; the ranClean gate keeps the
+//     cancelled/errored rule (never restart over what the user just
+//     stopped).
 func (s *Server) completeRun(c runCompletion) {
 	ctx := context.WithoutCancel(c.run.ctx)
 	if c.final != nil {
@@ -68,6 +75,11 @@ func (s *Server) completeRun(c runCompletion) {
 		derived := derivedCancelledHistory(history, c.human, c.run.id, reason)
 		_ = s.sessions.save(ctx, c.sid, stripSystem(derived), c.workspace)
 	}
+	// Deferred queued-cancel saves join this holder's serialized window:
+	// drain AFTER the holder's own save, BEFORE the release. (A
+	// self-executed finalizer drains too — later ones may be waiting behind
+	// it in the FIFO.)
+	s.drainCancelFinalizers(c.sid)
 	if c.heldGate {
 		s.admission.release(c.sid)
 		if c.run.ranClean() {

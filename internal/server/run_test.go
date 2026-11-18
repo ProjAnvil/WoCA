@@ -207,5 +207,45 @@ func TestBufferedAnswerForVanishedCardIsDropped(t *testing.T) {
 		t.Fatalf("stale buffered entry leaked: %#v", ans)
 	default:
 	}
-	r.cancelRun()
+	r.cancelRun(StopReasonUser)
+}
+
+// TestStopCauseSingleWriteFirstWriterWins (cancel-semantics bug 4): the stop
+// cause is written exactly once, at cancelRun — the single write point. A
+// parked-TTL timer firing after (or before) a user cancel must not relabel
+// the run: the first cause wins. The race window (timer vs user cancel in
+// one instruction window) is forced deterministically by sequencing the two
+// cancelRun calls — the stamp decision happens under the run mutex inside
+// cancelRun, so both interleaving orders are covered exhaustively.
+func TestStopCauseSingleWriteFirstWriterWins(t *testing.T) {
+	newCancelled := func(id string) *Run {
+		r := newRun(id, nil, t.Context(), func() {})
+		r.finish(EventDone, map[string]any{"cancelled": true})
+		return r
+	}
+
+	r := newCancelled("user-first")
+	r.cancelRun(StopReasonUser)
+	r.cancelRun(StopReasonParkedTTL) // late TTL timer: must not relabel
+	if reason, cancelled := r.cancelledReason(); !cancelled || reason != StopReasonUser {
+		t.Fatalf("cancelledReason = %q/%v, want user_stop/true (first writer wins)", reason, cancelled)
+	}
+	if got := r.stopCause(); got != StopReasonUser {
+		t.Fatalf("stopCause = %q, want user_stop", got)
+	}
+
+	r2 := newCancelled("ttl-first")
+	r2.cancelRun(StopReasonParkedTTL)
+	r2.cancelRun(StopReasonUser) // late user cancel: must not relabel
+	if reason, _ := r2.cancelledReason(); reason != StopReasonParkedTTL {
+		t.Fatalf("cancelledReason = %q, want parked_ttl (first writer wins)", reason)
+	}
+
+	// A run cancelled without an explicit cause falls back to user_stop
+	// (wire compatibility: the done payload and notice always carry a
+	// reason, and pre-cause cancellations were all user stops).
+	r3 := newCancelled("unstamped")
+	if reason, _ := r3.cancelledReason(); reason != StopReasonUser {
+		t.Fatalf("unstamped cancelledReason = %q, want user_stop fallback", reason)
+	}
 }

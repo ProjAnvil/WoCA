@@ -43,12 +43,12 @@ func TestAdmissionFIFO(t *testing.T) {
 	}
 	granted := make(chan string, 2)
 	go func() {
-		if a.wait(t.Context(), "s1", w1) {
+		if promoted, _ := a.wait(t.Context(), "s1", w1); promoted {
 			granted <- "w1"
 		}
 	}()
 	go func() {
-		if a.wait(t.Context(), "s1", w2) {
+		if promoted, _ := a.wait(t.Context(), "s1", w2); promoted {
 			granted <- "w2"
 		}
 	}()
@@ -78,12 +78,35 @@ func TestAdmissionCancelWhileQueued(t *testing.T) {
 		t.Fatalf("enter: ok=%v w=%v", ok, w)
 	}
 	cancel()
-	if a.wait(ctx, "s1", w) {
+	promoted, cause := a.wait(ctx, "s1", w)
+	if promoted {
 		t.Fatal("wait returned true after ctx cancel, want false")
+	}
+	// The waiter's own ctx was cancelled (the run's cancelRun — a user
+	// stop), so the abort cause is user_stop.
+	if cause != StopReasonUser {
+		t.Fatalf("abort cause = %q, want user_stop", cause)
 	}
 	total, depths := a.stats()
 	if total != 0 || len(depths) != 0 {
 		t.Fatalf("stats after cancel: total=%d depths=%v", total, depths)
+	}
+}
+
+// admission.stop() aborts queued waiters with the server_stop cause — the
+// queued-cancel branches need to distinguish a user stop (ctx cancelled)
+// from the server shutting the queue down (stopCh closed).
+func TestAdmissionStopReportsServerStop(t *testing.T) {
+	a := newAdmission()
+	a.enter("s1", nil) // hold the gate
+	w, _, ok := a.enter("s1", nil)
+	if !ok || w == nil {
+		t.Fatalf("enter: ok=%v w=%v", ok, w)
+	}
+	a.stop()
+	promoted, cause := a.wait(t.Context(), "s1", w)
+	if promoted || cause != StopReasonServerStop {
+		t.Fatalf("wait after stop = %v/%q, want false/server_stop", promoted, cause)
 	}
 }
 

@@ -15,14 +15,27 @@ import (
 	"github.com/projanvil/woca/internal/machinetag"
 )
 
-// Reasons a run stopped, carried by the notice tag's reason attribute so the
-// frontend can distinguish the copy (a user stop from an approval timeout).
+// Reasons a run stopped — a closed, wire-stable cause set (the strings
+// appear in persisted notice tags and the done event's reason field, so
+// they must stay readable by the web parser). The cause is stamped exactly
+// once at the cancel entry point (Run.cancelRun, the single write point);
+// consumers (the persisted tag, the done payload) only read it.
 const (
 	// StopReasonUser marks a run stopped by the user (cancel / stop button).
 	StopReasonUser = "user_stop"
 	// StopReasonParkedTTL marks a run cancelled by the parked-interrupt TTL
 	// (an unanswered approval or ask timed out).
 	StopReasonParkedTTL = "parked_ttl"
+	// StopReasonServerStop marks a run aborted by the server lifecycle — a
+	// queued run whose admission wait was aborted by shutdown
+	// (admission.stop). Distinct from user_stop so a shutdown does not
+	// persist "the user stopped this".
+	StopReasonServerStop = "server_stop"
+	// StopReasonLeaseLost marks a run cancelled because its run-ledger
+	// lease was reaped or adopted by another instance (EE posture; stamped
+	// by trackRunLease's heartbeat goroutine — no producer in the personal
+	// edition, which configures no ledger).
+	StopReasonLeaseLost = "lease_lost"
 )
 
 // stopNotice builds the persisted stop notice: a Human message whose content

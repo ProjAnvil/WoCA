@@ -79,16 +79,19 @@ type Run struct {
 	// first). They apply to the next park whose cards they address;
 	// entries for cards that never re-park are dropped with that park.
 	buffered []cardAnswerEntry
-	done    bool // terminal event (done or error) emitted
+	done     bool // terminal event (done or error) emitted
 	// finishKind records the terminal event type for the run ledger.
 	finishKind string
 	// finishCancelled, under mu, records whether the terminal done event was
 	// a cancellation. The wake driver skips cancelled (and errored) runs
 	// when deciding whether to re-check the session's queue — see ranClean.
 	finishCancelled bool
-	// stopReason, under mu, distinguishes cancelled runs for the persisted
-	// stop notice: waitParked's TTL timer marks parked timeouts; every other
-	// cancellation is a user stop. Empty while the run has not stopped.
+	// stopReason, under mu, is the stamped stop cause (see the StopReason*
+	// set): written EXACTLY ONCE at the single write point (cancelRun) —
+	// the first cancel wins the label and later ones cannot relabel (a
+	// parked-TTL timer firing after a user stop keeps user_stop). Empty
+	// while the run has not stopped; readers fall back to user_stop for
+	// cancellations that predate the typed causes.
 	stopReason string
 	// mirror, when set, persists every emitted event to the run ledger's
 	// run_events stream (cross-instance SSE replay). Failures are the
@@ -157,7 +160,10 @@ func (r *Run) startWith(runFn func() ([]messages.Message, error), onDone func([]
 		final, err := runFn()
 		if err != nil {
 			if r.ctx.Err() != nil {
-				r.finish(EventDone, map[string]any{"cancelled": true})
+				// The done payload carries the stop cause next to
+				// cancelled:true (the live UI distinguishes stop reasons
+				// without waiting for the reload's persisted tag).
+				r.finish(EventDone, map[string]any{"cancelled": true, "reason": r.stopCause()})
 			} else {
 				r.finish(EventError, map[string]any{"message": err.Error()})
 			}
@@ -389,13 +395,11 @@ func (r *Run) waitParked(cards []parkedCard, reply chan any) (any, error) {
 	}
 
 	timer := time.AfterFunc(parkedRunTTL, func() {
-		// Mark the stop reason before cancelling: the completion path reads
-		// it (under mu) to stamp the persisted stop notice's reason.
-		r.mu.Lock()
-		r.stopReason = StopReasonParkedTTL
-		r.mu.Unlock()
+		// The TTL is a stop cause like any other: cancelRun is the single
+		// write point that stamps it (first writer wins — a user cancel
+		// that landed first keeps user_stop).
 		r.emit(Event{Type: EventTimeout, Data: map[string]any{"kind": kind, "reason": "parked_ttl"}})
-		r.cancelRun()
+		r.cancelRun(StopReasonParkedTTL)
 	})
 	defer timer.Stop()
 	select {
@@ -797,19 +801,20 @@ func (r *Run) ranClean() bool {
 	return r.finishKind == EventDone && !r.finishCancelled
 }
 
-// cancelledReason reports whether the run ended cancelled and, if so, why:
-// StopReasonParkedTTL when the parked-interrupt TTL fired, StopReasonUser
-// otherwise. Cancelled=false covers clean finishes and errors — runs with no
-// stop notice to persist. Callers read it from the completion path, after
-// finish recorded the terminal state.
+// cancelledReason reports whether the run ended cancelled and, if so, the
+// stamped cause: a getter of the field cancelRun wrote (single write
+// point), falling back to user_stop when nothing stamped a cause.
+// Cancelled=false covers clean finishes and errors — runs with no stop
+// notice to persist. Callers read it from the completion path, after finish
+// recorded the terminal state.
 func (r *Run) cancelledReason() (reason string, cancelled bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.finishKind != EventDone || !r.finishCancelled {
 		return "", false
 	}
-	if r.stopReason == StopReasonParkedTTL {
-		return StopReasonParkedTTL, true
+	if r.stopReason != "" {
+		return r.stopReason, true
 	}
 	return StopReasonUser, true
 }
@@ -860,16 +865,36 @@ func (r *Run) unsubscribe(sub *subscriber) {
 	r.mu.Unlock()
 }
 
-// cancelRun cancels the run's context and drops any parked interrupt: a
-// cancelled run will never consume an answer, so a late one must fail with
-// "no pending interrupt" instead of returning 200 and emitting a stray
-// resolution event into the replay history.
-func (r *Run) cancelRun() {
+// cancelRun cancels the run's context, drops any parked interrupt, and
+// stamps WHY the run stopped. It is the single write point for the cause:
+// the stamp happens exactly once under the run mutex — the first cancel
+// wins the label, and a later cancel (or a no-op repeat) cannot overwrite
+// it, so a parked-TTL timer and a user cancel racing in one instruction
+// window cannot mislabel the run. A cancelled run will never consume an
+// answer, so a late one must fail with "no pending interrupt" instead of
+// returning 200 and emitting a stray resolution event into the replay
+// history.
+func (r *Run) cancelRun(cause string) {
 	r.mu.Lock()
 	r.pending = nil
 	r.buffered = nil
+	if cause != "" && r.stopReason == "" {
+		r.stopReason = cause
+	}
 	r.mu.Unlock()
 	if r.cancel != nil {
 		r.cancel()
 	}
+}
+
+// stopCause returns the stamped stop cause, defaulting to user_stop: the
+// done event payload always carries a reason (wire compatibility —
+// cancellations without an explicit cause were user stops).
+func (r *Run) stopCause() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopReason != "" {
+		return r.stopReason
+	}
+	return StopReasonUser
 }

@@ -136,7 +136,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	run.cancelRun()
+	run.cancelRun(StopReasonUser)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -200,9 +200,12 @@ func (s *Server) trackRunLease(run *Run, sid string) {
 				if err := s.ledger.Heartbeat(context.WithoutCancel(run.ctx), run.id, s.workerID, runLeaseDuration); err != nil {
 					// The lease was reaped (worker death from the ledger's
 					// point of view) or handed to another worker: stop this
-					// execution so the run is not double-run.
+					// execution so the run is not double-run. Stamped
+					// lease_lost so the persisted notice and done event say
+					// why (no producer in the personal edition — it
+					// configures no run ledger).
 					s.log.Warn().Str("run", run.id).Str("session", sid).Err(err).Msg("run lease lost; cancelling local execution")
-					run.cancel()
+					run.cancelRun(StopReasonLeaseLost)
 					return
 				}
 			}
@@ -535,18 +538,33 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 	run.onPark = func() { s.markSessionState(sid, wocadb.SessionAwaiting, run.id) }
 	run.onResume = func() { s.markSessionState(sid, wocadb.SessionRunning, run.id) }
 	go func() {
-		if w != nil && !s.admission.wait(run.ctx, sid, w) {
-			// Cancelled while queued (cancelRun cancelled run.ctx) or shutdown.
-			run.finish(EventDone, map[string]any{"cancelled": true})
-			// The queued cancel never reaches the onDone below (the run never
-			// started), so its derived history persists here: the prompt plus
-			// the stop notice. The run never held the gate, so completeRun
-			// must not release it.
-			s.completeRun(runCompletion{
-				run: run, sid: sid, workspace: workspace,
-				human: &human, heldGate: false,
-			})
-			return
+		if w != nil {
+			if promoted, abortCause := s.admission.wait(run.ctx, sid, w); !promoted {
+				// Cancelled while queued (cancelRun cancelled run.ctx — a
+				// user stop) or aborted by server shutdown (admission stop).
+				// cancelRun is the single write point for the cause; the
+				// done payload carries the stamped cause.
+				run.cancelRun(abortCause)
+				run.finish(EventDone, map[string]any{"cancelled": true, "reason": run.stopCause()})
+				// The queued cancel never reaches the onDone below (the run
+				// never started). Its derived history (prompt + stop
+				// notice) is DEFERRED, not saved here: writing now would
+				// land outside the admission window — the in-flight
+				// holder's completion save is a full overwrite built from
+				// the history it loaded at start, so this write would be
+				// clobbered. The finalizer persists it from inside the
+				// holder's save→release window instead (completeRun's
+				// drain), or immediately when the session is idle / the
+				// server is shutting down (see finalizer.go). The run never
+				// held the gate, so completeRun must not release it.
+				s.enqueueCancelFinalizer(sid, func() {
+					s.completeRun(runCompletion{
+						run: run, sid: sid, workspace: workspace,
+						human: &human, heldGate: false,
+					})
+				})
+				return
+			}
 		}
 		// Externalized run state (Phase 2): the database row is created when
 		// the run actually starts executing — the one_active_run_per_session
@@ -564,6 +582,12 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 			}, s.workerID, runLeaseDuration); err != nil {
 				s.log.Warn().Str("run", run.id).Str("session", sid).Err(err).Msg("run rejected by the run ledger")
 				run.finish(EventError, map[string]any{"message": "session is running on another instance"})
+				// This path releases the gate WITHOUT a completeRun save of
+				// its own; any queued-cancel finalizers waiting on this
+				// "holder" must still join the release window here, or they
+				// would sit in the FIFO until the session's next run (or
+				// shutdown flush).
+				s.drainCancelFinalizers(sid)
 				s.admission.release(sid)
 				return
 			}

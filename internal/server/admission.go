@@ -70,12 +70,16 @@ func (a *admission) enter(sessionID string, onPosition func(int)) (*gateWaiter, 
 	return w, len(g.queue), true
 }
 
-// wait blocks until the waiter is promoted (true) or removed due to ctx
-// cancellation / admission stop (false).
-func (a *admission) wait(ctx context.Context, sessionID string, w *gateWaiter) bool {
+// wait blocks until the waiter is promoted (true, "") or removed due to ctx
+// cancellation / admission stop (false, abortCause). abortCause says which
+// one removed it — user_stop when the waiter's own ctx was cancelled (the
+// run's cancelRun: a user stop), server_stop when admission stopped (server
+// shutdown aborted the queue) — so the queued-cancel branches can stamp the
+// right cause instead of assuming a user stop.
+func (a *admission) wait(ctx context.Context, sessionID string, w *gateWaiter) (bool, string) {
 	select {
 	case <-w.ready:
-		return true
+		return true, ""
 	case <-ctx.Done():
 	case <-a.stopCh:
 	}
@@ -83,11 +87,11 @@ func (a *admission) wait(ctx context.Context, sessionID string, w *gateWaiter) b
 	defer a.mu.Unlock()
 	g := a.gates[sessionID]
 	if g == nil {
-		return false
+		return false, waitAbortCause(ctx)
 	}
 	select {
 	case <-w.ready:
-		return true // promoted while ctx fired; caller's ctx is done, run exits fast
+		return true, "" // promoted while ctx fired; caller's ctx is done, run exits fast
 	default:
 	}
 	if removeWaiter(g, w) {
@@ -96,7 +100,18 @@ func (a *admission) wait(ctx context.Context, sessionID string, w *gateWaiter) b
 			delete(a.gates, sessionID)
 		}
 	}
-	return false
+	return false, waitAbortCause(ctx)
+}
+
+// waitAbortCause reports why an aborted waiter left the queue. When both the
+// ctx and admission's stopCh fired, the explicit run cancellation (a user
+// stop via cancelRun) wins the label; cancelRun's single-write discipline
+// keeps the first stamp either way.
+func waitAbortCause(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return StopReasonUser
+	}
+	return StopReasonServerStop
 }
 
 // release frees the gate and promotes the FIFO head, renumbering the rest.

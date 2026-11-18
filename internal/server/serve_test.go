@@ -187,6 +187,12 @@ func TestRunCancelWhileParked(t *testing.T) {
 			if !strings.Contains(ev.Data, `"cancelled":true`) {
 				t.Fatalf("done payload = %s, want cancelled:true", ev.Data)
 			}
+			// The done payload carries the stop cause next to cancelled
+			// (cancel-semantics gap 2: the live UI distinguishes stop
+			// reasons without waiting for the reload's tag).
+			if !strings.Contains(ev.Data, `"reason":"`+StopReasonUser+`"`) {
+				t.Fatalf("done payload = %s, want reason user_stop", ev.Data)
+			}
 			return
 		}
 	}
@@ -629,7 +635,7 @@ func TestCancelRunWithoutCancelFunc(t *testing.T) {
 	// A run built without a cancel func must not panic on cancel.
 	run := newRun("nil-cancel", nil, t.Context(), nil)
 	s.registerRun(run.id, run)
-	run.cancelRun()
+	run.cancelRun(StopReasonUser)
 
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()

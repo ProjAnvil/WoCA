@@ -216,18 +216,30 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 		run.emit(Event{Type: EventRunQueued, Data: map[string]any{"position": pos}})
 	}
 	go func() {
-		if w != nil && !s.admission.wait(run.ctx, sessionID, w) {
-			// Cancelled while queued (cancelRun cancelled run.ctx) or shutdown.
-			run.finish(EventDone, map[string]any{"cancelled": true})
-			// The queued cancel never reaches the onDone below (the goal loop
-			// never started). Goal rounds carry no human turn, so the derived
-			// history is the session history plus the stop notice alone; the
-			// run never held the gate, so completeRun must not release it.
-			s.completeRun(runCompletion{
-				run: run, sid: sessionID, workspace: workspace,
-				human: nil, heldGate: false,
-			})
-			return
+		if w != nil {
+			if promoted, abortCause := s.admission.wait(run.ctx, sessionID, w); !promoted {
+				// Cancelled while queued (cancelRun cancelled run.ctx — a
+				// user stop) or aborted by server shutdown (admission stop).
+				// cancelRun is the single write point for the cause; the
+				// done payload carries the stamped cause.
+				run.cancelRun(abortCause)
+				run.finish(EventDone, map[string]any{"cancelled": true, "reason": run.stopCause()})
+				// The queued cancel never reaches the onDone below (the
+				// goal loop never started), and its derived history (the
+				// session history plus the stop notice alone — goal rounds
+				// carry no human turn) is DEFERRED like the main-run twin:
+				// saving now would be clobbered by the in-flight holder's
+				// full-overwrite completion save. The finalizer joins the
+				// holder's save→release window instead; the run never held
+				// the gate, so completeRun must not release it.
+				s.enqueueCancelFinalizer(sessionID, func() {
+					s.completeRun(runCompletion{
+						run: run, sid: sessionID, workspace: workspace,
+						human: nil, heldGate: false,
+					})
+				})
+				return
+			}
 		}
 		run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
 		s.markSessionState(sessionID, wocadb.SessionRunning, id)
