@@ -62,29 +62,41 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// File-level undo/redo commands execute against the harness directly
 	// (no model turn), exactly like the TUI's /undo and /redo. The command
 	// resolves the session's workspace so undo touches only that session's
-	// edits (see tools.FileHistory).
+	// edits (see tools.FileHistory). The command run goes through the session
+	// admission gate (T7): its file revert AND its transcript append order
+	// against the session's other runs — see startCommandRun.
 	if len(req.Attachments) == 0 {
 		switch strings.TrimSpace(req.Prompt) {
 		case "/undo", "/redo":
-			ws := req.Workspace
-			if ws == "" {
-				ws = s.workdir
-			}
-			ctx := agent.WithRunWorkspace(r.Context(), ws)
-			var output string
-			var err error
-			if req.Prompt == "/redo" {
-				output, err = s.agent.RedoFiles(ctx)
-			} else {
-				output, err = s.agent.UndoFiles(ctx)
+			redo := req.Prompt == "/redo"
+			run, sessionID, pos, err := s.startCommandRun(req.SessionID, human, req.Workspace,
+				func(ctx context.Context) string {
+					var output string
+					var cerr error
+					if redo {
+						output, cerr = s.agent.RedoFiles(ctx)
+					} else {
+						output, cerr = s.agent.UndoFiles(ctx)
+					}
+					if cerr != nil {
+						output = "Error: " + cerr.Error()
+					}
+					undoN, redoN := s.agent.FileHistoryCounts(ctx)
+					return fmt.Sprintf("%s (%d undoable, %d redoable steps left)", output, undoN, redoN)
+				})
+			if err == errQueueFull {
+				http.Error(w, "session run queue is full", http.StatusConflict)
+				return
 			}
 			if err != nil {
-				output = "Error: " + err.Error()
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
 			}
-			undoN, redoN := s.agent.FileHistoryCounts(ctx)
-			run, sessionID := s.startCommandRun(req.SessionID, human, req.Workspace,
-				fmt.Sprintf("%s (%d undoable, %d redoable steps left)", output, undoN, redoN))
-			writeJSON(w, http.StatusOK, map[string]any{"run_id": run.ID(), "session_id": sessionID})
+			state := "running"
+			if pos > 0 {
+				state = "queued"
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"run_id": run.ID(), "session_id": sessionID, "state": state, "queue_position": pos})
 			return
 		}
 	}
@@ -825,20 +837,84 @@ func (s *Server) cancelQueuedRunAtTerminal(ctx context.Context, cancel context.C
 	}
 }
 
-// startCommandRun creates a run that completes immediately with a fixed
-// output (harness-side commands like /undo and /redo): the reply streams as a
-// normal delta and the transcript persists to the session like any turn.
-func (s *Server) startCommandRun(sessionID string, human messages.Message, workspace, output string) (*Run, string) {
-	run, sid, workspace, history := s.newRegisteredRun(sessionID, workspace)
+// startCommandRun creates a run that executes a harness-side command
+// (file-level /undo and /redo, no model turn) behind the session admission
+// gate: the run executes the command, streams its fixed output as a normal
+// delta, and persists the command turn to the session transcript like any
+// turn. It returns the run, the session id and the queue position (0 =
+// executing immediately); errQueueFull mirrors startRunWith.
+//
+// T7 admission ordering: a command run is a session TURN (it appends the
+// command and its output to the transcript), so it takes the same per-session
+// gate as model runs. The former ungated path snapshotted the history and
+// full-overwrite saved at once: a concurrently finishing holder — whose
+// completion save is a full overwrite built from ITS start-time history —
+// silently dropped either the command turn or the holder's reply,
+// last-writer-wins. Gating also orders the command's file mutation itself:
+// undoing a file change while the run that recorded it is still executing
+// would race that run's later edits, so the revert must wait for the holder
+// too.
+//
+// UX: an idle session grants the gate on the spot, so /undo stays as instant
+// as before; a busy session queues the command FIFO like any prompt (the
+// web's file-level undo bypasses this path entirely — POST /api/workspace/undo).
+// The run ledger is not involved: the command executes locally in
+// microseconds and holds no cross-instance lease (a pre-existing limitation
+// shared with the other local session writers — see handleTruncateSession).
+func (s *Server) startCommandRun(sessionID string, human messages.Message, workspace string, command func(context.Context) string) (*Run, string, int, error) {
+	run, sid, workspace, _ := s.newRegisteredRun(sessionID, workspace) // preloaded history discarded: reloaded after acquiring the gate so the holder's persisted reply is visible
 	s.log.Info().Str("run", run.id).Str("session", sid).Str("command", human.Content).Msg("command run")
+	s.refreshDebugLog()
+	if obs := s.agent.Obs(); obs != nil {
+		s.agent.SetObsRun(workspace, sid, run.id)
+		obs.Log("info", "run_start", map[string]any{"session": sid, "run": run.id})
+	}
+	w, pos, ok := s.admission.enter(sid, func(p int) {
+		run.emit(Event{Type: EventQueuePosition, Data: map[string]any{"position": p}})
+	})
+	if !ok {
+		run.finish(EventError, map[string]any{"message": "session run queue is full"})
+		return nil, sid, -1, errQueueFull
+	}
+	if pos > 0 {
+		run.emit(Event{Type: EventRunQueued, Data: map[string]any{"position": pos}})
+	}
 	go func() {
-		defer run.cancel()
-		run.emit(Event{Type: EventDelta, Data: map[string]any{"text": output + "\n"}})
-		run.finish(EventDone, map[string]any{"cancelled": false})
-		final := append(append([]messages.Message(nil), history...), human, messages.AI(output))
-		_ = s.sessions.save(context.WithoutCancel(run.ctx), sid, stripSystem(final), workspace)
+		if w != nil {
+			if promoted, abortCause := s.admission.wait(run.ctx, sid, w); !promoted {
+				// Cancelled while queued or aborted by server shutdown —
+				// the same deferred-persistence posture as a queued model
+				// run: the derived history (command + stop notice) joins the
+				// holder's save→release window via the finalizer queue. The
+				// run never held the gate, so completeRun must not release.
+				run.cancelRun(abortCause)
+				run.finish(EventDone, map[string]any{"cancelled": true, "reason": run.stopCause()})
+				s.enqueueCancelFinalizer(sid, func() {
+					s.completeRun(runCompletion{
+						run: run, sid: sid, workspace: workspace,
+						human: &human, heldGate: false,
+					})
+				})
+				return
+			}
+		}
+		run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
+		history := s.sessions.load(run.ctx, sid)
+		run.startWith(func() ([]messages.Message, error) {
+			output := command(run.ctx)
+			run.emit(Event{Type: EventDelta, Data: map[string]any{"text": output + "\n"}})
+			return append(append([]messages.Message(nil), history...), human, messages.AI(output)), nil
+		}, func(final []messages.Message) {
+			// Single completion point (see completeRun): persist the command
+			// turn, drain the session's deferred saves, then release the gate
+			// so the next promoted run is guaranteed to see this turn.
+			s.completeRun(runCompletion{
+				run: run, sid: sid, workspace: workspace,
+				human: &human, base: history, final: final, heldGate: true,
+			})
+		})
 	}()
-	return run, sid
+	return run, sid, pos, nil
 }
 
 // logObsRunEnd records the run's completion and persists the message-level
