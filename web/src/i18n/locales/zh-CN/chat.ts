@@ -92,6 +92,8 @@ export default {
   toolStatusErr: '出错',
   generationStopped: '已停止生成',
   runTimedOut: '等待审批超时已停止',
+  runServerStopped: '服务已停止',
+  runLeaseLost: '执行租约丢失，已停止',
   input: '输入',
   output: '输出',
   toolOutput: '工具输出',

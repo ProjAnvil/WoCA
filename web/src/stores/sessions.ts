@@ -16,7 +16,7 @@ import * as api from '../api/client'
 import i18n from '../i18n'
 import { truncate, baseName } from '../lib/format'
 import { asksOf, hitlCardKey } from '../lib/hitl'
-import { isNoticeContent, isRunStoppedNotice, messagesToItems, nid, parseRunStopped } from '../lib/transcript'
+import { isNoticeContent, isRunStoppedNotice, messagesToItems, nid, parseRunStopped, stopNoticeKey } from '../lib/transcript'
 import { useAgentStore, isPermissionMode, isThinkingLevel } from './agent'
 import { toErrorMessage } from '../lib/errors'
 import { useActivityStore } from './activity'
@@ -103,10 +103,13 @@ export const useSessionStore = defineStore('sessions', () => {
   // per run, never two when the paths race; the reload path seeds the guard
   // from the persisted tags' run ids (the run attribute is the live key).
   const stoppedRunNotices = new Set<string>()
-  function pushStoppedNotice(sid: string, rid: string) {
+  // reason is the done event's typed stop cause; unknown or missing values
+  // route to the user-stop copy (stopNoticeKey degrades defensively), the
+  // same routing the persisted tag renders on reload.
+  function pushStoppedNotice(sid: string, rid: string, reason?: string) {
     if (!rid || stoppedRunNotices.has(rid)) return
     stoppedRunNotices.add(rid)
-    push(sid, { id: nid(), kind: 'notice', content: i18n.global.t('chat.generationStopped') })
+    push(sid, { id: nid(), kind: 'notice', content: i18n.global.t(stopNoticeKey(reason)) })
   }
 
   const { contextInfo, contextLoading, contextError, refreshContext } = createContextTracker({
@@ -140,7 +143,7 @@ export const useSessionStore = defineStore('sessions', () => {
     runAuto,
     items: mutations,
     sending,
-    onRunCancelled: (sid, rid) => pushStoppedNotice(sid, rid),
+    onRunCancelled: (sid, rid, reason) => pushStoppedNotice(sid, rid, reason),
     loadSession: (id) => loadSession(id),
     refreshContext: () => refreshContext(),
   })

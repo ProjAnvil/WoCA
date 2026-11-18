@@ -119,7 +119,7 @@ describe('run-events dispatch', () => {
     expect(h.onResync).toHaveBeenCalledWith('seq_gap')
   })
 
-  it('terminal events close the stream: done carries cancelled, error the message', () => {
+  it('terminal events close the stream: done carries cancelled and reason, error the message', () => {
     const { h, options } = startRun()
     msg(options, 'error', { message: 'boom' })
     expect(h.onError).toHaveBeenCalledWith('boom')
@@ -128,8 +128,17 @@ describe('run-events dispatch', () => {
 
     const second = startRun()
     msg(second.options, 'done', { cancelled: true })
-    expect(second.h.onDone).toHaveBeenCalledWith(true)
+    expect(second.h.onDone).toHaveBeenCalledWith(true, undefined)
     expect(() => second.options.onclose()).not.toThrow()
+
+    // A stopped run's done carries its typed cause alongside the flag.
+    const third = startRun()
+    msg(third.options, 'done', { cancelled: true, reason: 'server_stop' })
+    expect(third.h.onDone).toHaveBeenCalledWith(true, 'server_stop')
+
+    const fourth = startRun()
+    msg(fourth.options, 'done', { cancelled: false })
+    expect(fourth.h.onDone).toHaveBeenCalledWith(false, undefined)
   })
 
   it('auth_revoked surfaces the code and raises the login gate', () => {

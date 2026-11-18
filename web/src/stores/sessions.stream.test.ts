@@ -142,6 +142,37 @@ describe('live-block lifecycle', () => {
     void sent2
   })
 
+  // The done event's typed cause routes the parked notice's copy — the live
+  // twin of the persisted-tag routing ChatItemView renders (see
+  // parseRunStopped); unknown or missing causes degrade to the user-stop copy.
+  it.each([
+    ['server_stop', 'chat.runServerStopped'],
+    ['lease_lost', 'chat.runLeaseLost'],
+    ['parked_ttl', 'chat.runTimedOut'],
+  ] as const)('a cancelled done with reason %s parks the matching copy', async (reason, key) => {
+    const store = seedStore()
+    const sent = store.send('go')
+    await vi.waitFor(() => expect(handlers.onDelta).toBeTruthy())
+    handlers.onDone(true, reason)
+    expect(store.activeItems.find((i) => i.kind === 'notice')).toMatchObject({
+      kind: 'notice',
+      content: i18n.global.t(key),
+    })
+    void sent
+  })
+
+  it('a cancelled done with an unknown cause degrades to the user-stop copy', async () => {
+    const store = seedStore()
+    const sent = store.send('go')
+    await vi.waitFor(() => expect(handlers.onDelta).toBeTruthy())
+    handlers.onDone(true, 'garbled')
+    expect(store.activeItems.find((i) => i.kind === 'notice')).toMatchObject({
+      kind: 'notice',
+      content: i18n.global.t('chat.generationStopped'),
+    })
+    void sent
+  })
+
   it('marks a stopped run once even when the stream done and a local cancel race', async () => {
     api.cancelRun.mockReset().mockResolvedValue(undefined)
     const store = seedStore()

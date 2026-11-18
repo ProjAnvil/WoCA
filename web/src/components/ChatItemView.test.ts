@@ -269,6 +269,30 @@ describe('notice card content routing', () => {
     expect(text).not.toContain('run-stopped')
   })
 
+  it('renders a persisted server_stop stop as the service-stopped copy', async () => {
+    const w = mountItem(notice('<run-stopped run="run-9" reason="server_stop"/>'))
+    await openNotice(w)
+    const text = w.get('.tool-output').text()
+    expect(text).toContain(i18n.global.t('chat.runServerStopped'))
+    expect(text).not.toContain('run-stopped')
+  })
+
+  it('renders a persisted lease_lost stop as the lease-lost copy', async () => {
+    const w = mountItem(notice('<run-stopped run="run-9" reason="lease_lost"/>'))
+    await openNotice(w)
+    const text = w.get('.tool-output').text()
+    expect(text).toContain(i18n.global.t('chat.runLeaseLost'))
+    expect(text).not.toContain('run-stopped')
+  })
+
+  it('renders an unknown persisted cause as the user-stop copy, never raw', async () => {
+    const w = mountItem(notice('<run-stopped run="run-9" reason="garbled"/>'))
+    await openNotice(w)
+    const text = w.get('.tool-output').text()
+    expect(text).toContain(i18n.global.t('chat.generationStopped'))
+    expect(text).not.toContain('garbled')
+  })
+
   it('treats a malformed stop tag as a user stop', async () => {
     const w = mountItem(notice('<run-stopped/>'))
     await openNotice(w)

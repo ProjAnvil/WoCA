@@ -237,6 +237,13 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
     for (const id of Object.keys(SECTION_KEYS) as SectionId[]) {
       for (const key of SECTION_KEYS[id]) baseline[key] = draftValue(key)
     }
+    // The debugLog ref keeps the same dispatch baseline: the toggle is
+    // instant-apply (toggleDebugLog PUTs then flips the ref), so a flip
+    // landing while this fetch is in flight is an edit the stale response
+    // would silently revert. It owns no section (no dirty flag exists for
+    // it), so the guard lives here rather than in the section machinery —
+    // and applies on every path: no caller re-applies this ref itself.
+    const debugLogBaseline = debugLog.value
     try {
       const s = await getSettings()
       // Capture the user's unsaved work BEFORE the response overwrites the
@@ -267,7 +274,11 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
       }
       checkpointBackend.value = s.checkpoint_backend || 'sqlite'
       memoryBackend.value = s.memory_backend || 'sqlite'
+      // Drift past the dispatch baseline is a mid-flight toggle — keep it;
+      // otherwise the ref takes the server's truth verbatim.
+      const debugLogDrifted = debugLog.value !== debugLogBaseline ? debugLog.value : null
       debugLog.value = Boolean(s.debug_log)
+      if (debugLogDrifted !== null) debugLog.value = debugLogDrifted
       memoryEngine.value = s.memory_engine || 'ladym'
       ladymEmbedding.value = s.ladym_embedding || 'inherit'
       ladymEmbeddingModel.value = s.ladym_embedding_model ?? ''

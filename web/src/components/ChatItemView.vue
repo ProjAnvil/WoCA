@@ -5,7 +5,7 @@ import { Bell, Brain, Bug, Check, ChevronDown, Copy, Loader2, Target, X } from '
 import type { ChatItem } from '../types'
 import { renderMarkdown, markdownToPlain } from '../lib/markdown'
 import { decorateCodeBlocks, highlightCodeBlocks } from '../lib/codeBlocks'
-import { isRunStoppedNotice, parseRunStopped } from '../lib/transcript'
+import { isRunStoppedNotice, parseRunStopped, stopNoticeKey } from '../lib/transcript'
 import { useSmoothStream } from '../composables/useSmoothStream'
 import { useSessionStore } from '../stores/sessions'
 import { useSettingsStore } from '../stores/settings'
@@ -128,13 +128,16 @@ const noticeContent = computed(() => {
   return it.kind === 'notice' ? it.content : ''
 })
 // Persisted stop tags (<run-stopped …/>) route to localized copy instead of
-// the raw machine tag: an approval-wait timeout (parked_ttl) reads as a
-// timeout, anything else — malformed or missing reason included — as a
-// plain stop. Every other notice keeps rendering its raw content.
+// the raw machine tag, keyed by the typed stop cause: an approval-wait
+// timeout (parked_ttl) reads as a timeout, a lifecycle abort (server_stop)
+// and a lost run lease (lease_lost) as their own copies, and anything else —
+// malformed or unknown reason included — as a plain stop (stopNoticeKey, the
+// same routing the live done event's notice uses). Every other notice keeps
+// rendering its raw content.
 const noticeBody = computed(() => {
   const content = noticeContent.value
   if (isRunStoppedNotice(content)) {
-    return parseRunStopped(content).reason === 'parked_ttl' ? t('chat.runTimedOut') : t('chat.generationStopped')
+    return t(stopNoticeKey(parseRunStopped(content).reason))
   }
   return content
 })

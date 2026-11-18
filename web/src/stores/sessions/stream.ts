@@ -37,8 +37,10 @@ export interface StreamDeps {
   // snapshot and wipe the optimistic user bubble.
   sending: Set<string>
   /** A run ended via the done event's cancelled flag (stopped run): the
-   * orchestrator parks its localized stop notice (guarded per run id). */
-  onRunCancelled: (sid: string, rid: string) => void
+   * orchestrator parks its localized stop notice (guarded per run id). The
+   * reason is the event's typed stop cause (user_stop/parked_ttl/
+   * server_stop/lease_lost; unknown or missing degrades to user_stop). */
+  onRunCancelled: (sid: string, rid: string, reason?: string) => void
   loadSession: (id: string) => Promise<void>
   refreshContext: () => Promise<void>
 }
@@ -276,7 +278,7 @@ export function createRunStreams(deps: StreamDeps) {
             reasoningId.value[sid] = null
           })
         },
-        onDone: (cancelled) => {
+        onDone: (cancelled, reason) => {
           closeStreaming(sid)
           closeReasoning(sid)
           closeGoalNote(sid)
@@ -291,8 +293,9 @@ export function createRunStreams(deps: StreamDeps) {
           // (finish passes final=nil), so the transcript alone shows no
           // trace of the stop — park the localized marker here (other
           // tabs, replays, reattach; the cancelling tab aborts its stream
-          // before this event and marks via cancel() instead).
-          if (cancelled) onRunCancelled(sid, rid)
+          // before this event and marks via cancel() instead). The done
+          // event's typed cause routes the copy (stopNoticeKey).
+          if (cancelled) onRunCancelled(sid, rid, reason)
           afterDone?.()
           // The terminal SSE event fires just before the server persists the
           // final transcript, so let the save land before re-reading it.

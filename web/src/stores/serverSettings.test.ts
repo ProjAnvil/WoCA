@@ -458,4 +458,35 @@ describe('serverSettings loadServer in-flight edit preservation', () => {
     expect(s.msgPlaneNATSURL).toBe('nats://h:4222')
     expect(s.langfuseBaseURL).toBe('https://lf.example')
   })
+
+  // The debugLog toggle is instant-apply (PUT then flip) and owns no section
+  // or dirty flag, but its flip can land while a reload fetch is in flight —
+  // the stale response must not silently revert it. Dispatch-baseline guard,
+  // same shape as the section preservation above.
+  it('keeps a debugLog flip made while the fetch is in flight', async () => {
+    const s = useServerSettingsStore()
+    let resolveGet!: (v: unknown) => void
+    api.getSettings.mockReturnValueOnce(new Promise((r) => (resolveGet = r)))
+    const loading = s.loadServer()
+    // Toggled while the fetch is in flight — the response still carries the
+    // pre-toggle truth and would clobber the ref.
+    s.debugLog = true
+    resolveGet(settingsDoc({ debug_log: false }))
+    await loading
+    await flushPromises()
+    expect(s.debugLog).toBe(true)
+  })
+
+  it('debugLog still takes the server truth when no edit rode the fetch', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    api.getSettings.mockResolvedValue(settingsDoc({ debug_log: true }))
+    await s.loadServer()
+    await flushPromises()
+    expect(s.debugLog).toBe(true)
+    api.getSettings.mockResolvedValue(settingsDoc({ debug_log: false }))
+    await s.loadServer()
+    await flushPromises()
+    expect(s.debugLog).toBe(false)
+  })
 })

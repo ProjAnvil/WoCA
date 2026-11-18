@@ -90,8 +90,11 @@ export interface AuthRevokedPayload {
   code?: string
 }
 
+/** done — cancelled runs carry their typed stop cause (stopmark.go's
+ * wire-stable cause strings); a clean completion carries neither field. */
 export interface DonePayload {
   cancelled?: boolean
+  reason?: string
 }
 
 export interface ErrorPayload {

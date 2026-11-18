@@ -45,7 +45,9 @@ export interface StreamHandlers {
   onRunStarted?: (ev: RunStartedPayload) => void
   /** Replay gap (server retention window or client-detected seq jump). */
   onResync?: (reason: string) => void
-  onDone: (cancelled: boolean) => void
+  /** Terminal done — cancelled runs carry their typed stop cause alongside
+   * the legacy flag (unknown/absent reason means the common user stop). */
+  onDone: (cancelled: boolean, reason?: string) => void
   onError: (message: string) => void
 }
 
@@ -56,8 +58,9 @@ export interface StreamHandlers {
  * (goal-chip snapshot), run_queued / queue_position / run_started
  * (per-session admission gate), resync (the replay window can't cover the
  * gap — refetch a full snapshot), auth_revoked (credential revoked
- * mid-stream) and the terminal done (carries cancelled) / error (carries
- * message) pair. Event names and payload shapes are the contract in
+ * mid-stream) and the terminal done (carries cancelled plus the typed stop
+ * cause reason) / error (carries message) pair. Event names and payload
+ * shapes are the contract in
  * ./events.ts (mirrored from internal/server/ssevents.go; CI drift check).
  * Every event carries an id: line with its per-run seq for Last-Event-ID
  * resume.
@@ -168,10 +171,12 @@ export function streamRun(
             useAuthStore().raise()
             break
           }
-          case 'done':
+          case 'done': {
             terminal = true
-            handlers.onDone((data as DonePayload).cancelled ?? false)
+            const done = data as DonePayload
+            handlers.onDone(done.cancelled ?? false, done.reason)
             break
+          }
           case 'error':
             terminal = true
             handlers.onError((data as ErrorPayload).message ?? i18n.global.t('api.unknownError'))

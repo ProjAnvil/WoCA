@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { isNoticeContent, isRunStoppedNotice, messagesToItems, parseRunStopped, stripGoalReport } from './transcript'
+import {
+  isNoticeContent,
+  isRunStoppedNotice,
+  messagesToItems,
+  normalizeStopCause,
+  parseRunStopped,
+  stopNoticeKey,
+  stripGoalReport,
+} from './transcript'
 import type { TranscriptMessage } from '../types'
 
 function msg(over: Partial<TranscriptMessage>): TranscriptMessage {
@@ -182,7 +190,7 @@ describe('stripGoalReport', () => {
 })
 
 describe('parseRunStopped', () => {
-  it('extracts the run id and both reason variants', () => {
+  it('extracts the run id and every wire-stable stop cause', () => {
     expect(parseRunStopped('<run-stopped run="run-9" reason="user_stop"/>')).toEqual({
       run: 'run-9',
       reason: 'user_stop',
@@ -191,11 +199,43 @@ describe('parseRunStopped', () => {
       run: 'r1',
       reason: 'parked_ttl',
     })
+    expect(parseRunStopped('<run-stopped run="r1" reason="server_stop"/>')).toEqual({
+      run: 'r1',
+      reason: 'server_stop',
+    })
+    expect(parseRunStopped('<run-stopped run="r1" reason="lease_lost"/>')).toEqual({
+      run: 'r1',
+      reason: 'lease_lost',
+    })
   })
 
   it('treats a malformed or missing reason attribute as a user stop', () => {
     expect(parseRunStopped('<run-stopped run="r1"/>').reason).toBe('user_stop')
     expect(parseRunStopped('<run-stopped reason="garbled"/>')).toEqual({ run: '', reason: 'user_stop' })
     expect(parseRunStopped('<run-stopped/>').reason).toBe('user_stop')
+  })
+})
+
+// The cause set is the web twin of the Go constants in
+// internal/server/stopmark.go (see internal/machinetag for the tag prefix);
+// unknown causes must degrade to the user-stop copy, never render raw.
+describe('stop cause normalization and copy routing', () => {
+  it('normalizes every known cause and degrades unknowns to user_stop', () => {
+    expect(normalizeStopCause('user_stop')).toBe('user_stop')
+    expect(normalizeStopCause('parked_ttl')).toBe('parked_ttl')
+    expect(normalizeStopCause('server_stop')).toBe('server_stop')
+    expect(normalizeStopCause('lease_lost')).toBe('lease_lost')
+    expect(normalizeStopCause('garbled')).toBe('user_stop')
+    expect(normalizeStopCause(undefined)).toBe('user_stop')
+    expect(normalizeStopCause(42)).toBe('user_stop')
+  })
+
+  it('routes each cause to its chat message key, unknowns to the stop copy', () => {
+    expect(stopNoticeKey('user_stop')).toBe('chat.generationStopped')
+    expect(stopNoticeKey('parked_ttl')).toBe('chat.runTimedOut')
+    expect(stopNoticeKey('server_stop')).toBe('chat.runServerStopped')
+    expect(stopNoticeKey('lease_lost')).toBe('chat.runLeaseLost')
+    expect(stopNoticeKey(undefined)).toBe('chat.generationStopped')
+    expect(stopNoticeKey('garbled')).toBe('chat.generationStopped')
   })
 })

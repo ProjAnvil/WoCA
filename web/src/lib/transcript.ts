@@ -38,10 +38,42 @@ export function isRunStoppedNotice(content: string): boolean {
 // persisted stop tag. The format is fixed by the server (fmt Sprintf with
 // double-quoted attributes), but a malformed or missing reason degrades to
 // 'user_stop' — the common cancel case — instead of surfacing raw.
-export function parseRunStopped(content: string): { run: string; reason: 'user_stop' | 'parked_ttl' } {
+export function parseRunStopped(content: string): { run: string; reason: StopCause } {
   const run = /run="([^"]*)"/.exec(content)?.[1] ?? ''
   const reason = /reason="([^"]*)"/.exec(content)?.[1] ?? ''
-  return { run, reason: reason === 'parked_ttl' ? 'parked_ttl' : 'user_stop' }
+  return { run, reason: normalizeStopCause(reason) }
+}
+
+// The wire-stable stop causes a run can be cancelled with — the web twin of
+// the Go constants in internal/server/stopmark.go (user_stop, parked_ttl,
+// server_stop, lease_lost), carried by the done event's reason field and the
+// persisted <run-stopped …/> tag's reason attribute. Unknown or missing
+// values degrade to user_stop so a garbled cause never renders raw.
+export type StopCause = 'user_stop' | 'parked_ttl' | 'server_stop' | 'lease_lost'
+
+const STOP_CAUSES: ReadonlySet<string> = new Set(['user_stop', 'parked_ttl', 'server_stop', 'lease_lost'])
+
+export function normalizeStopCause(reason: unknown): StopCause {
+  return typeof reason === 'string' && STOP_CAUSES.has(reason) ? (reason as StopCause) : 'user_stop'
+}
+
+// Copy routing shared by the live stop notice (the sessions store's done
+// handler) and the persisted-tag renderer (ChatItemView) so reload and live
+// views agree. Returns chat.* message KEYS only — translation stays at the
+// call sites, keeping this module i18n-free like the rest of the file.
+export type StopNoticeKey = 'chat.generationStopped' | 'chat.runTimedOut' | 'chat.runServerStopped' | 'chat.runLeaseLost'
+
+export function stopNoticeKey(reason: unknown): StopNoticeKey {
+  switch (normalizeStopCause(reason)) {
+    case 'parked_ttl':
+      return 'chat.runTimedOut'
+    case 'server_stop':
+      return 'chat.runServerStopped'
+    case 'lease_lost':
+      return 'chat.runLeaseLost'
+    default:
+      return 'chat.generationStopped'
+  }
 }
 
 // Rebuild the UI item list from the backend's transcript (messages.Message
