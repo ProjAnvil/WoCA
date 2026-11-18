@@ -64,18 +64,33 @@ function toolCall(id: string, name: string, args: Record<string, unknown>, index
   };
 }
 
+/** The machine-tag notice prefixes woca's own consumers exclude when they
+ * look for a run's real request (internal/machinetag Prefixes): mid-run
+ * injections like <relevant-memory> rides as USER messages AFTER the turn's
+ * tool results, so a naive "last user message" turn boundary misclassifies
+ * the round as unanswered and the script would re-issue a gated call that
+ * already ran (the phantom re-ask behind this spec's former wedge). */
+const MACHINE_TAG_PREFIXES = ['<relevant-memory>', '<queued-user-input', '<stop-hook>', '<run-stopped', '<task-fork>'];
+
+function isMachineTagNotice(m: Msg): boolean {
+  if (m.role !== 'user') return false;
+  const c = m.content ?? '';
+  return MACHINE_TAG_PREFIXES.some((p) => c.startsWith(p));
+}
+
 /** The scripted model: parent turns are identified by the HITL-FANOUT
  * marker, child turns by FILE-A / FILE-B in the transcript. Children gated
  * call: Bash `npm install ...` (classifier non-readonly, grantable prefix)
  * for the grant scenario; Write for the plain allow/deny scenario. */
 function scriptFor(messages: Msg[]): { deltas: Record<string, unknown>[]; finish: string } {
   const text = messages.map((m) => m.content ?? '').join('\n');
-  // Tool results OF THE CURRENT TURN: anything after the last user
-  // message. A second fan-out in the same session must re-emit the Task
-  // batch even though the transcript already carries the first turn's
-  // tool results.
-  const lastHuman = messages.map((m) => m.role).lastIndexOf('user');
-  const hasToolResults = messages.slice(lastHuman + 1).some((m) => m.role === 'tool');
+  // Tool results OF THE CURRENT TURN: anything after the last REAL user
+  // message (machine-tag notices excluded — see MACHINE_TAG_PREFIXES). A
+  // second fan-out in the same session must re-emit the Task batch even
+  // though the transcript already carries the first turn's tool results.
+  const turn = messages.filter((m) => !isMachineTagNotice(m));
+  const lastHuman = turn.map((m) => m.role).lastIndexOf('user');
+  const hasToolResults = turn.slice(lastHuman + 1).some((m) => m.role === 'tool');
   if (text.includes('FILE-B')) {
     if (hasToolResults) return { deltas: [{ content: 'child B done' }], finish: 'stop' };
     return {

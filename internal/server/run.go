@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,11 +75,19 @@ type Run struct {
 	subs    map[*subscriber]struct{}
 	history []Event
 	pending *interruptState
+	// lastCards holds the most recent park's cards by answer key — the
+	// pause the run is currently leaving (or parked on). The buffering path
+	// reads it to stamp each buffered entry with its approval's identity
+	// (see cardIdentity), so the entry still addresses that approval when
+	// the re-park mints a fresh interrupt NS.
+	lastCards map[string]parkedCard
 	// buffered holds answers that arrived while no pause was pending —
 	// the resume window between a partial answer and the interrupted
 	// sibling's re-park (the child must re-execute its approval node
-	// first). They apply to the next park whose cards they address;
-	// entries for cards that never re-park are dropped with that park.
+	// first). They apply to the next park whose cards they address — by
+	// key, or by approval identity when the re-park regenerated the NS —
+	// and entries for approvals that never re-park are dropped with that
+	// park (never orphaned while live, never immortal once gone).
 	buffered []cardAnswerEntry
 	done     bool // terminal event (done or error) emitted
 	// finishKind records the terminal event type for the run ledger.
@@ -258,20 +268,38 @@ func (r *Run) handleInterrupt(cards []agent.PauseCard) (any, error) {
 	reply := make(chan any, 1)
 	r.mu.Lock()
 	r.pending = &interruptState{cards: parked, reply: reply}
+	// Remember this park's cards for the NEXT resume window's buffering
+	// (identity stamping in answer()).
+	last := make(map[string]parkedCard, len(parked))
+	for _, c := range parked {
+		last[c.key()] = c
+	}
+	r.lastCards = last
 	// Answers buffered during the resume window apply now: entries whose
 	// key addresses one of THIS park's cards decode against it and become
 	// the pause's resume value (the same scalar/map rules as answer());
-	// entries for cards that never re-parked die here.
+	// entries whose key missed because the re-park minted a fresh NS
+	// re-key through the approval's identity (same asks, new address);
+	// entries for approvals that never re-parked die here.
 	var resume any
 	if len(r.buffered) > 0 {
 		byKey := make(map[string]parkedCard, len(parked))
+		byIdentity := make(map[string]parkedCard, len(parked))
 		for _, c := range parked {
 			byKey[c.key()] = c
+			if id := cardIdentity(c); id != "" {
+				byIdentity[id] = c
+			}
 		}
 		answered := make(map[string]any)
 		kept := r.buffered[:0:0]
 		for _, e := range r.buffered {
 			card, ok := byKey[e.Key]
+			if !ok && e.identity != "" {
+				// Same approval under a regenerated NS: re-key the entry
+				// onto the card its asks address.
+				card, ok = byIdentity[e.identity]
+			}
 			if !ok {
 				continue
 			}
@@ -280,7 +308,7 @@ func (r *Run) handleInterrupt(cards []agent.PauseCard) (any, error) {
 				kept = append(kept, e) // undecodable against this card: keep for a later one
 				continue
 			}
-			answered[e.Key] = value
+			answered[card.key()] = value
 		}
 		r.buffered = kept
 		switch {
@@ -413,9 +441,35 @@ func (r *Run) waitParked(cards []parkedCard, reply chan any) (any, error) {
 // cardAnswerEntry is one entry of the list-form answer body
 // {answers: [{key, value}]}: key addresses one pending card (its NS, or ID
 // for legacy NS-less interrupts); value is the per-kind answer object.
+// identity is server-internal (never on the wire): the approval identity the
+// key addressed at buffer time, so the entry survives the re-park minting a
+// fresh NS for the same approval (see cardIdentity).
 type cardAnswerEntry struct {
-	Key   string          `json:"key"`
-	Value json.RawMessage `json:"value"`
+	Key      string          `json:"key"`
+	Value    json.RawMessage `json:"value"`
+	identity string
+}
+
+// cardIdentity returns the stable identity of a parked card's approval
+// request: its asks' call ids, sorted and joined. Those ids are the model
+// tool-call ids the graph's decisions channel keys its decisions by — they
+// persist in the checkpointed message state, so they survive the approval
+// node's re-execution where the fork's interrupt NS is minted per
+// invocation. "" for ask-less legacy cards (identity matching does not
+// apply; those keep key-only addressing).
+func cardIdentity(c parkedCard) string {
+	if len(c.asks) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(c.asks))
+	for _, ask := range c.asks {
+		if ask.CallID == "" {
+			return "" // an unaddressable ask is worse than no identity
+		}
+		ids = append(ids, ask.CallID)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, "\x00")
 }
 
 // decodeCardAnswerList extracts the list-form entries of an answer body
@@ -463,7 +517,15 @@ func (r *Run) answer(body []byte) error {
 			return errors.New("no pending interrupt")
 		}
 		r.mu.Lock()
-		r.buffered = append(r.buffered, entries...)
+		for _, e := range entries {
+			// Stamp the approval identity the key addresses NOW — the
+			// pause is gone, but the last park's cards still name it, and
+			// the re-park may mint a fresh NS for the same approval.
+			if card, ok := r.lastCards[e.Key]; ok {
+				e.identity = cardIdentity(card)
+			}
+			r.buffered = append(r.buffered, e)
+		}
 		r.mu.Unlock()
 		// The buffered answer satisfies the pause the run is currently
 		// re-parking: without the resolution event a client watching the
@@ -877,6 +939,7 @@ func (r *Run) unsubscribe(sub *subscriber) {
 func (r *Run) cancelRun(cause string) {
 	r.mu.Lock()
 	r.pending = nil
+	r.lastCards = nil
 	r.buffered = nil
 	if cause != "" && r.stopReason == "" {
 		r.stopReason = cause
