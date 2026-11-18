@@ -2,6 +2,7 @@
 import { Brain } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useServerSettingsStore } from '../../stores/serverSettings'
+import SectionSaveControl from './SectionSaveControl.vue'
 import WInfoTip from '../ui/WInfoTip.vue'
 
 const { t } = useI18n()
@@ -15,7 +16,7 @@ const locked = () => settings.isManaged('memory-engine')
 <template>
   <!-- Memory (ladyM factual memory engine) -->
   <section class="setting-section">
-    <div class="setting-section-title"><Brain :size="13" style="vertical-align: -2px" /> {{ t('settings.memory.title') }}</div>
+    <div class="setting-section-title with-actions"><Brain :size="13" style="vertical-align: -2px" /> {{ t('settings.memory.title') }}<SectionSaveControl section="memory" /></div>
     <p class="mem-intro">{{ t('settings.memory.intro') }}</p>
 
     <div class="setting-row">

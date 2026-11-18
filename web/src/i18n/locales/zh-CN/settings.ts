@@ -22,6 +22,13 @@ export default {
     savedRestart: '已保存；存储后端变更需重启 woca 生效',
     savedApplyError: '已保存，但模型切换失败：{error}',
   },
+  section: {
+    save: '保存本区设置',
+    unsaved: '有未保存修改',
+    appliedInstantly: '即时生效',
+    secretsHintKey: 'API Key 保存在服务端数据库，密钥加密存储',
+    secretsHintDSN: 'Postgres DSN 保存在服务端数据库，密钥加密存储',
+  },
   title: '设置',
   nav: {
     appearance: '外观',
@@ -45,8 +52,6 @@ export default {
 
   },
   footer: {
-    hint: '设置保存在服务端数据库，密钥加密存储',
-    restart: '部分改动需重启 woca 后生效',
     save: '保存',
   },
   shared: {

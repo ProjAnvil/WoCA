@@ -2,6 +2,7 @@
 import { Radio } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useServerSettingsStore } from '../../stores/serverSettings'
+import SectionSaveControl from './SectionSaveControl.vue'
 import WInfoTip from '../ui/WInfoTip.vue'
 
 const { t } = useI18n()
@@ -11,8 +12,9 @@ const settings = useServerSettingsStore()
 <template>
   <!-- Message plane: how dispatched runs reach the workers -->
   <section class="setting-section">
-    <div class="setting-section-title">
+    <div class="setting-section-title with-actions">
       <Radio :size="13" style="vertical-align: -2px" /> {{ t('settings.msgplane.title') }}
+      <SectionSaveControl section="msgplane" />
     </div>
 
     <div v-if="!settings.server?.msg_plane_available" class="setting-row" style="display: block">

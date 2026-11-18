@@ -22,6 +22,13 @@ export default {
     savedRestart: 'Saved; storage backend changes need a woca restart to take effect',
     savedApplyError: 'Saved, but switching the model failed: {error}',
   },
+  section: {
+    save: 'Save this section',
+    unsaved: 'Unsaved changes',
+    appliedInstantly: 'Applied instantly',
+    secretsHintKey: 'The API key is stored in the server database, encrypted at rest',
+    secretsHintDSN: 'The Postgres DSN is stored in the server database, encrypted at rest',
+  },
   title: 'Settings',
   nav: {
     appearance: 'Appearance',
@@ -47,8 +54,6 @@ export default {
 
   },
   footer: {
-    hint: 'Settings are stored in the server database; secrets are encrypted at rest',
-    restart: 'Some changes take effect after woca restarts',
     save: 'Save',
   },
   shared: {

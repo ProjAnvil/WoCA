@@ -35,7 +35,7 @@
 }
 
 /* Settings panel shell styles (settings-card / settings-layout / settings-nav
-   / settings-content / settings-footer) live scoped in SettingsPanel.vue. */
+   / settings-content) live scoped in SettingsPanel.vue. */
 
 .setting-section {
   padding: 14px 0 22px;
@@ -52,6 +52,47 @@
   text-transform: uppercase;
   color: var(--muted);
   margin-bottom: 10px;
+}
+
+/* Section titles that carry a right-aligned affordance (the per-section
+   save control or the instant-apply badge) lay out as a flex row. */
+.setting-section-title.with-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Instant-apply sections (appearance/preferences): no save control —
+   changes apply the moment they are made. */
+.badge-instant {
+  margin-left: auto;
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  line-height: 16px;
+  color: var(--text-2);
+}
+
+/* "Secrets are encrypted at rest" — per-section body hint (F2 variant A:
+   the old global footer that carried it is gone). */
+.sec-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--faint);
+}
+.sec-hint svg {
+  flex: none;
+  color: var(--faint);
 }
 
 /* Theme choice card styles live scoped in the appearance section component. */

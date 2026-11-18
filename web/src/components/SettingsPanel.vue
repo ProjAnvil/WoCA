@@ -313,20 +313,9 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- Sticky footer: server-settings save actions -->
-      <div class="settings-footer">
-        <span v-if="server.serverError" class="row-hint" style="color: var(--danger)">
-          {{ server.serverError }}
-        </span>
-        <span v-else-if="server.savedMessage" class="row-hint">{{ server.savedMessage }}</span>
-        <span v-else class="row-hint">{{ t('settings.footer.hint') }}</span>
-        <span v-if="server.restartRequired" class="row-hint" style="color: var(--warn)">
-          {{ t('settings.footer.restart') }}
-        </span>
-        <button class="btn" :disabled="server.saving" @click="server.saveServer()">
-          {{ server.saving ? t('settings.shared.saving') : t('settings.footer.save') }}
-        </button>
-      </div>
+      <!-- No global save bar (F2 variant A): every editable section saves
+           itself from its own header; save results announce through the
+           app toast stack. -->
     </div>
   </div>
 </template>
@@ -482,17 +471,6 @@ onBeforeUnmount(() => {
   text-decoration: underline;
 }
 
-/* Sticky save bar shared by the server-backed sections. */
-.settings-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 12px 20px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
-}
-
 /* Narrow viewports (w320/w375 audit): the 168px sidebar column starves the
    content pane (~83px at w320). The nav becomes a horizontally scrolling
    chip row above the content; the selected chip keeps the token accent
@@ -545,15 +523,6 @@ onBeforeUnmount(() => {
   }
   .settings-content {
     padding: 6px 14px 16px;
-  }
-  /* Sticky footer (w320/w375 audit): the hint line is long localized text;
-     let it own its line(s) and keep the Save button visually separate on
-     the row below instead of crushing both onto one line. */
-  .settings-footer {
-    flex-wrap: wrap;
-  }
-  .settings-footer .row-hint {
-    flex-basis: 100%;
   }
 }
 </style>

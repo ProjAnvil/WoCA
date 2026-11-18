@@ -22,6 +22,72 @@ import type {
 } from '../types'
 import { useAgentStore } from './agent'
 import { useSettingsStore } from './settings'
+import { useToastStore } from './toast'
+
+// --- per-section persistence (F2 · variant A) ---
+// Which settings keys each panel section owns. Empty arrays are the
+// instant-apply sections (client-side only, nothing to persist). The four
+// explicit key groups the old full-patch save assembled are fully covered:
+// the always-on base patch, the msg-plane keys (EE surface), the langfuse
+// keys (personal form) and the typed-secret keys.
+export type SectionId =
+  | 'appearance'
+  | 'preferences'
+  | 'provider'
+  | 'storage'
+  | 'memory'
+  | 'msgplane'
+  | 'langfuse'
+
+export const SECTION_KEYS: Record<SectionId, readonly string[]> = {
+  appearance: [],
+  preferences: [],
+  provider: [
+    'provider',
+    'model',
+    'anthropic_base_url',
+    'openai_base_url',
+    'glm_base_url',
+    'deepseek_base_url',
+    'anthropic_api_key',
+    'openai_api_key',
+    'glm_api_key',
+    'deepseek_api_key',
+  ],
+  storage: ['checkpoint_backend', 'memory_backend', 'postgres_url'],
+  memory: [
+    'memory_engine',
+    'ladym_embedding',
+    'ladym_embedding_model',
+    'ladym_embedding_base_url',
+    'ladym_embedding_api_key',
+    'ladym_llm',
+    'ladym_autoretain',
+    'ladym_topk',
+    'ladym_db_path',
+    'ladym_system2',
+    'ladym_system2_interval',
+  ],
+  msgplane: ['msg_plane_mode', 'msg_plane_nats_url', 'msg_plane_subject'],
+  langfuse: [
+    'langfuse_enabled',
+    'langfuse_base_url',
+    'langfuse_public_key',
+    'langfuse_secret_key',
+  ],
+}
+
+// Secret keys ride the PUT only when the user typed a non-empty draft (an
+// empty password input means "keep the stored key", never "clear it").
+const SECRET_KEYS: ReadonlySet<string> = new Set([
+  'anthropic_api_key',
+  'openai_api_key',
+  'glm_api_key',
+  'deepseek_api_key',
+  'postgres_url',
+  'ladym_embedding_api_key',
+  'langfuse_secret_key',
+])
 
 export const useServerSettingsStore = defineStore('serverSettings', () => {
   // --- managed-settings metadata (product design §3.1) ---
@@ -76,9 +142,9 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
   // --- server snapshot ---
   const server = ref<AppSettings | null>(null)
   const serverError = ref('')
-  const saving = ref(false)
-  const savedMessage = ref('')
-  const restartRequired = ref(false)
+  // Which section's save is in flight (double-submit guard): only that
+  // section's button disables — never a pre-disable validation gate.
+  const savingSection = ref<SectionId | null>(null)
 
   // Local editable copies for the form (password inputs stay empty unless
   // the user types a new value).
@@ -128,10 +194,10 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
   //
   // Implicit security contract: an EMPTY key field means "unchanged", never
   // "clear". The password inputs always render empty (even when a key is
-  // set — see apiKeySet), so saveServer only forwards non-empty secrets and
-  // loadServer resets the drafts to ''. Turning an empty string into an
-  // explicit clear would let a casual "save" destroy an encrypted key the
-  // form never even displayed.
+  // set — see apiKeySet), so saveSection only forwards non-empty secrets
+  // and loadServer resets the drafts to ''. Turning an empty string into
+  // an explicit clear would let a casual "save" destroy an encrypted key
+  // the form never even displayed.
   const baseURL = computed({
     get: () => baseURLs.value[provider.value],
     set: (v: string) => (baseURLs.value[provider.value] = v),
@@ -193,82 +259,233 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
       langfuseBaseURL.value = s.langfuse_base_url ?? ''
       langfusePublicKey.value = s.langfuse_public_key ?? ''
       langfuseSecret.value = ''
+      snapshotSections()
     } catch (e) {
       serverError.value = toErrorMessage(e)
     }
   }
 
-  async function saveServer() {
-    saving.value = true
-    savedMessage.value = ''
+  // --- per-section dirty tracking (spec OQ3) ---
+  // Key↔draft wiring as one table: the dirty snapshot, the subset PUT and
+  // the cross-section draft preservation all read and write through it.
+  type Prim = string | number | boolean
+  const draftAccessors: Record<string, { get: () => Prim; set: (v: Prim) => void }> = {
+    provider: { get: () => provider.value, set: (v) => (provider.value = v as ProviderName) },
+    model: { get: () => serverModel.value, set: (v) => (serverModel.value = String(v)) },
+    anthropic_base_url: {
+      get: () => baseURLs.value.anthropic,
+      set: (v) => (baseURLs.value.anthropic = String(v)),
+    },
+    openai_base_url: {
+      get: () => baseURLs.value.openai,
+      set: (v) => (baseURLs.value.openai = String(v)),
+    },
+    glm_base_url: {
+      get: () => baseURLs.value.glm,
+      set: (v) => (baseURLs.value.glm = String(v)),
+    },
+    deepseek_base_url: {
+      get: () => baseURLs.value.deepseek,
+      set: (v) => (baseURLs.value.deepseek = String(v)),
+    },
+    anthropic_api_key: {
+      get: () => apiKeys.value.anthropic,
+      set: (v) => (apiKeys.value.anthropic = String(v)),
+    },
+    openai_api_key: {
+      get: () => apiKeys.value.openai,
+      set: (v) => (apiKeys.value.openai = String(v)),
+    },
+    glm_api_key: {
+      get: () => apiKeys.value.glm,
+      set: (v) => (apiKeys.value.glm = String(v)),
+    },
+    deepseek_api_key: {
+      get: () => apiKeys.value.deepseek,
+      set: (v) => (apiKeys.value.deepseek = String(v)),
+    },
+    checkpoint_backend: {
+      get: () => checkpointBackend.value,
+      set: (v) => (checkpointBackend.value = v as CheckpointBackend),
+    },
+    memory_backend: {
+      get: () => memoryBackend.value,
+      set: (v) => (memoryBackend.value = v as MemoryBackend),
+    },
+    postgres_url: { get: () => postgresURL.value, set: (v) => (postgresURL.value = String(v)) },
+    memory_engine: {
+      get: () => memoryEngine.value,
+      set: (v) => (memoryEngine.value = v as 'ladym' | 'remote' | 'none'),
+    },
+    ladym_embedding: {
+      get: () => ladymEmbedding.value,
+      set: (v) => (ladymEmbedding.value = String(v)),
+    },
+    ladym_embedding_model: {
+      get: () => ladymEmbeddingModel.value,
+      set: (v) => (ladymEmbeddingModel.value = String(v)),
+    },
+    ladym_embedding_base_url: {
+      get: () => ladymEmbeddingBaseURL.value,
+      set: (v) => (ladymEmbeddingBaseURL.value = String(v)),
+    },
+    ladym_embedding_api_key: {
+      get: () => ladymEmbeddingAPIKey.value,
+      set: (v) => (ladymEmbeddingAPIKey.value = String(v)),
+    },
+    ladym_llm: { get: () => ladymLLM.value, set: (v) => (ladymLLM.value = String(v)) },
+    ladym_autoretain: {
+      get: () => ladymAutoRetain.value,
+      set: (v) => (ladymAutoRetain.value = Boolean(v)),
+    },
+    ladym_topk: { get: () => ladymTopK.value, set: (v) => (ladymTopK.value = Number(v)) },
+    ladym_db_path: { get: () => ladymDBPath.value, set: (v) => (ladymDBPath.value = String(v)) },
+    ladym_system2: {
+      get: () => ladymSystem2.value,
+      set: (v) => (ladymSystem2.value = Boolean(v)),
+    },
+    ladym_system2_interval: {
+      get: () => ladymSystem2Interval.value,
+      set: (v) => (ladymSystem2Interval.value = Number(v)),
+    },
+    msg_plane_mode: {
+      get: () => msgPlaneMode.value,
+      set: (v) => (msgPlaneMode.value = v as 'pg' | 'pg+nats'),
+    },
+    msg_plane_nats_url: {
+      get: () => msgPlaneNATSURL.value,
+      set: (v) => (msgPlaneNATSURL.value = String(v)),
+    },
+    msg_plane_subject: {
+      get: () => msgPlaneSubject.value,
+      set: (v) => (msgPlaneSubject.value = String(v)),
+    },
+    langfuse_enabled: {
+      get: () => langfuseEnabled.value,
+      set: (v) => (langfuseEnabled.value = Boolean(v)),
+    },
+    langfuse_base_url: {
+      get: () => langfuseBaseURL.value,
+      set: (v) => (langfuseBaseURL.value = String(v)),
+    },
+    langfuse_public_key: {
+      get: () => langfusePublicKey.value,
+      set: (v) => (langfusePublicKey.value = String(v)),
+    },
+    langfuse_secret_key: {
+      get: () => langfuseSecret.value,
+      set: (v) => (langfuseSecret.value = String(v)),
+    },
+  }
+
+  function draftValue(key: string): Prim {
+    return draftAccessors[key]?.get() ?? ''
+  }
+
+  // loadServer records each section's grouped draft values; sectionDirty
+  // compares the live drafts against the snapshot. Before the first load
+  // there is nothing to be dirty against.
+  const sectionSnapshots = ref<
+    Partial<Record<SectionId, Record<string, string | number | boolean>>>
+  >({})
+
+  function snapshotSections() {
+    const snap: Partial<Record<SectionId, Record<string, string | number | boolean>>> = {}
+    for (const id of Object.keys(SECTION_KEYS) as SectionId[]) {
+      const keys = SECTION_KEYS[id]
+      if (!keys.length) continue // instant sections carry no drafts
+      const values: Record<string, string | number | boolean> = {}
+      for (const key of keys) values[key] = draftValue(key)
+      snap[id] = values
+    }
+    sectionSnapshots.value = snap
+  }
+
+  function sectionDirty(id: SectionId): boolean {
+    const snap = sectionSnapshots.value[id]
+    if (!snap) return false
+    return SECTION_KEYS[id].some((key) => !Object.is(draftValue(key), snap[key]))
+  }
+
+  // Drafts of every OTHER dirty section (used to survive the post-save
+  // reload — see saveSection).
+  function captureUnsavedDrafts(except: SectionId): Record<string, Prim> {
+    const out: Record<string, Prim> = {}
+    for (const id of Object.keys(SECTION_KEYS) as SectionId[]) {
+      if (id === except || !sectionDirty(id)) continue
+      for (const key of SECTION_KEYS[id]) out[key] = draftValue(key)
+    }
+    return out
+  }
+
+  // An emptied numeric input yields ''/NaN, which the server would reject
+  // with a 400 — fall back to the documented defaults.
+  function patchValue(key: string, v: string | number | boolean): string | number | boolean {
+    if (key === 'ladym_topk') {
+      return typeof v === 'number' && Number.isFinite(v) && v >= 1 ? v : 6
+    }
+    if (key === 'ladym_system2_interval') {
+      return typeof v === 'number' && Number.isFinite(v) && v >= 60 ? v : 300
+    }
+    return v
+  }
+
+  // Per-section save: same endpoint, subset PUT. The server treats absent
+  // keys as unchanged, so only this section's keys ride the patch.
+  async function saveSection(id: SectionId): Promise<void> {
+    if (savingSection.value) return
+    const keys = SECTION_KEYS[id]
+    if (!keys.length) return // instant sections never hit the endpoint
+    const patch: Record<string, string | number | boolean> = {}
+    for (const key of keys) {
+      // Edition-scoped keys ride only when their surface exists: the server
+      // rejects them by PRESENCE on the other editions (the message plane
+      // on personal forms, the Langfuse plugin on console-managed forms).
+      if (key.startsWith('msg_plane_') && !msgPlaneAvailable.value) continue
+      if (key.startsWith('langfuse_') && langfuseConsoleManaged.value) continue
+      const v = draftValue(key)
+      // Secrets: only send what the user actually typed. An empty draft
+      // means "keep the stored key" — the server treats absent fields as
+      // unchanged, and forwarding '' would wipe an encrypted key the form
+      // never showed.
+      if (SECRET_KEYS.has(key) && !v) continue
+      patch[key] = patchValue(key, v)
+    }
+    // A fully gated-out subset (EE surface absent) has nothing to persist.
+    if (!Object.keys(patch).length) return
+    savingSection.value = id
     serverError.value = ''
-    const patch: AppSettingsUpdate = {
-      provider: provider.value,
-      model: serverModel.value,
-      anthropic_base_url: baseURLs.value.anthropic,
-      openai_base_url: baseURLs.value.openai,
-      glm_base_url: baseURLs.value.glm,
-      deepseek_base_url: baseURLs.value.deepseek,
-      checkpoint_backend: checkpointBackend.value,
-      memory_backend: memoryBackend.value,
-      memory_engine: memoryEngine.value,
-      ladym_embedding: ladymEmbedding.value,
-      ladym_embedding_model: ladymEmbeddingModel.value,
-      ladym_embedding_base_url: ladymEmbeddingBaseURL.value,
-      ladym_llm: ladymLLM.value,
-      ladym_autoretain: ladymAutoRetain.value,
-      // An emptied input yields ''/NaN, which the server would reject with a
-      // 400 — fall back to the default of 6 for invalid values.
-      ladym_topk: Number.isFinite(ladymTopK.value) && ladymTopK.value >= 1 ? ladymTopK.value : 6,
-      ladym_system2_interval:
-        Number.isFinite(ladymSystem2Interval.value) && ladymSystem2Interval.value >= 60
-          ? ladymSystem2Interval.value
-          : 300,
-      ladym_db_path: ladymDBPath.value,
-      ladym_system2: ladymSystem2.value,
-    }
-    // Edition-scoped keys ride only when their surface exists: the server
-    // rejects them by PRESENCE on the other editions (the message plane on
-    // personal forms, the Langfuse plugin on console-managed forms), which
-    // would fail every save over fields the form never showed.
-    if (msgPlaneAvailable.value) {
-      patch.msg_plane_mode = msgPlaneMode.value
-      patch.msg_plane_nats_url = msgPlaneNATSURL.value
-      patch.msg_plane_subject = msgPlaneSubject.value
-    }
-    if (!langfuseConsoleManaged.value) {
-      patch.langfuse_enabled = langfuseEnabled.value
-      patch.langfuse_base_url = langfuseBaseURL.value
-      patch.langfuse_public_key = langfusePublicKey.value
-    }
-    // Secrets: only send what the user actually typed. An empty draft means
-    // "keep the stored key" — the server treats absent fields as unchanged,
-    // and forwarding '' would wipe an encrypted key the form never showed.
-    if (apiKeys.value.anthropic) patch.anthropic_api_key = apiKeys.value.anthropic
-    if (apiKeys.value.openai) patch.openai_api_key = apiKeys.value.openai
-    if (apiKeys.value.glm) patch.glm_api_key = apiKeys.value.glm
-    if (apiKeys.value.deepseek) patch.deepseek_api_key = apiKeys.value.deepseek
-    if (postgresURL.value) patch.postgres_url = postgresURL.value
-    if (ladymEmbeddingAPIKey.value) patch.ladym_embedding_api_key = ladymEmbeddingAPIKey.value
-    if (langfuseSecret.value && !langfuseConsoleManaged.value) patch.langfuse_secret_key = langfuseSecret.value
+    const toast = useToastStore()
     try {
-      const res = await updateSettings(patch)
-      restartRequired.value = res.restart_required
-      savedMessage.value = res.restart_required
-        ? i18n.global.t('settings.store.savedRestart')
-        : res.apply_error
-          ? i18n.global.t('settings.store.savedApplyError', { error: res.apply_error })
-          : i18n.global.t('settings.store.saved')
+      const res = await updateSettings(patch as AppSettingsUpdate)
+      // Results ride the app toast stack (role="status" + aria-live) —
+      // the shared announcement channel, not a parallel mechanism.
+      toast.success(
+        res.restart_required
+          ? i18n.global.t('settings.store.savedRestart')
+          : res.apply_error
+            ? i18n.global.t('settings.store.savedApplyError', { error: res.apply_error })
+            : i18n.global.t('settings.store.saved'),
+      )
       // The one pref↔server bridge: a saved server default model becomes
-      // the preferred model.
-      if (serverModel.value) useSettingsStore().model = serverModel.value
+      // the preferred model (the provider section owns the `model` key).
+      if (id === 'provider' && serverModel.value) {
+        useSettingsStore().model = serverModel.value
+      }
+      // A subset save must not wipe unsaved drafts in OTHER sections: the
+      // server still holds their pre-edit values, so capture each dirty
+      // section's drafts and restore them after the reload (loadServer's
+      // fresh snapshot then keeps those sections correctly dirty).
+      const unsaved = captureUnsavedDrafts(id)
       await loadServer()
+      for (const [key, v] of Object.entries(unsaved)) draftAccessors[key]?.set(v)
       // Provider/model changes may flip the thinking drawer's support state.
-      void useAgentStore().load()
+      if (id === 'provider') void useAgentStore().load()
     } catch (e) {
       serverError.value = toErrorMessage(e)
+      toast.error(serverError.value)
     } finally {
-      saving.value = false
+      savingSection.value = null
     }
   }
 
@@ -277,7 +494,11 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
     try {
       await updateSettings({ debug_log: next })
       debugLog.value = next
+      // The instant apply must not wipe unsaved drafts elsewhere (same
+      // preservation as a subset save — debug_log owns no section drafts).
+      const unsaved = captureUnsavedDrafts('preferences')
       await loadServer()
+      for (const [key, v] of Object.entries(unsaved)) draftAccessors[key]?.set(v)
     } catch (e) {
       serverError.value = toErrorMessage(e)
     }
@@ -295,9 +516,7 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
     applyModel,
     server,
     serverError,
-    saving,
-    savedMessage,
-    restartRequired,
+    savingSection,
     provider,
     serverModel,
     baseURL,
@@ -332,6 +551,7 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
     logDir: computed(() => server.value?.log_dir ?? ''),
     toggleDebugLog,
     loadServer,
-    saveServer,
+    saveSection,
+    sectionDirty,
   }
 })

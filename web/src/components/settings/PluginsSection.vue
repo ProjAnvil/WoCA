@@ -5,6 +5,7 @@ import { Activity, Puzzle } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useServerSettingsStore } from '../../stores/serverSettings'
 import { usePluginsStore } from '../../stores/sections'
+import SectionSaveControl from './SectionSaveControl.vue'
 import WInfoTip from '../ui/WInfoTip.vue'
 
 // bridge=true on the private-cloud form: the same dual track as skills/MCP
@@ -130,7 +131,9 @@ const stateLabels = computed<Record<string, string>>(() => ({
     </div>
 
     <!-- Langfuse observability plugin: spans follow the OTel GenAI
-         conventions; the plugin exports them over OTLP -->
+         conventions; the plugin exports them over OTLP. Its fields persist
+         through the server-settings endpoint, so the card carries its own
+         section save affordance (the plugin toggles above use theirs). -->
     <div v-if="!langfuseHidden" class="plugin-card" data-testid="langfuse-card">
       <div class="plugin-card-head">
         <div>
@@ -138,15 +141,18 @@ const stateLabels = computed<Record<string, string>>(() => ({
           <span class="env-check-name" style="margin-left: 4px">{{ t('settings.plugins.langfuse.title') }}</span>
           <span class="plugin-badge">OTLP</span>
         </div>
-        <button
-          class="switch"
-          role="switch"
-          :class="{ on: settings.langfuseEnabled }"
-          :aria-label="t('settings.plugins.langfuse.title')"
-          :aria-checked="settings.langfuseEnabled"
-          :title="settings.langfuseEnabled ? t('settings.plugins.langfuse.disableTip') : t('settings.plugins.langfuse.enableTip')"
-          @click="settings.langfuseEnabled = !settings.langfuseEnabled"
-        ></button>
+        <div class="langfuse-head-actions">
+          <SectionSaveControl section="langfuse" />
+          <button
+            class="switch"
+            role="switch"
+            :class="{ on: settings.langfuseEnabled }"
+            :aria-label="t('settings.plugins.langfuse.title')"
+            :aria-checked="settings.langfuseEnabled"
+            :title="settings.langfuseEnabled ? t('settings.plugins.langfuse.disableTip') : t('settings.plugins.langfuse.enableTip')"
+            @click="settings.langfuseEnabled = !settings.langfuseEnabled"
+          ></button>
+        </div>
       </div>
       <div class="row-hint">{{ t('settings.plugins.langfuse.intro') }}</div>
       <template v-if="settings.langfuseEnabled">
@@ -212,6 +218,16 @@ const stateLabels = computed<Record<string, string>>(() => ({
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+/* The Langfuse card's own save affordance sits beside its enable switch. */
+.langfuse-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The shared control's auto margin targets section titles, not card heads. */
+.langfuse-head-actions :deep(.sec-actions) {
+  margin-left: 0;
 }
 .plugin-badge {
   display: inline-block;

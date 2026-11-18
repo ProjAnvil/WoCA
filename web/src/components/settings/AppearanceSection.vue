@@ -10,7 +10,10 @@ const settings = useSettingsStore()
 <template>
   <!-- Appearance -->
   <section class="setting-section">
-    <div class="setting-section-title">{{ t('settings.appearance.title') }}</div>
+    <div class="setting-section-title with-actions">
+      {{ t('settings.appearance.title') }}
+      <span class="badge-instant">{{ t('settings.section.appliedInstantly') }}</span>
+    </div>
     <div class="theme-choice">
       <button
         class="theme-option"
@@ -29,7 +32,10 @@ const settings = useSettingsStore()
         <span>{{ t('settings.appearance.dark') }}</span>
       </button>
     </div>
-    <div class="setting-section-title lang-title">{{ t('settings.appearance.language') }}</div>
+    <div class="setting-section-title lang-title with-actions">
+      {{ t('settings.appearance.language') }}
+      <span class="badge-instant">{{ t('settings.section.appliedInstantly') }}</span>
+    </div>
     <div class="theme-choice lang-choice">
       <button
         class="theme-option"

@@ -12,7 +12,10 @@ const server = useServerSettingsStore()
 <template>
   <!-- Preferences -->
   <section class="setting-section">
-    <div class="setting-section-title">{{ t('settings.preferences.title') }}</div>
+    <div class="setting-section-title with-actions">
+      {{ t('settings.preferences.title') }}
+      <span class="badge-instant">{{ t('settings.section.appliedInstantly') }}</span>
+    </div>
 
     <div class="setting-row">
       <div>

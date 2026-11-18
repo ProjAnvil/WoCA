@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Database } from 'lucide-vue-next'
+import { Database, Lock } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useServerSettingsStore } from '../../stores/serverSettings'
+import SectionSaveControl from './SectionSaveControl.vue'
 import WInfoTip from '../ui/WInfoTip.vue'
 
 defineProps<{ bridge?: boolean }>()
@@ -21,8 +22,9 @@ const memoryStoreLocked = computed(() => settings.isManaged('memory'))
 <template>
   <!-- Storage (checkpoint + memoryStore backends) -->
   <section class="setting-section">
-    <div class="setting-section-title">
+    <div class="setting-section-title with-actions">
       <Database :size="13" style="vertical-align: -2px" /> {{ t('settings.storage.title') }}
+      <SectionSaveControl section="storage" />
     </div>
     <p v-if="bridge && (checkpointLocked || memoryStoreLocked)" class="mem-intro">
       {{ t('settings.storage.managedNotice') }}
@@ -91,8 +93,16 @@ const memoryStoreLocked = computed(() => settings.isManaged('memory'))
 
     <div v-if="settings.server" class="setting-row">
       <div>
-<div class="row-label">{{ t('settings.storage.dbLocation') }}<WInfoTip :text="settings.server.database" /></div>
+        <div class="row-label">{{ t('settings.storage.dbLocation') }}<WInfoTip :text="settings.server.database" /></div>
       </div>
+    </div>
+
+    <!-- The old global footer's at-rest hint, scoped to the section that
+         actually stores a secret (and only where the secret is a local
+         decision — managed bridges hide the DSN field above). -->
+    <div v-if="!(bridge && (checkpointLocked || memoryStoreLocked))" class="sec-hint">
+      <Lock :size="12" aria-hidden="true" />
+      <span>{{ t('settings.section.secretsHintDSN') }}</span>
     </div>
   </section>
 </template>

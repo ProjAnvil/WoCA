@@ -7,6 +7,8 @@ const api = vi.hoisted(() => ({
   getStatus: vi.fn(),
   getEdgeBridges: vi.fn(),
   logout: vi.fn(),
+  getSettings: vi.fn(),
+  updateSettings: vi.fn(),
 }))
 vi.mock('../api/client', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../api/client')>()
@@ -74,6 +76,11 @@ describe('SettingsPanel', () => {
     api.getStatus.mockReset().mockResolvedValue({ edition: 'personal', managed: false })
     api.getEdgeBridges.mockReset().mockResolvedValue(null)
     api.logout.mockReset().mockResolvedValue(undefined)
+    api.getSettings.mockReset().mockResolvedValue({
+      provider: 'anthropic',
+      msg_plane_available: false,
+    })
+    api.updateSettings.mockReset().mockResolvedValue({ ok: true, restart_required: false })
   })
   afterEach(() => {
     w?.unmount()
@@ -158,6 +165,70 @@ describe('SettingsPanel', () => {
       'stats',
     ]
     expect(navLabels()).toEqual(navLabelsFor(ids))
+  })
+
+  // Switches the right pane to a section by nav id (the panel renders one
+  // section at a time; the per-section save affordances live in the
+  // sections' own headers).
+  async function showSection(id: string) {
+    const label = i18n.global.t(`settings.nav.${id}`)
+    const entry = all('.settings-nav .settings-nav-item:not(.nav-logout)').find(
+      (el) => el.textContent?.trim() === label,
+    )
+    expect(entry, `nav entry for ${id}`).toBeTruthy()
+    click(entry!)
+    await flushPromises()
+  }
+
+  it('drops the global save bar (per-section saves replace it)', async () => {
+    mountPanel()
+    await flushPromises()
+    expect(q('.settings-footer')).toBeNull()
+  })
+
+  it('renders the provider save control disabled when clean, enabled when dirty', async () => {
+    mountPanel()
+    const serverSettings = useServerSettingsStore()
+    await serverSettings.loadServer()
+    await showSection('provider')
+
+    const btn = q('[data-testid="section-save"]') as HTMLButtonElement | null
+    expect(btn).not.toBeNull()
+    expect(btn!.disabled).toBe(true)
+
+    serverSettings.serverModel = 'glm-5'
+    await flushPromises()
+    expect(btn!.disabled).toBe(false)
+  })
+
+  it('clicking a dirty section save PUTs that section only', async () => {
+    mountPanel()
+    const serverSettings = useServerSettingsStore()
+    await serverSettings.loadServer()
+    await showSection('storage')
+    serverSettings.checkpointBackend = 'postgres'
+    await flushPromises()
+    click(q('[data-testid="section-save"]')!)
+    await flushPromises()
+    expect(api.updateSettings).toHaveBeenCalledTimes(1)
+    const patch = api.updateSettings.mock.calls[0][0] as Record<string, unknown>
+    expect(Object.keys(patch).sort()).toEqual(
+      ['checkpoint_backend', 'memory_backend'].sort(),
+    )
+  })
+
+  it('instant sections show the applied-instantly badge and no save control', async () => {
+    mountPanel()
+    const serverSettings = useServerSettingsStore()
+    await serverSettings.loadServer()
+
+    await showSection('preferences')
+    expect(q('.badge-instant')).not.toBeNull()
+    expect(q('[data-testid="section-save"]')).toBeNull()
+
+    await showSection('appearance')
+    expect(q('.badge-instant')).not.toBeNull()
+    expect(q('[data-testid="section-save"]')).toBeNull()
   })
 
   it('shows the bridge surfaces for an enrolled admin', async () => {

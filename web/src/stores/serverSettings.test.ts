@@ -12,43 +12,262 @@ vi.mock('../api/client', async (importOriginal) => {
   return { ...orig, ...api }
 })
 
-import { useServerSettingsStore } from './serverSettings'
+import { SECTION_KEYS, useServerSettingsStore } from './serverSettings'
 
 function settingsDoc(over: Record<string, unknown> = {}) {
   return { provider: 'anthropic', msg_plane_available: false, ...over }
 }
 
-describe('serverSettings edition-scoped patch fields', () => {
+// ---------------------------------------------------------------------------
+// SECTION_KEYS coverage — the four explicit key lists the store's
+// persistence path registers (the payload groups the old full-patch save
+// assembled). Every key must land in a section: a miss would strand a field
+// behind no save affordance at all.
+// ---------------------------------------------------------------------------
+
+// The always-on patch body (the store persistence path's base object).
+const BASE_PATCH_KEYS = [
+  'provider',
+  'model',
+  'anthropic_base_url',
+  'openai_base_url',
+  'glm_base_url',
+  'deepseek_base_url',
+  'checkpoint_backend',
+  'memory_backend',
+  'memory_engine',
+  'ladym_embedding',
+  'ladym_embedding_model',
+  'ladym_embedding_base_url',
+  'ladym_llm',
+  'ladym_autoretain',
+  'ladym_topk',
+  'ladym_system2_interval',
+  'ladym_db_path',
+  'ladym_system2',
+] as const
+
+// Keys that ride only when the message-plane surface exists.
+const MSG_PLANE_KEYS = ['msg_plane_mode', 'msg_plane_nats_url', 'msg_plane_subject'] as const
+
+// Keys that ride only on personal (non console-managed) forms.
+const LANGFUSE_KEYS = [
+  'langfuse_enabled',
+  'langfuse_base_url',
+  'langfuse_public_key',
+  'langfuse_secret_key',
+] as const
+
+// Secret keys: forwarded only when the user typed a non-empty draft.
+const SECRET_KEYS = [
+  'anthropic_api_key',
+  'openai_api_key',
+  'glm_api_key',
+  'deepseek_api_key',
+  'postgres_url',
+  'ladym_embedding_api_key',
+  'langfuse_secret_key',
+] as const
+
+const REGISTERED = [
+  ...BASE_PATCH_KEYS,
+  ...MSG_PLANE_KEYS,
+  ...LANGFUSE_KEYS,
+  ...SECRET_KEYS,
+]
+
+function sectionsOwning(key: string): string[] {
+  return Object.entries(SECTION_KEYS)
+    .filter(([, keys]) => keys.includes(key))
+    .map(([id]) => id)
+}
+
+describe('serverSettings SECTION_KEYS registry', () => {
+  it.each([...BASE_PATCH_KEYS])('base-patch key %s lands in a section', (key) => {
+    expect(sectionsOwning(key).length).toBeGreaterThan(0)
+  })
+
+  it.each([...MSG_PLANE_KEYS])('message-plane key %s lands in a section', (key) => {
+    expect(sectionsOwning(key).length).toBeGreaterThan(0)
+  })
+
+  it.each([...LANGFUSE_KEYS])('langfuse key %s lands in a section', (key) => {
+    expect(sectionsOwning(key).length).toBeGreaterThan(0)
+  })
+
+  it.each([...SECRET_KEYS])('secret key %s lands in a section', (key) => {
+    expect(sectionsOwning(key).length).toBeGreaterThan(0)
+  })
+
+  it('introduces no keys outside the registered lists', () => {
+    const registered = REGISTERED as readonly string[]
+    const extra = Object.values(SECTION_KEYS)
+      .flat()
+      .filter((k) => !registered.includes(k))
+    expect(extra).toEqual([])
+  })
+
+  it('assigns every key to exactly one section (no double ownership)', () => {
+    for (const key of REGISTERED) {
+      expect(sectionsOwning(key)).toHaveLength(1)
+    }
+  })
+
+  it('appearance and preferences are instant sections with no keys', () => {
+    expect(SECTION_KEYS.appearance).toEqual([])
+    expect(SECTION_KEYS.preferences).toEqual([])
+  })
+})
+
+// ---------------------------------------------------------------------------
+// saveSection: same-endpoint subset PUT with the availability gating intact.
+// ---------------------------------------------------------------------------
+
+describe('serverSettings saveSection subset PUT', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     for (const fn of Object.values(api)) fn.mockReset()
+    api.getSettings.mockResolvedValue(settingsDoc())
+    api.updateSettings.mockResolvedValue({ ok: true, restart_required: false })
   })
 
-  it('omits message-plane and langfuse keys on forms without those surfaces', async () => {
-    api.getSettings.mockResolvedValue(settingsDoc({ langfuse_console_managed: true }))
-    api.updateSettings.mockResolvedValue({ ok: true, restart_required: false })
+  it('storage save PUTs only storage keys', async () => {
     const s = useServerSettingsStore()
     await s.loadServer()
-    await s.saveServer()
+    s.checkpointBackend = 'postgres'
+    s.postgresURL = 'postgres://u:p@h/db'
+    await s.saveSection('storage')
+    await flushPromises()
+    expect(api.updateSettings).toHaveBeenCalledTimes(1)
+    const patch = api.updateSettings.mock.calls[0][0] as Record<string, unknown>
+    expect(Object.keys(patch).sort()).toEqual(
+      ['checkpoint_backend', 'memory_backend', 'postgres_url'].sort(),
+    )
+    expect(patch.checkpoint_backend).toBe('postgres')
+    expect(patch.postgres_url).toBe('postgres://u:p@h/db')
+  })
+
+  it('provider save forwards only the typed secret, not the empty drafts', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    s.apiKey = 'sk-ant-new'
+    await s.saveSection('provider')
     await flushPromises()
     const patch = api.updateSettings.mock.calls[0][0] as Record<string, unknown>
-    expect(patch.msg_plane_mode).toBeUndefined()
-    expect(patch.langfuse_enabled).toBeUndefined()
-    expect(patch.langfuse_base_url).toBeUndefined()
-    expect(patch.langfuse_public_key).toBeUndefined()
+    expect(patch.anthropic_api_key).toBe('sk-ant-new')
+    expect(patch.openai_api_key).toBeUndefined()
+    expect(patch.glm_api_key).toBeUndefined()
+    expect(patch.deepseek_api_key).toBeUndefined()
+    expect(patch.postgres_url).toBeUndefined()
+  })
+
+  it('sends exactly the msg-plane keys on a plane-available form', async () => {
+    const s = useServerSettingsStore()
+    api.getSettings.mockResolvedValue(settingsDoc({ msg_plane_available: true }))
+    await s.loadServer()
+    s.msgPlaneSubject = 'runs.wake'
+    await s.saveSection('msgplane')
+    await flushPromises()
+    const patch = api.updateSettings.mock.calls[0][0] as Record<string, unknown>
+    expect(Object.keys(patch).sort()).toEqual(
+      ['msg_plane_mode', 'msg_plane_nats_url', 'msg_plane_subject'].sort(),
+    )
+    expect(patch.msg_plane_subject).toBe('runs.wake')
+  })
+
+  it('keeps msg-plane keys out of every section subset when the plane is off', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    s.serverModel = 'glm-5'
+    s.checkpointBackend = 'postgres'
+    await s.saveSection('provider')
+    await s.saveSection('storage')
+    await flushPromises()
+    for (const call of api.updateSettings.mock.calls) {
+      const patch = call[0] as Record<string, unknown>
+      for (const key of Object.keys(patch)) {
+        expect(key.startsWith('msg_plane_')).toBe(false)
+      }
+    }
+  })
+
+  it('skips the request entirely when gating empties the subset', async () => {
+    const s = useServerSettingsStore()
+    // Plane off + console-managed langfuse: neither EE surface accepts keys.
+    api.getSettings.mockResolvedValue(
+      settingsDoc({ msg_plane_available: false, langfuse_console_managed: true }),
+    )
+    await s.loadServer()
+    await s.saveSection('msgplane')
+    await s.saveSection('langfuse')
+    await flushPromises()
+    expect(api.updateSettings).not.toHaveBeenCalled()
   })
 
   it('sends langfuse keys on the personal form', async () => {
-    api.getSettings.mockResolvedValue(settingsDoc({ langfuse_console_managed: false }))
-    api.updateSettings.mockResolvedValue({ ok: true, restart_required: false })
     const s = useServerSettingsStore()
+    api.getSettings.mockResolvedValue(settingsDoc({ langfuse_console_managed: false }))
     await s.loadServer()
     s.langfuseEnabled = true
     s.langfuseBaseURL = 'https://lf.example'
-    await s.saveServer()
+    await s.saveSection('langfuse')
     await flushPromises()
     const patch = api.updateSettings.mock.calls[0][0] as Record<string, unknown>
     expect(patch.langfuse_enabled).toBe(true)
     expect(patch.langfuse_base_url).toBe('https://lf.example')
+    expect(Object.keys(patch).every((k) => k.startsWith('langfuse_'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// sectionDirty lifecycle.
+// ---------------------------------------------------------------------------
+
+describe('serverSettings sectionDirty lifecycle', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    for (const fn of Object.values(api)) fn.mockReset()
+    api.getSettings.mockResolvedValue(settingsDoc())
+    api.updateSettings.mockResolvedValue({ ok: true, restart_required: false })
+  })
+
+  it('is false after load, true after an edit, false again after the section save', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    expect(s.sectionDirty('storage')).toBe(false)
+    expect(s.sectionDirty('provider')).toBe(false)
+    expect(s.sectionDirty('memory')).toBe(false)
+
+    s.checkpointBackend = 'postgres'
+    expect(s.sectionDirty('storage')).toBe(true)
+    // Another section's edit stays out of this section's dirty state.
+    expect(s.sectionDirty('provider')).toBe(false)
+
+    s.serverModel = 'glm-5'
+    expect(s.sectionDirty('provider')).toBe(true)
+
+    await s.saveSection('storage')
+    await flushPromises()
+    expect(s.sectionDirty('storage')).toBe(false)
+    // The provider draft was never saved — still dirty.
+    expect(s.sectionDirty('provider')).toBe(true)
+  })
+
+  it('tracks secret drafts: typing marks dirty, the post-save reload clears', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    expect(s.sectionDirty('provider')).toBe(false)
+    s.apiKey = 'sk-ant-2'
+    expect(s.sectionDirty('provider')).toBe(true)
+    await s.saveSection('provider')
+    await flushPromises()
+    expect(s.sectionDirty('provider')).toBe(false)
+  })
+
+  it('instant sections are never dirty', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    expect(s.sectionDirty('appearance')).toBe(false)
+    expect(s.sectionDirty('preferences')).toBe(false)
   })
 })

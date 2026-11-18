@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Server } from 'lucide-vue-next'
+import { Lock, Server } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 import { useServerSettingsStore } from '../../stores/serverSettings'
+import SectionSaveControl from './SectionSaveControl.vue'
 import WInfoTip from '../ui/WInfoTip.vue'
 
 defineProps<{ locked?: boolean }>()
@@ -30,9 +31,10 @@ const providerHint = computed(
        catalog (model section) is the selection surface and keys are delivered by
        the config plane, so the fields gray out instead of failing on save. -->
   <section class="setting-section">
-    <div class="setting-section-title">
+    <div class="setting-section-title with-actions">
       <Server :size="13" style="vertical-align: -2px" /> {{ t('settings.provider.title') }}
       <span v-if="locked" class="managed-badge">{{ t('settings.managedBadge') }}</span>
+      <SectionSaveControl section="provider" />
     </div>
     <p v-if="locked" class="mem-intro">
       {{ t('settings.provider.managedNotice') }}
@@ -112,6 +114,13 @@ const providerHint = computed(
         placeholder="claude-sonnet-4-5"
         :disabled="locked"
       />
+    </div>
+
+    <!-- The old global footer's at-rest hint, scoped to the section that
+         actually stores a secret. -->
+    <div class="sec-hint">
+      <Lock :size="12" aria-hidden="true" />
+      <span>{{ t('settings.section.secretsHintKey') }}</span>
     </div>
   </section>
 </template>
