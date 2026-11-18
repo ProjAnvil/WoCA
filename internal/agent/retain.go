@@ -9,6 +9,7 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 
+	"github.com/projanvil/woca/internal/machinetag"
 	"github.com/projanvil/woca/internal/memory"
 	"github.com/projanvil/woca/internal/settings"
 	"github.com/projanvil/woca/internal/tools"
@@ -219,21 +220,17 @@ func (m *memoryRuntime) system2Due(ws string, intervalS int64) bool {
 }
 
 // runQuestion returns the run's actual request: the last human message at
-// runner entry, skipping known synthetic wrappers injected by the harness.
+// runner entry, skipping known synthetic wrappers injected by the harness
+// (the machinetag notice family — <relevant-memory>, <queued-user-input>,
+// <stop-hook>, <run-stopped, <task-fork>).
 func runQuestion(msgs []messages.Message) string {
 	for _, msg := range slices.Backward(msgs) {
 		if msg.Role != messages.RoleHuman {
 			continue
 		}
-		c := strings.TrimSpace(msg.Content)
-		if c == "" || strings.HasPrefix(c, "<relevant-memory>") ||
-			strings.HasPrefix(c, "<queued-user-input") ||
-			strings.HasPrefix(c, "<stop-hook>") ||
-			strings.HasPrefix(c, "<run-stopped") ||
-			strings.HasPrefix(c, "<task-fork>") {
-			continue
+		if c := strings.TrimSpace(msg.Content); c != "" && !machinetag.IsNotice(c) {
+			return c
 		}
-		return c
 	}
 	return ""
 }

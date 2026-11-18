@@ -26,6 +26,7 @@ import (
 	"github.com/projanvil/woca/internal/agents"
 	"github.com/projanvil/woca/internal/config"
 	"github.com/projanvil/woca/internal/console"
+	"github.com/projanvil/woca/internal/machinetag"
 	"github.com/projanvil/woca/internal/keybindings"
 	"github.com/projanvil/woca/internal/notify"
 	"github.com/projanvil/woca/internal/promptref"
@@ -1325,11 +1326,6 @@ func (m *Model) submit(text string) tea.Cmd {
 	return m.runWithHistory(runHistory)
 }
 
-// stopNoticePrefix is the persisted stop-notice machine tag (built by the
-// server's stopNotice when a run is cancelled): the terminal Human of a
-// cancelled round. It must never fold into a run's prompt.
-const stopNoticePrefix = "<run-stopped"
-
 func (m *Model) historyForRun() ([]messages.Message, error) {
 	if len(m.history) == 0 {
 		return nil, nil
@@ -1338,7 +1334,10 @@ func (m *Model) historyForRun() ([]messages.Message, error) {
 	if m.history[last].Role != messages.RoleHuman {
 		return append([]messages.Message(nil), m.history...), nil
 	}
-	if strings.HasPrefix(strings.TrimSpace(m.history[last].Content), stopNoticePrefix) {
+	// The persisted stop-notice machine tag (machinetag.RunStopped, built by
+	// the server's stopNotice when a run is cancelled) is the terminal Human
+	// of a cancelled round and must never fold into a run's prompt.
+	if machinetag.IsStopNotice(m.history[last].Content) {
 		// The last Human is the stop notice, a machine tag rather than a
 		// prompt: fold the previous real Human instead. With none, there is
 		// no prompt to expand — pass the history through unchanged.
@@ -1346,7 +1345,7 @@ func (m *Model) historyForRun() ([]messages.Message, error) {
 			if m.history[i].Role != messages.RoleHuman {
 				continue
 			}
-			if strings.HasPrefix(strings.TrimSpace(m.history[i].Content), stopNoticePrefix) {
+			if machinetag.IsStopNotice(m.history[i].Content) {
 				continue
 			}
 			base := append([]messages.Message(nil), m.history[:i]...)

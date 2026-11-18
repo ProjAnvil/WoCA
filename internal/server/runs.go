@@ -540,11 +540,12 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 			run.finish(EventDone, map[string]any{"cancelled": true})
 			// The queued cancel never reaches the onDone below (the run never
 			// started), so its derived history persists here: the prompt plus
-			// the stop notice, through the same save posture (WithoutCancel —
-			// run.ctx is already done — and stripSystem).
-			history := s.sessions.load(context.WithoutCancel(run.ctx), sid)
-			derived := derivedCancelledHistory(history, &human, run.id, StopReasonUser)
-			_ = s.sessions.save(context.WithoutCancel(run.ctx), sid, stripSystem(derived), workspace)
+			// the stop notice. The run never held the gate, so completeRun
+			// must not release it.
+			s.completeRun(runCompletion{
+				run: run, sid: sid, workspace: workspace,
+				human: &human, heldGate: false,
+			})
 			return
 		}
 		// Externalized run state (Phase 2): the database row is created when
@@ -583,35 +584,14 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 		// includes the pre-restart items.
 		s.restoreTodos(sid)
 		run.start(append(history, human), func(final []messages.Message) {
-			if final != nil {
-				// Completion persistence must survive run cancellation:
-				// keep the ctx values, drop the cancellation.
-				_ = s.sessions.save(context.WithoutCancel(run.ctx), sid, stripSystem(final), workspace)
-				s.logObsRunEnd(sid, run.id, workspace, final)
-			} else if reason, cancelled := run.cancelledReason(); cancelled {
-				// Cancelled round: persist the derived history (prompt + stop
-				// notice) through the same posture, so a reload keeps what the
-				// user typed and why the round ended. ranClean stays false and
-				// maybeWake below keeps its cancelled-run rule.
-				derived := derivedCancelledHistory(history, &human, run.id, reason)
-				_ = s.sessions.save(context.WithoutCancel(run.ctx), sid, stripSystem(derived), workspace)
-			}
-			// Correctness core: the session gate is released only after
-			// onDone (including persistence) returns, so when the next
-			// queued run is promoted the previous reply is guaranteed to
-			// be persisted.
-			s.admission.release(sid)
-			// Lost-wakeup re-check (R4): onFinish — and with it
-			// wakeAfterRun — fires BEFORE this release, so a notification
-			// queued in between saw admission.busy and returned without
-			// waking. Re-check now that the gate is open; maybeWake's busy
-			// re-check collapses the case where wakeAfterRun already
-			// queued a wake run behind this one, and the ranClean gate
-			// keeps the cancelled/errored rule (never restart over what
-			// the user just stopped).
-			if run.ranClean() {
-				s.maybeWake(sid)
-			}
+			// Single completion point: persist (clean transcript or derived
+			// cancelled history), then release the gate and re-check wake —
+			// see completeRun for the ordering invariants. The derivation
+			// bases on the history this run started from (base).
+			s.completeRun(runCompletion{
+				run: run, sid: sid, workspace: workspace,
+				human: &human, base: history, final: final, heldGate: true,
+			})
 		})
 	}()
 	return run, sid, pos, nil

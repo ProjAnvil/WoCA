@@ -339,6 +339,15 @@ func TestRunQuestionSkipsStopNoticeTag(t *testing.T) {
 	if q := runQuestion([]messages.Message{messages.Human(`<run-stopped run="run-9" reason="parked_ttl"/>`)}); q != "" {
 		t.Fatalf("runQuestion over a lone stop notice = %q, want empty", q)
 	}
+	// Every stop cause produces the same tag prefix, so the skip is
+	// cause-agnostic: server_stop (shutdown-aborted) and lease_lost must be
+	// skipped exactly like user_stop and parked_ttl.
+	for _, cause := range []string{"user_stop", "parked_ttl", "server_stop", "lease_lost"} {
+		lone := messages.Human(`<run-stopped run="run-9" reason="` + cause + `"/>`)
+		if q := runQuestion([]messages.Message{lone}); q != "" {
+			t.Fatalf("runQuestion over a lone %s stop notice = %q, want empty", cause, q)
+		}
+	}
 }
 
 func TestSystem2DueThrottle(t *testing.T) {

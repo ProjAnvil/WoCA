@@ -8,10 +8,11 @@ package server
 // with a registered tag prefix, like <scheduled-task ...>).
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+
+	"github.com/projanvil/woca/internal/machinetag"
 )
 
 // Reasons a run stopped, carried by the notice tag's reason attribute so the
@@ -26,10 +27,12 @@ const (
 
 // stopNotice builds the persisted stop notice: a Human message whose content
 // is the registered machine tag `<run-stopped run="..." reason="..."/>`. The
-// tag stays model-visible in history (same class as <scheduled-task>); the
-// consumers that must exclude it match on the "<run-stopped" prefix.
+// wire format lives in the machinetag leaf package (one source shared with
+// the agent/tui consumers); the tag stays model-visible in history (same
+// class as <scheduled-task>); the consumers that must exclude it match on
+// machinetag.RunStopped.
 func stopNotice(runID, reason string) messages.Message {
-	return messages.Human(fmt.Sprintf(`<run-stopped run="%s" reason="%s"/>`, runID, reason))
+	return messages.Human(machinetag.StopNotice(runID, reason))
 }
 
 // derivedCancelledHistory builds the transcript a cancelled run persists.

@@ -194,21 +194,25 @@ func TestHistoryForRunFoldsPromptBeforeStopNotice(t *testing.T) {
 }
 
 // A stop notice with no earlier Human leaves nothing to expand: the history
-// passes through unchanged (no prompt folding).
+// passes through unchanged (no prompt folding). The fold is cause-agnostic —
+// every stop cause (user_stop, parked_ttl, server_stop, lease_lost) produces
+// the same tag prefix.
 func TestHistoryForRunStopNoticeWithoutEarlierHuman(t *testing.T) {
-	model := New(nil, nil, config.Config{WorkDir: t.TempDir()})
-	model.history = []messages.Message{
-		messages.AI("stale reply"),
-		messages.Human(`<run-stopped run="run-2" reason="parked_ttl"/>`),
-	}
+	for _, cause := range []string{"parked_ttl", "server_stop", "lease_lost"} {
+		model := New(nil, nil, config.Config{WorkDir: t.TempDir()})
+		model.history = []messages.Message{
+			messages.AI("stale reply"),
+			messages.Human(`<run-stopped run="run-2" reason="` + cause + `"/>`),
+		}
 
-	runHistory, err := model.historyForRun()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runHistory) != 2 || runHistory[0].Content != "stale reply" ||
-		runHistory[1].Content != `<run-stopped run="run-2" reason="parked_ttl"/>` {
-		t.Fatalf("run history = %+v, want the unchanged passthrough", runHistory)
+		runHistory, err := model.historyForRun()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runHistory) != 2 || runHistory[0].Content != "stale reply" ||
+			runHistory[1].Content != `<run-stopped run="run-2" reason="`+cause+`"/>` {
+			t.Fatalf("run history = %+v, want the unchanged passthrough for %s", runHistory, cause)
+		}
 	}
 }
 

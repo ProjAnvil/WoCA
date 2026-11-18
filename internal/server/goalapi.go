@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -222,11 +221,12 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 			run.finish(EventDone, map[string]any{"cancelled": true})
 			// The queued cancel never reaches the onDone below (the goal loop
 			// never started). Goal rounds carry no human turn, so the derived
-			// history is the session history plus the stop notice alone —
-			// same save posture as the completion path.
-			history := s.sessions.load(context.WithoutCancel(run.ctx), sessionID)
-			derived := derivedCancelledHistory(history, nil, id, StopReasonUser)
-			_ = s.sessions.save(context.WithoutCancel(run.ctx), sessionID, stripSystem(derived), workspace)
+			// history is the session history plus the stop notice alone; the
+			// run never held the gate, so completeRun must not release it.
+			s.completeRun(runCompletion{
+				run: run, sid: sessionID, workspace: workspace,
+				human: nil, heldGate: false,
+			})
 			return
 		}
 		run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
@@ -236,25 +236,20 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 		// goal loop's TodoWrite merges against the restored list.
 		s.restoreTodos(sessionID)
 		run.startGoal(history, func(final []messages.Message) {
+			// Single completion point (see completeRun): persist the clean
+			// transcript or the derived cancelled history — goal rounds carry
+			// no human turn, so the derivation is the session history plus
+			// the stop notice alone — then release the gate.
 			if final != nil {
-				// Completion persistence must survive run cancellation:
-				// keep the ctx values, drop the cancellation.
-				_ = s.sessions.save(context.WithoutCancel(run.ctx), sessionID, stripSystem(final), workspace)
 				if g := a.Goal(); g != nil {
 					s.log.Info().Str("run", id).Str("session", sessionID).
 						Str("status", string(g.Status)).Msg("goal run ended")
 				}
-				s.logObsRunEnd(sessionID, id, workspace, final)
-			} else if reason, cancelled := run.cancelledReason(); cancelled {
-				// Cancelled goal round: persist the derived history — no human
-				// turn this round, so the session history plus the stop notice
-				// alone — through the same save posture.
-				derived := derivedCancelledHistory(history, nil, id, reason)
-				_ = s.sessions.save(context.WithoutCancel(run.ctx), sessionID, stripSystem(derived), workspace)
 			}
-			// Correctness core: the session gate is released only after
-			// onDone (including persistence) returns.
-			s.admission.release(sessionID)
+			s.completeRun(runCompletion{
+				run: run, sid: sessionID, workspace: workspace,
+				human: nil, base: history, final: final, heldGate: true,
+			})
 		})
 	}()
 	return run, nil
