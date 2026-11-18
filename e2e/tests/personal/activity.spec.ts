@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import http from 'node:http';
-import { test, expect, request, type Page } from '@playwright/test';
-import { PERSONAL, pinLocale } from '../../fixtures/lab';
+import { test, expect, type Page } from '@playwright/test';
+import { pinLocale } from '../../fixtures/lab';
+import { startDedicatedServe, stopDedicatedServe, type DedicatedServe } from '../../fixtures/dedicated';
 
 // Form 1 — the session activity panel against the REAL `woca serve` binary.
 // The model is a scripted OpenAI-compatible SSE stand-in served from the
@@ -11,6 +12,17 @@ import { PERSONAL, pinLocale } from '../../fixtures/lab';
 // plain text. Assertions use data-testid/class selectors and zh-CN strings
 // (the suite pins locale to zh-CN). Screenshots land OUTSIDE the repo for
 // the controller's visual review.
+//
+// Dedicated instance (the stopnotice/chatcolumn pattern): this spec
+// reconfigures the provider AND the permission mode, both server-global on
+// `woca serve` — the settings `provider` key is a single live selector with
+// no per-run override, so on the shared personal webServer the hitl spec's
+// identical setup raced this one for the slot (runs landing on the wrong
+// scripted model or on a dead endpoint after the other spec's teardown
+// reset; reproduced at HEAD with activity+hitl --repeat-each=5: 8/10
+// failed). A private instance gives this spec its own provider slot,
+// permission mode, sidebar and database — the same real binary and
+// embedded web build under test.
 
 const SHOTS = '/Users/yuhaochen/Documents/codebase/projanvil/woca-internal-docs/activity-panel-shots';
 
@@ -41,6 +53,8 @@ const TOOL_CALLS = [
 let modelURL = '';
 let modelRequests = 0;
 let modelServer: http.Server | undefined;
+let serve: DedicatedServe | undefined;
+let base = '';
 
 /** One SSE chunk in the chat-completions streaming shape. */
 function chunk(delta: Record<string, unknown>, finish: string | null): string {
@@ -82,9 +96,9 @@ test.beforeAll(async () => {
   // → arm the surface; anything else (tool results present, or a tool-less
   // call like the session-title summarizer) → final text. Non-streaming
   // callers (the title summarizer) get plain JSON, streamers get SSE. Only
-  // THIS spec's conversation is counted (the personal webServer and its
-  // model are shared with the parallel personal specs; a wake run of this
-  // session would show up in the count).
+  // THIS spec's conversation is counted (the dedicated instance runs only
+  // this spec's conversations; a wake run of this session would show up in
+  // the count).
   modelServer = http.createServer((req, res) => {
     const parts: Buffer[] = [];
     req.on('data', (b: Buffer) => parts.push(b));
@@ -131,23 +145,19 @@ test.beforeAll(async () => {
   const addr = modelServer!.address();
   if (!addr || typeof addr !== 'object') throw new Error('fake model has no address');
   modelURL = `http://127.0.0.1:${addr.port}`;
+
+  // The dedicated personal instance (fixtures/dedicated.ts): own provider
+  // slot and permission mode, so no teardown reset is needed — the instance
+  // dies with the worker and never strands a neighbor on a dead provider.
+  serve = await startDedicatedServe('activity');
+  base = serve.base;
 });
 
 test.afterAll(async () => {
-  // The personal webServer is shared across the personal specs: move its
-  // provider off the scripted model BEFORE the model goes away, so parallel
-  // specs never hold a provider pointing at a dead endpoint. anthropic
-  // without credentials fails fast and deterministically (the fresh-install
-  // posture the other specs already run under).
+  if (serve) {
+    await stopDedicatedServe(serve);
+  }
   if (modelServer) {
-    const ctx = await request.newContext();
-    await ctx
-      .put(`${PERSONAL}/api/settings`, { data: { provider: 'anthropic', model: '' } })
-      .catch(() => {});
-    await ctx
-      .post(`${PERSONAL}/api/agent/permissions`, { data: { mode: 'default' } })
-      .catch(() => {});
-    await ctx.dispose();
     await new Promise<void>((r) => modelServer!.close(() => r()));
   }
 });
@@ -178,12 +188,12 @@ async function shootCard(page: Page, card: ReturnType<Page['locator']>, path: st
 test('activity panel: badge, tabs, kill (quiet), scheduled, narrow, dark', async ({ page }) => {
   test.setTimeout(180_000);
 
-  // Point the real server's model at the scripted stand-in (loopback trust,
-  // no gate); the rebuild applies from the next run. Permission mode goes to
-  // bypass for this spec: the panel is the subject under test, and the
-  // model's Bash calls would otherwise park the run on permission prompts
-  // (the real user flow answers those in-chat).
-  const put = await page.request.put(`${PERSONAL}/api/settings`, {
+  // Point the dedicated instance's model at the scripted stand-in (loopback
+  // trust, no gate); the rebuild applies from the next run. Permission mode
+  // goes to bypass for this spec: the panel is the subject under test, and
+  // the model's Bash calls would otherwise park the run on permission
+  // prompts (the real user flow answers those in-chat).
+  const put = await page.request.put(`${base}/api/settings`, {
     data: {
       provider: 'openai',
       model: 'gpt-e2e',
@@ -192,19 +202,18 @@ test('activity panel: badge, tabs, kill (quiet), scheduled, narrow, dark', async
     },
   });
   expect(put.status(), 'configure scripted model via settings').toBe(200);
-  const perms = await page.request.post(`${PERSONAL}/api/agent/permissions`, {
+  const perms = await page.request.post(`${base}/api/agent/permissions`, {
     data: { mode: 'bypassPermissions' },
   });
   expect(perms.status(), 'set bypass permission mode').toBe(200);
 
   await pinLocale(page);
-  await page.goto(PERSONAL);
+  await page.goto(base);
   await expect(page.locator('aside.sidebar')).toBeVisible();
-  // The personal webServer is shared with the other personal specs (which
-  // may leave sessions behind): start from a fresh session so this spec's
-  // conversation is exactly the scripted one. Wait for the create response:
-  // the store switches its active session only then, and sending earlier
-  // would drop the message into the previously active session.
+  // Start from a fresh session so this spec's conversation is exactly the
+  // scripted one. Wait for the create response: the store switches its
+  // active session only then, and sending earlier would drop the message
+  // into the previously active session.
   const sessionCreated = page.waitForResponse(
     (r) => r.request().method() === 'POST' && /\/api\/sessions$/.test(r.url()),
   );
@@ -226,7 +235,7 @@ test('activity panel: badge, tabs, kill (quiet), scheduled, narrow, dark', async
   await expect
     .poll(
       async () => {
-        const res = await page.request.get(`${PERSONAL}/api/sessions/${sid}`);
+        const res = await page.request.get(`${base}/api/sessions/${sid}`);
         const { messages } = (await res.json()) as { messages: Array<{ content?: string }> };
         return messages.some((m) => (m.content ?? '').includes('All background work is armed.'));
       },
@@ -239,7 +248,7 @@ test('activity panel: badge, tabs, kill (quiet), scheduled, narrow, dark', async
   await expect
     .poll(
       async () => {
-        const res = await page.request.get(`${PERSONAL}/api/sessions/${sid}/activity`);
+        const res = await page.request.get(`${base}/api/sessions/${sid}/activity`);
         const snap = (await res.json()) as {
           todos: { items: unknown[] };
           shells: Array<{ command: string; status: string }>;

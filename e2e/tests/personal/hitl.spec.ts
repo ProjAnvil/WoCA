@@ -1,6 +1,10 @@
+import fs from 'node:fs';
 import http from 'node:http';
-import { test, expect, request, type Page } from '@playwright/test';
-import { PERSONAL, pinLocale } from '../../fixtures/lab';
+import path from 'node:path';
+import { test, expect, type Page } from '@playwright/test';
+import { pinLocale } from '../../fixtures/lab';
+import { startDedicatedServe, stopDedicatedServe, type DedicatedServe } from '../../fixtures/dedicated';
+import { runtimeDir } from '../../fixtures/paths';
 
 // Form 1 — graph-native HITL against the REAL `woca serve` binary. The
 // model is a scripted OpenAI-compatible SSE stand-in served from the test
@@ -9,12 +13,27 @@ import { PERSONAL, pinLocale } from '../../fixtures/lab';
 // scripted by its prompt marker (FILE-A / FILE-B) so both children pause on
 // a gated call in ONE superstep — the multi-card approval stack, session
 // grants, the deny path, and the Subagents tab are asserted end-to-end.
+//
+// Dedicated instance (the stopnotice/chatcolumn pattern): this spec
+// reconfigures the provider AND the permission mode, both server-global on
+// `woca serve` — the settings `provider` key is a single live selector with
+// no per-run override, so on the shared personal webServer the activity
+// spec's identical setup raced this one for the slot (runs landing on the
+// wrong scripted model or on a dead endpoint after the other spec's
+// teardown reset; reproduced at HEAD with activity+hitl --repeat-each=5:
+// 8/10 failed). A private instance gives this spec its own provider slot,
+// permission mode, sidebar and database — the same real binary and
+// embedded web build under test.
 
 type Msg = { role: string; content?: string; tool_calls?: unknown[] };
 
 let modelURL = '';
 let modelRequests = 0;
 let modelServer: http.Server | undefined;
+let serve: DedicatedServe | undefined;
+let base = '';
+/** The seeded throwaway workspace (server-resolved path) — see beforeAll. */
+let wsGroupPath = '';
 
 function chunk(delta: Record<string, unknown>, finish: string | null): string {
   return (
@@ -107,27 +126,56 @@ test.beforeAll(async () => {
   await new Promise<void>((r) => modelServer!.listen(0, '127.0.0.1', r));
   const addr = modelServer.address() as { port: number };
   modelURL = `http://127.0.0.1:${addr.port}`;
+
+  // The dedicated personal instance (fixtures/dedicated.ts): own provider
+  // slot and permission mode, so no teardown reset is needed — the instance
+  // dies with the worker and never strands a neighbor on a dead provider.
+  serve = await startDedicatedServe('hitl');
+  base = serve.base;
+
+  // Seed a throwaway workspace (the stopnotice posture): its sidebar group
+  // hosts this spec's sessions, AND the session-granted `npm install` the
+  // script issues executes inside it — a dedicated spawn's default
+  // workspace would be the worker's cwd (the e2e/ tree), while the shared
+  // server ran it in the repo root. The dir carries its own minimal
+  // package.json so npm roots INSIDE it: npm resolves the install root by
+  // walking up to the nearest package.json, and e2e/ has one.
+  const ws = path.join(runtimeDir, 'hitl', `ws-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(ws, { recursive: true });
+  fs.writeFileSync(
+    path.join(ws, 'package.json'),
+    JSON.stringify({ name: 'hitl-e2e-workspace', private: true }, null, 2) + '\n',
+  );
+  const seed = await fetch(`${base}/api/sessions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ workspace: ws }),
+  });
+  if (!seed.ok) throw new Error(`workspace seed failed: ${seed.status}`);
+  const seeded = (await seed.json()) as { workspace: string };
+  wsGroupPath = seeded.workspace; // the server resolves/expands the path
+  if (!wsGroupPath) throw new Error('workspace seed response incomplete');
 });
 
 test.afterAll(async () => {
+  if (serve) {
+    await stopDedicatedServe(serve);
+  }
   if (modelServer) {
-    const ctx = await request.newContext();
-    await ctx
-      .put(`${PERSONAL}/api/settings`, { data: { provider: 'anthropic', model: '' } })
-      .catch(() => {});
-    await ctx
-      .post(`${PERSONAL}/api/agent/permissions`, { data: { mode: 'default' } })
-      .catch(() => {});
-    await ctx.dispose();
     await new Promise<void>((r) => modelServer!.close(() => r()));
   }
 });
 
 async function freshSession(page: Page): Promise<string> {
+  // The seeded workspace's own "+" button: its sessions carry the throwaway
+  // workspace, so the granted npm install executes there (see beforeAll).
+  const group = page.locator('.ws-group').filter({
+    has: page.locator(`.ws-group-name[title="${wsGroupPath}"]`),
+  });
   const sessionCreated = page.waitForResponse(
     (r) => r.request().method() === 'POST' && /\/api\/sessions$/.test(r.url()),
   );
-  await page.getByRole('button', { name: '在此工作区新建会话' }).click();
+  await group.getByRole('button', { name: '在此工作区新建会话' }).click();
   expect((await sessionCreated).status()).toBe(200);
   await expect(page.locator('.chat-input textarea')).toBeVisible();
   const runPost = page.waitForRequest((r) => r.method() === 'POST' && /\/api\/runs$/.test(r.url()));
@@ -143,7 +191,7 @@ async function freshSession(page: Page): Promise<string> {
 }
 
 async function configure(page: Page, mode: string) {
-  const put = await page.request.put(`${PERSONAL}/api/settings`, {
+  const put = await page.request.put(`${base}/api/settings`, {
     data: {
       provider: 'openai',
       model: 'gpt-e2e',
@@ -152,7 +200,7 @@ async function configure(page: Page, mode: string) {
     },
   });
   expect(put.status(), 'configure scripted model via settings').toBe(200);
-  const perms = await page.request.post(`${PERSONAL}/api/agent/permissions`, { data: { mode } });
+  const perms = await page.request.post(`${base}/api/agent/permissions`, { data: { mode } });
   expect(perms.status(), `set ${mode} permission mode`).toBe(200);
 }
 
@@ -160,7 +208,7 @@ async function sessionDone(page: Page, sid: string, marker: string) {
   await expect
     .poll(
       async () => {
-        const res = await page.request.get(`${PERSONAL}/api/sessions/${sid}`);
+        const res = await page.request.get(`${base}/api/sessions/${sid}`);
         const { messages } = (await res.json()) as { messages: Array<{ content?: string }> };
         return messages.some((m) => (m.content ?? '').includes(marker));
       },
@@ -173,7 +221,7 @@ test('hitl: two parallel child approvals, session grant, deny, subagents tab', a
   test.setTimeout(240_000);
   await configure(page, 'default');
   await pinLocale(page);
-  await page.goto(PERSONAL);
+  await page.goto(base);
   await expect(page.locator('aside.sidebar')).toBeVisible();
   const sid = await freshSession(page);
 
@@ -207,15 +255,15 @@ test('hitl: two parallel child approvals, session grant, deny, subagents tab', a
   // (4) Grants management (server truth; the panel UI is unit-tested): the
   // session carries the npm rule; revoking clears it (the next fan-out asks
   // again).
-  const grantsResp = await page.request.get(`${PERSONAL}/api/agent/grants?session=${sid}`);
+  const grantsResp = await page.request.get(`${base}/api/agent/grants?session=${sid}`);
   expect(grantsResp.status()).toBe(200);
   const grantsBody = (await grantsResp.json()) as { grants: Array<{ key: string }> };
   expect(grantsBody.grants.some((g) => g.key.includes('npm install'))).toBe(true);
   const del = await page.request.delete(
-    `${PERSONAL}/api/agent/grants?session=${sid}&key=${encodeURIComponent(grantsBody.grants[0].key)}`,
+    `${base}/api/agent/grants?session=${sid}&key=${encodeURIComponent(grantsBody.grants[0].key)}`,
   );
   expect(del.status()).toBe(200);
-  const after = (await (await page.request.get(`${PERSONAL}/api/agent/grants?session=${sid}`)).json()) as {
+  const after = (await (await page.request.get(`${base}/api/agent/grants?session=${sid}`)).json()) as {
     grants: Array<{ key: string }>;
   };
   expect(after.grants).toHaveLength(0);

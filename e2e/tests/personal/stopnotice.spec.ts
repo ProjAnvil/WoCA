@@ -1,11 +1,10 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
-import net from 'node:net';
 import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import { pinLocale } from '../../fixtures/lab';
-import { repoRoot, runtimeDir } from '../../fixtures/paths';
+import { startDedicatedServe, stopDedicatedServe, type DedicatedServe } from '../../fixtures/dedicated';
+import { runtimeDir } from '../../fixtures/paths';
 
 // Form 1 — the cancelled-run stop notice against a REAL `woca serve`
 // binary. Pins the F1 loop end to end: a slow-streaming run stopped
@@ -27,7 +26,9 @@ import { repoRoot, runtimeDir } from '../../fixtures/paths';
 // sidebar group broke the neighbors' one-group session-button locators.
 // A private instance gives this spec its own provider slot, sidebar and
 // database (the same isolation the config's webServer applies), with the
-// same real binary and the same embedded web build under test.
+// same real binary and the same embedded web build under test. The spawn
+// harness itself lives in fixtures/dedicated.ts (shared with the other
+// provider-mutating specs).
 //
 // The model is a scripted OpenAI-compatible SSE stand-in served from the
 // test process (the wire shape the activity/hitl specs pin). Runs whose
@@ -53,7 +54,7 @@ const CHUNKS = 80; // ~24s of stream — far longer than the test needs
 
 let modelURL = '';
 let modelServer: http.Server | undefined;
-let serve: ChildProcess | undefined;
+let serve: DedicatedServe | undefined;
 let base = '';
 
 /** One SSE chunk in the chat-completions streaming shape. */
@@ -71,91 +72,6 @@ function chunk(delta: Record<string, unknown>, finish: string | null): string {
 
 function plainReply(): string {
   return chunk({ role: 'assistant', content: 'unrelated' }, null) + chunk({}, 'stop') + 'data: [DONE]\n\n';
-}
-
-/** A free loopback port (bind :0, read it, release — good enough locally). */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address();
-      const port = addr && typeof addr === 'object' ? addr.port : 0;
-      srv.close(() => (port ? resolve(port) : reject(new Error('no free port'))));
-    });
-    srv.on('error', reject);
-  });
-}
-
-// Runtime hygiene (the posture the playwright webServer applies to
-// personal-home): home-*/ws-* dirs from previous runs accrete under
-// e2e/.runtime/stopnotice. Entry names embed their creating worker's pid
-// (home-<pid>-<ts>), so "owner pid no longer alive" is exactly "left
-// over from a previous run". Only those are wiped at startup: sibling
-// workers of THIS run have live pids and unique names, so a blanket
-// subtree wipe would race them (the config runs fullyParallel across 4
-// workers, each spawning its own serve home here).
-function wipeStaleRuntimeDirs(): void {
-  const dir = path.join(runtimeDir, 'stopnotice');
-  fs.mkdirSync(dir, { recursive: true });
-  for (const entry of fs.readdirSync(dir)) {
-    const pid = Number(/^(?:home|ws)-(\d+)-\d+$/.exec(entry)?.[1]);
-    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
-    try {
-      process.kill(pid, 0); // owner still alive (or pid reused) — keep
-      continue;
-    } catch {
-      // dead owner: leftover from a previous run
-    }
-    fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
-  }
-}
-
-/** Spawns the dedicated instance and waits for its /api/health to answer. */
-async function startServe(): Promise<{ child: ChildProcess; base: string }> {
-  const bin = path.join(repoRoot, 'e2e', '.bin', 'woca');
-  if (!fs.existsSync(bin)) {
-    throw new Error(`${bin} missing — the playwright webServer builds it before tests run`);
-  }
-  wipeStaleRuntimeDirs();
-  const home = path.join(runtimeDir, 'stopnotice', `home-${process.pid}-${Date.now()}`);
-  fs.mkdirSync(home, { recursive: true });
-  const port = await freePort();
-  const child = spawn(
-    bin,
-    ['serve', '--addr', `127.0.0.1:${port}`, '--no-browser', '--log-level', 'warn'],
-    {
-      env: {
-        ...process.env,
-        HOME: home,
-        WOCA_HOME: home,
-        WOCA_DB: path.join(home, 'woca.db'),
-        WOCA_PLUGIN_ROOT: path.join(home, 'plugins'),
-        WOCA_NO_BROWSER: '1',
-      },
-      stdio: ['ignore', 'ignore', 'pipe'],
-    },
-  );
-  const stderr: string[] = [];
-  child.stderr?.on('data', (d: Buffer) => stderr.push(d.toString()));
-  const at = `http://127.0.0.1:${port}`;
-  const deadline = Date.now() + 30_000;
-  for (;;) {
-    if (child.exitCode !== null) {
-      throw new Error(`dedicated woca serve exited early (code ${child.exitCode}): ${stderr.join('').slice(-500)}`);
-    }
-    try {
-      const res = await fetch(`${at}/api/health`);
-      if (res.ok) break;
-    } catch {
-      // not up yet
-    }
-    if (Date.now() > deadline) {
-      child.kill('SIGKILL');
-      throw new Error(`dedicated woca serve never became healthy: ${stderr.join('').slice(-500)}`);
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  return { child, base: at };
 }
 
 test.beforeAll(async () => {
@@ -234,25 +150,13 @@ test.beforeAll(async () => {
   modelURL = `http://127.0.0.1:${addr.port}`;
 
   // The dedicated personal instance.
-  const started = await startServe();
-  serve = started.child;
-  base = started.base;
+  serve = await startDedicatedServe('stopnotice');
+  base = serve.base;
 });
 
 test.afterAll(async () => {
-  const child = serve;
-  if (child) {
-    child.kill('SIGTERM');
-    await new Promise<void>((resolve) => {
-      const t = setTimeout(() => {
-        child.kill('SIGKILL');
-        resolve();
-      }, 5_000);
-      child.once('exit', () => {
-        clearTimeout(t);
-        resolve();
-      });
-    });
+  if (serve) {
+    await stopDedicatedServe(serve);
   }
   if (modelServer) {
     modelServer.closeAllConnections?.();
