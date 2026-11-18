@@ -2,6 +2,18 @@ import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../i18n'
+
+// Mounting the panel fire-and-forgets the composer's store loads (agent,
+// quota, models, completions); unmocked they hit the network and surface
+// as ECONNREFUSED noise once the tests' timers drain.
+const api = vi.hoisted(() => ({
+  getAgent: vi.fn(),
+  getQuota: vi.fn(),
+  listModels: vi.fn(),
+  getCompletions: vi.fn(),
+}))
+vi.mock('../api/client', () => ({ ...api }))
+
 import ChatPanel from './ChatPanel.vue'
 import { useSessionStore } from '../stores/sessions'
 
@@ -24,6 +36,10 @@ describe('composer FLIP dock transition', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    api.getAgent.mockResolvedValue(undefined)
+    api.getQuota.mockResolvedValue({})
+    api.listModels.mockResolvedValue([])
+    api.getCompletions.mockResolvedValue([])
   })
 
   it('skips the FLIP entirely under prefers-reduced-motion', async () => {

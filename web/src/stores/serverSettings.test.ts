@@ -6,6 +6,11 @@ import i18n from '../i18n'
 const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
+  // saveSection('provider') fire-and-forgets an agent reload
+  // (useAgentStore().load → getAgent); mocking it here keeps that
+  // cross-store load off the network instead of printing ECONNREFUSED
+  // noise once the test's microtasks drain.
+  getAgent: vi.fn(),
 }))
 vi.mock('../api/client', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../api/client')>()
@@ -129,6 +134,7 @@ describe('serverSettings saveSection subset PUT', () => {
     for (const fn of Object.values(api)) fn.mockReset()
     api.getSettings.mockResolvedValue(settingsDoc())
     api.updateSettings.mockResolvedValue({ ok: true, restart_required: false })
+    api.getAgent.mockResolvedValue(undefined)
   })
 
   it('storage save PUTs only storage keys', async () => {
@@ -229,6 +235,7 @@ describe('serverSettings sectionDirty lifecycle', () => {
     for (const fn of Object.values(api)) fn.mockReset()
     api.getSettings.mockResolvedValue(settingsDoc())
     api.updateSettings.mockResolvedValue({ ok: true, restart_required: false })
+    api.getAgent.mockResolvedValue(undefined)
   })
 
   it('is false after load, true after an edit, false again after the section save', async () => {
@@ -334,6 +341,7 @@ describe('serverSettings toggleDebugLog draft preservation', () => {
     for (const fn of Object.values(api)) fn.mockReset()
     api.getSettings.mockResolvedValue(settingsDoc())
     api.updateSettings.mockResolvedValue({ ok: true, restart_required: false })
+    api.getAgent.mockResolvedValue(undefined)
   })
 
   it('preserves the drafts of every dirty section across the reload it triggers', async () => {
@@ -367,6 +375,7 @@ describe('serverSettings loadServer in-flight edit preservation', () => {
     for (const fn of Object.values(api)) fn.mockReset()
     api.getSettings.mockResolvedValue(settingsDoc())
     api.updateSettings.mockResolvedValue({ ok: true, restart_required: false })
+    api.getAgent.mockResolvedValue(undefined)
   })
 
   it('keeps edits typed while the fetch is in flight, and flags the section dirty', async () => {
@@ -421,5 +430,32 @@ describe('serverSettings loadServer in-flight edit preservation', () => {
     expect(s.provider).toBe('glm')
     expect(s.sectionDirty('storage')).toBe(false)
     expect(s.sectionDirty('provider')).toBe(false)
+  })
+
+  it('genuine first paint (no snapshot, no edits) ends clean with server values', async () => {
+    const s = useServerSettingsStore()
+    api.getSettings.mockResolvedValue(
+      settingsDoc({
+        provider: 'glm',
+        model: 'glm-5',
+        checkpoint_backend: 'postgres',
+        memory_engine: 'remote',
+        msg_plane_nats_url: 'nats://h:4222',
+        langfuse_base_url: 'https://lf.example',
+      }),
+    )
+    await s.loadServer()
+    await flushPromises()
+    // No drift past the dispatch baseline → every section takes the
+    // server's values verbatim and nothing is dirty.
+    for (const id of Object.keys(SECTION_KEYS) as (keyof typeof SECTION_KEYS)[]) {
+      expect(s.sectionDirty(id)).toBe(false)
+    }
+    expect(s.provider).toBe('glm')
+    expect(s.serverModel).toBe('glm-5')
+    expect(s.checkpointBackend).toBe('postgres')
+    expect(s.memoryEngine).toBe('remote')
+    expect(s.msgPlaneNATSURL).toBe('nats://h:4222')
+    expect(s.langfuseBaseURL).toBe('https://lf.example')
   })
 })
