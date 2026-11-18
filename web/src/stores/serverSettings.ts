@@ -407,9 +407,12 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
     return SECTION_KEYS[id].some((key) => !Object.is(draftValue(key), snap[key]))
   }
 
-  // Drafts of every OTHER dirty section (used to survive the post-save
-  // reload — see saveSection).
-  function captureUnsavedDrafts(except: SectionId): Record<string, Prim> {
+  // Drafts of every dirty section except `except` — the section whose save
+  // is about to trigger a reload (its own drafts are handled separately,
+  // see saveSection's mid-flight pass). Omitting `except` captures every
+  // dirty section: the instant-apply paths own no section drafts of their
+  // own, so they must preserve everything.
+  function captureUnsavedDrafts(except?: SectionId): Record<string, Prim> {
     const out: Record<string, Prim> = {}
     for (const id of Object.keys(SECTION_KEYS) as SectionId[]) {
       if (id === except || !sectionDirty(id)) continue
@@ -455,6 +458,12 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
     if (!Object.keys(patch).length) return
     savingSection.value = id
     serverError.value = ''
+    // Baseline of the saving section's drafts at dispatch time. Any draft
+    // that has moved past this baseline when the request settles is a
+    // mid-flight edit the payload never carried (the patch object was
+    // already built).
+    const sentDrafts: Record<string, Prim> = {}
+    for (const key of keys) sentDrafts[key] = draftValue(key)
     const toast = useToastStore()
     try {
       const res = await updateSettings(patch as AppSettingsUpdate)
@@ -477,8 +486,20 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
       // section's drafts and restore them after the reload (loadServer's
       // fresh snapshot then keeps those sections correctly dirty).
       const unsaved = captureUnsavedDrafts(id)
+      // Edits made to THIS section while its own save was in flight never
+      // rode the PUT, so the reload would silently revert them. Capture the
+      // drift past the sent baseline and re-apply it after the reload;
+      // against the fresh snapshot it correctly marks the section dirty
+      // again. A section left alone mid-flight has no drift and settles
+      // clean, exactly as before.
+      const inFlightEdits: Record<string, Prim> = {}
+      for (const key of keys) {
+        const v = draftValue(key)
+        if (!Object.is(v, sentDrafts[key])) inFlightEdits[key] = v
+      }
       await loadServer()
       for (const [key, v] of Object.entries(unsaved)) draftAccessors[key]?.set(v)
+      for (const [key, v] of Object.entries(inFlightEdits)) draftAccessors[key]?.set(v)
       // Provider/model changes may flip the thinking drawer's support state.
       if (id === 'provider') void useAgentStore().load()
     } catch (e) {
@@ -494,9 +515,11 @@ export const useServerSettingsStore = defineStore('serverSettings', () => {
     try {
       await updateSettings({ debug_log: next })
       debugLog.value = next
-      // The instant apply must not wipe unsaved drafts elsewhere (same
-      // preservation as a subset save — debug_log owns no section drafts).
-      const unsaved = captureUnsavedDrafts('preferences')
+      // The instant apply must not wipe unsaved drafts in ANY section (same
+      // preservation as a subset save). debug_log owns no section drafts, so
+      // this captures everything dirty — explicitly, not by excluding a
+      // section that merely happens to be empty today.
+      const unsaved = captureUnsavedDrafts()
       await loadServer()
       for (const [key, v] of Object.entries(unsaved)) draftAccessors[key]?.set(v)
     } catch (e) {

@@ -270,4 +270,87 @@ describe('serverSettings sectionDirty lifecycle', () => {
     expect(s.sectionDirty('appearance')).toBe(false)
     expect(s.sectionDirty('preferences')).toBe(false)
   })
+
+  it('stays dirty when the save request fails, and clears on a successful retry', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    s.checkpointBackend = 'postgres'
+    expect(s.sectionDirty('storage')).toBe(true)
+    api.updateSettings.mockRejectedValueOnce(new Error('network down'))
+    await s.saveSection('storage')
+    await flushPromises()
+    // A failed PUT persists nothing: the draft and its dirty flag survive.
+    expect(s.serverError).toBeTruthy()
+    expect(s.checkpointBackend).toBe('postgres')
+    expect(s.sectionDirty('storage')).toBe(true)
+    await s.saveSection('storage')
+    await flushPromises()
+    expect(s.sectionDirty('storage')).toBe(false)
+  })
+
+  it('keeps edits made to the saving section while its save is in flight, and flags it dirty', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    s.checkpointBackend = 'postgres'
+    let resolvePut!: (v: unknown) => void
+    api.updateSettings.mockReturnValueOnce(new Promise((r) => (resolvePut = r)))
+    const saving = s.saveSection('storage')
+    // The user keeps typing while the PUT is in flight — the payload was
+    // already built, so this edit never rode the request.
+    s.postgresURL = 'postgres://midflight'
+    // The server echoes the saved subset back on the reload.
+    api.getSettings.mockResolvedValue(settingsDoc({ checkpoint_backend: 'postgres' }))
+    resolvePut({ ok: true, restart_required: false })
+    await saving
+    await flushPromises()
+    expect(s.postgresURL).toBe('postgres://midflight')
+    expect(s.sectionDirty('storage')).toBe(true)
+  })
+
+  it('ends clean when the saving section is left alone mid-flight', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    s.checkpointBackend = 'postgres'
+    let resolvePut!: (v: unknown) => void
+    api.updateSettings.mockReturnValueOnce(new Promise((r) => (resolvePut = r)))
+    const saving = s.saveSection('storage')
+    api.getSettings.mockResolvedValue(settingsDoc({ checkpoint_backend: 'postgres' }))
+    resolvePut({ ok: true, restart_required: false })
+    await saving
+    await flushPromises()
+    expect(s.checkpointBackend).toBe('postgres')
+    expect(s.sectionDirty('storage')).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// toggleDebugLog instant apply: draft preservation across the reload it
+// triggers (capture-all semantics — see captureUnsavedDrafts).
+// ---------------------------------------------------------------------------
+
+describe('serverSettings toggleDebugLog draft preservation', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    for (const fn of Object.values(api)) fn.mockReset()
+    api.getSettings.mockResolvedValue(settingsDoc())
+    api.updateSettings.mockResolvedValue({ ok: true, restart_required: false })
+  })
+
+  it('preserves the drafts of every dirty section across the reload it triggers', async () => {
+    const s = useServerSettingsStore()
+    await s.loadServer()
+    s.serverModel = 'glm-5' // provider draft
+    s.checkpointBackend = 'postgres' // storage draft
+    const toggling = s.toggleDebugLog()
+    // The reload after the instant apply echoes the flipped flag only —
+    // the two dirty sections' drafts must survive it.
+    api.getSettings.mockResolvedValue(settingsDoc({ debug_log: true }))
+    await toggling
+    await flushPromises()
+    expect(s.debugLog).toBe(true)
+    expect(s.serverModel).toBe('glm-5')
+    expect(s.checkpointBackend).toBe('postgres')
+    expect(s.sectionDirty('provider')).toBe(true)
+    expect(s.sectionDirty('storage')).toBe(true)
+  })
 })

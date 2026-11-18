@@ -17,14 +17,19 @@ const savingThis = computed(() => store.savingSection === props.section)
 <template>
   <span class="sec-actions" :data-section="section">
     <!-- The visual dirty dot needs no name of its own: the sr-only text
-         carries the state for assistive tech. -->
-    <span v-if="dirty" class="sr-only">{{ t('settings.section.unsaved') }}</span>
+         carries the state for assistive tech, linked to the button via
+         aria-describedby. The control renders once per section id, so the
+         section-derived hint id stays unique. -->
+    <span v-if="dirty" :id="`${section}-dirty-hint`" class="sr-only">{{
+      t('settings.section.unsaved')
+    }}</span>
     <span class="dirty-dot" :class="{ on: dirty }" aria-hidden="true"></span>
     <button
       class="btn-save"
       :class="{ dirty }"
       type="button"
       :disabled="!dirty || savingThis"
+      :aria-describedby="dirty ? `${section}-dirty-hint` : undefined"
       data-testid="section-save"
       @click="store.saveSection(section)"
     >
