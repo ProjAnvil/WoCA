@@ -56,6 +56,9 @@ jobs:
       - name: SSE event contract drift check
         run: ci/check-sse-contract.sh
 
+      - name: Machine-tag contract drift check
+        run: ci/check-machinetag-contract.sh
+
       - name: Test
         run: go test ./...
 
