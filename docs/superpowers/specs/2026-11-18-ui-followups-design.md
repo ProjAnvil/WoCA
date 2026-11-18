@@ -136,7 +136,7 @@ e2e(personal):1440/1800 视口断言 `.message` 与 `.chat-input-inner` 计算�
 
 ## 执行记录(2026-11-18 收尾回写)
 
-- **F2/T4 gate 未决**:双原型已交付 woca-internal-docs/settings-save-prototype/{prototype-a,prototype-b}.html;用户两轮未应答,按 plan 回退「Task 5 跳过并记录」。恢复路径:A/B 共用 store 层(区→键映射表+dirty 快照),仅 SettingsPanel 保存件形态不同。
+- **F2/T4 gate 已决(2026-11-18 深夜续)**:双原型交付后用户两轮未应答、后续指令「都按照 modern-web-guidance 的建议进行实施」→ 取 spec 推荐的**方案 A 分区保存**实施完毕(5e218ac7):SECTION_KEYS 31 键与 saveServer payload 严格 1:1、同端点子集 PUT、可用性门控不变、全局底栏删除、即时区角标、密钥提示迁入模型/存储。评审裁定:langfuse 保存件落其插件卡内(其可编辑面,nav 区属未请求的 IA 变更);restart_required 改 toast 播报(WocaApp aria-live 满足播报要求,持久重启横幅记后续)。
 - **F6/T9 gate 未立项**:三视图已交付 woca-internal-docs/tablet-icon-rail-prototype/{icon-rail,expanded,current-280}.html;未获立项拍板,本轮零代码,维持 280px 侧栏现状。
 - **F5 勘误**:①「46 行存量 ALLOWED」过期——冻结时实扫 5 文件/14 行(misc.css 4、ConnectView 0、WebSearchSection 3 系 539b924e 起存量未豁免,check:tokens 基线本就 RED);按实扫重定基线冻结(评审裁定:唯一同时满足「冻结现状+新增零容忍」的选项)。②「每 token 内联 --shiki-light/--shiki-dark」与 shiki 4.6.0 实际输出(内联 plain `color:`)不符,系本文侧勘误。
 - **F1 前端锚点勘误**:e7c9143e 后 live 路径实际在 web/src/stores/sessions/stream.ts + sessions.ts(loadSession 去重接缝),非 web/src/lib/streaming.ts。
