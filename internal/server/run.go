@@ -426,7 +426,7 @@ func (r *Run) waitParked(cards []parkedCard, reply chan any) (any, error) {
 		// The TTL is a stop cause like any other: cancelRun is the single
 		// write point that stamps it (first writer wins — a user cancel
 		// that landed first keeps user_stop).
-		r.emit(Event{Type: EventTimeout, Data: map[string]any{"kind": kind, "reason": "parked_ttl"}})
+		r.emit(Event{Type: EventTimeout, Data: map[string]any{"kind": kind, "reason": StopReasonParkedTTL}})
 		r.cancelRun(StopReasonParkedTTL)
 	})
 	defer timer.Stop()
