@@ -13,7 +13,9 @@ cd "$(dirname "$0")/.."
 ts=web/src/lib/transcript.ts
 status=0
 while IFS= read -r name; do
-  value=$(grep -oE "${name}[[:space:]]+=[[:space:]]*\"[^\"]+\"" internal/machinetag/machinetag.go | grep -oE '"[^"]+"' | tr -d '"')
+  # `|| true`: a constant renamed out of the Go source empties the pipeline,
+  # and set -e would exit before the friendly message below could print.
+  value=$(grep -oE "${name}[[:space:]]+=[[:space:]]*\"[^\"]+\"" internal/machinetag/machinetag.go | grep -oE '"[^"]+"' | tr -d '"') || true
   if [ -z "$value" ]; then
     echo "machinetag contract: constant $name missing from internal/machinetag/machinetag.go" >&2
     status=1

@@ -116,11 +116,15 @@ fmt:
 check-sse:
 	ci/check-sse-contract.sh
 
+# Machine-tag contract drift check (same gate as CI).
+check-machinetag:
+	ci/check-machinetag-contract.sh
+
 # Matches CI's Go + UI jobs: format, vet, lint, unit tests, frontend tests,
 # and the hygiene gates. CI additionally runs `race` and the Postgres-backed
 # tests (service-gated; skipped here unless WOCA_TEST_PG_DSN/WOCA_PG_TEST_DSN
 # are set), plus native-test on a macOS runner.
-check: fmt vet lint test web-test ee-web-test check-sse check-deps check-server-artifacts check-editions
+check: fmt vet lint test web-test ee-web-test check-sse check-machinetag check-deps check-server-artifacts check-editions
 
 run:
 	go run ./cmd/woca
