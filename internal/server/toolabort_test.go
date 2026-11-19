@@ -19,7 +19,7 @@ import (
 
 func TestSynthToolAbortContentVerbatim(t *testing.T) {
 	cases := []struct {
-		reason string
+		reason  string
 		elapsed time.Duration
 		want    string
 	}{

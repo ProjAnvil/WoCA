@@ -643,10 +643,16 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 			// Single completion point: persist (clean transcript or derived
 			// cancelled history), then release the gate and re-check wake —
 			// see completeRun for the ordering invariants. The derivation
-			// bases on the history this run started from (base).
+			// bases on the history this run started from (base). A cancelled
+			// round also hands its partial transcript (what already streamed,
+			// spec D1) to the derivation.
+			var partial []messages.Message
+			if final == nil {
+				partial = run.partialTranscript()
+			}
 			s.completeRun(runCompletion{
 				run: run, sid: sid, workspace: workspace,
-				human: &human, base: history, final: final, heldGate: true,
+				human: &human, base: history, final: final, partial: partial, heldGate: true,
 			})
 		})
 	}()

@@ -259,16 +259,21 @@ func (s *Server) startGoalRun(origin context.Context, sessionID, workspace strin
 			// Single completion point (see completeRun): persist the clean
 			// transcript or the derived cancelled history — goal rounds carry
 			// no human turn, so the derivation is the session history plus
-			// the stop notice alone — then release the gate.
+			// the partial transcript plus the stop notice — then release the
+			// gate.
 			if final != nil {
 				if g := a.Goal(); g != nil {
 					s.log.Info().Str("run", id).Str("session", sessionID).
 						Str("status", string(g.Status)).Msg("goal run ended")
 				}
 			}
+			var partial []messages.Message
+			if final == nil {
+				partial = run.partialTranscript()
+			}
 			s.completeRun(runCompletion{
 				run: run, sid: sessionID, workspace: workspace,
-				human: nil, base: history, final: final, heldGate: true,
+				human: nil, base: history, final: final, partial: partial, heldGate: true,
 			})
 		})
 	}()

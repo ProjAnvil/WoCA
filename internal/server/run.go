@@ -188,10 +188,23 @@ func (r *Run) startWith(runFn func() ([]messages.Message, error), onDone func([]
 		final, err := runFn()
 		if err != nil {
 			if r.ctx.Err() != nil {
+				reason := r.stopCause()
+				// Spec 2026-11-19-cancel-partial-output §D4: every dangling
+				// call of the partial transcript gets its synthesized
+				// terminal result on the event stream BEFORE the done frame —
+				// live tabs, reattach replay and the ledger mirror all see
+				// the open tool cards close. Runs without a render face
+				// (command runs) accumulate nothing, so they emit nothing.
+				for _, m := range synthesizeAborted(r.partialTranscript(), reason, r.runElapsed()) {
+					r.emit(Event{Type: EventToolResult, Data: toolResultPayload{
+						ToolCallID: m.ToolCallID,
+						Content:    m.Content,
+					}})
+				}
 				// The done payload carries the stop cause next to
 				// cancelled:true (the live UI distinguishes stop reasons
 				// without waiting for the reload's persisted tag).
-				r.finish(EventDone, map[string]any{"cancelled": true, "reason": r.stopCause()})
+				r.finish(EventDone, map[string]any{"cancelled": true, "reason": reason})
 			} else {
 				r.finish(EventError, map[string]any{"message": err.Error()})
 			}

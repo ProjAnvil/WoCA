@@ -48,16 +48,23 @@ func stopNotice(runID, reason string) messages.Message {
 	return messages.Human(machinetag.StopNotice(runID, reason))
 }
 
-// derivedCancelledHistory builds the transcript a cancelled run persists.
-// history is cloned first: sessionStore.load returns a slice shared with the
-// in-memory session state, so appending to it directly would pollute every
-// later load (and the next run's prompt ride-along would overwrite the
-// derived messages). human is nil for goal runs, whose rounds carry no human
-// turn — the derivation then appends the notice tag alone.
-func derivedCancelledHistory(history []messages.Message, human *messages.Message, runID, reason string) []messages.Message {
+// derivedCancelledHistory builds the transcript a cancelled run persists:
+// base + human? + partial + synth + stop notice. history is cloned first:
+// sessionStore.load returns a slice shared with the in-memory session state,
+// so appending to it directly would pollute every later load (and the next
+// run's prompt ride-along would overwrite the derived messages). human is
+// nil for goal runs, whose rounds carry no human turn. partial is the
+// cancelled round's partial transcript (nil for queued cancels — the run
+// never executed) and synth the synthesized terminal results for its
+// dangling tool calls; both keep stream order, so a dangling AI message —
+// always the partial's last message (Human messages only follow completed
+// tool batches) — pairs legally with the synth appended right after it.
+func derivedCancelledHistory(history []messages.Message, human *messages.Message, partial, synth []messages.Message, runID, reason string) []messages.Message {
 	derived := slices.Clone(history)
 	if human != nil {
 		derived = append(derived, *human)
 	}
+	derived = append(derived, partial...)
+	derived = append(derived, synth...)
 	return append(derived, stopNotice(runID, reason))
 }

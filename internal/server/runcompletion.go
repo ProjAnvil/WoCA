@@ -28,6 +28,11 @@ type runCompletion struct {
 	base []messages.Message
 	// final is the runner's final transcript; nil on cancel/error.
 	final []messages.Message
+	// partial is the executing run's partial transcript at cancel (spec
+	// 2026-11-19-cancel-partial-output §D3): what already streamed, read
+	// from the run's accumulator by the onDone closure. Nil for queued
+	// cancels (never executed) and ignored on clean finishes.
+	partial []messages.Message
 	// heldGate reports whether the run held the session admission gate (it
 	// executed). Only a holder releases the gate and re-checks wake.
 	heldGate bool
@@ -37,10 +42,10 @@ type runCompletion struct {
 // The order is the correctness core:
 //
 //  1. persist — the clean transcript on completion, or the derived
-//     cancelled history (prompt + stop notice) on cancel; both through the
-//     same save posture (WithoutCancel — the run ctx is already dead but
-//     its values must survive — and stripSystem). Errored runs persist
-//     nothing.
+//     cancelled history (prompt + partial + synthesized results + stop
+//     notice) on cancel; both through the same save posture (WithoutCancel —
+//     the run ctx is already dead but its values must survive — and
+//     stripSystem). Errored runs persist nothing.
 //  2. drain the session's queued-cancel finalizers (cancel-semantics gap
 //     1): each deferred save re-loads the history just persisted here and
 //     appends its own prompt + stop notice, so it lands inside this
@@ -64,15 +69,17 @@ func (s *Server) completeRun(c runCompletion) {
 		_ = s.sessions.save(ctx, c.sid, stripSystem(c.final), c.workspace)
 		s.logObsRunEnd(c.sid, c.run.id, c.workspace, c.final)
 	} else if reason, cancelled := c.run.cancelledReason(); cancelled {
-		// Cancelled round: persist the derived history (prompt + stop
-		// notice) so a reload keeps what the user typed and why the round
-		// ended. ranClean stays false and the wake re-check below keeps its
-		// cancelled-run rule.
+		// Cancelled round: persist the derived history (prompt + partial +
+		// synthesized results + stop notice) so a reload keeps what the user
+		// typed, what already streamed, and why the round ended. ranClean
+		// stays false and the wake re-check below keeps its cancelled-run
+		// rule.
 		history := c.base
 		if history == nil {
 			history = s.sessions.load(ctx, c.sid)
 		}
-		derived := derivedCancelledHistory(history, c.human, c.run.id, reason)
+		synth := synthesizeAborted(c.partial, reason, c.run.runElapsed())
+		derived := derivedCancelledHistory(history, c.human, c.partial, synth, c.run.id, reason)
 		_ = s.sessions.save(ctx, c.sid, stripSystem(derived), c.workspace)
 	}
 	// Deferred queued-cancel saves join this holder's serialized window:

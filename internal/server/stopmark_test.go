@@ -68,7 +68,7 @@ func TestDerivedCancelledHistoryMainRunFormulaClonesBase(t *testing.T) {
 	history[1] = messages.AI("earlier answer")
 	human := messages.Human("cancelled prompt")
 
-	derived := derivedCancelledHistory(history, &human, "run-1", StopReasonUser)
+	derived := derivedCancelledHistory(history, &human, nil, nil, "run-1", StopReasonUser)
 
 	if len(derived) != 4 {
 		t.Fatalf("derived len = %d, want 4 (history + human + tag): %+v", len(derived), derived)
@@ -107,7 +107,7 @@ func TestDerivedCancelledHistoryGoalFormulaWithoutHuman(t *testing.T) {
 			baseHumans++
 		}
 	}
-	derived := derivedCancelledHistory(history, nil, "run-2", StopReasonParkedTTL)
+	derived := derivedCancelledHistory(history, nil, nil, nil, "run-2", StopReasonParkedTTL)
 	if len(derived) != 3 {
 		t.Fatalf("derived len = %d, want 3 (history + tag): %+v", len(derived), derived)
 	}
@@ -122,6 +122,72 @@ func TestDerivedCancelledHistoryGoalFormulaWithoutHuman(t *testing.T) {
 	}
 	if got := lastStopNotice(derived); got != wantStopNotice("run-2", StopReasonParkedTTL) {
 		t.Fatalf("derived tail = %q, want the stop notice tag", got)
+	}
+}
+
+// Case 2b (spec 2026-11-19-cancel-partial-output §D3): the partial and synth
+// segments land between the human prompt and the stop notice, in stream
+// order. The steers scenario pins the Human-after-tools invariant: mid-turn
+// user input sits after a completed tool batch and before the next model
+// turn, so a dangling AI message is always the partial's LAST message — the
+// appended synth keeps every tool_use/result pairing legal.
+func TestDerivedCancelledHistoryWithPartialAndSynth(t *testing.T) {
+	history := []messages.Message{messages.Human("earlier"), messages.AI("earlier reply")}
+	human := messages.Human("run it")
+	ai1 := messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{ID: "c1", Name: "Bash"}}}
+	res1 := messages.Tool("c1", "ok")
+	steer := messages.Human("<queued-user-input>more context</queued-user-input>")
+	ai2 := messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{ID: "c2", Name: "Bash"}}}
+	partial := []messages.Message{ai1, res1, steer, ai2}
+
+	synth := synthesizeAborted(partial, StopReasonUser, 3*time.Second)
+	if len(synth) != 1 || synth[0].ToolCallID != "c2" {
+		t.Fatalf("synth = %+v, want one result for the dangling c2 only (c1 is answered)", synth)
+	}
+
+	derived := derivedCancelledHistory(history, &human, partial, synth, "run-3", StopReasonUser)
+	if len(derived) != 9 {
+		t.Fatalf("derived len = %d, want 9 (2 base + human + 4 partial + synth + notice): %+v", len(derived), derived)
+	}
+	wantOrder := []struct {
+		role messages.Role
+		id   string
+	}{
+		{messages.RoleHuman, ""},
+		{messages.RoleAI, ""},     // ai1
+		{messages.RoleTool, "c1"}, // res1
+		{messages.RoleHuman, ""},  // steer
+		{messages.RoleAI, ""},     // ai2 (dangling tail)
+		{messages.RoleTool, "c2"}, // synth
+	}
+	for i, w := range wantOrder {
+		got := derived[2+i]
+		if got.Role != w.role || got.ToolCallID != w.id {
+			t.Fatalf("derived[%d] = %+v, want role %s id %q", 2+i, got, w.role, w.id)
+		}
+	}
+	if got := lastStopNotice(derived); got != wantStopNotice("run-3", StopReasonUser) {
+		t.Fatalf("derived tail = %q, want the stop notice tag", got)
+	}
+	// Clone posture: a later append to the partial slice must not leak into
+	// the derived transcript.
+	partial = append(partial, messages.AI("late"))
+	if got := derived[7]; got.Role != messages.RoleTool || got.ToolCallID != "c2" {
+		t.Fatalf("append to the partial leaked into derived: %+v", derived[7])
+	}
+}
+
+// Case 2c: nil partial/synth (queued cancels — the run never executed;
+// nothing streamed) keeps the two-segment formula byte-for-byte.
+func TestDerivedCancelledHistoryWithoutPartialKeepsFormula(t *testing.T) {
+	history := []messages.Message{messages.Human("q")}
+	human := messages.Human("cancelled prompt")
+	derived := derivedCancelledHistory(history, &human, nil, nil, "run-4", StopReasonUser)
+	if len(derived) != 3 {
+		t.Fatalf("derived len = %d, want 3 (history + human + notice): %+v", len(derived), derived)
+	}
+	if got := derived[2]; got.Role != messages.RoleHuman || got.Content != wantStopNotice("run-4", StopReasonUser) {
+		t.Fatalf("derived[2] = %+v, want the stop notice tag", got)
 	}
 }
 
@@ -220,7 +286,10 @@ func TestQueuedCancelWhileHolderRunsPersistsBoth(t *testing.T) {
 
 // Case 4 (parked TTL, run.go's waitParked timer): a run parked on an
 // unanswered interrupt is cancelled by the TTL and persists the notice with
-// reason=parked_ttl (distinct from a user stop).
+// reason=parked_ttl (distinct from a user stop). The parked ask's committed
+// tool call is dangling — the partial transcript keeps the AI message and a
+// synthesized terminal result answers the call ahead of the notice (spec
+// 2026-11-19-cancel-partial-output §D2/§D3).
 func TestParkedTTLRunPersistsStopNoticeWithParkedReason(t *testing.T) {
 	old := parkedRunTTL
 	parkedRunTTL = 150 * time.Millisecond
@@ -239,8 +308,15 @@ func TestParkedTTLRunPersistsStopNoticeWithParkedReason(t *testing.T) {
 		return lastStopNotice(msgs) == wantStopNotice(runID, StopReasonParkedTTL)
 	})
 	msgs := sessionMessages(t, ts.URL, sid)
-	if len(msgs) != 2 || msgs[0].Content != "awaiting an answer" {
-		t.Fatalf("transcript = %+v, want exactly [prompt, notice]", msgs)
+	if len(msgs) != 4 || msgs[0].Content != "awaiting an answer" {
+		t.Fatalf("transcript = %+v, want [prompt, partial ask, synth, notice]", msgs)
+	}
+	if got := msgs[1]; got.Role != messages.RoleAI || len(got.ToolCalls) != 1 {
+		t.Fatalf("partial = %+v, want the committed AskUserQuestion call", got)
+	}
+	if got := msgs[2]; got.Role != messages.RoleTool || got.ToolCallID != msgs[1].ToolCalls[0].ID ||
+		!strings.HasPrefix(got.Content, "Tool call aborted: approval timed out") {
+		t.Fatalf("synth = %+v, want the parked_ttl abort wording", got)
 	}
 	// The done payload carries parked_ttl, not the generic user_stop.
 	for _, f := range replayRunEvents(t, ts.URL, runID) {
