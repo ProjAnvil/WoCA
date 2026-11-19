@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/settings"
 )
 
@@ -120,8 +121,11 @@ func (s *Server) wakeLocked(sid string) {
 	// enqueueRun. The base context derives from the server lifecycle
 	// (rootCtx), not a detached Background, so a dispatched wake run's
 	// workspace binding (resolveRunWorkspace) and cancellation follow the
-	// server.
-	run, _, _, err := s.startRunWith(s.rootCtx, sid, agent.CoalesceQueuedInputs(items), s.sessions.workspaceOf(sid), nil, runOptions{auto: true, trigger: trigger})
+	// server. The same holds for the tenant: no request carries it here, so
+	// wakeCtx restores the session's tenant from its run ledger rows —
+	// without it a dispatched wake run enqueued as 'local' would be
+	// invisible to the owning tenant's readers (RLS tenant_isolation).
+	run, _, _, err := s.startRunWith(s.wakeCtx(sid), sid, agent.CoalesceQueuedInputs(items), s.sessions.workspaceOf(sid), nil, runOptions{auto: true, trigger: trigger})
 	if err != nil {
 		// One attempt, no retry ladder (design §5.2): log the failure, put
 		// the items back, and stall this session's driver until a user run
@@ -146,6 +150,33 @@ func (s *Server) wakeLocked(sid string) {
 	}
 	s.wakeChain[sid]++
 	s.log.Info().Str("session", sid).Str("run", run.ID()).Str("trigger", trigger).Msg("auto-wake run started")
+}
+
+// wakeCtx derives the context a wake run starts under: the server
+// lifecycle parent (a dispatched or local wake run must outlive the
+// notification that triggered it and die with the server) plus the
+// session's tenant, restored from its most recent run row — the wake paths
+// (notification observer, run-finish hook) have no request context to read
+// the tenant from, and the run ledger is the tenant-scoped record of the
+// session's activity. Best-effort like the state marks: a ledger read
+// failure logs and proceeds tenantless (the wake run then carries the
+// 'local' default — degraded, not dropped), and a session with no derivable
+// tenant (sqlite ledgers, sessions whose runs are all 'local') keeps the
+// bare parent, the personal-edition posture.
+func (s *Server) wakeCtx(sid string) context.Context {
+	if s.ledger == nil {
+		return s.rootCtx
+	}
+	tenant, err := s.ledger.SessionTenant(s.rootCtx, sid)
+	if err != nil {
+		s.log.Warn().Err(err).Str("session", sid).
+			Msg("wake tenant resolution failed; starting the wake run tenantless")
+		return s.rootCtx
+	}
+	if tenant == "" {
+		return s.rootCtx
+	}
+	return tenancy.NewContext(s.rootCtx, tenancy.Context{TenantID: tenant})
 }
 
 // resetWakeChain clears the session's chain budget and any stall: a

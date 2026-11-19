@@ -220,3 +220,82 @@ func TestLocalRunTenantEndToEndOnPostgres(t *testing.T) {
 		t.Fatalf("foreign tenant replay = %v err=%v, want isolation", foreign, err)
 	}
 }
+
+// TestWakeDispatchCarriesSessionTenantOnPostgres: the wake driver has no
+// request to carry a tenant, so it restores the session's from its most
+// recent run row before dispatching — a wake run for a tenant's session
+// enqueues tenant-tagged (visible to the owning tenant's SSE), while a
+// session whose runs are 'local' keeps the default. Pre-fix the wake path
+// dispatched from bare rootCtx and every wake run landed 'local'.
+func TestWakeDispatchCarriesSessionTenantOnPostgres(t *testing.T) {
+	s, ledger, db, _ := openTenantPGServer(t, Config{
+		Agent: newScriptedAgent(t, "never-executed-here"), Static: fstest.MapFS{},
+		Logger: zerolog.Nop(), SessionDir: t.TempDir(), WorkDir: t.TempDir(),
+		DispatchToQueue: true,
+	})
+	ctx := context.Background()
+	acme := tenancy.NewContext(ctx, tenancy.Context{TenantID: "acme"})
+
+	// Seed the sessions' histories: one tenant-dispatched run (finished —
+	// the session is idle again), one plain local run.
+	seed := func(tenant, runID, sessionID string) {
+		t.Helper()
+		c := ctx
+		if tenant != "" {
+			c = tenancy.NewContext(c, tenancy.Context{TenantID: tenant})
+		}
+		if err := ledger.Enqueue(c, runstate.Run{RunID: runID, SessionID: sessionID}); err != nil {
+			t.Fatal(err)
+		}
+		claimed, err := ledger.Claim(ctx, "w-seed", time.Minute)
+		if err != nil || claimed == nil || claimed.RunID != runID {
+			t.Fatalf("seed claim %s = %+v err=%v", runID, claimed, err)
+		}
+		if err := ledger.Finish(ctx, runID, "w-seed", "done"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("acme", "seed-acme", "s-wake-acme")
+	seed("", "seed-plain", "s-wake-plain")
+
+	// Queue a wake-able notification per session and let the driver fire.
+	s.agent.QueueNotificationFor("s-wake-acme", "bg-shell", "shell exited")
+	s.maybeWake("s-wake-acme")
+	s.agent.QueueNotificationFor("s-wake-plain", "bg-shell", "shell exited")
+	s.maybeWake("s-wake-plain")
+
+	wakeTenant := func(sessionID, seedID string) (string, string) {
+		t.Helper()
+		var runID, tenantID string
+		if err := db.QueryRow(
+			`SELECT run_id, tenant_id FROM runs WHERE session_id = $1 AND run_id <> $2`,
+			sessionID, seedID).Scan(&runID, &tenantID); err != nil {
+			t.Fatalf("wake run row for %s: %v", sessionID, err)
+		}
+		return runID, tenantID
+	}
+	if _, tenantID := wakeTenant("s-wake-acme", "seed-acme"); tenantID != "acme" {
+		t.Fatalf("wake run tenant_id = %q, want acme (wake dispatch dropped the session tenant)", tenantID)
+	}
+	if _, tenantID := wakeTenant("s-wake-plain", "seed-plain"); tenantID != "local" {
+		t.Fatalf("plain wake run tenant_id = %q, want the 'local' default", tenantID)
+	}
+
+	// The tenant's reader can replay the wake run's events; the tenantless
+	// default cannot (RLS).
+	runID, _ := wakeTenant("s-wake-acme", "seed-acme")
+	own, err := ledger.Replay(acme, runID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(own) != 0 {
+		// No events mirrored yet (no worker executed it) — the row's
+		// visibility, not its content, is what matters here; the empty
+		// replay must at least succeed under the tenant scope.
+		t.Fatalf("unexpected events: %v", own)
+	}
+	var visible int
+	if err := db.QueryRowContext(ctx, `SELECT 1 FROM runs WHERE run_id = $1`, runID).Scan(&visible); err != nil {
+		t.Fatalf("tenantless visibility probe (queue-operator read, must stay readable): %v", err)
+	}
+}

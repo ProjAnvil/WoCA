@@ -112,3 +112,21 @@ func TestSqliteClaimReportsNoTenant(t *testing.T) {
 		t.Fatalf("sqlite claim TenantID = %q, want empty", got.TenantID)
 	}
 }
+
+// TestSessionTenantSqliteGuard: sqlite ledgers are single-tenant by design
+// (no tenant column), so SessionTenant never reports one — the wake path
+// keeps the bare context and runs stay 'local', the personal-edition
+// posture.
+func TestSessionTenantSqliteGuard(t *testing.T) {
+	l := openLedger(t)
+	if err := l.Enqueue(tenantCtx("acme"), Run{RunID: "r1", SessionID: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := l.SessionTenant(context.Background(), "s1")
+	if err != nil || got != "" {
+		t.Fatalf("sqlite SessionTenant = %q, %v; want \"\", nil", got, err)
+	}
+	if got, err := l.SessionTenant(context.Background(), "unknown"); err != nil || got != "" {
+		t.Fatalf("sqlite SessionTenant(unknown) = %q, %v; want \"\", nil", got, err)
+	}
+}

@@ -103,7 +103,8 @@ func TestLocalRunSessionStateMarkCarriesTenant(t *testing.T) {
 	s.state = capture
 
 	ctx := tenancy.NewContext(t.Context(), tenancy.Context{TenantID: "tenant-a", UserID: "u1"})
-	if _, _, _, err := s.startRun(ctx, "s-mark", messages.Human("hi"), "", nil); err != nil {
+	run, _, _, err := s.startRun(ctx, "s-mark", messages.Human("hi"), "", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
 	got := capture.waitForSet(t)
@@ -111,6 +112,7 @@ func TestLocalRunSessionStateMarkCarriesTenant(t *testing.T) {
 	if !ok || tc.TenantID != "tenant-a" {
 		t.Fatalf("local-run mark ctx tenant = %+v ok=%v, want tenant-a", tc, ok)
 	}
+	waitRunSettled(t, s, run, "s-mark")
 }
 
 // TestLocalRunSessionStateClearCarriesTenant: the terminal clear (an
@@ -134,7 +136,7 @@ func TestLocalRunSessionStateClearCarriesTenant(t *testing.T) {
 	if !ok || tc.TenantID != "tenant-a" {
 		t.Fatalf("terminal clear ctx tenant = %+v ok=%v, want tenant-a", tc, ok)
 	}
-	_ = run
+	waitRunSettled(t, s, run, "s-clear")
 }
 
 // TestDispatchSessionStateMarkCarriesTenant: a queue-dispatched run's busy

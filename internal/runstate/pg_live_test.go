@@ -312,3 +312,82 @@ func rewriteUserPassword(dsn, user, pass string) string {
 	u.User = neturl.UserPassword(user, pass)
 	return u.String()
 }
+
+// TestSessionTenantOnPostgres: the session-tenant derivation the wake
+// driver relies on — a session's most recently updated run row carries the
+// tenant its wake-side work belongs to, sessions of the 'local' default (or
+// with no runs) report none, and a later run under a different tenant wins
+// (sessions are single-tenant in practice; the ledger records the truth).
+func TestSessionTenantOnPostgres(t *testing.T) {
+	baseDSN := os.Getenv("WOCA_PG_TEST_DSN")
+	if baseDSN == "" {
+		t.Skip("WOCA_PG_TEST_DSN not set")
+	}
+	ctx := context.Background()
+	admin, err := sql.Open("pgx", baseDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbName := fmt.Sprintf("woca_rl_st_%d", os.Getpid())
+	if _, err := admin.ExecContext(ctx, `DROP DATABASE IF EXISTS `+dbName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ExecContext(ctx, `CREATE DATABASE `+dbName); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = admin.ExecContext(ctx, `DROP DATABASE IF EXISTS `+dbName) })
+	defer admin.Close()
+
+	db, err := wocadb.Open("pg:" + dsnForDatabase(baseDSN, dbName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	l, err := New(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runTo := func(tenant, runID, sessionID string) {
+		t.Helper()
+		c := context.Background()
+		if tenant != "" {
+			c = tenancy.NewContext(c, tenancy.Context{TenantID: tenant})
+		}
+		if err := l.Enqueue(c, Run{RunID: runID, SessionID: sessionID}); err != nil {
+			t.Fatal(err)
+		}
+		claimed, err := l.Claim(ctx, "w-st", time.Minute)
+		if err != nil || claimed == nil || claimed.RunID != runID {
+			t.Fatalf("claim %s = %+v err=%v", runID, claimed, err)
+		}
+		if err := l.Finish(ctx, runID, "w-st", "done"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// A tenant-tagged run makes the session resolve to that tenant; the
+	// tenantless lookup crosses tenants because runs is NO FORCE RLS (the
+	// queue-operator posture the wake driver shares).
+	runTo("acme", "st-1", "s-acme")
+	got, err := l.SessionTenant(ctx, "s-acme")
+	if err != nil || got != "acme" {
+		t.Fatalf("SessionTenant(s-acme) = %q, %v; want acme", got, err)
+	}
+
+	// The 'local' default and unknown sessions report no tenant.
+	runTo("", "st-2", "s-plain")
+	if got, err := l.SessionTenant(ctx, "s-plain"); err != nil || got != "" {
+		t.Fatalf("SessionTenant(s-plain) = %q, %v; want \"\"", got, err)
+	}
+	if got, err := l.SessionTenant(ctx, "s-none"); err != nil || got != "" {
+		t.Fatalf("SessionTenant(s-none) = %q, %v; want \"\"", got, err)
+	}
+
+	// Most-recent-wins: a newer run under another tenant re-scopes the
+	// session (its updated_at is the freshest).
+	runTo("other", "st-3", "s-acme")
+	if got, err := l.SessionTenant(ctx, "s-acme"); err != nil || got != "other" {
+		t.Fatalf("SessionTenant(s-acme) after newer run = %q, %v; want other", got, err)
+	}
+}

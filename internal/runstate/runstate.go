@@ -354,6 +354,39 @@ func (l *Ledger) ActiveRun(ctx context.Context, sessionID string) (*Run, bool, e
 	return &run, true, nil
 }
 
+// SessionTenant returns the tenant a session's background-side work belongs
+// to: the tenant of its most recently updated run row. The run ledger is
+// the persistent, tenant-scoped record of a session's activity (Enqueue and
+// Start stamp the originating request's tenant), so a wake-driver path with
+// no request to read restores the session's identity from it — crash-safe,
+// the tenant was persisted at enqueue time. The lookup runs on the bare
+// pool: runs is deliberately NO FORCE RLS (the queue operator must see
+// every tenant's rows to claim them), so the tenantless background caller
+// reads across tenants here. "" means no derivable tenant: the session has
+// no runs, all of them predate tenant propagation, or the latest is
+// 'local' — callers then proceed with the default, unchanged. Sqlite has
+// no tenant column (single-tenant by design) and always reports "".
+func (l *Ledger) SessionTenant(ctx context.Context, sessionID string) (string, error) {
+	if l.dialect != wocadb.DialectPostgres {
+		return "", nil
+	}
+	var tenant string
+	err := l.db.DB.QueryRowContext(ctx,
+		`SELECT tenant_id FROM runs WHERE session_id = `+l.ph(0)+
+			` ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+		sessionID).Scan(&tenant)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("runstate: session tenant: %w", err)
+	}
+	if tenant == "" || tenant == "local" {
+		return "", nil
+	}
+	return tenant, nil
+}
+
 // ReapExpired re-queues running runs whose lease has lapsed (the worker
 // died) and returns their ids. The next Claim hands them out again.
 func (l *Ledger) ReapExpired(ctx context.Context) ([]string, error) {

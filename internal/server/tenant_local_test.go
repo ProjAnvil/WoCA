@@ -22,6 +22,23 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// waitRunSettled waits until a locally executed run is fully complete:
+// terminal event fired AND the session gate released (completeRun persists
+// the transcript strictly before the release, so this bounds every disk
+// write the run schedules — returning earlier races t.TempDir's cleanup
+// with the async save).
+func waitRunSettled(t *testing.T, s *Server, run *Run, sid string) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for run.isDone() == false || s.admission.busy(sid) {
+		select {
+		case <-deadline:
+			t.Fatal("run never settled (terminal + gate release)")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 // openPgShapedLedger opens a sqlite database driven as the postgres dialect
 // (the wocadb twin of runstate's newPgShapedLedger): tenant-scoped writes
 // reach the BeginTx + set_config prologue exactly as they would on a real
@@ -75,6 +92,7 @@ func TestLocalRunContextCarriesRequestTenant(t *testing.T) {
 		t.Fatal("request cancellation must not propagate to a locally executed run")
 	default:
 	}
+	waitRunSettled(t, s, run, "s-local-tenant")
 }
 
 // TestLocalRunContextWithoutTenant: a tenantless request (the personal
@@ -94,6 +112,7 @@ func TestLocalRunContextWithoutTenant(t *testing.T) {
 	if _, ok := tenancy.FromContext(run.ctx); ok {
 		t.Fatal("local run context must not carry a tenant when the request had none")
 	}
+	waitRunSettled(t, s, run, "s-local-plain")
 }
 
 // TestCommandRunContextCarriesRequestTenant: command runs (/undo, /redo)
@@ -116,6 +135,7 @@ func TestCommandRunContextCarriesRequestTenant(t *testing.T) {
 	if !ok || tc.TenantID != "tenant-b" {
 		t.Fatalf("command run ctx tenant = %+v ok=%v, want tenant-b", tc, ok)
 	}
+	waitRunSettled(t, s, run, "s-cmd-tenant")
 }
 
 // TestLocalRunLedgerStartReachesTenantPrologue: with a postgres-shaped
