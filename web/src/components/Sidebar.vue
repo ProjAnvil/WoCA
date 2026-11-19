@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, FolderOpen, Plus, Settings, X } from 'lucide-vue-next'
+import { Activity, FolderOpen, MessageSquare, Plus, Settings, X } from 'lucide-vue-next'
 import FolderPicker from "./FolderPicker.vue";
 import StatusModal from "./StatusModal.vue";
 import SessionList from "./SessionList.vue";
@@ -50,6 +50,26 @@ onMounted(() => {
   shellMq.addEventListener("change", onShellChange);
 });
 onBeforeUnmount(() => shellMq?.removeEventListener("change", onShellChange));
+
+// Tablet rail band (spec 2026-11-19-tablet-icon-rail D1/D5): 641-1023px
+// folds the 280px column into a 56px icon rail; the sessions/workspace
+// content opens as a flyout anchored to the rail (Task 2). Tracked live
+// the same way as the ≤640 drawer shell — the CSS media rules are the
+// authority, this observer only drives which subtree renders, so the
+// drift window is one change event.
+const railShell = ref(false);
+const flyoutOpen = ref(false);
+const onRailChange = (e: MediaQueryListEvent) => {
+  railShell.value = e.matches;
+};
+let railMq: MediaQueryList | null = null;
+onMounted(() => {
+  if (typeof window.matchMedia !== "function") return;
+  railMq = window.matchMedia("(min-width: 641px) and (max-width: 1023px)");
+  railShell.value = railMq.matches;
+  railMq.addEventListener("change", onRailChange);
+});
+onBeforeUnmount(() => railMq?.removeEventListener("change", onRailChange));
 useFocusTrap(drawerEl, computed(() => ui.sidebarOpen && drawerShell.value), {
   esc: () => {
     if (
@@ -123,7 +143,54 @@ async function pickWorkspace(path: string) {
       <span class="brand-name">woca</span>
     </div>
 
-    <div class="sidebar-body">
+    <!-- Tablet band (641-1023px): the rail subtree. The 280px column's
+         content (workspace section + session list) does not render here —
+         it opens as a flyout anchored to the rail. The dialog cluster at
+         the shared aside tail stays OUTSIDE this fork so the rail buttons
+         and the 280px header "+" drive the very same single-instance
+         dialogs. -->
+    <nav v-if="railShell" class="rail-nav" :aria-label="t('sidebar.workspaces')">
+      <button
+        class="rail-btn"
+        :class="{ active: flyoutOpen }"
+        :aria-expanded="flyoutOpen"
+        aria-controls="rail-flyout"
+        :title="t('sidebar.sessions')"
+        :aria-label="t('sidebar.sessions')"
+        @click="flyoutOpen = !flyoutOpen"
+      >
+        <MessageSquare :size="17" />
+      </button>
+      <button
+        class="rail-btn"
+        :title="t('sidebar.newWorkspace')"
+        :aria-label="t('sidebar.newWorkspace')"
+        @click="openWorkspaceDialog"
+      >
+        <Plus :size="17" />
+      </button>
+      <button
+        v-if="statusStore.hasStatusSurface"
+        class="rail-btn"
+        :title="t('status.entry')"
+        :aria-label="t('status.entry')"
+        @click="statusOpen = true"
+      >
+        <span class="rail-lamp" :class="'lamp-' + statusStore.lamp" />
+        <Activity :size="17" />
+      </button>
+      <div class="rail-spacer" />
+      <button
+        class="rail-btn"
+        :title="t('sidebar.settings')"
+        :aria-label="t('sidebar.settings')"
+        @click="settings.openPanel()"
+      >
+        <Settings :size="17" />
+      </button>
+    </nav>
+
+    <div v-if="!railShell" class="sidebar-body">
       <section class="side-section">
         <div class="side-section-head">
           <span class="side-section-title">{{ t('sidebar.workspaces') }}</span>
@@ -140,7 +207,7 @@ async function pickWorkspace(path: string) {
       </section>
     </div>
 
-    <div class="footer-bar">
+    <div v-if="!railShell" class="footer-bar">
       <button
         v-if="statusStore.hasStatusSurface"
         class="footer-settings-btn"

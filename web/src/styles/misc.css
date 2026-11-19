@@ -725,17 +725,22 @@
 }
 
 /* Bridge health lamp (product design §6.3): green = synced, yellow =
-   STALE cache, grey = standalone. */
+   STALE cache, grey = standalone. The tablet rail's dot shares the color
+   mapping (its base geometry lives in layout.css with the rail pieces). */
 .status-lamp {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   flex: none;
 }
-.status-lamp.lamp-ok { background: var(--ok); }
-.status-lamp.lamp-stale { background: var(--warn); }
-.status-lamp.lamp-off { background: var(--muted); }
-.status-lamp.lamp-err { background: var(--danger); }
+.status-lamp.lamp-ok,
+.rail-lamp.lamp-ok { background: var(--ok); }
+.status-lamp.lamp-stale,
+.rail-lamp.lamp-stale { background: var(--warn); }
+.status-lamp.lamp-off,
+.rail-lamp.lamp-off { background: var(--muted); }
+.status-lamp.lamp-err,
+.rail-lamp.lamp-err { background: var(--danger); }
 
 /* Shared modal + indicator utilities (previously duplicated as scoped
    copies in StatusModal / FolderPicker / CloudAccessSection / AdminSection). */

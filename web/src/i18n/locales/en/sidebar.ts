@@ -1,5 +1,6 @@
 export default {
   workspaces: 'Workspaces',
+  sessions: 'Sessions',
   workspace: 'Workspace',
   newWorkspace: 'New workspace',
   settings: 'Settings',

@@ -42,26 +42,37 @@ function footerLabels(): string[] {
 }
 
 // Mutable matchMedia stub (WorkspaceSidebar.test pattern): happy-dom's
-// real matchMedia is static, but the drawer shell must react to crossing
-// the 640px breakpoint live — tests flip `matches` and fire the
-// registered change listener to simulate a resize. Only the drawer query
-// gets the mutable mq (the i18n/theme layer also probes
+// real matchMedia is static, but the drawer and rail shells must react to
+// crossing their breakpoints live — tests flip `matches` and fire the
+// registered change listener to simulate a resize. Only those two queries
+// get a mutable mq (the i18n/theme layer also probes
 // prefers-color-scheme through the same global and must stay inert).
-function stubDrawerShell(initial: boolean) {
+const RAIL_QUERY = '(min-width: 641px) and (max-width: 1023px)'
+
+function stubSidebarMedia(initialDrawer: boolean, initialRail = false) {
   const drawerMq = {
-    matches: initial,
+    matches: initialDrawer,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
+  const railMq = {
+    matches: initialRail,
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   };
   vi.stubGlobal(
     'matchMedia',
-    vi.fn().mockImplementation((q: string) =>
-      q === '(max-width: 640px)'
-        ? drawerMq
-        : { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() },
-    ),
+    vi.fn().mockImplementation((q: string) => {
+      if (q === '(max-width: 640px)') return drawerMq;
+      if (q === RAIL_QUERY) return railMq;
+      return { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
+    }),
   );
-  return drawerMq;
+  return { drawerMq, railMq };
+}
+
+function stubDrawerShell(initial: boolean) {
+  return stubSidebarMedia(initial).drawerMq
 }
 
 describe('Sidebar footer', () => {
@@ -232,5 +243,74 @@ describe('Sidebar drawer (≤640px shells)', () => {
     expect(event.defaultPrevented).toBe(false)
     expect(document.activeElement).toBe(outside)
     outside.remove()
+  })
+})
+
+describe('Sidebar tablet rail (641-1023px band)', () => {
+  let railMq: { matches: boolean; addEventListener: ReturnType<typeof vi.fn> }
+
+  function railButtons(): string[] {
+    return (w?.findAll('.rail-btn') ?? []).map((b) => b.attributes('aria-label') ?? '')
+  }
+
+  beforeEach(() => {
+    i18n.global.locale.value = 'en'
+    api.getStatus.mockReset()
+    // Wide desktop default: no drawer, no rail (happy-dom's own viewport).
+    railMq = stubSidebarMedia(false, true).railMq
+  })
+  afterEach(() => {
+    w?.unmount()
+    w = null
+    vi.unstubAllGlobals()
+  })
+
+  it('renders the rail and drops the 280px column in the band', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    expect(w?.find('#app-sidebar.sidebar').exists()).toBe(true)
+    expect(w?.find('.rail-nav').exists()).toBe(true)
+    // Personal serve has no status surface: sessions, new-workspace,
+    // settings — the status button stays hidden with the 280px footer's
+    // own condition.
+    expect(railButtons()).toEqual(['Sessions', 'New workspace', 'Settings'])
+    // The 280px column content moved into the flyout (Task 2); it must
+    // not render inside the rail band.
+    expect(w?.find('.sidebar-body').exists()).toBe(false)
+    expect(w?.find('.footer-bar').exists()).toBe(false)
+  })
+
+  it('bridge deployment: the status rail button appears with its lamp', async () => {
+    api.getStatus.mockResolvedValue(bridgeStatus())
+    mountSidebar()
+    await flushPromises()
+
+    expect(railButtons()).toEqual(['Sessions', 'New workspace', 'Status', 'Settings'])
+    expect(w?.find('.rail-btn .rail-lamp').exists()).toBe(true)
+  })
+
+  it('no rail on wide (≥1024) shells', async () => {
+    railMq.matches = false
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    expect(w?.find('.rail-nav').exists()).toBe(false)
+    expect(w?.find('.sidebar-body').exists()).toBe(true)
+    expect(w?.find('.footer-bar').exists()).toBe(true)
+    expect(w?.find('#app-sidebar.sidebar').exists()).toBe(true)
+  })
+
+  it('no rail inside the ≤640px drawer band', async () => {
+    vi.unstubAllGlobals()
+    railMq = stubSidebarMedia(true, false).railMq
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    expect(w?.find('.rail-nav').exists()).toBe(false)
+    expect(w?.find('#app-sidebar.sidebar').exists()).toBe(true)
   })
 })

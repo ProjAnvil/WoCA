@@ -141,6 +141,102 @@ body.ws-resizing {
   letter-spacing: -0.01em;
 }
 
+/* 641-1023px tablet band (spec 2026-11-19-tablet-icon-rail D1): the 280px
+   column folds into a 56px icon rail — the sizing constants (56 / 44 / 3)
+   come from the audited prototype. The rail subtree renders only in this
+   band (Sidebar.vue observes the same query string; the CSS rules are the
+   authority, the observer only switches which subtree exists, so the
+   drift window is one change event); the workspace/sessions content opens
+   as a flyout anchored to the rail (see .rail-flyout below). The ≤640
+   drawer and ≥1024 static column are untouched. */
+@media (min-width: 641px) and (max-width: 1023px) {
+  .sidebar {
+    flex: 0 0 56px;
+    width: 56px;
+  }
+  .sidebar .sidebar-brand {
+    height: 56px;
+    padding: 0;
+    justify-content: center;
+    flex: 0 0 auto;
+  }
+  .sidebar .brand-name {
+    display: none;
+  }
+}
+
+/* Tablet rail pieces (mounted only inside the band above). Touch floor is
+   44×44 — the prototype's tablet minimum; T1's 24px icon-btn floor does
+   not apply to rail buttons. */
+.rail-nav {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0;
+}
+
+.rail-btn {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.rail-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.rail-btn.active {
+  background: var(--surface-active);
+  color: var(--text);
+}
+
+/* Expanded indicator: a 3px ink bar on the rail's left edge (prototype
+   expanded.html). left reaches past the button to the aside's edge. */
+.rail-btn.active::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 11px;
+  bottom: 11px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--text);
+}
+
+.rail-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* Status lamp dot: the footer .status-lamp colors reused (misc.css), pinned
+   to the icon's top-right with a sidebar-colored ring (prototype). */
+.rail-lamp {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--bg-sidebar);
+}
+
+.rail-spacer {
+  flex: 1;
+}
+
 .side-section {
   margin-top: 18px;
 }

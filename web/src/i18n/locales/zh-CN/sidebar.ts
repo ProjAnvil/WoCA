@@ -1,5 +1,6 @@
 export default {
   workspaces: '工作区',
+  sessions: '会话',
   workspace: '工作区',
   newWorkspace: '新建工作区',
   settings: '设置',
