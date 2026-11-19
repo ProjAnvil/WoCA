@@ -3,6 +3,16 @@ package server
 // T5 Part B: concurrent-run delta cross-contamination repro. Two sessions
 // stream concurrently over one shared agent/server; each session's live
 // delta events and persisted transcript must contain ONLY its own text.
+//
+// Case closed 2026-11-19: the original report could not be reproduced on
+// any plane — server-side here (8 concurrent runs, -race, both storage
+// forms), the web stream store (e2e/tests/personal/deltarace.spec.ts: two
+// browser contexts streaming concurrently, including a mid-run reload,
+// reattach and session switch — the sid-closure suspicion), or the
+// forwarding paths (edge parked-request/respond pairing, bridge tunnel
+// payload-ID pairing and the personal relay are all request-scoped;
+// audited alongside). The report predates the wave1 cancel-semantics
+// fixes and is deemed stale. This guard stays as the regression pin.
 
 import (
 	"context"

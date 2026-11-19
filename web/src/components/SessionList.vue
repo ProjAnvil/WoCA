@@ -137,7 +137,13 @@ async function removeSession(s: Session) {
           class="session-row"
           :class="{ active: s.id === store.activeId, awaiting: store.runStateOf(s.id) === 'awaiting' }"
         >
-          <button class="session-item" :class="{ active: s.id === store.activeId }" @click="selectSession(s)">
+          <button
+            class="session-item"
+            :class="{ active: s.id === store.activeId }"
+            data-testid="session-item"
+            :data-sid="s.id"
+            @click="selectSession(s)"
+          >
             <Loader2
               v-if="store.runStateOf(s.id) === 'running'"
               :size="15"
