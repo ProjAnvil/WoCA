@@ -504,10 +504,20 @@ func decodeCardAnswerList(body []byte) ([]cardAnswerEntry, bool) {
 // may answer a subset — unanswered cards re-pause), or — for a single
 // pending card — the legacy flat forms ({approve}, {answers: [...]}, the
 // approvals decision map).
+//
+// A terminal run accepts no answer at all: no park can ever consume it, so
+// the list form must not buffer (the entries would ride a resume window that
+// no longer exists) and nothing may emit interrupt_resolved past the
+// terminal event — a replaying client would resurrect a card the done/error
+// frame already closed. Late answers fail like every other unmatched shape.
 func (r *Run) answer(body []byte) error {
 	r.mu.Lock()
 	p := r.pending
+	done := r.done
 	r.mu.Unlock()
+	if done {
+		return errors.New("run already finished")
+	}
 	if p == nil {
 		// The resume window (see Run.buffered): list-form answers buffer
 		// and apply to the next park; the legacy single-card forms cannot
@@ -933,9 +943,9 @@ func (r *Run) unsubscribe(sub *subscriber) {
 // wins the label, and a later cancel (or a no-op repeat) cannot overwrite
 // it, so a parked-TTL timer and a user cancel racing in one instruction
 // window cannot mislabel the run. A cancelled run will never consume an
-// answer, so a late one must fail with "no pending interrupt" instead of
-// returning 200 and emitting a stray resolution event into the replay
-// history.
+// answer, so a late one must fail (answer's done gate — "run already
+// finished") instead of returning 200 and emitting a stray resolution
+// event into the replay history.
 func (r *Run) cancelRun(cause string) {
 	r.mu.Lock()
 	r.pending = nil
