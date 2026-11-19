@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -77,7 +78,7 @@ func (s *Server) handleGoalCommand(w http.ResponseWriter, r *http.Request) {
 		g := s.agent.Goal()
 		output = fmt.Sprintf("goal set (max %d cycles · %s tokens): %s\nthe loop starts now — completion claims are verified by an independent evaluator.",
 			g.MaxCycles, agent.FormatGoalTokens(g.MaxTokens), g.Objective)
-		run, err := s.startGoalRun(id, req.Workspace)
+		run, err := s.startGoalRun(r.Context(), id, req.Workspace)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -121,7 +122,7 @@ func (s *Server) handleGoalCommand(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 			}
-			run, err := s.startGoalRun(id, req.Workspace)
+				run, err := s.startGoalRun(r.Context(), id, req.Workspace)
 			if err != nil {
 				output = "goal resumed but the loop could not start: " + err.Error()
 				break
@@ -166,7 +167,7 @@ func (s *Server) handleGoalCommand(w http.ResponseWriter, r *http.Request) {
 // agent-level goal claim below stays as defense in depth). Goal-state
 // changes stream into the run as "goal" events; the final transcript (all
 // cycle messages) persists back to the session on completion.
-func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
+func (s *Server) startGoalRun(origin context.Context, sessionID, workspace string) (*Run, error) {
 	a := s.agent
 	if g := a.Goal(); g == nil || g.Status != agent.GoalActive {
 		return nil, fmt.Errorf("server: goal is not active")
@@ -182,7 +183,7 @@ func (s *Server) startGoalRun(sessionID, workspace string) (*Run, error) {
 	// (newRunContext): the ctx values feed RetainGoal (WithoutCancel
 	// preserves them) and the goal graph's prefetch, and tools/spans inside
 	// the loop correlate to the goal's session (N2).
-	ctx, cancel := s.newRunContext(id, sessionID, workspace)
+	ctx, cancel := s.newRunContext(origin, id, sessionID, workspace)
 	run := newRun(id, a, ctx, cancel)
 	s.registerRun(id, run)
 

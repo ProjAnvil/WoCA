@@ -463,7 +463,7 @@ func TestGoalCommandLifecycleWhileRunning(t *testing.T) {
 	defer resp.Body.Close()
 
 	// The internal starter refuses a second concurrent loop.
-	if _, err := s.startGoalRun(sid, ""); err == nil || !strings.Contains(err.Error(), "already running") {
+	if _, err := s.startGoalRun(t.Context(), sid, ""); err == nil || !strings.Contains(err.Error(), "already running") {
 		t.Fatalf("startGoalRun while running = %v, want already-running error", err)
 	}
 
@@ -552,7 +552,7 @@ func TestGoalResumeAfterRestart(t *testing.T) {
 		t.Fatalf("budget on restored goal = %q", output)
 	}
 	// …and the loop starter refuses non-active goals.
-	if _, err := s2.startGoalRun(sid, ""); err == nil || !strings.Contains(err.Error(), "not active") {
+	if _, err := s2.startGoalRun(t.Context(), sid, ""); err == nil || !strings.Contains(err.Error(), "not active") {
 		t.Fatalf("startGoalRun on complete goal = %v, want not-active error", err)
 	}
 

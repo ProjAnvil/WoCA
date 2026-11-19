@@ -69,7 +69,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		switch strings.TrimSpace(req.Prompt) {
 		case "/undo", "/redo":
 			redo := req.Prompt == "/redo"
-			run, sessionID, pos, err := s.startCommandRun(req.SessionID, human, req.Workspace,
+			run, sessionID, pos, err := s.startCommandRun(r.Context(), req.SessionID, human, req.Workspace,
 				func(ctx context.Context) string {
 					var output string
 					var cerr error
@@ -354,7 +354,7 @@ func (s *Server) handleBtwRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auditEvent(r, "run_btw", r.PathValue("id"))
 	human := messages.Human(req.Prompt)
-	run, sid, _, history := s.newRegisteredRun(r.PathValue("id"), req.Workspace)
+	run, sid, _, history := s.newRegisteredRun(r.Context(), r.PathValue("id"), req.Workspace)
 	run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
 	run.start(append(history, human), func(final []messages.Message) {
 		// Deliberately not persisted: /btw never enters the transcript.
@@ -444,8 +444,22 @@ func (s *Server) registerRun(id string, run *Run) {
 // correlates to the session that owns it (N2 invariant).
 // sid must be the FINAL session id — generate it first (see
 // newRegisteredRun), never pass an unresolved input id.
-func (s *Server) newRunContext(id, sid, workspace string) (context.Context, context.CancelFunc) {
+//
+// origin is the context the run was triggered from (usually the HTTP
+// request). The run's LIVENESS deliberately derives from Background — a
+// local run must outlive its request — but the origin's tenant identity is
+// plain context data and crosses that seam values-only (the same
+// attach-only pattern enqueueRun uses for dispatched runs): with it present,
+// the run's ledger writes (Start, the event mirror, session-state marks)
+// run under the tenant-transaction prologue and tag their rows with the
+// originating tenant instead of the 'local' default. A tenantless origin
+// (personal edition, unauthenticated forms) injects nothing — unchanged
+// behavior.
+func (s *Server) newRunContext(origin context.Context, id, sid, workspace string) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(agent.WithRunWorkspace(context.Background(), workspace))
+	if tc, ok := tenancy.FromContext(origin); ok && !tc.IsZero() {
+		ctx = tenancy.NewContext(ctx, tc)
+	}
 	if s.agent != nil {
 		ctx = agent.WithSessionPolicy(ctx, sid, s.agent.PolicySource())
 	}
@@ -459,7 +473,8 @@ func (s *Server) newRunContext(id, sid, workspace string) (context.Context, cont
 // and command-run paths. The session id is resolved BEFORE the run context
 // is built so even a session-less run executes scoped to its generated
 // session id (N2: the ctx must carry the final identity, not the input).
-func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, string, []messages.Message) {
+// origin supplies the run's tenant identity (see newRunContext).
+func (s *Server) newRegisteredRun(origin context.Context, sessionID, workspace string) (*Run, string, string, []messages.Message) {
 	id := newRunID()
 	sid := sessionID
 	if sid == "" {
@@ -468,7 +483,7 @@ func (s *Server) newRegisteredRun(sessionID, workspace string) (*Run, string, st
 	if workspace == "" {
 		workspace = s.workdir
 	}
-	ctx, cancel := s.newRunContext(id, sid, workspace)
+	ctx, cancel := s.newRunContext(origin, id, sid, workspace)
 	run := newRun(id, s.agent, ctx, cancel)
 	s.registerRun(id, run)
 	history := s.sessions.load(run.ctx, sid)
@@ -511,7 +526,7 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 		}
 		return s.enqueueRun(ctx, sessionID, human, workspace, atts)
 	}
-	run, sid, workspace, _ := s.newRegisteredRun(sessionID, workspace) // preloaded history discarded: reloaded after acquiring the gate so the previous run's persisted reply is visible
+	run, sid, workspace, _ := s.newRegisteredRun(ctx, sessionID, workspace) // preloaded history discarded: reloaded after acquiring the gate so the previous run's persisted reply is visible
 	s.log.Info().Str("run", run.id).Str("session", sid).Msg("run queued")
 	s.refreshDebugLog()
 	if obs := s.agent.Obs(); obs != nil {
@@ -861,8 +876,8 @@ func (s *Server) cancelQueuedRunAtTerminal(ctx context.Context, cancel context.C
 // The run ledger is not involved: the command executes locally in
 // microseconds and holds no cross-instance lease (a pre-existing limitation
 // shared with the other local session writers — see handleTruncateSession).
-func (s *Server) startCommandRun(sessionID string, human messages.Message, workspace string, command func(context.Context) string) (*Run, string, int, error) {
-	run, sid, workspace, _ := s.newRegisteredRun(sessionID, workspace) // preloaded history discarded: reloaded after acquiring the gate so the holder's persisted reply is visible
+func (s *Server) startCommandRun(origin context.Context, sessionID string, human messages.Message, workspace string, command func(context.Context) string) (*Run, string, int, error) {
+	run, sid, workspace, _ := s.newRegisteredRun(origin, sessionID, workspace) // preloaded history discarded: reloaded after acquiring the gate so the holder's persisted reply is visible
 	s.log.Info().Str("run", run.id).Str("session", sid).Str("command", human.Content).Msg("command run")
 	s.refreshDebugLog()
 	if obs := s.agent.Obs(); obs != nil {
