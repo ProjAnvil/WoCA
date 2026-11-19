@@ -134,3 +134,4 @@ v2(审计修订版)——Ready for planning。
 - elapsed 求值点:emit 侧与持久化侧各算一次(同一 goroutine 链,µs 级间隔);e2e 断言 emit 内容与持久化逐字节一致(Go 链路测试钉)。
 - 顺带修复:前场 toolabort_test.go 的 gofmt 版本漂移(PATH gofmt 1.27.4 vs golangci 内嵌 1.27.3)由 `golangci-lint fmt` 归一。
 - 存量并行 flake(基线可复现,与本设计无关):chatcolumn 1440/1800 的 dedicated 实例 settings PUT 503(settings DB 初始化竞态,4 workers 负载下);hitl 并行审批 UI flake(既有票)。
+- **终审修复(d96afdaa)**:park-resume 后 fork 会把已完成 sibling 的 writes 按原消息 id 重放为 updates(graph.go:1446-1450),积累器盲 append 会双计——取消后持久化重复 tool_result,严格供应商下一轮拒收(C1 同类)。修法=积累器按 graph-stamped id 幂等(committed/provisional 双通道;无 id 消息保持原 append 行为);取代规则不变。
