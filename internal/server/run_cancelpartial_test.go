@@ -19,6 +19,7 @@ package server
 import (
 	"context"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -150,10 +151,19 @@ func TestCancelledRunWithDanglingToolCallSynthesizesResult(t *testing.T) {
 			}
 		}
 		r.mu.Unlock()
-		if emitted != msgs[2].Content {
+		// The elapsed digits are masked before comparing: the emit side and
+		// the persist side each compute runElapsed (µs apart), and an exact
+		// string compare could straddle a %.1f rounding boundary.
+		if maskElapsed(emitted) != maskElapsed(msgs[2].Content) {
 			t.Fatalf("emitted synth %q != persisted synth %q", emitted, msgs[2].Content)
 		}
 	}
+}
+
+// maskElapsed neutralizes the "after Xs" elapsed digits of a synthesized
+// abort content so byte-equality asserts ignore sub-tenth timing drift.
+func maskElapsed(s string) string {
+	return regexp.MustCompile(`after \d+(\.\d+)?s`).ReplaceAllString(s, "after Xs")
 }
 
 // blockingTextModel streams one text chunk, then holds the stream open until

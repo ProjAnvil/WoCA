@@ -203,17 +203,20 @@ body.ws-resizing {
   color: var(--text);
 }
 
-/* Expanded indicator: a 3px ink bar on the rail's left edge (prototype
-   expanded.html). left reaches past the button to the aside's edge. */
+/* Expanded indicator: a 3px ink bar on the rail's LEFT edge (spec D2,
+   prototype expanded.html). The button centers 5.5px into the rail's 55px
+   content box (56 − 1px border), so −5.5px lands the bar flush on the
+   aside's edge — the prototype's −10px sat outside .app-shell's
+   overflow:hidden and never rendered (final-review minor). */
 .rail-btn.active::before {
   content: '';
   position: absolute;
-  left: -10px;
+  left: -5.5px;
   top: 11px;
   bottom: 11px;
   width: 3px;
   border-radius: 2px;
-  background: var(--text);
+  background: var(--accent);
 }
 
 .rail-btn:focus-visible {

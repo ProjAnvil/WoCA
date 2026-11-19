@@ -79,6 +79,19 @@ test('tablet band: 56px rail keeps the chat; the flyout opens and closes', async
     await expect(scrim).toBeVisible();
     await expect(sessionsBtn).toHaveAttribute('aria-expanded', 'true');
 
+    // The active indicator (spec D2): a 3px bar on the rail's left edge.
+    // The button centers 5.5px into the 55px content box (56 − 1px
+    // border), so the pseudo-element must sit at left ≈ −5.5px to land on
+    // the rail's edge — inside the shell's overflow:hidden (the
+    // prototype's own −10px never rendered; final-review minor).
+    const bar = await sessionsBtn.evaluate((el) => {
+      const cs = getComputedStyle(el, '::before')
+      return { left: cs.left, width: cs.width, background: cs.backgroundColor }
+    });
+    expect(parseFloat(bar.left), `${width}: the ink bar anchors at the rail edge`).toBeCloseTo(-5.5, 1);
+    expect(parseFloat(bar.width), `${width}: the ink bar is 3px`).toBe(3);
+    expect(bar.background, `${width}: the ink bar paints (accent)`).not.toBe('rgba(0, 0, 0, 0)');
+
     // The z21 anchor, proven by a real hit-test: the button sits above
     // the fullscreen veil, so clicking it again closes the flyout.
     await sessionsBtn.click();

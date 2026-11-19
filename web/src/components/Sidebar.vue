@@ -240,7 +240,7 @@ async function pickWorkspace(path: string) {
         class="rail-btn"
         :class="{ active: flyoutOpen }"
         :aria-expanded="flyoutOpen"
-        aria-controls="rail-flyout"
+        :aria-controls="flyoutOpen ? 'rail-flyout' : undefined"
         :title="t('sidebar.sessions')"
         :aria-label="t('sidebar.sessions')"
         @click="flyoutOpen = !flyoutOpen"

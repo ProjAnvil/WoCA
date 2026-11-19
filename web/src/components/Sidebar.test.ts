@@ -324,7 +324,8 @@ describe('Sidebar tablet rail (641-1023px band)', () => {
   })
 
   function sessionsBtn() {
-    return w!.get('[aria-controls="rail-flyout"]')
+    // Located by label: aria-controls exists only while the flyout is open.
+    return w!.get('.rail-btn[aria-label="Sessions"]')
   }
 
   async function openFlyout() {
@@ -337,10 +338,15 @@ describe('Sidebar tablet rail (641-1023px band)', () => {
     mountSidebar()
     await flushPromises()
 
+    // Collapsed: no dangling aria-controls — the flyout id exists only
+    // while open, a closed reference is flagged by strict validators.
+    expect(sessionsBtn().attributes('aria-controls')).toBeUndefined()
+
     await openFlyout()
 
     const btn = sessionsBtn()
     expect(btn.attributes('aria-expanded')).toBe('true')
+    expect(btn.attributes('aria-controls')).toBe('rail-flyout')
     expect(btn.classes()).toContain('active')
     expect(w!.find('#rail-flyout').exists()).toBe(true)
     expect(w!.find('.flyout-scrim').exists()).toBe(true)
