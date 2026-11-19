@@ -66,7 +66,8 @@ func newGatedUndoServer(t *testing.T, dir string, perCallDelay time.Duration) (*
 
 // postCommandRun POSTs a harness command ("/undo", "/redo") as a run prompt
 // and returns the created run id, queue position and HTTP status. A non-200
-// body (e.g. the queue-full 409 plain text) is not JSON: runID stays empty.
+// body (e.g. the coded queue-full 409 envelope) is not a run: runID stays
+// empty.
 func postCommandRun(t *testing.T, base, sessionID, prompt string) (runID string, pos int, status int) {
 	t.Helper()
 	body := fmt.Sprintf(`{"prompt":%q,"session_id":%q}`, prompt, sessionID)
