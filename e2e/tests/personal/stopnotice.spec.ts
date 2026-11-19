@@ -45,12 +45,32 @@ import { runtimeDir } from '../../fixtures/paths';
 // asserted on the computed max-width while the boxes are asserted against
 // each container's live available width — min(860, available).
 
-type Msg = { role?: string; content?: string };
+type Msg = { role?: string; content?: string; tool_call_id?: string; tool_calls?: Array<{ id?: string }> };
 
 const MARKER = 'STOP-NOTICE';
 const PROMPT = `${MARKER} stream slowly so the stop click lands mid-answer`;
 const CHUNK_MS = 300;
 const CHUNKS = 80; // ~24s of stream — far longer than the test needs
+
+// Tool lane (spec 2026-11-19-cancel-partial-output §4): a run whose prompt
+// carries the tool marker streams a little text, then calls Bash sleep 30 —
+// the stop click lands while the tool executes. The mid-tool window is a
+// genuine engine race (the fork's stream emitter drops the tools batch on a
+// cancelled ctx with select-random priority): the call closes EITHER with
+// the server's synthesized abort result OR with the killed shell's own
+// "Exit code -1." output. Both outcomes are legal, both close the card, and
+// the next round's model request must never carry a dangling tool_use — the
+// assertions below pin exactly that disjunction (the synthesized copy
+// verbatim is pinned deterministically by the Go suite's parked-approval
+// window, where no race exists).
+const TOOL_MARKER = 'STOP-TOOL';
+const TOOL_PROMPT = `${TOOL_MARKER} inspect the workspace with a slow command`;
+const TOOL_CALL_ID = 'call-stop-tool-1';
+const TOOL_RESULT_RE = /Tool call aborted by user after |^Exit code -1\./;
+
+// Every chat-completions body the scripted model received, newest last —
+// the next-round assertion reads the exact history the server replayed.
+const modelRequests: Msg[][] = [];
 
 let modelURL = '';
 let modelServer: http.Server | undefined;
@@ -74,6 +94,29 @@ function plainReply(): string {
   return chunk({ role: 'assistant', content: 'unrelated' }, null) + chunk({}, 'stop') + 'data: [DONE]\n\n';
 }
 
+/** The tool lane's opening move: partial text, then one real Bash call. */
+function toolLaneReply(): string {
+  return (
+    chunk({ role: 'assistant' }, null) +
+    chunk({ content: 'checking the workspace first ' }, null) +
+    chunk(
+      {
+        tool_calls: [
+          {
+            index: 0,
+            id: TOOL_CALL_ID,
+            type: 'function',
+            function: { name: 'Bash', arguments: JSON.stringify({ command: 'sleep 30' }) },
+          },
+        ],
+      },
+      null,
+    ) +
+    chunk({}, 'tool_calls') +
+    'data: [DONE]\n\n'
+  );
+}
+
 test.beforeAll(async () => {
   // The scripted model.
   modelServer = http.createServer((req, res) => {
@@ -86,13 +129,22 @@ test.beforeAll(async () => {
     req.on('end', () => {
       let stream = true;
       let mine = false;
+      let toolLane = false;
       try {
         const body = JSON.parse(Buffer.concat(parts).toString('utf8')) as { messages?: Msg[]; stream?: boolean };
         stream = body.stream === true; // non-streaming callers omit the flag
+        const msgs = body.messages ?? [];
+        modelRequests.push(msgs);
         // Route on the FIRST user message: later turns carry recorded
         // history whose text must not re-trigger the slow lane.
-        const firstUser = (body.messages ?? []).find((m) => m.role === 'user' || m.role === 'human');
+        const firstUser = msgs.find((m) => m.role === 'user' || m.role === 'human');
         mine = (firstUser?.content ?? '').includes(MARKER);
+        // Tool lane: this conversation's opening turn, and the scripted
+        // call is still unanswered (once history carries its result — real
+        // or synthesized — the conversation moves to plain replies).
+        toolLane =
+          msgs.some((m) => (m.content ?? '').includes(TOOL_MARKER)) &&
+          !msgs.some((m) => m.role === 'tool' && m.tool_call_id === TOOL_CALL_ID);
       } catch {
         mine = false;
       }
@@ -108,6 +160,10 @@ test.beforeAll(async () => {
         return;
       }
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      if (toolLane) {
+        res.end(toolLaneReply());
+        return;
+      }
       if (!mine) {
         res.end(plainReply());
         return;
@@ -312,4 +368,146 @@ test('cancelled run: the stop notice card survives page reload', async ({ page }
   expect(widths.inputMax, 'composer column tier at 1024').toBe('860px');
   expect(Math.abs(widths.msgBox - Math.min(860, widths.msgAvail))).toBeLessThanOrEqual(1);
   expect(Math.abs(widths.inputBox - Math.min(860, widths.inputAvail))).toBeLessThanOrEqual(1);
+});
+
+// Form 1b — the cancelled TOOL run (spec 2026-11-19-cancel-partial-output).
+// A run whose prompt carries the tool marker streams partial text, calls
+// Bash sleep 30 (real execution under bypassPermissions), and the stop click
+// lands while the tool runs. Pins: (1) the cancelling tab's open tool card
+// flips to the local aborted terminal (no spinner survives the stop);
+// (2) after reload the partial assistant bubble, the closed tool card
+// (synthesized abort result or the killed shell's own output — the engine
+// race both ways, see the lane comment above) and exactly one notice card;
+// (3) the persisted transcript closes the call server-side; (4) the next
+// round's model request carries the closed call and NEVER a dangling
+// tool_use, plus the model-visible stop tag.
+test('cancelled tool run: the partial transcript and the closed call survive reload', async ({ page }) => {
+  test.setTimeout(120_000);
+
+  const ws = path.join(runtimeDir, 'stopnotice', `ws-tool-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(ws, { recursive: true });
+  const seed = await page.request.post(`${base}/api/sessions`, { data: { workspace: ws } });
+  expect(seed.status(), 'seed a session in the tool workspace').toBe(200);
+  const wsPath = ((await seed.json()) as { workspace: string }).workspace;
+  expect(wsPath).toBeTruthy();
+
+  const perms = await page.request.post(`${base}/api/agent/permissions`, {
+    data: { mode: 'bypassPermissions' },
+  });
+  expect(perms.status(), 'set bypass permission mode').toBe(200);
+  const put = await page.request.put(`${base}/api/settings`, {
+    data: {
+      provider: 'openai',
+      model: 'gpt-e2e',
+      openai_base_url: `${modelURL}/v1`,
+      openai_api_key: 'e2e-key',
+    },
+  });
+  expect(put.status(), 'point the instance at the scripted model').toBe(200);
+
+  await pinLocale(page);
+  await page.goto(base);
+  await expect(page.locator('aside.sidebar')).toBeVisible();
+
+  const group = page.locator('.ws-group').filter({
+    has: page.locator(`.ws-group-name[title="${wsPath}"]`),
+  });
+  await expect(group).toHaveCount(1);
+  const sessionCreated = page.waitForResponse(
+    (r) => r.request().method() === 'POST' && /\/api\/sessions$/.test(r.url()),
+  );
+  await group.getByRole('button', { name: '在此工作区新建会话' }).click();
+  expect((await sessionCreated).status()).toBe(200);
+  await expect(page.locator('.chat-input textarea')).toBeVisible();
+
+  const runPost = page.waitForRequest((r) => r.method() === 'POST' && /\/api\/runs$/.test(r.url()));
+  await page.locator('.chat-input textarea').fill(TOOL_PROMPT);
+  await page.keyboard.press('Enter');
+  const runReq = await runPost;
+  const posted = (await runReq.postDataJSON()) as { session_id: string; prompt: string };
+  expect(posted.prompt).toContain(TOOL_MARKER);
+  const sid = posted.session_id;
+  const runBody = (await (await runReq.response())?.json()) as { run_id: string };
+  const rid = runBody.run_id;
+  expect(rid).toBeTruthy();
+
+  // (1) The tool card opens with its spinner while the partial text streams;
+  // the stop click lands inside the tool execution window.
+  const card = page.locator('.stream-card').filter({ hasText: 'Bash' }).first();
+  await expect(card.locator('.tool-status-running')).toHaveCount(1, { timeout: 20_000 });
+  await expect(page.locator('.message.assistant .markdown-body')).toContainText('checking the workspace first', {
+    timeout: 20_000,
+  });
+  const stopBtn = page.locator('.chat-input .send-btn.stop');
+  await expect(stopBtn).toBeVisible();
+  await stopBtn.click();
+
+  // The cancelling tab aborted its stream before the server's synthesized
+  // tool_result events could arrive: cancel() flips the open card to the
+  // local aborted terminal and the spinner is gone. Tool cards start
+  // collapsed (autoCollapseTools) — expand to see the flipped output.
+  await expect(card.locator('.tool-status-running')).toHaveCount(0, { timeout: 10_000 });
+  await card.locator('.w-collapse-head').click();
+  await expect(card.locator('.tool-output')).toContainText('已中止');
+
+  // (3) Server truth: the persisted transcript closes the call — the
+  // synthesized abort result or the killed shell's own output.
+  let closerContent = '';
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get(`${base}/api/sessions/${sid}`);
+        const { messages } = (await res.json()) as { messages: Array<{ role?: string; tool_call_id?: string; content?: string }> };
+        const tool = messages.find((m) => m.role === 'tool' && m.tool_call_id === TOOL_CALL_ID);
+        closerContent = tool?.content ?? '';
+        return TOOL_RESULT_RE.test(closerContent);
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  // The stop tag closes the round after the closed call.
+  const res0 = await page.request.get(`${base}/api/sessions/${sid}`);
+  const msgs0 = ((await res0.json()) as { messages: Array<{ content?: string }> }).messages;
+  expect(msgs0.some((m) => (m.content ?? '').includes(`<run-stopped run="${rid}" reason="user_stop"/>`))).toBe(true);
+
+  // (2) Reload: the partial bubble, the closed card, one notice card.
+  await page.reload();
+  await expect(page.locator('aside.sidebar')).toBeVisible();
+  await group.locator('.session-item').filter({ hasText: TOOL_MARKER }).click();
+  await expect(page.locator('.message.assistant .markdown-body')).toContainText('checking the workspace first');
+  const reCard = page.locator('.stream-card').filter({ hasText: 'Bash' }).first();
+  await expect(reCard.locator('.tool-status-running')).toHaveCount(0);
+  await reCard.locator('.w-collapse-head').click();
+  await expect(reCard.locator('.tool-output')).toContainText(TOOL_RESULT_RE);
+  const noticeCard = page.locator('.w-collapse-card').filter({ hasText: '系统通知' });
+  await expect(noticeCard).toHaveCount(1);
+
+  // (4) The next round proves model visibility: the server replays the
+  // history with the closed call — never a dangling tool_use — and the stop
+  // tag rides along as machine-visible history. The matching request must
+  // carry the closed call (the session-title summarizer sees the new prompt
+  // too, but without the tool history).
+  await page.locator('.chat-input textarea').fill('and now just wrap up');
+  await page.keyboard.press('Enter');
+  const isReplay = (messages: Msg[]): boolean =>
+    messages.some((m) => (m.content ?? '').includes('and now just wrap up')) &&
+    messages.some((m) => m.role === 'tool' && m.tool_call_id === TOOL_CALL_ID);
+  await expect
+    .poll(
+      () => modelRequests.some(isReplay),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
+  const replayed = modelRequests.findLast(isReplay)!;
+  const answered = new Set(replayed.filter((m) => m.role === 'tool').map((m) => m.tool_call_id));
+  const dangling: string[] = [];
+  for (const m of replayed) {
+    for (const tc of m.tool_calls ?? []) {
+      if (tc.id && !answered.has(tc.id)) dangling.push(tc.id);
+    }
+  }
+  expect(dangling, 'no tool_use may reach the model without its result').toEqual([]);
+  const toolMsg = replayed.find((m) => m.role === 'tool' && m.tool_call_id === TOOL_CALL_ID);
+  expect(toolMsg?.content ?? '', 'the closed call rides along with terminal content').toMatch(TOOL_RESULT_RE);
+  expect(replayed.some((m) => (m.content ?? '').includes(`<run-stopped run="${rid}"`))).toBe(true);
 });
