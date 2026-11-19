@@ -13,6 +13,7 @@ vi.mock('../api/client', async (importOriginal) => {
 
 import Sidebar from './Sidebar.vue'
 import { useUiStore } from '../stores/ui'
+import { useSessionStore } from '../stores/sessions'
 import type { BridgeStatus } from '../api/client'
 
 function bridgeStatus(over: Partial<BridgeStatus> = {}): BridgeStatus {
@@ -312,5 +313,87 @@ describe('Sidebar tablet rail (641-1023px band)', () => {
 
     expect(w?.find('.rail-nav').exists()).toBe(false)
     expect(w?.find('#app-sidebar.sidebar').exists()).toBe(true)
+  })
+
+  function sessionsBtn() {
+    return w!.get('[aria-controls="rail-flyout"]')
+  }
+
+  async function openFlyout() {
+    await sessionsBtn().trigger('click')
+    await w!.vm.$nextTick()
+  }
+
+  it('opens the sessions flyout: expanded state, scrim, rail-open anchor', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    await openFlyout()
+
+    const btn = sessionsBtn()
+    expect(btn.attributes('aria-expanded')).toBe('true')
+    expect(btn.classes()).toContain('active')
+    expect(w!.find('#rail-flyout').exists()).toBe(true)
+    expect(w!.find('.flyout-scrim').exists()).toBe(true)
+    // The z21 anchor (audit I1): while the flyout is open the rail aside
+    // carries the rail-open class — the CSS that lifts it above the scrim
+    // so "click the rail button again" hits the button, not the veil.
+    expect(w?.get('#app-sidebar').classes()).toContain('rail-open')
+  })
+
+  it('closes via the scrim, the rail toggle, and the close button', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    // Scrim click.
+    await openFlyout()
+    await w!.get('.flyout-scrim').trigger('click')
+    await w!.vm.$nextTick()
+    expect(w?.find('#rail-flyout').exists()).toBe(false)
+    expect(w?.find('.flyout-scrim').exists()).toBe(false)
+    expect(sessionsBtn().attributes('aria-expanded')).toBe('false')
+    expect(w?.get('#app-sidebar').classes()).not.toContain('rail-open')
+
+    // Toggle again from the rail button.
+    await openFlyout()
+    await sessionsBtn().trigger('click')
+    await w!.vm.$nextTick()
+    expect(w?.find('#rail-flyout').exists()).toBe(false)
+
+    // The flyout's own close button.
+    await openFlyout()
+    await w!.get('.flyout-close').trigger('click')
+    await w!.vm.$nextTick()
+    expect(w?.find('#rail-flyout').exists()).toBe(false)
+  })
+
+  it('closes when a session is selected (drawer convention)', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    // Seed one session so the flyout's SessionList renders a clickable row.
+    const store = useSessionStore()
+    store.seed(
+      [
+        {
+          id: 's1',
+          title: 'Rail session',
+          updatedAt: '',
+          loaded: true,
+          workspace: '/ws',
+          workspaceName: 'ws',
+        },
+      ],
+      { s1: [] },
+    )
+    await openFlyout()
+
+    await w!.get('[data-testid="session-item"]').trigger('click')
+    await w!.vm.$nextTick()
+    expect(w?.find('#rail-flyout').exists()).toBe(false)
+    expect(w?.find('.flyout-scrim').exists()).toBe(false)
   })
 })

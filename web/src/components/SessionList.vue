@@ -19,6 +19,13 @@ const activity = useActivityStore()
 const confirmDialog = useConfirmStore()
 const ui = useUiStore()
 
+// Hosts that need the list to close on selection pass a callback (the
+// tablet rail's flyout); the component stays band-agnostic — no media
+// sniffing, the ≤640 drawer keeps its own sidebarOpen path.
+const props = defineProps<{
+  onSelectExtra?: () => void
+}>()
+
 // Picking a session closes the ≤640px drawer so the chat is visible again.
 // No width sniffing: sidebarOpen is only ever true on drawer shells (the
 // hamburger that sets it is media-scoped), so on wide shells the close is a
@@ -26,6 +33,7 @@ const ui = useUiStore()
 function selectSession(s: Session) {
   void store.setActive(s.id)
   if (ui.sidebarOpen) ui.closeSidebar()
+  props.onSelectExtra?.()
 }
 
 // Collapsed groups (default: expanded); switching the active session's

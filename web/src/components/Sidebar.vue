@@ -137,7 +137,56 @@ async function pickWorkspace(path: string) {
     aria-hidden="true"
     @click.self="ui.closeSidebar()"
   />
-  <aside id="app-sidebar" ref="drawerEl" class="sidebar" :class="{ open: ui.sidebarOpen }">
+
+  <!-- Tablet-band sessions flyout (spec D3): siblings of the rail aside,
+       not children — once the rail aside turns relative (rail-open, the
+       z21 anchor) it would otherwise become the containing block for
+       absolutely-positioned children and clip them to the 56px rail. -->
+  <template v-if="railShell && flyoutOpen">
+    <div
+      class="flyout-scrim"
+      aria-hidden="true"
+      @click="flyoutOpen = false"
+    />
+    <aside id="rail-flyout" class="rail-flyout" :aria-label="t('sidebar.sessions')">
+      <div class="flyout-head">
+        <span class="flyout-title">{{ t('sidebar.sessions') }}</span>
+        <div class="flyout-head-actions">
+          <button
+            class="icon-btn"
+            :title="t('sidebar.newWorkspace')"
+            :aria-label="t('sidebar.newWorkspace')"
+            @click="openWorkspaceDialog"
+          >
+            <Plus :size="16" />
+          </button>
+          <button
+            class="icon-btn flyout-close"
+            :title="t('common.close')"
+            :aria-label="t('common.close')"
+            @click="flyoutOpen = false"
+          >
+            <X :size="15" />
+          </button>
+        </div>
+      </div>
+      <div class="flyout-body">
+        <section class="side-section">
+          <div class="side-section-head">
+            <span class="side-section-title">{{ t('sidebar.workspaces') }}</span>
+          </div>
+          <SessionList :on-select-extra="() => (flyoutOpen = false)" />
+        </section>
+      </div>
+    </aside>
+  </template>
+
+  <aside
+    id="app-sidebar"
+    ref="drawerEl"
+    class="sidebar"
+    :class="{ open: ui.sidebarOpen, 'rail-open': railShell && flyoutOpen }"
+  >
     <div class="sidebar-brand">
       <div class="brand-mark">W</div>
       <span class="brand-name">woca</span>

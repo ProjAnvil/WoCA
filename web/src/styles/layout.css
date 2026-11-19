@@ -237,6 +237,72 @@ body.ws-resizing {
   flex: 1;
 }
 
+/* The z21 anchor (audit I1): while the flyout is open the rail aside lifts
+   above the scrim and the flyout's shadow — "click the sessions button
+   again" must hit the button, not the veil. It also makes the aside the
+   containing block for its absolutely-positioned descendants, which is why
+   the flyout and scrim render as its SIBLINGS (see Sidebar.vue). */
+.sidebar.rail-open {
+  position: relative;
+  z-index: 21;
+}
+
+/* Tablet sessions flyout (spec D3): 280px overlay against the shell root,
+   anchored at the rail's right edge. Sibling of the rail aside. */
+.rail-flyout {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 56px;
+  width: 280px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+}
+
+.flyout-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 14px 12px 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.flyout-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.flyout-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.flyout-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 12px 8px;
+}
+
+/* Fullscreen veil while the flyout is open (spec D4: the chat dims and
+   light-blurs; the whole veil is the touch close target). Fixed like
+   .sidebar-backdrop so no transformed/positioned ancestor can clip it. */
+.flyout-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(2px);
+  cursor: pointer;
+}
+
 .side-section {
   margin-top: 18px;
 }
