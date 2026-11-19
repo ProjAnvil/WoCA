@@ -139,9 +139,9 @@ test.afterAll(async () => {
 });
 
 /** Owns one session end to end: creates it via the group "+", sends the
- * marker prompt, returns {sid, runId}. Must await the session-create
+ * marker prompt, returns the session id. Must await the session-create
  * response BEFORE sending (the store switches sessions on it). */
-async function ownSession(page: Page, markerPrompt: string): Promise<{ sid: string; runId: string }> {
+async function ownSession(page: Page, markerPrompt: string): Promise<string> {
   const group = page.locator('.ws-group').first();
   const sessionCreated = page.waitForResponse(
     (r) => r.request().method() === 'POST' && /\/api\/sessions$/.test(r.url()),
@@ -161,7 +161,7 @@ async function ownSession(page: Page, markerPrompt: string): Promise<{ sid: stri
   expect(body.prompt).toContain(markerPrompt.split(' ')[0]);
   const runBody = (await (await req.response())?.json()) as { run_id: string };
   expect(runBody.run_id).toBeTruthy();
-  return { sid, runId: runBody.run_id };
+  return sid;
 }
 
 test('two concurrent sessions stream their own deltas only', async ({ browser }) => {
@@ -201,7 +201,9 @@ test('two concurrent sessions stream their own deltas only', async ({ browser })
 
   const a = await ownSession(pageA, 'MARK-ALPHA please answer');
   const b = await ownSession(pageB, 'MARK-BETA please answer');
-  expect(a.sid).not.toBe(b.sid);
+  expect(a).not.toBe(b);
+  const sidA = a;
+  const sidB = b;
 
   // (1) Genuine overlap: both stops are up at the same time, both bubbles
   // are streaming their own marker.
@@ -227,16 +229,19 @@ test('two concurrent sessions stream their own deltas only', async ({ browser })
   await pageA.reload();
   await expect(pageA.locator('.chat-input textarea')).toBeVisible();
   const groupA = pageA.locator('.ws-group').first();
-  await groupA.locator(`[data-testid="session-item"][data-sid="${a.sid}"]`).click();
+  await groupA.locator(`[data-testid="session-item"][data-sid="${sidA}"]`).click();
   await expect(pageA.locator('.message.assistant .markdown-body')).toContainText('ALPHA-delta-', {
     timeout: 30_000, // the reattach replay rebuilds the streaming bubble
   });
-  await groupA.locator(`[data-testid="session-item"][data-sid="${b.sid}"]`).click();
+  await groupA.locator(`[data-testid="session-item"][data-sid="${sidB}"]`).click();
   await expect(pageA.locator('.message.assistant .markdown-body')).toContainText('BETA-delta-', {
     timeout: 30_000,
   });
   await expect(pageA.locator('.chat-messages')).not.toContainText('ALPHA-delta-');
-  await groupA.locator(`[data-testid="session-item"][data-sid="${a.sid}"]`).click();
+  // Liveness: the switch leg only proves steering if A is still streaming
+  // while page A views B — its sidebar spinner must be up right now.
+  await expect(groupA.locator(`[data-testid="session-item"][data-sid="${sidA}"] .session-icon.spinning`)).toBeVisible();
+  await groupA.locator(`[data-testid="session-item"][data-sid="${sidA}"]`).click();
   await expect(pageA.locator('.message.assistant .markdown-body')).toContainText('ALPHA-delta-', {
     timeout: 30_000,
   });
@@ -255,17 +260,34 @@ test('two concurrent sessions stream their own deltas only', async ({ browser })
 
   // (4) Server truth: each session's persisted transcript mirrors the same
   // isolation (the store must not have corrupted what the server saved).
+  // The completion save trails the done event (completeRun runs after
+  // finish), so poll briefly for the tail chunk before reading.
   for (const [sid, mine, other] of [
-    [a.sid, 'ALPHA', 'BETA'],
-    [b.sid, 'BETA', 'ALPHA'],
+    [sidA, 'ALPHA', 'BETA'],
+    [sidB, 'BETA', 'ALPHA'],
   ] as const) {
+    await expect
+      .poll(
+        async () => {
+          const res = await pageA.request.get(`${base}/api/sessions/${sid}`);
+          const { messages } = (await res.json()) as { messages: Array<{ content?: string }> };
+          return messages.map((m) => m.content ?? '').join('\n');
+        },
+        { timeout: 30_000 },
+      )
+      .toContain(`${mine}-delta-${CHUNKS - 1}`);
     const res = await pageA.request.get(`${base}/api/sessions/${sid}`);
-    expect(res.status()).toBe(200);
     const { messages } = (await res.json()) as { messages: Array<{ content?: string }> };
     const joined = messages.map((m) => m.content ?? '').join('\n');
-    expect(joined, `session ${sid} keeps its own text`).toContain(`${mine}-delta-${CHUNKS - 1}`);
     expect(joined, `session ${sid} must not contain ${other} text`).not.toContain(`${other}-delta-`);
   }
+
+  // (5) Reattach-only residual: page A re-displays B once more after both
+  // runs settled — a bug that steers reattached ALPHA text into B's items
+  // only AFTER the earlier negative checks must still be caught here.
+  await groupA.locator(`[data-testid="session-item"][data-sid="${sidB}"]`).click();
+  await expect(pageA.locator('.chat-messages')).toContainText('BETA-delta-');
+  await expect(pageA.locator('.chat-messages')).not.toContainText('ALPHA-delta-');
 
   await ctxA.close();
   await ctxB.close();
