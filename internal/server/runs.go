@@ -876,9 +876,21 @@ func (s *Server) cancelQueuedRunAtTerminal(ctx context.Context, cancel context.C
 // UX: an idle session grants the gate on the spot, so /undo stays as instant
 // as before; a busy session queues the command FIFO like any prompt (the
 // web's file-level undo bypasses this path entirely — POST /api/workspace/undo).
-// The run ledger is not involved: the command executes locally in
-// microseconds and holds no cross-instance lease (a pre-existing limitation
-// shared with the other local session writers — see handleTruncateSession).
+//
+// Run ledger parity with model runs: the command run executes locally (it
+// never dispatches — the undo log it replays is this process's in-memory
+// FileHistory), but it is a registered, streaming run all the same, so when
+// the ledger is configured it takes a row, mirrors its events and holds the
+// lease exactly like a locally executed model run. That keeps the multi-
+// instance serving contract symmetric: a client following the run from
+// another instance (or after a reconnect) replays the command turn's events
+// from run_events instead of a 404, and the one_active_run_per_session
+// constraint orders this local writer against runs executing elsewhere —
+// closing the cross-instance gap the local admission gate cannot cover. The
+// undo STACK itself stays process-local (a /undo landing on an instance that
+// never executed the session's model runs finds nothing to revert); that
+// locality is inherent to the in-memory FileHistory design and unchanged
+// here — the row makes the turn visible and ordered, not the undo portable.
 func (s *Server) startCommandRun(origin context.Context, sessionID string, human messages.Message, workspace string, command func(context.Context) string) (*Run, string, int, error) {
 	run, sid, workspace, _ := s.newRegisteredRun(origin, sessionID, workspace) // preloaded history discarded: reloaded after acquiring the gate so the holder's persisted reply is visible
 	s.log.Info().Str("run", run.id).Str("session", sid).Str("command", human.Content).Msg("command run")
@@ -915,6 +927,28 @@ func (s *Server) startCommandRun(origin context.Context, sessionID string, human
 				})
 				return
 			}
+		}
+		// Ledger wiring, mirroring startRunWith's post-promotion block: the
+		// command run registers in the run ledger (born running under this
+		// worker's lease) and mirrors its events, so cross-instance SSE replay
+		// sees command turns and the session constraint rejects the run while
+		// another instance holds the session. A Start failure releases the
+		// gate through the same error posture as a model run.
+		if s.ledger != nil {
+			thread := agent.NewThreadID()
+			run.mu.Lock()
+			run.thread = thread
+			run.mu.Unlock()
+			if err := s.ledger.Start(run.ctx, runstate.Run{
+				RunID: run.id, SessionID: sid, ThreadID: thread,
+			}, s.workerID, runLeaseDuration); err != nil {
+				s.log.Warn().Str("run", run.id).Str("session", sid).Err(err).Msg("run rejected by the run ledger")
+				run.finish(EventError, map[string]any{"message": "session is running on another instance"})
+				s.drainCancelFinalizers(sid)
+				s.admission.release(sid)
+				return
+			}
+			s.trackRunLease(run, sid)
 		}
 		run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
 		history := s.sessions.load(run.ctx, sid)

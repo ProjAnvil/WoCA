@@ -149,8 +149,12 @@ func (s *Server) handleWorkspaceUndo(w http.ResponseWriter, r *http.Request) {
 //
 // Pre-existing limitation, unchanged: the local gate orders this writer
 // against this instance's runs only — a cross-instance (dispatch/executor)
-// holder is serialized by the run ledger, not here (shared with the other
-// local session writers; see startCommandRun).
+// holder is serialized by the run ledger, not here. Truncate deliberately
+// writes no ledger row or events even so: it is not a run (no run id, no
+// event stream to replay — the synchronous response IS the contract), so
+// there is nothing to mirror. The command runs share the gate ordering but
+// NOT this exemption: they are registered streaming runs and carry ledger
+// rows (see startCommandRun).
 func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Keep         int  `json:"keep"`
