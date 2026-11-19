@@ -17,6 +17,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/woca/internal/agent"
 	"github.com/projanvil/woca/internal/diffutil"
+	"github.com/projanvil/woca/internal/platform/httpx"
 )
 
 // changeFile is one pending (undoable) workspace change rendered for the
@@ -172,7 +173,7 @@ func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 	// runaway-client guard applies to every gate waiter.
 	gw, _, ok := s.admission.enter(sid, nil)
 	if !ok {
-		writeError(w, http.StatusConflict, "session run queue is full")
+		httpx.WriteCodedMsg(w, http.StatusConflict, httpx.SegBusiness, httpx.CodeQueueFull, "session run queue is full")
 		return
 	}
 	if gw != nil {
@@ -181,7 +182,7 @@ func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 			// The client went away or the server is shutting down: the
 			// waiter was removed from the FIFO (no gate leak — later runs
 			// still enter cleanly) and nothing was written.
-			writeError(w, http.StatusServiceUnavailable, "session busy; truncate abandoned before it started")
+			httpx.WriteCodedMsg(w, http.StatusServiceUnavailable, httpx.SegBusiness, httpx.CodeAbandoned, "session busy; truncate abandoned before it started")
 			return
 		}
 	}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/projanvil/langchain-golang/core/messages"
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/platform/tenancy"
 	"github.com/projanvil/woca/internal/runstate"
 	"github.com/projanvil/woca/internal/tracing"
@@ -85,7 +86,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 					return fmt.Sprintf("%s (%d undoable, %d redoable steps left)", output, undoN, redoN)
 				})
 			if err == errQueueFull {
-				http.Error(w, "session run queue is full", http.StatusConflict)
+				httpx.WriteCodedMsg(w, http.StatusConflict, httpx.SegBusiness, httpx.CodeQueueFull, errQueueFull.Error())
 				return
 			}
 			if err != nil {
@@ -104,7 +105,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	s.auditEvent(r, "run_create", req.SessionID)
 	run, sid, pos, err := s.startRun(r.Context(), req.SessionID, human, req.Workspace, req.Attachments)
 	if err == errQueueFull {
-		http.Error(w, "session run queue is full", http.StatusConflict)
+		httpx.WriteCodedMsg(w, http.StatusConflict, httpx.SegBusiness, httpx.CodeQueueFull, errQueueFull.Error())
 		return
 	}
 	if errors.Is(err, errNoSandboxExecutor) || errors.Is(err, errSandboxBinding) {

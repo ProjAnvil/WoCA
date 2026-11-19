@@ -428,6 +428,12 @@ func TestTruncateSaveDetachedFromDisconnectAfterPromotion(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("truncate after disconnect = %d, want 200 (in-window save must be detached)", rec.Code)
 	}
+	var out struct {
+		Kept int `json:"kept"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil || out.Kept != 2 {
+		t.Fatalf("truncate kept = %d (err %v), want 2 (the synchronous contract holds)", out.Kept, err)
+	}
 	awaitSave(t, saved, 1) // the truncate save
 
 	// No mem/disk fork: memory and disk both hold the truncated transcript.

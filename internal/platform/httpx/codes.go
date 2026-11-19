@@ -29,6 +29,16 @@ const (
 	CodeRateLimited = "0103"
 )
 
+// Common admission codes (0200–0299) — the session admission plane (queue
+// gates and their waiters).
+const (
+	// CodeQueueFull: the addressed queue is at capacity (HTTP 409).
+	CodeQueueFull = "0200"
+	// CodeAbandoned: the caller went away before its queued request was
+	// acted on (HTTP 503).
+	CodeAbandoned = "0201"
+)
+
 // Common internal/downstream codes (0500–0599).
 const (
 	CodeInternal         = "0500"

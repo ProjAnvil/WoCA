@@ -10,6 +10,7 @@ import (
 	"github.com/projanvil/langchain-golang/core/messages"
 
 	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/platform/httpx"
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
@@ -80,6 +81,12 @@ func (s *Server) handleGoalCommand(w http.ResponseWriter, r *http.Request) {
 			g.MaxCycles, agent.FormatGoalTokens(g.MaxTokens), g.Objective)
 		run, err := s.startGoalRun(r.Context(), id, req.Workspace)
 		if err != nil {
+			// The goal start queues on the session admission gate like any
+			// run: its queue-full refusal is the coded 409, not a 500.
+			if err == errQueueFull {
+				httpx.WriteCodedMsg(w, http.StatusConflict, httpx.SegBusiness, httpx.CodeQueueFull, errQueueFull.Error())
+				return
+			}
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
