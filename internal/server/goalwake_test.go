@@ -43,7 +43,7 @@ func newGoalWakeAgent(t *testing.T, perCallDelay time.Duration, wakeReply string
 	t.Helper()
 	responses := []messages.Message{
 		messages.AI("criteria checklist\nThis cycle: implement"), // assess
-		messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
+		{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{{
 			ID: "1", Name: "Read", Args: map[string]any{"file_path": "x"},
 		}}},
 		messages.AI("implemented"),                                   // execute final

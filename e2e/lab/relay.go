@@ -165,7 +165,8 @@ func runRelay() {
 	<-ctx.Done()
 	stop()
 	select {
-	case <-serveDone:
+	case err := <-serveDone:
+		fmt.Fprintf(os.Stderr, "lab/relay: serve exited early: %v\n", err)
 	case <-time.After(5 * time.Second):
 	}
 	_ = os.RemoveAll(tmp)

@@ -747,7 +747,6 @@ func TestRunTaskDescriptionFallsBackToPrompt(t *testing.T) {
 type promptRecordingModel struct {
 	reply  string
 	prompt string
-	name   string
 }
 
 func (m *promptRecordingModel) Invoke(_ context.Context, input []messages.Message, _ ...runnables.Option) (messages.Message, error) {

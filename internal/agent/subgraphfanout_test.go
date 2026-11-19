@@ -395,7 +395,7 @@ func TestStaleFanoutErrorsLoudly(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := map[string]any{
-		"messages": []messages.Message{messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
+		"messages": []messages.Message{{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
 			{ID: "t9", Name: "Task", Args: map[string]any{"description": "ghost"}},
 		}}},
 		decisionsChannelName: decisionsState{PerCall: map[string]callDecision{

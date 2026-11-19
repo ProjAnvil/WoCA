@@ -204,7 +204,8 @@ func runEnterprise() {
 	stop()
 	// ServeWithEdition traps SIGTERM itself; give it a grace window.
 	select {
-	case <-serveDone:
+	case err := <-serveDone:
+		fmt.Fprintf(os.Stderr, "lab/enterprise: serve exited early: %v\n", err)
 	case <-time.After(5 * time.Second):
 	}
 	_ = os.RemoveAll(tmp)

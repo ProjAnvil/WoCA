@@ -156,38 +156,6 @@ func (m *transcriptModel) Capabilities() language.ChatModelCapabilities {
 	return language.ChatModelCapabilities{ToolCalling: true, Streaming: true}
 }
 
-// fanoutTestAgent builds a parent agent whose model is scripted to call the
-// Task tool once and then finish, paired with a transcript-driven subagent
-// model (Config.SubagentModel) scripted per test. workdir roots both
-// registries so the child's Write calls land in the test's temp dir.
-func fanoutTestAgent(t *testing.T, workdir string, subScript ...messages.Message) *Agent {
-	t.Helper()
-	parentModel := language.NewFakeChatModel(
-		language.WithCapabilities(language.ChatModelCapabilities{ToolCalling: true}),
-		language.WithResponses(
-			messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
-				{ID: "t1", Name: "Task", Args: map[string]any{
-					"description": "write files",
-					"prompt":      "write the files I asked for",
-				}},
-			}},
-			messages.AI("parent done"),
-		),
-	)
-	a, err := New(Config{
-		Model:          parentModel,
-		SubagentModel:  &transcriptModel{script: subScript},
-		Registry:       tools.NewRegistry(workdir),
-		SystemPrompt:   "t",
-		PermissionMode: config.ModeDefault,
-		WorkDir:        workdir,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return a
-}
-
 func writeCall(id, path, content string) messages.Message {
 	return messages.Message{Role: messages.RoleAI, ToolCalls: []messages.ToolCall{
 		{ID: id, Name: "Write", Args: map[string]any{"file_path": path, "content": content}},

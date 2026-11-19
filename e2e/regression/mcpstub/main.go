@@ -18,7 +18,7 @@ func main() {
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
 	w := bufio.NewWriter(os.Stdout)
-	defer w.Flush()
+	defer func() { _ = w.Flush() }()
 
 	for sc.Scan() {
 		line := sc.Bytes()
@@ -43,7 +43,7 @@ func main() {
 		} else {
 			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":%s}`+"\n", msg.ID, result)
 		}
-		w.Flush()
+		_ = w.Flush()
 	}
 }
 

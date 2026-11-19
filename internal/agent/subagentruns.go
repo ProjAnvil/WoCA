@@ -51,11 +51,6 @@ func (s SubagentRunState) terminal() bool {
 
 // SubagentRun is the snapshot vocabulary of one registry entry.
 type SubagentRun struct {
-	// baseTokens is the shared child Agent's usage total at this child's
-	// first node: same-def children share one Agent whose usage accumulates
-	// across siblings, so the exit node reports the delta (unexported, not
-	// part of the wire snapshot).
-	baseTokens int
 	// Def is the subagent definition's display name ("general" for default
 	// children); CallID is the parent's Task tool-call id; Session is the
 	// starting run's session id; Origin is the shell-owner form
@@ -104,7 +99,7 @@ func newSubagentRuns(max int) *subagentRuns {
 func runKey(session, callID string) string { return session + "\x00" + callID }
 
 // seedTokenBase records the shared child Agent's usage total at a child's
-// first node (the per-child delta baseline; see SubagentRun.baseTokens).
+// first node (the per-child delta baseline, held in r.bases).
 func (r *subagentRuns) seedTokenBase(session, callID string, base int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

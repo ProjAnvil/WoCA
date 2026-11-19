@@ -2,10 +2,11 @@ package server
 
 import (
 	"context"
-	"github.com/projanvil/woca/internal/agent"
-	"github.com/projanvil/woca/internal/tools"
 	"testing"
 	"time"
+
+	"github.com/projanvil/woca/internal/agent"
+	"github.com/projanvil/woca/internal/tools"
 )
 
 func TestEmitAssignsMonotonicSeq(t *testing.T) {

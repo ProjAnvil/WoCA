@@ -325,9 +325,9 @@ func TestTruncateDrainsPendingFinalizerBeforeSnapshot(t *testing.T) {
 // on a test-owned gate so the test can schedule the client disconnect
 // exactly between the gate promotion and the truncate's transcript write.
 type disconnectAwareStore struct {
-	inner blobstore.Store
-	key    string
-	puts   atomic.Int64
+	inner   blobstore.Store
+	key     string
+	puts    atomic.Int64
 	started chan struct{}
 	release chan struct{}
 }
