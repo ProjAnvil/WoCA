@@ -202,8 +202,12 @@ describe('run-events dispatch', () => {
     fetchEventSource.mockReset().mockRejectedValue(new Error('flake'))
     try {
       const p = streamRun('run-1', handlers())
+      // Attach the rejection handler BEFORE advancing the clock: the loop
+      // rejects mid-advance and a late handler would surface as an
+      // unhandled rejection for the whole suite.
+      const outcome = expect(p).rejects.toThrow('flake')
       await vi.advanceTimersByTimeAsync(10_000)
-      await expect(p).rejects.toThrow('flake')
+      await outcome
       expect(fetchEventSource).toHaveBeenCalledTimes(6) // 1 + 5 retries
     } finally {
       vi.useRealTimers()
