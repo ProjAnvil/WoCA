@@ -27,6 +27,10 @@ func TestCommandRunMirrorsLedgerEvents(t *testing.T) {
 	})
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
+	// The terminal row (ledger.Finish, chained on onFinish) lands BEFORE
+	// completeRun's transcript save into the SessionDir t.TempDir; await the
+	// save so teardown's RemoveAll cannot race the async write.
+	saved := trackSaves(s)
 
 	runID, _, status := postCommandRun(t, srv.URL, "sess-cmd-ledger", "/undo")
 	if status != http.StatusOK {
@@ -47,6 +51,7 @@ func TestCommandRunMirrorsLedgerEvents(t *testing.T) {
 	if err != nil || !ok || row.Status != "done" || row.ThreadID == "" {
 		t.Fatalf("command run row = %+v ok=%v err=%v, want terminal done with a thread id", row, ok, err)
 	}
+	awaitSave(t, saved, 1)
 
 	events, err := ledger.Replay(t.Context(), runID, 0, 100)
 	if err != nil {
@@ -85,6 +90,11 @@ func TestCommandRunSSEFromAnotherInstance(t *testing.T) {
 	defer srvA.Close()
 	srvB := httptest.NewServer(serverB.Handler())
 	defer srvB.Close()
+	// B's replay returns on the mirrored done frame, which A emits inside
+	// finish — BEFORE completeRun persists the command turn into A's
+	// SessionDir t.TempDir. Await that save so teardown's RemoveAll cannot
+	// race the async write (the -count cleanup flake this test used to hit).
+	saved := trackSaves(serverA)
 
 	runID, _, status := postCommandRun(t, srvA.URL, "sess-cmd-cross", "/undo")
 	if status != http.StatusOK {
@@ -108,4 +118,5 @@ func TestCommandRunSSEFromAnotherInstance(t *testing.T) {
 	if !sawDelta {
 		t.Fatalf("frames from B carry no delta: %+v", frames)
 	}
+	awaitSave(t, saved, 1)
 }

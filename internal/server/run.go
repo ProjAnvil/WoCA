@@ -510,6 +510,10 @@ func decodeCardAnswerList(body []byte) ([]cardAnswerEntry, bool) {
 // no longer exists) and nothing may emit interrupt_resolved past the
 // terminal event — a replaying client would resurrect a card the done/error
 // frame already closed. Late answers fail like every other unmatched shape.
+// The gate is enforced twice: once on entry, and again inside the critical
+// section that writes the buffer / clears the park and appends the
+// resolution event, so an answer interleaving with finish() cannot emit
+// past the terminal event either.
 func (r *Run) answer(body []byte) error {
 	r.mu.Lock()
 	p := r.pending
@@ -526,7 +530,18 @@ func (r *Run) answer(body []byte) error {
 		if !isList {
 			return errors.New("no pending interrupt")
 		}
+		// One critical section for the done re-check, the buffer writes and
+		// the resolution emission: the gate above can read done=false just
+		// before finish() flips it, and a check-then-act split across two
+		// lock acquisitions could append interrupt_resolved past the
+		// terminal event. With the emission under the same lock as the
+		// re-check, finish's set-done (which precedes its terminal append)
+		// orders every accepted resolution before the terminal event.
 		r.mu.Lock()
+		if r.done {
+			r.mu.Unlock()
+			return errors.New("run already finished")
+		}
 		for _, e := range entries {
 			// Stamp the approval identity the key addresses NOW — the
 			// pause is gone, but the last park's cards still name it, and
@@ -536,14 +551,17 @@ func (r *Run) answer(body []byte) error {
 			}
 			r.buffered = append(r.buffered, e)
 		}
+		ev := r.appendEvent(Event{Type: EventInterruptResolved, Data: map[string]any{"kind": "multi"}})
 		r.mu.Unlock()
 		// The buffered answer satisfies the pause the run is currently
 		// re-parking: without the resolution event a client watching the
 		// stream keeps rendering the previous park's cards until the next
 		// terminal event — the contract says interrupt_resolved fires on
 		// EVERY accepted answer, and a re-park (if any) re-emits its own
-		// interrupt right after.
-		r.emit(Event{Type: EventInterruptResolved, Data: map[string]any{"kind": "multi"}})
+		// interrupt right after. The mirror runs outside r.mu like emit's.
+		if r.mirror != nil {
+			r.mirror(ev)
+		}
 		return nil
 	}
 
@@ -607,12 +625,6 @@ func (r *Run) answer(body []byte) error {
 		return fmt.Errorf("decode answer: %d pending interrupt cards require {answers: [{key, value}]}", len(p.cards))
 	}
 
-	r.mu.Lock()
-	if r.pending == p {
-		r.pending = nil
-	}
-	r.mu.Unlock()
-
 	// The resolution is part of the event history: a client replaying the
 	// stream (page refresh, /api/events-driven reattach) must not resurrect
 	// the interrupt card this answer just satisfied.
@@ -620,7 +632,23 @@ func (r *Run) answer(body []byte) error {
 	if len(p.cards) == 1 {
 		kind = p.cards[0].kind
 	}
-	r.emit(Event{Type: EventInterruptResolved, Data: map[string]any{"kind": kind}})
+	// Same single-critical-section rule as the buffering branch: the done
+	// re-check, the pending clear and the resolution emission are atomic, so
+	// an answer racing finish() either lands its resolution before the
+	// terminal event or not at all.
+	r.mu.Lock()
+	if r.done {
+		r.mu.Unlock()
+		return errors.New("run already finished")
+	}
+	if r.pending == p {
+		r.pending = nil
+	}
+	ev := r.appendEvent(Event{Type: EventInterruptResolved, Data: map[string]any{"kind": kind}})
+	r.mu.Unlock()
+	if r.mirror != nil {
+		r.mirror(ev)
+	}
 	if r.onResume != nil {
 		r.onResume()
 	}
@@ -828,6 +856,20 @@ func approvalAnswerFromHTTP(asks []agent.Ask, approve bool, answers map[string]s
 // emit appends an event to history and fans it out to live subscribers.
 func (r *Run) emit(ev Event) {
 	r.mu.Lock()
+	ev = r.appendEvent(ev)
+	r.mu.Unlock()
+	if r.mirror != nil {
+		r.mirror(ev)
+	}
+}
+
+// appendEvent is emit's locked body — seq assignment, history append and
+// subscriber fanout — returning the seq-stamped event (the mirror persists
+// that copy). Callers hold r.mu; answer() uses it directly so the
+// interrupt_resolved emission shares ONE critical section with the done
+// re-check, which is what keeps a resolution from ordering past the
+// terminal event when an answer races finish().
+func (r *Run) appendEvent(ev Event) Event {
 	r.seq++
 	ev.Seq = r.seq
 	r.history = append(r.history, ev)
@@ -838,10 +880,7 @@ func (r *Run) emit(ev Event) {
 			r.dropped.Add(1) // dropped events on slow consumers are observable (/api/stats)
 		}
 	}
-	r.mu.Unlock()
-	if r.mirror != nil {
-		r.mirror(ev)
-	}
+	return ev
 }
 
 func (r *Run) droppedCount() int64 { return r.dropped.Load() }

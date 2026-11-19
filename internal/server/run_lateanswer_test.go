@@ -7,6 +7,8 @@ package server
 // growing history the done frame terminates. They must be a no-op.
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -157,5 +159,81 @@ func TestListAnswerStillBuffersWhileRunLive(t *testing.T) {
 	}
 	if after := historyLen(r); after != before+1 {
 		t.Fatalf("history grew by %d events, want exactly the one resolution", after-before)
+	}
+}
+
+// TestAnswerFinishInterleaveKeepsTerminalLast races answer() against
+// finish() across both answer branches (buffering and parked) and requires
+// the invariant the atomic re-check buys: interrupt_resolved never orders
+// past the terminal event.
+//
+// The interleave is NOT deterministically forceable — the window sits
+// between answer's entry gate and its second critical section, with only
+// pure-CPU decoding in between and no production seam to pause on — so this
+// is a bounded stress guard, not a step-by-step reproduction: it can never
+// fail on correct code (the resolution append shares the critical section
+// with the done re-check), and it catches a missing guard with high
+// probability across thousands of cheap iterations (verified by mutation:
+// dropping the in-section re-check fails it within one -count=1 run). The
+// runs are built directly (pending set by hand) so each iteration costs
+// microseconds instead of a parked-goroutine poll.
+func TestAnswerFinishInterleaveKeepsTerminalLast(t *testing.T) {
+	const fullAnswer = `{"answers":[
+		{"key":"approval:se1","value":{"approve":true}},
+		{"key":"subagent:researcher-ad33:se2","value":{"approve":false}}
+	]}`
+	const oneEntry = `{"answers":[{"key":"approval:se1","value":{"approve":true}}]}`
+
+	// buffering: pending nil (resume-window shape). parked: a hand-set
+	// two-card pause with the same cards multiCardPause classifies.
+	newRacer := func(parked bool) *Run {
+		ctx, cancel := context.WithCancel(t.Context())
+		r := newRun("race", nil, ctx, cancel)
+		if parked {
+			r.mu.Lock()
+			r.pending = &interruptState{
+				cards: []parkedCard{
+					{id: "ia1", ns: "approval:se1", kind: "permission", payload: map[string]any{}},
+					{id: "ia2", ns: "subagent:researcher-ad33:se2", kind: "permission", payload: map[string]any{}},
+				},
+				reply: make(chan any, 1),
+			}
+			r.mu.Unlock()
+		}
+		return r
+	}
+
+	race := func(answerBody string, parked bool) {
+		r := newRacer(parked)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = r.answer([]byte(answerBody)) // nil or "run already finished"
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			r.finish(EventDone, map[string]any{"cancelled": false})
+		}()
+		close(start)
+		wg.Wait()
+		r.cancel()
+
+		seq := doneSeq(t, r)
+		if seq == 0 {
+			t.Fatal("run never finished")
+		}
+		if n := countResolvedAfter(r, seq); n != 0 {
+			t.Fatalf("interrupt_resolved emitted %d times past the terminal event", n)
+		}
+	}
+
+	const iterations = 2000
+	for i := 0; i < iterations; i++ {
+		race(oneEntry, false) // buffering branch (the F3 late-answer path)
+		race(fullAnswer, true)
 	}
 }
