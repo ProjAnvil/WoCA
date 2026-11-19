@@ -75,6 +75,21 @@ type Run struct {
 	subs    map[*subscriber]struct{}
 	history []Event
 	pending *interruptState
+	// Partial-transcript accumulator for cancelled runs (spec
+	// 2026-11-19-cancel-partial-output §D1). render writes on the run
+	// goroutine; the cancel path reads after runFn returned. committed
+	// carries complete updates-batch messages; provisional carries
+	// goal-cycle messages seen via GoalDelta custom chunks that their
+	// owning node's batch has not yet superseded; deltaBuf accumulates
+	// streamed assistant text until an AI-bearing batch lands the complete
+	// message.
+	committed   []messages.Message
+	provisional []messages.Message
+	deltaBuf    string
+	// startedAt stamps startWith entry (post-promotion — queue wait
+	// excluded, parked waits included): the origin of the aborted-after-Xs
+	// elapsed copy.
+	startedAt time.Time
 	// lastCards holds the most recent park's cards by answer key — the
 	// pause the run is currently leaving (or parked on). The buffering path
 	// reads it to stamp each buffered entry with its approval's identity
@@ -166,6 +181,9 @@ func (r *Run) startGoal(history []messages.Message, onDone func([]messages.Messa
 // startWith runs runFn in a goroutine and routes its result through the
 // shared finish/onDone path used by both start and startGoal.
 func (r *Run) startWith(runFn func() ([]messages.Message, error), onDone func([]messages.Message)) {
+	r.mu.Lock()
+	r.startedAt = time.Now()
+	r.mu.Unlock()
 	go func() {
 		final, err := runFn()
 		if err != nil {
@@ -191,13 +209,16 @@ func (r *Run) startWith(runFn func() ([]messages.Message, error), onDone func([]
 
 // render translates one stream chunk into SSE events: custom payloads carry
 // token/reasoning deltas (and goal-cycle messages), update chunks carry the
-// message batches nodes produced.
+// message batches nodes produced. The same chunks feed the partial-transcript
+// accumulator (see the Run field comment) so a cancelled run can persist what
+// already streamed.
 func (r *Run) render(chunk lggraph.StreamChunk) {
 	switch chunk.Mode {
 	case lggraph.StreamCustom:
 		switch v := chunk.Payload.(type) {
 		case string:
 			if v != "" {
+				r.accumulateDelta(v)
 				r.emit(Event{Type: EventDelta, Data: map[string]any{"text": v}})
 			}
 		case agent.ReasoningDelta:
@@ -214,22 +235,96 @@ func (r *Run) render(chunk lggraph.StreamChunk) {
 			// The goal run's single unified reply — the one goal text that
 			// reaches the chat as an answer.
 			if v.Text != "" {
+				r.accumulateDelta(v.Text)
 				r.emit(Event{Type: EventDelta, Data: map[string]any{"text": v.Text}})
 			}
 		case agent.GoalDelta:
 			// Messages produced inside a goal execute cycle stream through
 			// the custom channel; render them like normal-run messages.
+			r.recordProvisional(v.Message)
 			r.renderMessage(v.Message)
 		}
 	case lggraph.StreamUpdates:
 		updates, _ := chunk.Payload.(map[string]any)
 		for _, nodeUpdate := range updates {
 			state, _ := nodeUpdate.(map[string]any)
-			for _, m := range agent.MessagesFrom(state) {
+			msgs := agent.MessagesFrom(state)
+			r.recordCommitted(msgs)
+			for _, m := range msgs {
 				r.renderMessage(m)
 			}
 		}
 	}
+}
+
+// accumulateDelta appends streamed assistant text (string and GoalFinalReply
+// custom chunks) to the pending buffer. The buffer is superseded — not
+// completed — by the owning node's updates batch (recordCommitted): a
+// cancel landing mid-stream keeps the partial text as a trailing AI message.
+func (r *Run) accumulateDelta(text string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deltaBuf += text
+}
+
+// recordProvisional remembers one goal-cycle message seen via a GoalDelta
+// custom chunk. The goal graph re-delivers every cycle message in the
+// execute node's updates batch when the cycle commits (dual channel), so
+// provisional copies live only in the uncommitted window.
+func (r *Run) recordProvisional(m messages.Message) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.provisional = append(r.provisional, m)
+}
+
+// recordCommitted folds one updates-batch message group into the partial
+// transcript. The batch is the authoritative copy of the node's messages,
+// so it discards any provisional goal-cycle copies it supersedes, and an
+// AI-bearing batch flushes the streamed-text buffer (the complete message
+// replaces its stream).
+func (r *Run) recordCommitted(msgs []messages.Message) {
+	if len(msgs) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.committed = append(r.committed, msgs...)
+	r.provisional = nil
+	for _, m := range msgs {
+		if m.Role == messages.RoleAI {
+			r.deltaBuf = ""
+			break
+		}
+	}
+}
+
+// partialTranscript assembles the run's partial transcript for a cancel:
+// the committed batches, the provisional goal-cycle messages whose batch
+// never landed, and the still-buffered streamed text as a trailing AI
+// message when the model node never committed. nil when nothing streamed
+// (command runs).
+func (r *Run) partialTranscript() []messages.Message {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var partial []messages.Message
+	partial = append(partial, r.committed...)
+	partial = append(partial, r.provisional...)
+	if r.deltaBuf != "" {
+		partial = append(partial, messages.AI(r.deltaBuf))
+	}
+	return partial
+}
+
+// runElapsed reports time since startWith entry (post-promotion); 0 before
+// the run started. Parked waits count (documented in the spec: the wording
+// says how long the run lived, not how long it worked).
+func (r *Run) runElapsed() time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.startedAt.IsZero() {
+		return 0
+	}
+	return time.Since(r.startedAt)
 }
 
 // renderMessage emits the SSE events for one transcript message.
