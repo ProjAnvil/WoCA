@@ -70,6 +70,32 @@ onMounted(() => {
   railMq.addEventListener("change", onRailChange);
 });
 onBeforeUnmount(() => railMq?.removeEventListener("change", onRailChange));
+
+// Flyout focus trap (spec D6): same gating posture as the ≤640 drawer —
+// active only while the band actually holds (a stale flyoutOpen surviving
+// a live resize must not keep a wide layout scroll-locked and Tab
+// confined), and the same Esc yield guard: the hand-rolled dialogs hosted
+// on this aside carry no trap of their own, so while focus sits inside
+// one the flyout's Esc lets the dialog close first.
+const flyoutEl = ref<HTMLElement | null>(null);
+useFocusTrap(flyoutEl, computed(() => flyoutOpen.value && railShell.value), {
+  esc: () => {
+    if (
+      document.activeElement instanceof Element &&
+      document.activeElement.closest(".overlay, .modal-backdrop, .w-modal-backdrop")
+    ) {
+      return;
+    }
+    flyoutOpen.value = false;
+  },
+});
+// Band exit (either direction — past 1023 or under 641): close the flyout
+// so re-entering the band never reopens it over a new chat state. The
+// watcher is this feature's own addition (0d04e971 only gates trap
+// effects, it does not reset state).
+watch(railShell, (inBand) => {
+  if (!inBand) flyoutOpen.value = false;
+});
 useFocusTrap(drawerEl, computed(() => ui.sidebarOpen && drawerShell.value), {
   esc: () => {
     if (
@@ -148,7 +174,7 @@ async function pickWorkspace(path: string) {
       aria-hidden="true"
       @click="flyoutOpen = false"
     />
-    <aside id="rail-flyout" class="rail-flyout" :aria-label="t('sidebar.sessions')">
+    <aside id="rail-flyout" ref="flyoutEl" class="rail-flyout" :aria-label="t('sidebar.sessions')">
       <div class="flyout-head">
         <span class="flyout-title">{{ t('sidebar.sessions') }}</span>
         <div class="flyout-head-actions">

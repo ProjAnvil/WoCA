@@ -12,8 +12,10 @@ vi.mock('../api/client', async (importOriginal) => {
 })
 
 import Sidebar from './Sidebar.vue'
+import WorkspaceSidebar from './WorkspaceSidebar.vue'
 import { useUiStore } from '../stores/ui'
 import { useSessionStore } from '../stores/sessions'
+import { useWorkspaceStore } from '../stores/workspace'
 import type { BridgeStatus } from '../api/client'
 
 function bridgeStatus(over: Partial<BridgeStatus> = {}): BridgeStatus {
@@ -50,7 +52,7 @@ function footerLabels(): string[] {
 // prefers-color-scheme through the same global and must stay inert).
 const RAIL_QUERY = '(min-width: 641px) and (max-width: 1023px)'
 
-function stubSidebarMedia(initialDrawer: boolean, initialRail = false) {
+function stubSidebarMedia(initialDrawer: boolean, initialRail = false, panel1100 = false) {
   const drawerMq = {
     matches: initialDrawer,
     addEventListener: vi.fn(),
@@ -61,15 +63,21 @@ function stubSidebarMedia(initialDrawer: boolean, initialRail = false) {
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   };
+  const panelMq = {
+    matches: panel1100,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
   vi.stubGlobal(
     'matchMedia',
     vi.fn().mockImplementation((q: string) => {
-      if (q === '(max-width: 640px)') return drawerMq;
-      if (q === RAIL_QUERY) return railMq;
+      if (q === '(max-width: 640px)') return drawerMq
+      if (q === RAIL_QUERY) return railMq
+      if (q === '(max-width: 1100px)') return panelMq
       return { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
     }),
   );
-  return { drawerMq, railMq };
+  return { drawerMq, railMq, panelMq };
 }
 
 function stubDrawerShell(initial: boolean) {
@@ -395,5 +403,135 @@ describe('Sidebar tablet rail (641-1023px band)', () => {
     await w!.vm.$nextTick()
     expect(w?.find('#rail-flyout').exists()).toBe(false)
     expect(w?.find('.flyout-scrim').exists()).toBe(false)
+  })
+
+  it('traps focus while open: initial focus inside, Tab wraps, Esc closes', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    await openFlyout()
+    await flushPromises()
+    const flyout = document.getElementById('rail-flyout')!
+    expect(flyout.contains(document.activeElement)).toBe(true)
+    expect(document.body.style.overflow).toBe('hidden')
+
+    // Tab from the last focusable stays inside the flyout.
+    const focusables = Array.from(
+      flyout.querySelectorAll<HTMLElement>('button, [href], input, select, textarea'),
+    )
+    focusables[focusables.length - 1]?.focus()
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }),
+    )
+    await flushPromises()
+    expect(flyout.contains(document.activeElement)).toBe(true)
+
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    await flushPromises()
+    expect(w?.find('#rail-flyout').exists()).toBe(false)
+    expect(document.body.style.overflow).toBe('')
+  })
+
+  it('yields Esc to a hosted overlay: the dialog closes, not the flyout', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    await openFlyout()
+    await flushPromises()
+    // The flyout head's "+" opens the new-workspace dialog (no trap of its
+    // own) and focuses its input: Esc there must close the dialog only.
+    await w!.get('#rail-flyout .flyout-head-actions .icon-btn').trigger('click')
+    await flushPromises()
+    expect(w!.find('.overlay .ws-dialog').exists()).toBe(true)
+    expect(document.activeElement?.id).toBe('ws-path-input')
+
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    await flushPromises()
+    expect(w!.find('.overlay .ws-dialog').exists()).toBe(false)
+    expect(w!.find('#rail-flyout').exists()).toBe(true)
+    expect(sessionsBtn().attributes('aria-expanded')).toBe('true')
+
+    // The next Esc (focus back under the flyout trap) closes the flyout.
+    document.activeElement?.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    )
+    await flushPromises()
+    expect(w!.find('#rail-flyout').exists()).toBe(false)
+  })
+
+  it('resets and releases when the band exits (both directions)', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    await openFlyout()
+    await flushPromises()
+    expect(document.body.style.overflow).toBe('hidden')
+
+    // Leaving the band — growing past 1023 or shrinking under 641 both
+    // flip the rail query off. The flyout must not survive the exit into
+    // either neighboring band (no surprise reopen on re-entry).
+    railMq.matches = false
+    const onChange = railMq.addEventListener.mock.calls.find((c) => c[0] === 'change')?.[1] as
+      | ((e: MediaQueryListEvent) => void)
+      | undefined
+    onChange?.({ matches: false } as MediaQueryListEvent)
+    await flushPromises()
+    // Exactly the rail's own listener may be registered on this mq.
+    expect(railMq.addEventListener).toHaveBeenCalledTimes(1)
+
+    expect(w?.find('#rail-flyout').exists()).toBe(false)
+    expect(w?.find('.flyout-scrim').exists()).toBe(false)
+    expect(document.body.style.overflow).toBe('')
+
+    const outside = document.createElement('button')
+    document.body.append(outside)
+    outside.focus()
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    outside.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
+  })
+
+  it('stacks with the right panel overlay: Esc closes the topmost first', async () => {
+    vi.unstubAllGlobals()
+    railMq = stubSidebarMedia(false, true, true).railMq
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    const panel = mount(WorkspaceSidebar, { global: { plugins: [i18n] }, attachTo: document.body })
+    try {
+      await flushPromises()
+      // ⌘J over the band: the right panel is an overlay (≤1100) with its
+      // own trap. Open the flyout first, then the panel — the panel's trap
+      // is the stack top, so the first Esc closes the panel, the second
+      // the flyout.
+      await openFlyout()
+      const ws = useWorkspaceStore()
+      ws.openPanel()
+      await flushPromises()
+      expect(w!.find('#rail-flyout').exists()).toBe(true)
+
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      )
+      await flushPromises()
+      expect(ws.panelOpen).toBe(false)
+      expect(w!.find('#rail-flyout').exists()).toBe(true)
+
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      )
+      await flushPromises()
+      expect(w!.find('#rail-flyout').exists()).toBe(false)
+    } finally {
+      panel.unmount()
+    }
   })
 })
