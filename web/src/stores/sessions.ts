@@ -700,9 +700,21 @@ export const useSessionStore = defineStore('sessions', () => {
     api.cancelRun(rid).then(
       () => {
         status.value[sid] = 'done'
-        // The local stream was aborted above before the done(cancelled)
-        // event could arrive — mark the stopped run through the same
-        // guarded push the stream path uses.
+        // The local stream was aborted above before the server's
+        // synthesized tool_result events could arrive — flip every open
+        // tool card (no result yet) to the local aborted terminal so no
+        // spinner survives the stop. Live view only: a reload rebuilds from
+        // the persisted transcript, where the server's synthesized results
+        // are the truth (spec 2026-11-19-cancel-partial-output D5).
+        const ls = items.value[sid]
+        if (ls?.length) {
+          const aborted = i18n.global.t('chat.toolAborted')
+          items.value[sid] = ls.map((it) =>
+            it.kind === 'tool_call' && it.result === undefined ? { ...it, result: aborted } : it,
+          )
+        }
+        // Mark the stopped run through the same guarded push the stream
+        // path uses.
         if (wasBusy) pushStoppedNotice(sid, rid)
         if (steers && steers.length) void send(steers.join('\n'))
       },

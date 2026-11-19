@@ -22,6 +22,8 @@ interface AttachedStream {
     onReasoning?: (text: string) => void
     onGoalNote?: (text: string) => void
     onRunStarted?: () => void
+    onToolCall?: (tc: { id: string; name: string; args: Record<string, unknown> }) => void
+    onToolResult?: (tr: { tool_call_id: string; content: string }) => void
   }
 }
 
@@ -153,5 +155,64 @@ describe('mid-turn steering (Codex parity)', () => {
     expect(api.createRun).toHaveBeenCalledTimes(2)
     expect(api.createRun.mock.calls[1][1]).toBe('use this steering input')
     expect(store.activePendingSteers).toEqual([])
+  })
+})
+
+describe('cancel() flips open tool cards locally (spec 2026-11-19-cancel-partial-output D5)', () => {
+  let streams: AttachedStream[]
+
+  beforeEach(() => {
+    streams = []
+    api.createRun.mockReset().mockResolvedValue({
+      run_id: 'run-1',
+      state: 'running',
+      queue_position: 0,
+    })
+    api.cancelRun.mockReset().mockResolvedValue(undefined)
+    api.queueRunInput.mockReset().mockResolvedValue({ ok: true, queued: 1 })
+    api.streamRun.mockReset().mockImplementation((_runID, handlers, signal?: AbortSignal) => {
+      streams.push({ signal, handlers })
+      return new Promise<void>((resolve) => {
+        signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+    })
+  })
+
+  it('flips every open tool card to the aborted terminal once the server confirms the cancel', async () => {
+    const store = seedStore()
+    const sending = store.send('use the tool')
+    await vi.waitFor(() => expect(streams).toHaveLength(1))
+    streams[0].handlers.onToolCall?.({ id: 'c1', name: 'Bash', args: {} })
+    streams[0].handlers.onToolCall?.({ id: 'c2', name: 'Read', args: {} })
+    streams[0].handlers.onToolResult?.({ tool_call_id: 'c1', content: 'ok' })
+
+    store.cancel()
+    await sending
+    await vi.waitFor(() => expect(store.activeStatus).toBe('done'))
+
+    const cards = store.activeItems.filter((item) => item.kind === 'tool_call') as Array<{ toolCallId?: string; result?: string }>
+    expect(cards).toHaveLength(2)
+    // The answered card keeps its real result; the dangling one flips to the
+    // local aborted terminal (the spinner judgment is result === undefined).
+    expect(cards.find((c) => c.toolCallId === 'c1')).toMatchObject({ result: 'ok' })
+    const open = cards.find((c) => c.toolCallId === 'c2')
+    expect(typeof open?.result).toBe('string')
+    expect(open?.result).not.toBe('')
+  })
+
+  it('keeps the cards spinning when the cancel request fails (the run is still live)', async () => {
+    api.cancelRun.mockReset().mockRejectedValue(new Error('boom'))
+    const store = seedStore()
+    const sending = store.send('use the tool')
+    await vi.waitFor(() => expect(streams).toHaveLength(1))
+    streams[0].handlers.onToolCall?.({ id: 'c1', name: 'Bash', args: {} })
+
+    store.cancel()
+    await sending
+    await vi.waitFor(() => expect(store.activeStatus).toBe('error'))
+
+    const cards = store.activeItems.filter((item) => item.kind === 'tool_call') as Array<{ toolCallId?: string; result?: string }>
+    expect(cards).toHaveLength(1)
+    expect(cards[0].result).toBeUndefined()
   })
 })

@@ -91,6 +91,7 @@ export default {
   toolStatusOk: 'Succeeded',
   toolStatusErr: 'Failed',
   generationStopped: 'Generation stopped',
+  toolAborted: 'Aborted',
   runTimedOut: 'Stopped after waiting too long for approval',
   runServerStopped: 'The service was stopped',
   runLeaseLost: 'Stopped: execution lease was lost',

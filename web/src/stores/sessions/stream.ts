@@ -289,12 +289,14 @@ export function createRunStreams(deps: StreamDeps) {
           delete queuePosition.value[sid]
           delete runAuto.value[sid]
           pendingSteers.value[sid] = []
-          // A cancelled run persists no assistant message server-side
-          // (finish passes final=nil), so the transcript alone shows no
-          // trace of the stop — park the localized marker here (other
-          // tabs, replays, reattach; the cancelling tab aborts its stream
-          // before this event and marks via cancel() instead). The done
-          // event's typed cause routes the copy (stopNoticeKey).
+          // A cancelled run persists its partial transcript, synthesized
+          // tool results and the stop tag server-side (spec
+          // 2026-11-19-cancel-partial-output), but the LIVE view still
+          // needs the localized marker here — other tabs, replays and
+          // reattach see this event, not the persisted history; a reload
+          // rebuilds from the transcript (the cancelling tab aborts its
+          // stream before this event and marks via cancel() instead). The
+          // done event's typed cause routes the copy (stopNoticeKey).
           if (cancelled) onRunCancelled(sid, rid, reason)
           afterDone?.()
           // The terminal SSE event fires just before the server persists the

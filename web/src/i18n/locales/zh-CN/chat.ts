@@ -91,6 +91,7 @@ export default {
   toolStatusOk: '成功',
   toolStatusErr: '出错',
   generationStopped: '已停止生成',
+  toolAborted: '已中止',
   runTimedOut: '等待审批超时已停止',
   runServerStopped: '服务已停止',
   runLeaseLost: '执行租约丢失，已停止',
