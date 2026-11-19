@@ -84,3 +84,13 @@ e2e(personal,768 与 1023 两个视口,内联 `page.setViewportSize` 惯例=chat
 ## 5. 状态
 
 v2(审计修订版)——Ready for planning。
+
+## 5b. 执行记录(2026-11-20)
+
+五任务全落地:a74909cd(CSS 带+rail 骨架)→6f182482(浮层+幕布+开合)→5ff9962c(trap+让位守卫+跨带复位)→7ef0cf30(e2e 768/1023)→3cb96342(终审修复)。门禁:make check 0/vitest 768/vue-tsc 0/check:tokens 基线不动/rail e2e ×3/personal 全套 18/18。
+
+- **终审 Important 修复(3cb96342)**:rail-open 的 relative+z21 使 aside 成栈上下文,其内对话框(z40/z150)被封顶在 21——右栏 z30 overlay 同开时梯子反转(ws-dialog 卡被文件树压住)。修法=任一宿主对话框开着时让出锚定(aside 回 root 级 z,rail 暂沉幕布下=惰性聊天姿态),对话框关闭锚定回归。
+- **浮层/幕布为 aside 兄弟节点**(D3 落地裁定):锚定使 aside 成为 absolute 子元的包含块,放栏内会把 280px 浮层错误锚进 56px 栏;scrim 用 fixed(sidebar-backdrop 惯例)。
+- **active 墨条永不渲染(Minor,顺延)**:left:-10px 落在 .app-shell(overflow:hidden)外——原型自带的几何 bug 被忠实继承;active 目前靠 surface-active 药丸传达。修复需 left≈-5.5px;颜色原型用 --accent 而实现用 --text,修复时一并定夺。
+- 已知顺延:dangling aria-controls(关闭态指向不存在的 id,SR 容忍);rail 按钮鼠标可达但 Tab 被 trap 圈在浮层内(Trap-over-rail 固有);settings 从 rail 开时 Esc 焦点依赖(镜像 ≤640 既有姿态)。
+- chatcolumn settings-PUT 503=B1 场登记的 dedicated 实例初始化竞态,与本设计无关。
