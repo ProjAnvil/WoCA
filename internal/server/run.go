@@ -83,9 +83,11 @@ type Run struct {
 	// owning node's batch has not yet superseded; deltaBuf accumulates
 	// streamed assistant text until an AI-bearing batch lands the complete
 	// message.
-	committed   []messages.Message
-	provisional []messages.Message
-	deltaBuf    string
+	committed     []messages.Message
+	provisional   []messages.Message
+	committedIDs  map[string]bool
+	provisionalID map[string]bool
+	deltaBuf      string
 	// startedAt stamps startWith entry (post-promotion — queue wait
 	// excluded, parked waits included): the origin of the aborted-after-Xs
 	// elapsed copy.
@@ -283,10 +285,22 @@ func (r *Run) accumulateDelta(text string) {
 // recordProvisional remembers one goal-cycle message seen via a GoalDelta
 // custom chunk. The goal graph re-delivers every cycle message in the
 // execute node's updates batch when the cycle commits (dual channel), so
-// provisional copies live only in the uncommitted window.
+// provisional copies live only in the uncommitted window. Messages carrying
+// a graph-stamped id are deduped per id: an inner-graph resume replays the
+// completed siblings' writes (with their original ids) as GoalDelta chunks
+// again, and the uncommitted window must keep each copy once.
 func (r *Run) recordProvisional(m messages.Message) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if m.ID != "" {
+		if r.provisionalID == nil {
+			r.provisionalID = map[string]bool{}
+		}
+		if r.provisionalID[m.ID] {
+			return
+		}
+		r.provisionalID[m.ID] = true
+	}
 	r.provisional = append(r.provisional, m)
 }
 
@@ -294,15 +308,32 @@ func (r *Run) recordProvisional(m messages.Message) {
 // transcript. The batch is the authoritative copy of the node's messages,
 // so it discards any provisional goal-cycle copies it supersedes, and an
 // AI-bearing batch flushes the streamed-text buffer (the complete message
-// replaces its stream).
+// replaces its stream). Messages carrying a graph-stamped id are deduped
+// per id: when a parked superstep resumes, the fork re-streams the
+// completed siblings' writes with their ORIGINAL ids (graph.go:1446-1450)
+// — writes already emitted live before the pause — and a second copy in
+// the partial transcript would persist duplicate tool results a strict
+// provider rejects on the next round's replay.
 func (r *Run) recordCommitted(msgs []messages.Message) {
 	if len(msgs) == 0 {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.committed = append(r.committed, msgs...)
+	for _, m := range msgs {
+		if m.ID != "" {
+			if r.committedIDs == nil {
+				r.committedIDs = map[string]bool{}
+			}
+			if r.committedIDs[m.ID] {
+				continue
+			}
+			r.committedIDs[m.ID] = true
+		}
+		r.committed = append(r.committed, m)
+	}
 	r.provisional = nil
+	r.provisionalID = nil
 	for _, m := range msgs {
 		if m.Role == messages.RoleAI {
 			r.deltaBuf = ""

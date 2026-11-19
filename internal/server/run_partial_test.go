@@ -148,6 +148,56 @@ func TestRunPartialEmptyWithoutRender(t *testing.T) {
 	}
 }
 
+// Resume-replay dedup (final review finding 1): when a parked superstep
+// resumes, the fork re-streams the completed siblings' writes as updates
+// chunks with their ORIGINAL message ids (graph.go:1446-1450) — writes that
+// were already emitted live before the pause. The accumulator must be
+// idempotent per id: a replayed batch appends nothing it already holds, and
+// a batch mixing replayed and fresh messages keeps only the fresh ones.
+// Without this, a run cancelled after a park-resume persists duplicate tool
+// results and the next round's replay is rejected by strict providers.
+func TestRunAccumulatorResumeReplayDedup(t *testing.T) {
+	r := newPartialRun()
+	tool1 := messages.Tool("c1", "result one")
+	tool1.ID = "msg-1"
+	ai2 := messages.AI("")
+	ai2.ID = "msg-2"
+	ai2.ToolCalls = []messages.ToolCall{{ID: "c2", Name: "Read"}}
+
+	r.render(updatesChunk(tool1))
+	// The resume replays the sibling write (same id) alongside a fresh one.
+	r.render(updatesChunk(tool1, ai2))
+
+	partial := r.partialTranscript()
+	if !partialMatches(partial, tool1, ai2) {
+		t.Fatalf("partial = %v, want each id-recorded message exactly once (replay deduped)", partial)
+	}
+
+	// A re-delivered GoalDelta (the goal twin of the same resume replay)
+	// also keeps its single provisional copy.
+	delta := messages.AI("cycle reply")
+	delta.ID = "msg-3"
+	r.render(customChunk(agent.GoalDelta{Message: delta}))
+	r.render(customChunk(agent.GoalDelta{Message: delta}))
+	partial = r.partialTranscript()
+	if !partialMatches(partial, tool1, ai2, delta) {
+		t.Fatalf("partial = %v, want the provisional message once (replay deduped)", partial)
+	}
+}
+
+// Id-less messages (the unit fixtures' shape; hand-built graphs) keep the
+// historical append behavior — the dedup keys on the graph-stamped ids only.
+func TestRunAccumulatorWithoutIDsStillAppends(t *testing.T) {
+	r := newPartialRun()
+	m := messages.Tool("c1", "result")
+	r.render(updatesChunk(m))
+	r.render(updatesChunk(m))
+	partial := r.partialTranscript()
+	if len(partial) != 2 {
+		t.Fatalf("partial = %v, want id-less messages appended verbatim", partial)
+	}
+}
+
 // startWith stamps the run's start (post-promotion) for the elapsed copy.
 func TestRunStartedAtStampedByStartWith(t *testing.T) {
 	r := newPartialRun()
