@@ -67,13 +67,11 @@ func ringOrder(r *Run, want ...string) string {
 	defer r.mu.Unlock()
 	lastSeq := int64(0)
 	pos := 0
-	var seqs []int64
 	for _, ev := range r.history {
 		if ev.Seq <= lastSeq {
 			return "seq not monotonic"
 		}
 		lastSeq = ev.Seq
-		seqs = append(seqs, ev.Seq)
 		if pos >= len(want) {
 			continue
 		}

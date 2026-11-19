@@ -122,3 +122,15 @@ OQ 裁定:OQ1 接受双源文案(英文 model-visible+双语本地翻卡,工具�
 ## 6. 状态
 
 v2(审计修订版)——Ready for planning。
+
+## 7. 执行记录(2026-11-20)
+
+六任务全部落地,commits 2594ce62(toolabort 纯函数面)→ 20b819e2(render 积累器)→ dae73b78(cancel 面贯通:emit 合成事件+completeRun partial 派生)→ b47c0232(web cancel() 本地翻卡+陈旧注释)→ 0599c97d(e2e 工具 lane)。门禁:go test ./... 绿、vitest 756/756、vue-tsc 0、make check 0、stopnotice e2e ×3 连绿。
+
+执行裁定(偏离与发现,详见 plan 工作区 ledger):
+
+- **mid-tool cancel 是引擎真竞态**:fork 的 stream emitter(fork graph/stream.go `emit`)在 `select { send / ctx.Done }` 里对已就绪双臂随机选择——取消后 tools 批次约五成被丢(→dangling→合成)、五成送达(→工具自身的取消输出答掉调用)。两态都合法、都闭环;Go 单测用确定性的 parked-approval 窗口钉合成支,e2e 工具 lane 按双态析取断言(合成文案或 `Exit code -1.`),下一轮无 dangling tool_use 为硬断言。
+- **parkedTTL 既有测试预期合法变化**:parked ask 的 AI+toolcall 已提交,新派生公式下转写从 2 段(prompt+notice)变 4 段(+partial+synth)——测试已按新语义更新;queued-cancel/clean-run 钉不变。
+- elapsed 求值点:emit 侧与持久化侧各算一次(同一 goroutine 链,µs 级间隔);e2e 断言 emit 内容与持久化逐字节一致(Go 链路测试钉)。
+- 顺带修复:前场 toolabort_test.go 的 gofmt 版本漂移(PATH gofmt 1.27.4 vs golangci 内嵌 1.27.3)由 `golangci-lint fmt` 归一。
+- 存量并行 flake(基线可复现,与本设计无关):chatcolumn 1440/1800 的 dedicated 实例 settings PUT 503(settings DB 初始化竞态,4 workers 负载下);hitl 并行审批 UI flake(既有票)。

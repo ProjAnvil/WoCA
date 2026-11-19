@@ -171,7 +171,10 @@ func TestDerivedCancelledHistoryWithPartialAndSynth(t *testing.T) {
 	}
 	// Clone posture: a later append to the partial slice must not leak into
 	// the derived transcript.
-	partial = append(partial, messages.AI("late"))
+	grown := append(partial, messages.AI("late"))
+	if len(grown) != 5 {
+		t.Fatalf("grown partial len = %d, want 5", len(grown))
+	}
 	if got := derived[7]; got.Role != messages.RoleTool || got.ToolCallID != "c2" {
 		t.Fatalf("append to the partial leaked into derived: %+v", derived[7])
 	}
