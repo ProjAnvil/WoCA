@@ -22,8 +22,8 @@ func TestDBSessionStatesMarkClear(t *testing.T) {
 	}
 
 	// MarkRunning upserts the running row the gateways' listings read.
-	st.MarkRunning("sess-1", "run-1")
-	rows, err := db.SessionStates()
+	st.MarkRunning(t.Context(), "sess-1", "run-1")
+	rows, err := db.SessionStates(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,13 +40,13 @@ func TestDBSessionStatesMarkClear(t *testing.T) {
 
 	// Clear is compare-and-clear: a mismatched run ID leaves the row alone
 	// (a promoted run's row stays safe).
-	st.Clear("sess-1", "run-other")
-	if rows, err = db.SessionStates(); err != nil || len(rows) != 1 {
+	st.Clear(t.Context(), "sess-1", "run-other")
+	if rows, err = db.SessionStates(t.Context()); err != nil || len(rows) != 1 {
 		t.Fatalf("rows after clear(wrong run) = %v (err %v), want 1", rows, err)
 	}
 
-	st.Clear("sess-1", "run-1")
-	if rows, err = db.SessionStates(); err != nil || len(rows) != 0 {
+	st.Clear(t.Context(), "sess-1", "run-1")
+	if rows, err = db.SessionStates(t.Context()); err != nil || len(rows) != 0 {
 		t.Fatalf("rows after clear = %v (err %v), want none", rows, err)
 	}
 }

@@ -66,16 +66,16 @@ func TestSessionStatePostgresDialectPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := pg.SetSessionState(SessionState{SessionID: "s1", Status: SessionRunning, RunID: "r1", Owner: "p@h", UpdatedAt: Now()}); err == nil {
+	if err := pg.SetSessionState(t.Context(), SessionState{SessionID: "s1", Status: SessionRunning, RunID: "r1", Owner: "p@h", UpdatedAt: Now()}); err == nil {
 		t.Fatal("SetSessionState on closed DB should fail")
 	}
-	if _, err := pg.ClearSessionState("s1", "r1"); err == nil {
+	if _, err := pg.ClearSessionState(t.Context(), "s1", "r1"); err == nil {
 		t.Fatal("ClearSessionState on closed DB should fail")
 	}
-	if err := pg.DeleteSessionState("s1"); err == nil {
+	if err := pg.DeleteSessionState(t.Context(), "s1"); err == nil {
 		t.Fatal("DeleteSessionState on closed DB should fail")
 	}
-	if _, err := pg.SessionStates(); err == nil {
+	if _, err := pg.SessionStates(t.Context()); err == nil {
 		t.Fatal("SessionStates on closed DB should fail")
 	}
 }
@@ -92,7 +92,7 @@ func TestSessionStatesScanError(t *testing.T) {
 		VALUES ('s', 'running', 'r', 'o', 'not-a-number')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.SessionStates(); err == nil {
+	if _, err := db.SessionStates(t.Context()); err == nil {
 		t.Fatal("want scan error for TEXT updated_at")
 	}
 }

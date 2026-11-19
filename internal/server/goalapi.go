@@ -202,9 +202,9 @@ func (s *Server) startGoalRun(origin context.Context, sessionID, workspace strin
 	// success, error and cancellation alike — an error-exiting goal run must
 	// not leave its subscriber (and this Run closure) on the agent forever.
 	// The same hook clears the session run-state row (compare-and-clear).
-	run.onFinish = func() { unsub(); s.clearSessionState(sessionID, id) }
-	run.onPark = func() { s.markSessionState(sessionID, wocadb.SessionAwaiting, id) }
-	run.onResume = func() { s.markSessionState(sessionID, wocadb.SessionRunning, id) }
+	run.onFinish = func() { unsub(); s.clearSessionState(context.WithoutCancel(run.ctx), sessionID, id) }
+	run.onPark = func() { s.markSessionState(context.WithoutCancel(run.ctx), sessionID, wocadb.SessionAwaiting, id) }
+	run.onResume = func() { s.markSessionState(context.WithoutCancel(run.ctx), sessionID, wocadb.SessionRunning, id) }
 
 	w, pos, ok := s.admission.enter(sessionID, func(p int) {
 		run.emit(Event{Type: EventQueuePosition, Data: map[string]any{"position": p}})
@@ -243,7 +243,7 @@ func (s *Server) startGoalRun(origin context.Context, sessionID, workspace strin
 			}
 		}
 		run.emit(Event{Type: EventRunStarted, Data: map[string]any{}})
-		s.markSessionState(sessionID, wocadb.SessionRunning, id)
+		s.markSessionState(run.ctx, sessionID, wocadb.SessionRunning, id)
 		history := s.sessions.load(run.ctx, sessionID)
 		// Todo sidecar restore, same as startRunWith (B9, PM §4.5): the
 		// goal loop's TodoWrite merges against the restored list.

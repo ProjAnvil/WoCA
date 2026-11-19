@@ -22,17 +22,17 @@ func TestSessionStateLifecycle(t *testing.T) {
 		SessionID: "sess-1", Status: SessionRunning,
 		RunID: "run-1", Owner: "111@h", UpdatedAt: Now(),
 	}
-	if err := db.SetSessionState(st); err != nil {
+	if err := db.SetSessionState(t.Context(), st); err != nil {
 		t.Fatal(err)
 	}
 	// Upsert flips status and run id together.
 	st.Status = SessionAwaiting
 	st.RunID = "run-2"
-	if err := db.SetSessionState(st); err != nil {
+	if err := db.SetSessionState(t.Context(), st); err != nil {
 		t.Fatal(err)
 	}
 
-	rows, err := db.SessionStates()
+	rows, err := db.SessionStates(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,13 +41,13 @@ func TestSessionStateLifecycle(t *testing.T) {
 	}
 
 	// Compare-and-clear: a stale run id must not remove the promoted run's row.
-	if ok, err := db.ClearSessionState("sess-1", "run-1"); err != nil || ok {
+	if ok, err := db.ClearSessionState(t.Context(), "sess-1", "run-1"); err != nil || ok {
 		t.Fatalf("stale clear = %v, %v; want false, nil", ok, err)
 	}
-	if ok, err := db.ClearSessionState("sess-1", "run-2"); err != nil || !ok {
+	if ok, err := db.ClearSessionState(t.Context(), "sess-1", "run-2"); err != nil || !ok {
 		t.Fatalf("matching clear = %v, %v; want true, nil", ok, err)
 	}
-	rows, err = db.SessionStates()
+	rows, err = db.SessionStates(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,13 +56,13 @@ func TestSessionStateLifecycle(t *testing.T) {
 	}
 
 	// Unconditional delete is idempotent.
-	if err := db.SetSessionState(st); err != nil {
+	if err := db.SetSessionState(t.Context(), st); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DeleteSessionState("sess-1"); err != nil {
+	if err := db.DeleteSessionState(t.Context(), "sess-1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DeleteSessionState("sess-1"); err != nil {
+	if err := db.DeleteSessionState(t.Context(), "sess-1"); err != nil {
 		t.Fatal(err)
 	}
 }

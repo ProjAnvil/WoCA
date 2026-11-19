@@ -174,7 +174,7 @@ func (s *Server) bindWorkspace(ctx context.Context, endpoint, tenantID, sourceKe
 	return out.WorkspaceID, nil
 }
 
-func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	list, err := s.sessions.list()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -185,7 +185,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, _ *http.Request) {
 	}
 	// Decorate with the durable run state so a fresh page load (and other
 	// processes sharing the database) can see busy sessions.
-	states := s.state.Snapshot()
+	states := s.state.Snapshot(r.Context())
 	for i := range list {
 		if st, ok := states[list[i].ID]; ok {
 			list[i].RunStatus = st.Status
@@ -278,7 +278,7 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.sessions.delete(r.Context(), id)
-	s.forgetSessionState(id)
+	s.forgetSessionState(r.Context(), id)
 	s.forgetWakeState(id)
 	s.log.Info().Str("session", id).
 		Int("shells_killed", rep.ShellsKilled).

@@ -37,38 +37,38 @@ func TestDBSessionStateClosedDB(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &dbSessionState{db: db}
-	s.Set(wocadb.SessionState{SessionID: "s1", RunID: "r1"})
-	if ok := s.ClearIfRun("s1", "r1"); !ok {
+	s.Set(t.Context(), wocadb.SessionState{SessionID: "s1", RunID: "r1"})
+	if ok := s.ClearIfRun(t.Context(), "s1", "r1"); !ok {
 		t.Fatal("ClearIfRun on live DB should succeed")
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	// Every method degrades silently on a closed DB.
-	s.Set(wocadb.SessionState{SessionID: "s1"})
-	if s.ClearIfRun("s1", "r1") {
+	s.Set(t.Context(), wocadb.SessionState{SessionID: "s1"})
+	if s.ClearIfRun(t.Context(), "s1", "r1") {
 		t.Fatal("ClearIfRun on closed DB should report false")
 	}
-	if got := s.Snapshot(); len(got) != 0 {
+	if got := s.Snapshot(t.Context()); len(got) != 0 {
 		t.Fatalf("Snapshot on closed DB = %v", got)
 	}
 }
 
 func TestMemSessionStateLifecycle(t *testing.T) {
 	s := newMemSessionState()
-	s.Set(wocadb.SessionState{SessionID: "s1", RunID: "r1", Status: wocadb.SessionRunning})
-	if ok := s.ClearIfRun("s1", "other"); ok {
+	s.Set(t.Context(), wocadb.SessionState{SessionID: "s1", RunID: "r1", Status: wocadb.SessionRunning})
+	if ok := s.ClearIfRun(t.Context(), "s1", "other"); ok {
 		t.Fatal("run-id mismatch should not clear")
 	}
-	if ok := s.ClearIfRun("s1", "r1"); !ok {
+	if ok := s.ClearIfRun(t.Context(), "s1", "r1"); !ok {
 		t.Fatal("matching run id should clear")
 	}
-	if s.ClearIfRun("ghost", "x") {
+	if s.ClearIfRun(t.Context(), "ghost", "x") {
 		t.Fatal("unknown session should not clear")
 	}
-	s.Set(wocadb.SessionState{SessionID: "s2"})
-	s.Delete("s2")
-	if got := s.Snapshot(); len(got) != 0 {
+	s.Set(t.Context(), wocadb.SessionState{SessionID: "s2"})
+	s.Delete(t.Context(), "s2")
+	if got := s.Snapshot(t.Context()); len(got) != 0 {
 		t.Fatalf("snapshot after delete = %v", got)
 	}
 }

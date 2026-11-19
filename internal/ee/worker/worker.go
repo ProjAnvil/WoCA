@@ -30,10 +30,11 @@ type Sessions interface {
 // SessionStates is the durable per-session busy signal (the session_state
 // table behind the server's listings). The worker marks running on claim
 // and lifts the row on finish — ClearIfRun semantics keep a promoted run's
-// row safe.
+// row safe. The context carries the claimed run's tenant (restored in
+// execute), scoping the writes to the owning tenant on postgres.
 type SessionStates interface {
-	MarkRunning(sessionID, runID string)
-	Clear(sessionID, runID string)
+	MarkRunning(ctx context.Context, sessionID, runID string)
+	Clear(ctx context.Context, sessionID, runID string)
 }
 
 // leaseDuration is how long a claimed run's lease lasts before another
@@ -166,7 +167,7 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 		return w.ledger.Finish(ctx, run.RunID, w.id, "error")
 	}
 	if w.states != nil {
-		w.states.MarkRunning(run.SessionID, run.RunID)
+		w.states.MarkRunning(ctx, run.SessionID, run.RunID)
 	}
 	if snap.Prompt != "" {
 		w.emitAndMirror(ctx, run.RunID, "run_started", map[string]any{})
@@ -194,7 +195,7 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 			w.emitAndMirror(ctx, run.RunID, "error", map[string]any{"message": err.Error()})
 			w.metrics.finish("error", time.Since(started))
 			if w.states != nil {
-				w.states.Clear(run.SessionID, run.RunID)
+				w.states.Clear(ctx, run.SessionID, run.RunID)
 			}
 			return w.ledger.Finish(ctx, run.RunID, w.id, "error")
 		}
@@ -218,7 +219,7 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 			w.emitAndMirror(ctx, run.RunID, "error", map[string]any{"message": err.Error()})
 			w.metrics.finish("error", time.Since(started))
 			if w.states != nil {
-				w.states.Clear(run.SessionID, run.RunID)
+				w.states.Clear(ctx, run.SessionID, run.RunID)
 			}
 			return w.ledger.Finish(ctx, run.RunID, w.id, "error")
 		}
@@ -235,7 +236,7 @@ func (w *Worker) execute(ctx context.Context, run *runstate.Run) error {
 	w.emitAndMirror(ctx, run.RunID, "done", map[string]any{"cancelled": false})
 	w.metrics.finish("done", time.Since(started))
 	if w.states != nil {
-		w.states.Clear(run.SessionID, run.RunID)
+		w.states.Clear(ctx, run.SessionID, run.RunID)
 	}
 	return w.ledger.Finish(ctx, run.RunID, w.id, "done")
 }

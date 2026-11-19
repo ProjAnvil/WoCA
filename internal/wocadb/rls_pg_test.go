@@ -22,11 +22,21 @@ import (
 	"github.com/projanvil/woca/internal/wocadb"
 )
 
+// testPGDSN resolves the live-test DSN: the repo-wide WOCA_PG_TEST_DSN
+// (CI's variable) or this file's historical WOCA_TEST_PG_DSN, either way a
+// superuser connection used only to CREATE/DROP throwaway databases.
+func testPGDSN() string {
+	if dsn := os.Getenv("WOCA_PG_TEST_DSN"); dsn != "" {
+		return dsn
+	}
+	return os.Getenv("WOCA_TEST_PG_DSN")
+}
+
 func testPGAdmin(t *testing.T) *sql.DB {
 	t.Helper()
-	dsn := os.Getenv("WOCA_TEST_PG_DSN")
+	dsn := testPGDSN()
 	if dsn == "" {
-		t.Skip("WOCA_TEST_PG_DSN not set; skipping postgres RLS integration test")
+		t.Skip("WOCA_PG_TEST_DSN (or WOCA_TEST_PG_DSN) not set; skipping postgres RLS integration test")
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -63,7 +73,7 @@ func openIsolatedDB(t *testing.T) *wocadb.DB {
 		_, _ = admin.Exec(fmt.Sprintf(`DROP ROLE IF EXISTS %s`, role))
 	})
 
-	dsn := os.Getenv("WOCA_TEST_PG_DSN")
+	dsn := testPGDSN()
 
 	// PG 15+ does not grant CREATE on a database's public schema to ordinary
 	// roles; provision it via the admin connection before wocadb.Open runs
@@ -369,5 +379,84 @@ func TestStoreTenantIsolationPostgres(t *testing.T) {
 	}
 	if got := get(asA); got != `"A"` {
 		t.Errorf("after B's delete, A sees %s — isolation broken", got)
+	}
+}
+
+// TestSessionStateTenantIsolation: session_state sits in the FORCE RLS
+// loop, so a busy row written under a tenant-carrying context (the gateway's
+// enqueue mark, the worker's claim mark) is tagged with that tenant, visible
+// to that tenant's snapshot reads, and clearable only through the tenant —
+// while the tenantless 'local' view that pre-fix received every row sees
+// none of it.
+func TestSessionStateTenantIsolation(t *testing.T) {
+	db := openIsolatedDB(t)
+	ctx := context.Background()
+	acme := tenancy.NewContext(ctx, tenancy.Context{TenantID: "t_acme"})
+	other := tenancy.NewContext(ctx, tenancy.Context{TenantID: "t_other"})
+
+	st := wocadb.SessionState{Status: wocadb.SessionRunning, RunID: "r1", Owner: "1@h", UpdatedAt: 1}
+	st.SessionID = "s-acme"
+	if err := db.SetSessionState(acme, st); err != nil {
+		t.Fatalf("set as tenant: %v", err)
+	}
+	st.SessionID = "s-local"
+	if err := db.SetSessionState(ctx, st); err != nil {
+		t.Fatalf("set as local: %v", err)
+	}
+
+	// Row tagging: the tenant-carrying write stamped the owning tenant. The
+	// probe itself must run scoped to the tenant — FORCE RLS hides the row
+	// from this (owner) connection's 'local' view, which is half the point.
+	var tag string
+	txTag, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := txTag.ExecContext(ctx, `SELECT set_config('app.tenant_id', 't_acme', true)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := txTag.QueryRowContext(ctx, `SELECT tenant_id FROM session_state WHERE session_id = 's-acme'`).Scan(&tag); err != nil {
+		t.Fatal(err)
+	}
+	_ = txTag.Rollback()
+	if tag != "t_acme" {
+		t.Fatalf("session_state tenant_id = %q, want t_acme (write dropped the caller tenant)", tag)
+	}
+
+	// Visibility: the owning tenant's snapshot lists exactly its row; the
+	// tenantless default and a foreign tenant do not see it.
+	seen := func(ctx context.Context) map[string]bool {
+		t.Helper()
+		rows, err := db.SessionStates(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for _, r := range rows {
+			out[r.SessionID] = true
+		}
+		return out
+	}
+	if got := seen(acme); !got["s-acme"] || got["s-local"] {
+		t.Fatalf("tenant snapshot = %v, want exactly its own row", got)
+	}
+	if got := seen(ctx); got["s-acme"] || !got["s-local"] {
+		t.Fatalf("local snapshot = %v, want exactly the local row (tenant row must be invisible)", got)
+	}
+	if got := seen(other); len(got) != 0 {
+		t.Fatalf("foreign tenant snapshot = %v, want nothing", got)
+	}
+
+	// Compare-and-clear under the owning tenant lifts the row; a tenantless
+	// clear cannot touch it (RLS hides it from the default view).
+	if ok, err := db.ClearSessionState(acme, "s-acme", "r1"); err != nil || !ok {
+		t.Fatalf("tenant clear = %v, %v; want true, nil", ok, err)
+	}
+	st.SessionID = "s-acme2"
+	if err := db.SetSessionState(acme, st); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.ClearSessionState(ctx, "s-acme2", "r1"); err != nil || ok {
+		t.Fatalf("tenantless clear of tenant row = %v, %v; want false, nil", ok, err)
 	}
 }

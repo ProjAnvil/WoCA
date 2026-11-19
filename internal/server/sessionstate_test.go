@@ -237,7 +237,7 @@ func TestGlobalEventsSeedsSnapshot(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
-	s.markSessionState("sess-x", wocadb.SessionAwaiting, "run-x")
+	s.markSessionState(t.Context(), "sess-x", wocadb.SessionAwaiting, "run-x")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	events := collectGlobalEvents(ctx, t, ts)
@@ -260,13 +260,13 @@ func TestReconcileStaleSessionState(t *testing.T) {
 		{SessionID: "remote", Status: wocadb.SessionRunning, RunID: "r3", Owner: "1@elsewhere", UpdatedAt: 3},
 	}
 	for _, st := range seed {
-		if err := db.SetSessionState(st); err != nil {
+		if err := db.SetSessionState(t.Context(), st); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	New(Config{Agent: newTestAgent(t), Static: fstest.MapFS{}, Logger: zerolog.Nop(), RunStateDB: db})
-	rows, err := db.SessionStates()
+	rows, err := db.SessionStates(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestDeleteSessionForgetsState(t *testing.T) {
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
-	s.markSessionState("sess-doomed", wocadb.SessionRunning, "run-doomed")
+	s.markSessionState(t.Context(), "sess-doomed", wocadb.SessionRunning, "run-doomed")
 	req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/sessions/sess-doomed", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -301,7 +301,7 @@ func TestDeleteSessionForgetsState(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("DELETE status = %d", resp.StatusCode)
 	}
-	if _, ok := s.state.Snapshot()["sess-doomed"]; ok {
+	if _, ok := s.state.Snapshot(t.Context())["sess-doomed"]; ok {
 		t.Fatal("state row survived session delete")
 	}
 }

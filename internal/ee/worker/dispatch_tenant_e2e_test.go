@@ -184,12 +184,54 @@ func TestDispatchTenantEndToEndOnPostgres(t *testing.T) {
 	}
 
 	// The worker shares only the database; its context carries no tenant —
-	// the claimed run restores it.
+	// the claimed run restores it (both for its event appends and for its
+	// session_state marks below).
 	w := New(Config{
 		Ledger: ledger, Agent: e2eAgent(t, "worker executed for acme"),
 		Bus: eventbus.NewLocalWithRetention(16), Logger: zerolog.Nop(), ID: "w-tenant-e2e",
+		States: NewDBSessionStates(db),
 	})
 	go func() { _ = w.Step(t.Context()) }()
+
+	// The session's busy row is tenant-tagged: the gateway's enqueue mark
+	// and the worker's claim mark both write under the run's tenant (the
+	// table is FORCE RLS-scoped), so the owning tenant's snapshot sees the
+	// session as running while the tenantless default does not. Pre-fix both
+	// writes landed 'local' and the tenant's listing never showed the busy
+	// state. Polled until the terminal clear removes the row.
+	acmeCtx := tenancy.NewContext(context.Background(), tenancy.Context{TenantID: "acme"})
+	sawTenantRow, sawLocalRow := false, false
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		rows, err := db.SessionStates(acmeCtx)
+		if err != nil {
+			t.Fatalf("tenant session_state snapshot: %v", err)
+		}
+		for _, r := range rows {
+			if r.SessionID == "s-tenant-e2e" && r.RunID == out.RunID {
+				sawTenantRow = true
+			}
+		}
+		localRows, err := db.SessionStates(context.Background())
+		if err != nil {
+			t.Fatalf("local session_state snapshot: %v", err)
+		}
+		for _, r := range localRows {
+			if r.SessionID == "s-tenant-e2e" {
+				sawLocalRow = true
+			}
+		}
+		if sawTenantRow {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !sawTenantRow {
+		t.Fatal("session_state row for the tenant run never appeared in the tenant's snapshot")
+	}
+	if sawLocalRow {
+		t.Fatal("session_state row for the tenant run leaked into the 'local' default view")
+	}
 
 	events := sseEventsBounded(t, srv.URL+"/api/runs/"+out.RunID+"/events")
 	var delta, done bool

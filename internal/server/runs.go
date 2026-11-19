@@ -552,7 +552,10 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 	// clear on the terminal event. clearSessionState is compare-and-clear, so
 	// a queued run promoted behind this one never loses its row.
 	run.onFinish = func() {
-		s.clearSessionState(sid, run.id)
+		// WithoutCancel keeps the run's tenant value while shedding its
+		// cancellation: the terminal hook can fire after the run context
+		// ended, and the durable clear must still go through.
+		s.clearSessionState(context.WithoutCancel(run.ctx), sid, run.id)
 		// Loop closure: a clean finish hands the session back to the wake
 		// driver — a notification that landed after the final tool-round
 		// drain queued with the session busy, so the finish is its last
@@ -563,8 +566,8 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 			s.wakeAfterRun(sid)
 		}
 	}
-	run.onPark = func() { s.markSessionState(sid, wocadb.SessionAwaiting, run.id) }
-	run.onResume = func() { s.markSessionState(sid, wocadb.SessionRunning, run.id) }
+	run.onPark = func() { s.markSessionState(context.WithoutCancel(run.ctx), sid, wocadb.SessionAwaiting, run.id) }
+	run.onResume = func() { s.markSessionState(context.WithoutCancel(run.ctx), sid, wocadb.SessionRunning, run.id) }
 	go func() {
 		if w != nil {
 			if promoted, abortCause := s.admission.wait(run.ctx, sid, w); !promoted {
@@ -628,7 +631,7 @@ func (s *Server) startRunWith(ctx context.Context, sessionID string, human messa
 			started["trigger"] = opts.trigger
 		}
 		run.emit(Event{Type: EventRunStarted, Data: started})
-		s.markSessionState(sid, wocadb.SessionRunning, run.id)
+		s.markSessionState(run.ctx, sid, wocadb.SessionRunning, run.id)
 		history := s.sessions.load(run.ctx, sid)
 		// Todo sidecar restore (B9, PM §4.5): a process with no live list
 		// for the session (first run after a restart) seeds it from the
@@ -786,7 +789,7 @@ func (s *Server) enqueueRun(ctx context.Context, sessionID string, human message
 	// The session is busy from the client's point of view whether the run
 	// executes here or on a worker; the worker's finish clears the row
 	// (ClearIfRun is compare-and-clear, so it only lifts its own run).
-	s.markSessionState(sid, wocadb.SessionRunning, run.id)
+	s.markSessionState(runCtx, sid, wocadb.SessionRunning, run.id)
 	// The stub is never registered, so no cancel endpoint or onFinish hook
 	// releases runCtx: without a watcher each dispatched run's WithCancel
 	// child stays registered on rootCtx until shutdown.
