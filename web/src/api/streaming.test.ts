@@ -159,14 +159,55 @@ describe('run-events dispatch', () => {
     await expect(options.onopen(sse('', { status: 503 }))).rejects.toThrow()
   })
 
-  it('a close before any terminal event is an error; retries back off to 1000ms', () => {
+  it('a close before any terminal event is an error; onerror never retries inside the library', () => {
     const { options } = startRun()
     expect(() => options.onclose()).toThrow('stream closed before terminal event')
-    expect(options.onerror(new Error('flake'))).toBe(1000)
-    let last: unknown = 1000
-    for (let i = 0; i < 4; i++) last = options.onerror(new Error('flake')) // 5 attempts total
-    expect(last).toBe(1000)
-    expect(() => options.onerror(new Error('given up'))).toThrow('given up') // 6th exceeds maxRetries
+    // The reconnect loop is ours (headers must rebuild per attempt); the
+    // library's built-in retry — a returned backoff — stays disabled.
+    expect(() => options.onerror(new Error('flake'))).toThrow('flake')
+  })
+
+  it('reconnects carrying the current Last-Event-ID', async () => {
+    vi.useFakeTimers()
+    fetchEventSource.mockReset()
+      .mockImplementationOnce((_url: string, opts: CapturedOptions) => {
+        opts.onmessage({ event: 'delta', data: JSON.stringify({ text: 'a' }), id: '1' })
+        opts.onmessage({ event: 'delta', data: JSON.stringify({ text: 'b' }), id: '2' })
+        return Promise.reject(new Error('flake'))
+      })
+      .mockImplementationOnce((_url: string, opts: CapturedOptions) => {
+        opts.onmessage({ event: 'done', data: JSON.stringify({ cancelled: false }), id: '3' })
+        return Promise.resolve()
+      })
+    try {
+      const p = streamRun('run-1', handlers())
+      await vi.advanceTimersByTimeAsync(0) // first connection delivers 1-2, then breaks
+      expect(fetchEventSource).toHaveBeenCalledTimes(1)
+      expect(
+        (fetchEventSource.mock.calls[0][1] as CapturedOptions).headers['Last-Event-ID'],
+      ).toBeUndefined() // fresh start: nothing received yet
+      await vi.advanceTimersByTimeAsync(1000) // backoff, then the reconnect
+      await p
+      expect(fetchEventSource).toHaveBeenCalledTimes(2)
+      expect(
+        (fetchEventSource.mock.calls[1][1] as CapturedOptions).headers['Last-Event-ID'],
+      ).toBe('2') // the seq the broken connection already delivered
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the reconnect loop gives up after five retries', async () => {
+    vi.useFakeTimers()
+    fetchEventSource.mockReset().mockRejectedValue(new Error('flake'))
+    try {
+      const p = streamRun('run-1', handlers())
+      await vi.advanceTimersByTimeAsync(10_000)
+      await expect(p).rejects.toThrow('flake')
+      expect(fetchEventSource).toHaveBeenCalledTimes(6) // 1 + 5 retries
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('carries stream overrides: base without trailing slash, bridge header, auth', () => {

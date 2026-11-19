@@ -78,19 +78,22 @@ export function streamRun(
   const maxRetries = 5
   let terminal = false
 
-  // Reconnect with Last-Event-ID: the server replays only the events we
-  // missed (or sends `resync` when the gap exceeds its retention window),
-  // so reconnecting a live run is now safe — the old "never reconnect"
-  // assumption (see git history for the removed comment) no longer holds.
-  const cancellation = nativeRequestCancellation(
-    signal,
-    lastSeq != null ? { 'Last-Event-ID': String(lastSeq) } : {},
-  )
-  const streamHeaders: Record<string, string> = { ...cancellation.headers }
-  if (bridge) streamHeaders['X-Woca-Bridge'] = bridge
-  if (auth) streamHeaders.Authorization = `${auth.scheme} ${auth.token}`
-  const connect = (): Promise<void> =>
-    fetchEventSource(`${base}/api/runs/${runId}/events`, {
+  // One connection attempt. Headers are rebuilt PER attempt so a reconnect
+  // carries the CURRENT Last-Event-ID — the seq the broken connection
+  // already delivered; a snapshot taken at setup would always be null and
+  // the resume header would never leave the client (the native-path bug
+  // this fixes). The library's built-in retry stays disabled (onerror
+  // always throws) because it would reuse the stale headers; the loop
+  // below owns the backoff.
+  const connectOnce = (): Promise<void> => {
+    const cancellation = nativeRequestCancellation(
+      signal,
+      lastSeq != null ? { 'Last-Event-ID': String(lastSeq) } : {},
+    )
+    const streamHeaders: Record<string, string> = { ...cancellation.headers }
+    if (bridge) streamHeaders['X-Woca-Bridge'] = bridge
+    if (auth) streamHeaders.Authorization = `${auth.scheme} ${auth.token}`
+    return fetchEventSource(`${base}/api/runs/${runId}/events`, {
       openWhenHidden: true,
       headers: streamHeaders,
       signal,
@@ -187,12 +190,24 @@ export function streamRun(
         if (!terminal) throw new Error('stream closed before terminal event')
       },
       onerror(err) {
-        if (terminal || ++attempts > maxRetries) throw err
-        // Returning a number makes fetch-event-source retry after that many
-        // milliseconds (reusing its built-in reconnection).
-        return 1000
+        throw err // retries belong to the loop below, with fresh headers
       },
-    })
+    }).finally(cancellation.release)
+  }
+
+  // The reconnect loop: 1s backoff, at most maxRetries retries, never past
+  // a terminal event or an aborted signal.
+  const connect = async (): Promise<void> => {
+    for (;;) {
+      try {
+        await connectOnce()
+        return
+      } catch (error) {
+        if (terminal || signal?.aborted || ++attempts > maxRetries) throw error
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
+    }
+  }
 
   let onAbort: (() => void) | undefined
   const streaming = new Promise<void>((resolve, reject) => {
@@ -227,7 +242,8 @@ export function streamRun(
   })
   return streaming.finally(() => {
     if (onAbort) signal?.removeEventListener('abort', onAbort)
-    cancellation.release()
+    // Per-attempt cancellations are released inside connectOnce's own
+    // finally; nothing stream-scoped remains to release here.
   })
 }
 

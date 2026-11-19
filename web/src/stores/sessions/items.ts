@@ -70,10 +70,15 @@ export function createItemMutations(state: ItemState) {
     items.value[sid] = next
   }
 
-  // A tool call also ends the live thinking segment.
+  // A tool call also ends the live thinking segment. Idempotent per call
+  // id: the goal graph legitimately re-delivers every cycle message on a
+  // second channel (GoalDelta + the outer batch), and a second card for
+  // the same call would never hear its result — the result lands on the
+  // first card — so it would spin forever.
   function addToolCall(sid: string, tc: { id: string; name: string; args: Record<string, unknown> }) {
     closeStreaming(sid)
     closeReasoning(sid)
+    if (list(sid).some((i) => i.kind === 'tool_call' && i.toolCallId === tc.id)) return
     push(sid, { id: nid(), kind: 'tool_call', toolCallId: tc.id, name: tc.name, args: tc.args })
   }
 
