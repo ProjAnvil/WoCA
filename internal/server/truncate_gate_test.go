@@ -19,10 +19,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/projanvil/langchain-golang/core/messages"
+
+	"github.com/projanvil/woca/internal/platform/blobstore"
+	"github.com/projanvil/woca/internal/session"
 )
 
 // postTruncate POSTs the truncate endpoint and decodes {"kept": n}. It
@@ -312,6 +316,139 @@ func TestTruncateDrainsPendingFinalizerBeforeSnapshot(t *testing.T) {
 	if got := lastStopNotice(msgs); got != "" {
 		t.Fatalf("the dropped anchor (stop notice) survived the truncate: %q", got)
 	}
+}
+
+// disconnectAwareStore wraps a blobstore.Store with the context semantics of
+// the interface's remote implementations (S3/NATS-style stores honor ctx;
+// the in-tree Local deliberately ignores it): once the context is canceled,
+// Put fails with the ctx error. The second Put for key is additionally held
+// on a test-owned gate so the test can schedule the client disconnect
+// exactly between the gate promotion and the truncate's transcript write.
+type disconnectAwareStore struct {
+	inner blobstore.Store
+	key    string
+	puts   atomic.Int64
+	started chan struct{}
+	release chan struct{}
+}
+
+func (d *disconnectAwareStore) Put(ctx context.Context, key string, data []byte) error {
+	if key == d.key && d.puts.Add(1) == 2 {
+		close(d.started)
+		<-d.release
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return d.inner.Put(ctx, key, data)
+}
+
+func (d *disconnectAwareStore) Get(ctx context.Context, key string) ([]byte, error) {
+	return d.inner.Get(ctx, key)
+}
+
+func (d *disconnectAwareStore) Delete(ctx context.Context, key string) error {
+	return d.inner.Delete(ctx, key)
+}
+
+func (d *disconnectAwareStore) List(ctx context.Context, prefix string) ([]string, error) {
+	return d.inner.List(ctx, prefix)
+}
+
+// Disconnect AFTER promotion: the waiter survives (unlike the 503 case, the
+// client is gone only once the gate already handed it the session), so the
+// in-window load+save must run detached from the connection — the same
+// persistence posture as completeRun (WithoutCancel: keep the ctx values,
+// drop the cancellation). Pre-fix the in-window save used r.Context():
+// sessionStore.save published the truncated transcript to memory (mem write
+// comes first), then the blob Put failed on any ctx-honoring store — mem and
+// disk forked (memory truncated, disk still the full holder history) and the
+// handler answered 500 into a dead connection. The regression pins the
+// disconnect between promotion and the truncate's Put via the store wrapper
+// and requires: 200 (the write completed), disk equal to memory (no fork),
+// and the gate released (the next run is admitted immediately).
+func TestTruncateSaveDetachedFromDisconnectAfterPromotion(t *testing.T) {
+	dir := t.TempDir()
+	s, ts := newGatedUndoServer(t, dir, 400*time.Millisecond)
+	const sid = "s-trunc-disconnect"
+	if err := s.sessions.save(t.Context(), sid, []messages.Message{
+		messages.Human("one"), messages.AI("two"),
+	}, dir); err != nil {
+		t.Fatal(err)
+	}
+	saved := trackSaves(s) // AFTER the seed: holder + truncate saves
+	// Wrap the store: Put #2 for this session's key is the truncate's save
+	// (Put #1 is the holder's completion save) — hold it for the disconnect.
+	store := &disconnectAwareStore{
+		inner:   s.sessions.blobs,
+		key:     sid + ".jsonl",
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	s.sessions.blobs = store
+
+	holderRun, _, pos := postRun(t, ts.URL, sid, "write it")
+	if pos != 0 {
+		t.Fatalf("holder position = %d, want 0 (runs immediately)", pos)
+	}
+
+	// Truncate queued behind the holder with a client that will disconnect
+	// AFTER promotion (once its save starts, the gate is already its own).
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+sid+"/truncate",
+		strings.NewReader(`{"drop_last_turn":true}`))
+	req.SetPathValue("id", sid)
+	ctx, cancel := context.WithCancel(context.Background())
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.handleTruncateSession(rec, req)
+	}()
+
+	// Holder settles → the truncate is promoted → its save starts. Disconnect
+	// the client right then, and let the held Put proceed with whatever ctx
+	// the handler chose for the in-window save.
+	waitRunDone(t, ts.URL, holderRun)
+	awaitSave(t, saved, 1) // holder transcript only so far
+	select {
+	case <-store.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("truncate save never started (promotion or save lost)")
+	}
+	cancel()
+	close(store.release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("truncate handler never returned")
+	}
+
+	// The write completed despite the dead connection.
+	if rec.Code != http.StatusOK {
+		t.Fatalf("truncate after disconnect = %d, want 200 (in-window save must be detached)", rec.Code)
+	}
+	awaitSave(t, saved, 1) // the truncate save
+
+	// No mem/disk fork: memory and disk both hold the truncated transcript.
+	memMsgs := s.sessions.load(t.Context(), sid)
+	diskMsgs, err := session.LoadBlob(t.Context(), s.sessions.blobs, sid+".jsonl")
+	if err != nil {
+		t.Fatalf("reload transcript from disk: %v", err)
+	}
+	if len(memMsgs) != 2 || memMsgs[0].Content != "one" || memMsgs[1].Content != "two" {
+		t.Fatalf("memory transcript = %s, want [one two] (truncated)", summarize(memMsgs))
+	}
+	if len(diskMsgs) != len(memMsgs) || diskMsgs[0].Content != memMsgs[0].Content || diskMsgs[1].Content != memMsgs[1].Content {
+		t.Fatalf("disk transcript = %s, want it to match memory %s (no fork)", summarize(diskMsgs), summarize(memMsgs))
+	}
+
+	// The gate was released: the session's next run is granted immediately.
+	nextRun, _, nextPos := postRun(t, ts.URL, sid, "next question")
+	if nextPos != 0 {
+		t.Fatalf("next run position = %d, want 0 (gate must be free)", nextPos)
+	}
+	waitRunDone(t, ts.URL, nextRun)
 }
 
 // summarize renders a compact role:content view for failure messages.

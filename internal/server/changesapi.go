@@ -185,7 +185,16 @@ func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// Gate held. Drain any residue queued-cancel finalizers BEFORE the
+	// Gate held. The in-window snapshot and save run detached from the client
+	// connection — the same persistence posture as completeRun
+	// (WithoutCancel: keep the ctx values, drop the cancellation). A
+	// cancellable ctx here forked mem and disk on a post-promotion
+	// disconnect: sessionStore.save publishes the truncated transcript to
+	// memory first, then the blob Put failed on any ctx-honoring store (the
+	// interface's remote implementations; Local ignores ctx) while the
+	// handler answered 500 into a dead connection.
+	ctx := context.WithoutCancel(r.Context())
+	// Drain any residue queued-cancel finalizers BEFORE the
 	// snapshot: completeRun drains between its save and its release, but a
 	// finalizer pushed in that residue window would otherwise survive this
 	// truncate's overwrite and later append its derived turn on top of the
@@ -194,7 +203,7 @@ func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 	// finalizer FIFO is empty and the transcript is exactly what the last
 	// writer wrote.
 	s.drainCancelFinalizers(sid)
-	msgs := s.sessions.load(r.Context(), sid)
+	msgs := s.sessions.load(ctx, sid)
 	keep := req.Keep
 	if req.DropLastTurn {
 		// Roll the conversation back to before the final user turn: keep
@@ -217,7 +226,7 @@ func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 		keep = len(msgs)
 	}
 	ws := s.sessions.workspaceOf(sid)
-	if err := s.sessions.save(r.Context(), sid, msgs[:keep], ws); err != nil {
+	if err := s.sessions.save(ctx, sid, msgs[:keep], ws); err != nil {
 		// The gate must not leak on a failed write: release before
 		// reporting so the session's next run is still admitted.
 		s.admission.release(sid)
