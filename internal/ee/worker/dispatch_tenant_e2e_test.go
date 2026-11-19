@@ -85,8 +85,19 @@ func openTenantPGDB(t *testing.T) (*wocadb.DB, *runstate.Ledger) {
 		u.Path = "/" + name
 		return u.String()
 	}
+	// swapDB reuses the base DSN's own credentials and only switches the
+	// database, so the grant connection works with whatever user the test
+	// DSN authenticates as (CI's admin user need not be "woca").
+	swapDB := func(name string) string {
+		u, err := url.Parse(baseDSN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.Path = "/" + name
+		return u.String()
+	}
 	// PG 15+: ordinary roles cannot CREATE on public; grant before Open.
-	grant, err := sql.Open("pgx", swap("woca", "woca-enterprise-dev", dbName))
+	grant, err := sql.Open("pgx", swapDB(dbName))
 	if err != nil {
 		t.Fatal(err)
 	}
