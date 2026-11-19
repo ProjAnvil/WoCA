@@ -349,7 +349,7 @@ func TestSessionStateDegradesOnStoreErrors(t *testing.T) {
 	st.Set(t.Context(), wocadb.SessionState{SessionID: "s3"}) // error swallowed
 	_ = st.ClearIfRun(t.Context(), "s3", "r")                 // false
 	st.Delete(t.Context(), "s3")                              // error swallowed
-	_ = st.Snapshot(t.Context())                            // empty on error
+	_ = st.Snapshot(t.Context())                              // empty on error
 }
 
 // The in-memory state store covers the same interface contract.

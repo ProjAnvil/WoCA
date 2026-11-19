@@ -122,7 +122,7 @@ func (s *Server) handleGoalCommand(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 			}
-				run, err := s.startGoalRun(r.Context(), id, req.Workspace)
+			run, err := s.startGoalRun(r.Context(), id, req.Workspace)
 			if err != nil {
 				output = "goal resumed but the loop could not start: " + err.Error()
 				break

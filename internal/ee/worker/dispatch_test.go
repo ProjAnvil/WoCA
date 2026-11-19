@@ -41,8 +41,12 @@ type memStates struct {
 	clears []string
 }
 
-func (m *memStates) MarkRunning(_ context.Context, sessionID, runID string) { m.marks = append(m.marks, runID) }
-func (m *memStates) Clear(_ context.Context, sessionID, runID string)    { m.clears = append(m.clears, runID) }
+func (m *memStates) MarkRunning(_ context.Context, sessionID, runID string) {
+	m.marks = append(m.marks, runID)
+}
+func (m *memStates) Clear(_ context.Context, sessionID, runID string) {
+	m.clears = append(m.clears, runID)
+}
 
 func newDispatchFixture(t *testing.T, sessions *memSessions, states *memStates) (*Worker, *runstate.Ledger) {
 	t.Helper()
