@@ -77,6 +77,14 @@ onBeforeUnmount(() => railMq?.removeEventListener("change", onRailChange));
 // confined), and the same Esc yield guard: the hand-rolled dialogs hosted
 // on this aside carry no trap of their own, so while focus sits inside
 // one the flyout's Esc lets the dialog close first.
+// The z21 anchor is dropped while any aside-hosted dialog is open:
+// position:relative + z-index turns the aside into a stacking context, and
+// the dialogs it hosts (.overlay z40 / .modal-backdrop z150) would then
+// cap at 21 — sinking below the right panel's z30 overlay when both are
+// up. Unanchored, they paint at their own root-level z again; the rail
+// itself falls under the scrim for that window, matching the inert-chat
+// posture. The anchor returns when the dialog closes. (Declared after the
+// dialog refs it reads.)
 const flyoutEl = ref<HTMLElement | null>(null);
 useFocusTrap(flyoutEl, computed(() => flyoutOpen.value && railShell.value), {
   esc: () => {
@@ -116,6 +124,9 @@ const wsPath = ref("");
 const wsInput = ref<HTMLInputElement | null>(null);
 const pickerOpen = ref(false);
 const statusOpen = ref(false);
+const railAnchored = computed(
+  () => railShell.value && flyoutOpen.value && !wsDialogOpen.value && !pickerOpen.value && !statusOpen.value,
+);
 // One probe on mount decides whether this deployment serves the bridge
 // status surface (personal `woca serve` does not, so the footer shows no
 // status entry and the poll never arms). Once the surface is seen — from
@@ -211,7 +222,7 @@ async function pickWorkspace(path: string) {
     id="app-sidebar"
     ref="drawerEl"
     class="sidebar"
-    :class="{ open: ui.sidebarOpen, 'rail-open': railShell && flyoutOpen }"
+    :class="{ open: ui.sidebarOpen, 'rail-open': railAnchored }"
   >
     <div class="sidebar-brand">
       <div class="brand-mark">W</div>

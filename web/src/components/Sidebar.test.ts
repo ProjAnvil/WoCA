@@ -500,6 +500,31 @@ describe('Sidebar tablet rail (641-1023px band)', () => {
     outside.remove()
   })
 
+  it('yields the z21 anchor while a hosted dialog is open (stacking ladder)', async () => {
+    api.getStatus.mockRejectedValue(new Error('spa fallback'))
+    mountSidebar()
+    await flushPromises()
+
+    await openFlyout()
+    expect(w!.get('#app-sidebar').classes()).toContain('rail-open')
+
+    // The anchor makes the aside a stacking context (z21): the dialogs it
+    // hosts (.overlay z40 / .modal-backdrop z150) would cap at 21 and
+    // sink below the right panel's z30 overlay. While any hosted dialog
+    // is open the aside must drop the anchor so the dialogs paint at
+    // their own root-level z.
+    await w!.get('#rail-flyout .flyout-head-actions .icon-btn').trigger('click')
+    await w!.vm.$nextTick()
+    expect(w!.find('.overlay .ws-dialog').exists()).toBe(true)
+    expect(w!.get('#app-sidebar').classes()).not.toContain('rail-open')
+    // The flyout itself stays open under the dialog.
+    expect(w!.find('#rail-flyout').exists()).toBe(true)
+
+    await w!.get('.overlay .ws-dialog .icon-btn').trigger('click') // dialog close button
+    await w!.vm.$nextTick()
+    expect(w!.get('#app-sidebar').classes()).toContain('rail-open')
+  })
+
   it('stacks with the right panel overlay: Esc closes the topmost first', async () => {
     vi.unstubAllGlobals()
     railMq = stubSidebarMedia(false, true, true).railMq
