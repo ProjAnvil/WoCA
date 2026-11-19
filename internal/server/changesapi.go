@@ -128,6 +128,29 @@ func (s *Server) handleWorkspaceUndo(w http.ResponseWriter, r *http.Request) {
 // handleTruncateSession drops every message after the first `keep` (clamped
 // to [0, len]) and persists the shortened transcript — the conversation leg
 // of "revert code + conversation" rollback.
+//
+// F1 admission ordering: the truncate is a full-overwrite session writer, so
+// it takes the session admission gate like any turn (the same posture as
+// the gated /undo //redo command runs, T7). The former ungated path
+// snapshotted the transcript and saved at once: racing an in-flight
+// holder's load+save meant last-writer-wins message loss in BOTH
+// directions — the truncate silently undone by the holder's later save, or
+// the holder's new turn wiped by the truncate. Acquire→drain→load→save→
+// release makes the snapshot exact: the holder (and every queued
+// predecessor, FIFO) has finished and persisted before promotion, so `kept`
+// is true at response time — the synchronous contract callers rely on.
+//
+// Cost (deliberate): the request blocks while the session's runs settle,
+// bounded by run length. The only caller is the web Changes tab's
+// drop-conversation action, which already awaits behind a confirm dialog,
+// never reads `kept`, and reloads the session on completion (the fetch has
+// no client-side timeout); the TUI has no truncate path. The pre-fix
+// alternative was silent transcript loss, which is strictly worse.
+//
+// Pre-existing limitation, unchanged: the local gate orders this writer
+// against this instance's runs only — a cross-instance (dispatch/executor)
+// holder is serialized by the run ledger, not here (shared with the other
+// local session writers; see startCommandRun).
 func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Keep         int  `json:"keep"`
@@ -138,11 +161,43 @@ func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sid := r.PathValue("id")
+	// Queue for the session gate like any waiter: an idle session grants it
+	// on the spot (the truncate stays immediate); a busy session serializes
+	// this writer behind the in-flight run. Beyond maxQueuedPerSession the
+	// request is refused with the same 409 the run surface returns — the
+	// runaway-client guard applies to every gate waiter.
+	gw, _, ok := s.admission.enter(sid, nil)
+	if !ok {
+		writeError(w, http.StatusConflict, "session run queue is full")
+		return
+	}
+	if gw != nil {
+		promoted, _ := s.admission.wait(r.Context(), sid, gw)
+		if !promoted {
+			// The client went away or the server is shutting down: the
+			// waiter was removed from the FIFO (no gate leak — later runs
+			// still enter cleanly) and nothing was written.
+			writeError(w, http.StatusServiceUnavailable, "session busy; truncate abandoned before it started")
+			return
+		}
+	}
+	// Gate held. Drain any residue queued-cancel finalizers BEFORE the
+	// snapshot: completeRun drains between its save and its release, but a
+	// finalizer pushed in that residue window would otherwise survive this
+	// truncate's overwrite and later append its derived turn on top of the
+	// truncated history — resurrecting a turn past the user's rollback
+	// point. Draining first keeps the invariant: after any gate window the
+	// finalizer FIFO is empty and the transcript is exactly what the last
+	// writer wrote.
+	s.drainCancelFinalizers(sid)
 	msgs := s.sessions.load(r.Context(), sid)
 	keep := req.Keep
 	if req.DropLastTurn {
 		// Roll the conversation back to before the final user turn: keep
-		// everything up to (not including) the last human message.
+		// everything up to (not including) the last human message. Because
+		// the snapshot is taken inside the gate window, "last" anchors on
+		// the settled transcript — an in-flight holder's turn became the
+		// last turn and is what gets dropped.
 		keep = len(msgs)
 		for i, msg := range slices.Backward(msgs) {
 			if msg.Role == messages.RoleHuman {
@@ -159,9 +214,13 @@ func (s *Server) handleTruncateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	ws := s.sessions.workspaceOf(sid)
 	if err := s.sessions.save(r.Context(), sid, msgs[:keep], ws); err != nil {
+		// The gate must not leak on a failed write: release before
+		// reporting so the session's next run is still admitted.
+		s.admission.release(sid)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.auditEvent(r, "session_truncate", sid)
+	s.admission.release(sid)
 	writeJSON(w, http.StatusOK, map[string]any{"kept": keep})
 }
