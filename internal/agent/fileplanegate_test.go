@@ -63,7 +63,7 @@ func TestFilePlaneAllowRuleLiftsDefaultAskForMatchedPaths(t *testing.T) {
 		),
 	)
 	a2, err := New(Config{
-		Model: outside,
+		Model:          outside,
 		Registry:       tools.NewRegistry(workdir),
 		SystemPrompt:   "t",
 		PermissionMode: config.ModeDefault,

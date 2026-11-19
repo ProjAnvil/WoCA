@@ -319,7 +319,7 @@ func (a *Agent) rebuildGraph() error {
 			// the fan-out path then backfills "Error: ..." as the Task
 			// call's tool result instead of killing the parent turn.
 			return map[string]any{
-				"messages":       []messages.Message{messages.AI("Error: " + err.Error())},
+				"messages":        []messages.Message{messages.AI("Error: " + err.Error())},
 				childErrorChannel: err.Error(),
 			}, nil
 		}

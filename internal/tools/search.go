@@ -194,24 +194,24 @@ func walkMatches(ctx context.Context, execFor func(context.Context) executor.Exe
 	var files []string
 	var walk func(dir string)
 	walk = func(dir string) {
-			entries, err := x.Glob(ctx, filepath.Join(dir, "*"))
+		entries, err := x.Glob(ctx, filepath.Join(dir, "*"))
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			fi, err := x.Stat(ctx, e)
 			if err != nil {
-				return
+				continue
 			}
-			for _, e := range entries {
-				fi, err := x.Stat(ctx, e)
-				if err != nil {
-					continue
-				}
-				if entryEscapesBase(ctx, x, base, e) {
-					continue // a symlink resolving outside the search scope
-				}
-				if fi.IsDir() {
-					walk(e)
-					continue
-				}
-				files = append(files, e)
+			if entryEscapesBase(ctx, x, base, e) {
+				continue // a symlink resolving outside the search scope
 			}
+			if fi.IsDir() {
+				walk(e)
+				continue
+			}
+			files = append(files, e)
+		}
 	}
 	walk(base)
 	slices.Sort(files)

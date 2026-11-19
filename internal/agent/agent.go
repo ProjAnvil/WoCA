@@ -298,18 +298,18 @@ type Agent struct {
 	boundModel language.ChatModel
 	// lastThread records the most recent checkpoint thread id so callers
 	// (the one-shot CLI) can tell the user what to pass to --resume-checkpoint.
-	lastThread     atomic.Value
-	registry       *tools.Registry
-	exec           executor.Executor
-	toolList       []coretools.Tool
-	toolByName     map[string]coretools.Tool
-	systemPrompt   string
-	mode           config.PermissionMode
-	workdir        string
-	recursionLimit int
+	lastThread            atomic.Value
+	registry              *tools.Registry
+	exec                  executor.Executor
+	toolList              []coretools.Tool
+	toolByName            map[string]coretools.Tool
+	systemPrompt          string
+	mode                  config.PermissionMode
+	workdir               string
+	recursionLimit        int
 	subagentModel         language.ChatModel
 	subagentModelExplicit bool // SubagentModel was pinned in Config
-	graph          *lggraph.CompiledGraph
+	graph                 *lggraph.CompiledGraph
 	// children is the content-addressed subagent registry (subagents.go):
 	// one child agent per distinct def content, each registered as a graph
 	// subgraph node. Swapped whole by rebuildGraph under a.mu; read via
@@ -1394,7 +1394,7 @@ func (a *Agent) resumeStreamWithBudget(ctx context.Context, threadID string, res
 			// unmatched interrupts re-pause natively).
 			StrictResume: true,
 		},
-		Modes:   streamModes,
+		Modes: streamModes,
 	})
 }
 

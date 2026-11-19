@@ -52,14 +52,14 @@ type BackgroundShellStatus struct {
 	// D6): "main" for the main agent graph, "subagent:<def>#<callID>" for a
 	// shell a subagent child started. The activity UI renders it as the
 	// Initiator column.
-	Owner        string
-	Running      bool
-	ExitCode     int        // -1 while running or after a signal kill (unchanged tool semantics)
-	Killed       bool       // terminated through KillFor, any origin
-	StoppedBy    StopOrigin // "" unless Killed
-	StartedAt    time.Time
-	EndedAt      time.Time // zero while running
-	OutputBytes  int
+	Owner       string
+	Running     bool
+	ExitCode    int        // -1 while running or after a signal kill (unchanged tool semantics)
+	Killed      bool       // terminated through KillFor, any origin
+	StoppedBy   StopOrigin // "" unless Killed
+	StartedAt   time.Time
+	EndedAt     time.Time // zero while running
+	OutputBytes int
 }
 
 // shellMainOwner is the Owner rendered for shells started without an

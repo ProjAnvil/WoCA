@@ -132,9 +132,9 @@ func TestSubagentRunsStopSession(t *testing.T) {
 func TestSubagentsCapFromConfig(t *testing.T) {
 	m := language.NewFakeChatModel()
 	a, err := New(Config{
-		Model:                   m,
-		Registry:                tools.NewRegistry(t.TempDir()),
-		MaxConcurrentSubagents:  3,
+		Model:                  m,
+		Registry:               tools.NewRegistry(t.TempDir()),
+		MaxConcurrentSubagents: 3,
 	})
 	if err != nil {
 		t.Fatal(err)

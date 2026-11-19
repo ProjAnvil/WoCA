@@ -306,11 +306,11 @@ func BuildAgent(ctx context.Context, opts Options, log zerolog.Logger) (*App, er
 		SkillsFor: func(ws string) []skills.Skill {
 			return loadSkills(ws, st.Load().BuiltinSkills, pluginList, log)
 		},
-		ExtraTools:         extraTools,
-		CompactThreshold:   opts.CompactLimit,
-		Summarizer:         model,
-		Permissions:        loadPermissions(workdir),
-		Agents: agentDefs,
+		ExtraTools:       extraTools,
+		CompactThreshold: opts.CompactLimit,
+		Summarizer:       model,
+		Permissions:      loadPermissions(workdir),
+		Agents:           agentDefs,
 		// The per-workspace loader must surface the PLUGIN agents too:
 		// serve-mode sessions resolve their def set through AgentsFor, so
 		// without the append a plugin's subagents never reach the @ list,

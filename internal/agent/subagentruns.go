@@ -60,15 +60,15 @@ type SubagentRun struct {
 	// children); CallID is the parent's Task tool-call id; Session is the
 	// starting run's session id; Origin is the shell-owner form
 	// "subagent:<def>#<callID>".
-	Def           string           `json:"def"`
-	CallID        string           `json:"call_id"`
-	Session       string           `json:"session"`
-	Origin        string           `json:"origin"`
-	State         SubagentRunState `json:"state"`
-	Tokens        int              `json:"tokens,omitempty"` // at finish, when available
-	Report        string           `json:"report,omitempty"`
-	StartedAt     time.Time        `json:"started_at"`
-	EndedAt       time.Time        `json:"ended_at,omitempty"`
+	Def       string           `json:"def"`
+	CallID    string           `json:"call_id"`
+	Session   string           `json:"session"`
+	Origin    string           `json:"origin"`
+	State     SubagentRunState `json:"state"`
+	Tokens    int              `json:"tokens,omitempty"` // at finish, when available
+	Report    string           `json:"report,omitempty"`
+	StartedAt time.Time        `json:"started_at"`
+	EndedAt   time.Time        `json:"ended_at,omitempty"`
 }
 
 // SubagentEvent is one lifecycle fact, emitted through the registry's

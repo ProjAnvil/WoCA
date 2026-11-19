@@ -4,11 +4,11 @@
 // marker tokens riding the first user message:
 //
 //   - "woca-reg:chat"  turn 1 Write out.txt (the approval round the
-//                      stage answers through the HITL API), turn 2 the
-//                      final text;
+//     stage answers through the HITL API), turn 2 the
+//     final text;
 //   - "woca-reg:mcp"   turn 1 one call to the MCP stub tool
-//                      mcp__mcpstub__echo (proves MCP binding by
-//                      executing it), turn 2 the final text;
+//     mcp__mcpstub__echo (proves MCP binding by
+//     executing it), turn 2 the final text;
 //   - anything else    plain text reply (a no-tool chat).
 //
 // Single-file, stdlib-only, no woca imports.
