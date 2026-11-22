@@ -123,7 +123,7 @@ func TestContextBreakdownLastRequest(t *testing.T) {
 	resp := messages.AI("answer")
 	resp.UsageMetadata = messages.UsageMetadata{
 		InputTokens: 42, OutputTokens: 7, TotalTokens: 49,
-		InputTokenDetails: &messages.InputTokenDetails{CacheReadInputTokens: 100},
+		InputTokenDetails: &messages.InputTokenDetails{CacheRead: 100},
 	}
 	model := language.NewFakeChatModel(language.WithResponses(resp))
 	a, err := New(Config{

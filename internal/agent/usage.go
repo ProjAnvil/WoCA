@@ -53,11 +53,15 @@ func (u *usageTracker) recordUsage(um messages.UsageMetadata) {
 		InputTokens:  um.InputTokens,
 		OutputTokens: um.OutputTokens,
 	}
-	if um.InputTokenDetails != nil {
-		lu.CacheReadTokens = um.InputTokenDetails.CacheReadInputTokens
-		lu.CacheWriteTokens = um.InputTokenDetails.CacheCreationInputTokens
-		u.totals.CacheReadTokens += um.InputTokenDetails.CacheReadInputTokens
-		u.totals.CacheWriteTokens += um.InputTokenDetails.CacheCreationInputTokens
+	if d := um.InputTokenDetails; d != nil {
+		// When the provider reports the ephemeral TTL breakdown, the flat
+		// cache_creation count is zeroed and the 5m/1h keys carry the
+		// specific counts, so sum all three to keep the total-write meaning.
+		cacheWrite := d.CacheCreation + d.Ephemeral5mInputTokens + d.Ephemeral1hInputTokens
+		lu.CacheReadTokens = d.CacheRead
+		lu.CacheWriteTokens = cacheWrite
+		u.totals.CacheReadTokens += d.CacheRead
+		u.totals.CacheWriteTokens += cacheWrite
 	}
 	u.last = lu
 }

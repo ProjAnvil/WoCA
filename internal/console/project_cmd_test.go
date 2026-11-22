@@ -98,7 +98,7 @@ func TestCostEmptyAndAccumulated(t *testing.T) {
 		OutputTokens: 5000,
 		TotalTokens:  105000,
 		InputTokenDetails: &messages.InputTokenDetails{
-			CacheReadInputTokens: 60000,
+			CacheRead: 60000,
 		},
 	}, "claude-sonnet-4-5")
 	res, err = c.Execute(t.Context(), "cost", nil, &Session{})

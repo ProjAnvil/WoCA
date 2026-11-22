@@ -16,7 +16,7 @@ func TestUsageAccumulatesAcrossCalls(t *testing.T) {
 	resp1 := messages.AI("first")
 	resp1.UsageMetadata = messages.UsageMetadata{
 		InputTokens: 100, OutputTokens: 20, TotalTokens: 120,
-		InputTokenDetails: &messages.InputTokenDetails{CacheReadInputTokens: 50, CacheCreationInputTokens: 10},
+		InputTokenDetails: &messages.InputTokenDetails{CacheRead: 50, CacheCreation: 10},
 	}
 	resp2 := messages.AI("second")
 	resp2.UsageMetadata = messages.UsageMetadata{InputTokens: 30, OutputTokens: 5, TotalTokens: 35}

@@ -276,9 +276,11 @@ func (s *Store) LogUsage(model string, um messages.UsageMetadata) {
 		"output": um.OutputTokens,
 		"total":  um.TotalTokens,
 	}
-	if um.InputTokenDetails != nil {
-		data["cache_read"] = um.InputTokenDetails.CacheReadInputTokens
-		data["cache_write"] = um.InputTokenDetails.CacheCreationInputTokens
+	if d := um.InputTokenDetails; d != nil {
+		// Same TTL-fold as agent usage tracking: the flat cache_creation
+		// count is zeroed when the ephemeral 5m/1h keys carry the counts.
+		data["cache_read"] = d.CacheRead
+		data["cache_write"] = d.CacheCreation + d.Ephemeral5mInputTokens + d.Ephemeral1hInputTokens
 	}
 	s.Log("debug", "model_usage", data)
 }
